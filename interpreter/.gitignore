@@ -1,0 +1,15 @@
+.dub
+docs.json
+__dummy.html
+docs/
+/interpreter
+interpreter.so
+interpreter.dylib
+interpreter.dll
+interpreter.a
+interpreter.lib
+interpreter-test-*
+*.exe
+*.o
+*.obj
+*.lst

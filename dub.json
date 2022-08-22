@@ -1,0 +1,18 @@
+{
+	"authors": [
+		"Jason"
+	],
+	"dependencies": {
+		"silver:grammar": "*",
+		"silver:interpreter": "*"
+	},
+	"subPackages": [
+		"./grammar/",
+		"./interpreter/"
+	],
+	"targetType": "none",
+	"copyright": "Copyright © 2020, Jason",
+	"description": "A minimal D application.",
+	"license": "proprietary",
+	"name": "silver"
+}
