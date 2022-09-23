@@ -20,21 +20,23 @@ Silver:
 
     Print < 'print' Expression
     
-    Expression <   (     Eval (Op Expression)?     )
-                 / (:'(' Eval (Op Expression)? :')')
+    Expression < AdditionExpression / MultiplyExpression / Eval
+
+    AdditionOperator < "+" / "-"
+    AdditionExpression < (MultiplyExpression / Eval) (AdditionOperator (MultiplyExpression / Eval))+
+
+    MultiplyOperator < "*" / "/"
+    MultiplyExpression < Eval (MultiplyOperator Eval)+
     
-    Eval <   Call
-            / Variable
+    Eval <  :'(' Expression :')'
+            / Call
             / Literal
+            / Variable
 
     Literal < BooleanLiteral
             / NumberLiteral
 
-    Op       < '+' / "-" / '*' / '/'
-             / AssignOp
-
-    AssignOp <  "~=" / "+=" / "-=" / "*=" / "^=" / "|=" / "&=" / "/="
-        / "="
+    AssignOp <  "~=" / "+=" / "-=" / "*=" / "^=" / "|=" / "&=" / "/=" / "="
 
     BooleanLiteral <- "true" / "false"
 
@@ -49,7 +51,7 @@ Silver:
     FloatingLiteral   <~ IntegerLiteral ('.' UnsignedLiteral )
     UnsignedLiteral   <~ [0-9]+
     IntegerLiteral    <~ SignLiteral? UnsignedLiteral
-    HexaLiteral       <~ [0-9a-fA-F]+
+    HexaLiteral       <~ "0x" [0-9a-fA-F]+
     BinaryLiteral     <~ "0b" [01] [01_]*
     SignLiteral       <- '-' / '+'
 
@@ -58,6 +60,8 @@ Silver:
 
 version(unittest)
 {
+    import std.typecons;
+
     bool parse(string input)
     {
         import std.stdio : writeln;
@@ -75,6 +79,14 @@ version(unittest)
     bool isEquivilent(ParseTree lhs, ParseTree rhs)
     {
         import std.range : zip;
+        import std.algorithm: canFind;
+
+        auto skippable = ["Silver.Expression", "Silver.Eval"];
+
+        while(skippable.canFind(lhs.name))
+            lhs = lhs[0];
+        while(skippable.canFind(rhs.name))
+            rhs = rhs[0];
 
         if((lhs.name == rhs.name)
         && (lhs.successful == rhs.successful)
@@ -93,6 +105,42 @@ version(unittest)
         }
         return false;
     }
+
+    string diff(ParseTree lhs, ParseTree rhs)
+    {
+        import std.array : join;
+        import std.conv : to;
+        import std.algorithm : map;
+        import std.format : format;
+        
+        return diffTree(lhs, rhs)
+            .map!(_ => "%s: %s is not the same as %s: %s".format(_[0].name, _[0].matches, _[1].name, _[1].matches))
+            .join("\n--------------------\n");
+    }
+
+    Tuple!(ParseTree, ParseTree)[] diffTree(ParseTree lhs, ParseTree rhs)
+    {
+        import std.range : zip;
+        import std.format;
+
+        if((lhs.name == rhs.name)
+        && (lhs.successful == rhs.successful)
+        && (lhs.matches == rhs.matches)
+        && (lhs.children.length == rhs.children.length))
+        {
+            Tuple!(ParseTree, ParseTree)[] diffs;
+            foreach (children; lhs.children.zip(rhs.children))
+            {
+                if(children[0].isEquivilent(children[1]))
+                {
+                    continue;
+                }
+                diffs ~= children[0].diffTree(children[1]);
+            }
+            return diffs;
+        }
+        return [tuple(lhs, rhs)];
+    }
 }
 
 @("Basic Assignment")
@@ -107,10 +155,16 @@ unittest
     parse("a=true").should.equal(true);
 }
 
-@("Basic Expression")
+@("Basic Addition")
 unittest
 {
     Silver.Expression("1+2").successful.should.equal(true);
+}
+
+@("Repeated Addition")
+unittest
+{
+    Silver.Expression("1+2+3").successful.should.equal(true);
 }
 
 @("Print Expression")
@@ -125,10 +179,48 @@ unittest
     Silver.Expression("(1)").successful.should.equal(true);
 }
 
-@("Expression Operator Precedence")
+@("Parenthesis Add")
 unittest
 {
-    Silver("a=1+2*3").isEquivilent(Silver("a=1+(2*3)")).should.equal(true);
+    Silver.Expression("1 + (2 * 3) + 4").successful.should.equal(true);
+}
+
+@("Expression Operator Precedence, Simple")
+unittest
+{
+    import std.format;
+    import std.conv;
+    auto implicit = Silver.decimateTree(Silver.Expression("1+2*3"));
+    auto explicit = Silver.decimateTree(Silver.Expression("1+(2*3)"));
+    implicit.isEquivilent(explicit).should.equal(true).because("\n"~diff(implicit, explicit));
+}
+
+@("Expression Operator Precedence, Complex")
+unittest
+{
+    import std.format;
+    import std.conv;
+    auto implicit = Silver.decimateTree(Silver.Expression("1 + 2 * 3 + 4"));
+    auto explicit = Silver.decimateTree(Silver.Expression("1 + (2 * 3) + 4"));
+    implicit.isEquivilent(explicit).should.equal(true).because("\n"~diff(implicit, explicit));
+}
+
+@("Expression Operator Precedence, Parenthesis")
+unittest
+{
+    import std.format;
+    import std.conv;
+    import std.stdio;
+    auto expr = Silver.decimateTree(Silver.Expression("(1 + 2) * 3"));
+    auto subexpr = Silver.decimateTree(Silver.AdditionExpression("1 + 2"));
+    expr[0][0].isEquivilent(subexpr).should.equal(true).because("\n"~diff(expr[0][0], subexpr));
+}
+
+
+@("Repeated Expression Operator")
+unittest
+{
+    Silver.Expression("a=1+2+3").successful.should.equal(true);
 }
 
 @("Multi-Line")

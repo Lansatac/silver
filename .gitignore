@@ -13,6 +13,7 @@ silver-test-*
 *.o
 *.obj
 *.lst
+*.pdb
 
 .vscode/tasks.json
 

@@ -10,15 +10,21 @@ class Context
 {
     private ParseTree program;
 
-    this(ParseTree program)
+    nothrow this(ParseTree program)
     {
         this.program = program;
+    }
+
+    private Array!(Variant[string]) globals;
+
+    const(Variant[string]) getGlobals() const
+    {
+        return globals[0];
     }
 
     /// Executes the ast.
     void run()
     {
-        Array!(Variant[string]) globals;
         globals.insert((Variant[string]).init);
         interpret(program, globals);
     }
@@ -69,23 +75,28 @@ class Context
     private Variant interpretExpression(ParseTree ast, Array!(Variant[string]) variables)
     {
         import std.conv : to;
+        import std.range : slide, drop;
         switch(ast.name)
         {
             case "Silver.Expression":
-                if(ast.children.length == 1)
+                return interpretExpression(ast[0], variables);
+            case "Silver.AdditionExpression":
+            case "Silver.MultiplyExpression":
+                auto lhs = interpretExpression(ast[0], variables);
+                foreach(children;ast.children.drop(1).slide(2))
                 {
-                    return interpretExpression(ast.children[0], variables);
+                    auto operator = children[0].matches[0];
+                    auto rhs = interpretExpression(children[1], variables);
+                    lhs = operate(operator, lhs, rhs);
                 }
-                auto lhs = interpretExpression(ast.children[0], variables);
-                auto operator = ast.children[1].matches[0];
-                auto rhs = interpretExpression(ast.children[1], variables);
-
-                return operate(operator, lhs, rhs);
+                return lhs;
             case "Silver.Eval":
             case "Silver.Literal":
             case "Silver.NumberLiteral":
                 return interpretExpression(ast.children[0], variables);
             case "Silver.UnsignedLiteral":
+                return Variant(ast.matches[0].to!int);
+            case "Silver.HexaLiteral":
                 return Variant(ast.matches[0].to!int);
             case "Silver.Variable":
                 auto name = ast.matches[0];
@@ -100,6 +111,18 @@ class Context
 
     private Variant operate(string operator, Variant lhs, Variant rhs)
     {
-        throw new Exception("not yet :'(");
+        switch(operator)
+        {
+        case "+":
+            return lhs + rhs;
+        case "-":
+            return lhs - rhs;
+        case "*":
+            return lhs * rhs;
+        case "/":
+            return lhs / rhs;
+        default:
+            throw new Exception("Unsupported operator " ~ operator);
+        }
     }
 }

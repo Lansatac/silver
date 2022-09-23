@@ -10,7 +10,7 @@
 		"./grammar/",
 		"./interpreter/"
 	],
-	"targetType": "none",
+	"targetType": "executable",
 	"copyright": "Copyright © 2020, Jason",
 	"description": "A minimal D application.",
 	"license": "proprietary",
