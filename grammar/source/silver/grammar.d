@@ -3,6 +3,7 @@ module silver.grammar;
 import pegged.grammar;
 
 version(unittest) import fluent.asserts;
+debug import std.stdio;
 
 mixin(pegged.grammar.grammar(`
 Silver:
@@ -20,13 +21,22 @@ Silver:
 
     Print < 'print' Expression
     
-    Expression < AdditionExpression / MultiplyExpression / Eval
+    Expression < LogicalExpression /
+                 AdditionExpression /
+                 MultiplyExpression /
+                 Eval
 
-    AdditionOperator < "+" / "-"
-    AdditionExpression < (MultiplyExpression / Eval) (AdditionOperator (MultiplyExpression / Eval))+
+    LogicalOperator    < "==" / "&&" / "||"
+    LogicalExpression  < (AdditionExpression / MultiplyExpression / Eval)
+                         (LogicalOperator (AdditionExpression / MultiplyExpression / Eval))+
 
-    MultiplyOperator < "*" / "/"
-    MultiplyExpression < Eval (MultiplyOperator Eval)+
+    AdditionOperator   < "+" / "-"
+    AdditionExpression < (MultiplyExpression / Eval)
+                         (AdditionOperator (MultiplyExpression / Eval))+
+
+    MultiplyOperator   < "*" / "/"
+    MultiplyExpression < Eval
+                        (MultiplyOperator Eval)+
     
     Eval <  :'(' Expression :')'
             / Call
@@ -161,6 +171,12 @@ unittest
     Silver.Expression("1+2").successful.should.equal(true);
 }
 
+@("Basic Logical Operator")
+unittest
+{
+    Silver.Expression("true && true").successful.should.equal(true);
+}
+
 @("Repeated Addition")
 unittest
 {
@@ -188,8 +204,6 @@ unittest
 @("Expression Operator Precedence, Simple")
 unittest
 {
-    import std.format;
-    import std.conv;
     auto implicit = Silver.decimateTree(Silver.Expression("1+2*3"));
     auto explicit = Silver.decimateTree(Silver.Expression("1+(2*3)"));
     implicit.isEquivilent(explicit).should.equal(true).because("\n"~diff(implicit, explicit));
@@ -198,8 +212,6 @@ unittest
 @("Expression Operator Precedence, Complex")
 unittest
 {
-    import std.format;
-    import std.conv;
     auto implicit = Silver.decimateTree(Silver.Expression("1 + 2 * 3 + 4"));
     auto explicit = Silver.decimateTree(Silver.Expression("1 + (2 * 3) + 4"));
     implicit.isEquivilent(explicit).should.equal(true).because("\n"~diff(implicit, explicit));
@@ -208,12 +220,18 @@ unittest
 @("Expression Operator Precedence, Parenthesis")
 unittest
 {
-    import std.format;
-    import std.conv;
-    import std.stdio;
     auto expr = Silver.decimateTree(Silver.Expression("(1 + 2) * 3"));
     auto subexpr = Silver.decimateTree(Silver.AdditionExpression("1 + 2"));
     expr[0][0].isEquivilent(subexpr).should.equal(true).because("\n"~diff(expr[0][0], subexpr));
+}
+
+@("Expression Operator Precedence, Logical")
+unittest
+{
+    auto expr = Silver.decimateTree(Silver.LogicalExpression("1 + 2 == 1 + 2"));
+    auto subexpr = Silver.decimateTree(Silver.AdditionExpression("1 + 2"));
+    expr[0].isEquivilent(subexpr).should.equal(true).because("\n"~diff(expr[0], subexpr));
+    expr[2].isEquivilent(subexpr).should.equal(true).because("\n"~diff(expr[2], subexpr));
 }
 
 

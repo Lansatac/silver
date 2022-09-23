@@ -1,13 +1,14 @@
 module silver.context;
 
-import std.stdio;
-import std.variant;
-import std.container.array;
-
 import pegged.grammar : ParseTree;
+
+debug import std.stdio;
 
 class Context
 {
+    import std.variant;
+    import std.container.array;
+
     private ParseTree program;
 
     nothrow this(ParseTree program)
