@@ -5,12 +5,10 @@
 	},
 	"configurations": [
 		{
-			"name": "library"
-		},
-		{
-			"name": "application",
-			"sourcePaths": ["source", "application"],
-			"targetType": "executable"
+			"name": "library",
+			"subConfigurations": {
+				"silver:grammar": "library"
+			}
 		},
 		{
 			"name": "unittest",
@@ -23,9 +21,6 @@
 			}
 		}
 	],
-	"subConfigurations": {
-		"silver:grammar": "unittest"
-	},
 	
 	"targetType": "library"
 }
