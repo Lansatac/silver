@@ -16,8 +16,7 @@ int main(string[] args)
 		return 0;
 	}
 
-	writefln("args: '%s'", args);
-	auto programFile = args[0];
+	auto programFile = args[1];
 	if(!programFile.isFile)
 	{
 		stderr.writefln("'%s' is not a file!");

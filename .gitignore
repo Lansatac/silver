@@ -18,3 +18,5 @@ silver-test-*
 .vscode/tasks.json
 
 **/silver_*.lib
+
+test.ag

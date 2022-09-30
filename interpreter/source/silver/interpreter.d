@@ -21,7 +21,7 @@ int interpret(string code)
         return 1;
     }
 
-    auto context = new Context(parseTree);
+    auto context = new Context(parseTree, true);
 
     context.run();
 
@@ -37,7 +37,7 @@ version(unittest)
     {
         import std.format;
 
-        auto program = `var variable = %s`.format(expression);
+        auto program = `var variable = %s;`.format(expression);
         auto parseTree = Silver(program);
         if(!parseTree.successful)
         {
@@ -47,12 +47,25 @@ version(unittest)
         context.run();
         return context.getGlobals()["variable"];
     }
+
+    
+    string runProgram(string program)
+    {
+        auto parseTree = Silver(program);
+        if(!parseTree.successful)
+        {
+            throw new Exception(parseTree.failMsg);
+        }
+        auto context = new Context(parseTree);
+        context.run();
+        return context.ProgramOutput;
+    }
 }
 
 @("Simple program")
 unittest
 {
-    interpret("var a = 1").should.equal(0);
+    interpret("var a = 1;").should.equal(0);
 }
 
 
@@ -85,9 +98,62 @@ unittest
 unittest
 {
     import std.conv;
-    auto tree = Silver("var a = 2 * 2 + 1");
+    auto tree = Silver("var a = 2 * 2 + 1;");
     tree.successful.should.equal(true);
     evaluateExpression("2 * 2 + 1").get!int.should.equal(5).because(tree.to!string);
+}
+
+@("Operator Precedence Parenthetical")
+unittest
+{
+    evaluateExpression("(1 + 2) * 2").get!int.should.equal(6);
+    evaluateExpression("2 * (1 + 2)").get!int.should.equal(6);
+}
+
+
+@("If Statements - true")
+unittest
+{
+    runProgram("var a = 1; if true then a = 2; end print a;").should.equal("2");
+}
+
+@("If Statements - false")
+unittest
+{
+    auto parseTree = Silver(
+        r"var a = 1;
+          if false then
+            a = 2;
+          end
+          ");
+    if(!parseTree.successful)
+    {
+        throw new Exception(parseTree.failMsg);
+    }
+    auto context = new Context(parseTree);
+    context.run();
+    context.getGlobals()["a"].get!int.should.equal(1);
+}
+
+
+@("If-Else Statements")
+unittest
+{
+    auto parseTree = Silver(
+        r"var a = 1;
+          if false then
+            a = 2;
+          else
+            a = 3;
+          end
+          ");
+    if(!parseTree.successful)
+    {
+        throw new Exception(parseTree.failMsg);
+    }
+    auto context = new Context(parseTree);
+    context.run();
+    context.getGlobals()["a"].get!int.should.equal(3);
 }
 
 private string errorMessage(ParseTree tree)
