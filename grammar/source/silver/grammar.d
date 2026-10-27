@@ -8,7 +8,7 @@ mixin(pegged.grammar.grammar(`
 Silver:
     Module < StatementBlock eol* eoi
 
-    StatementBlock < Statement (eol Statement)*
+    StatementBlock < Statement (eol+ Statement)*
 
     Statement < (
                  / DeclarationStatement
