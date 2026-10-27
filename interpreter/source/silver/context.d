@@ -73,6 +73,41 @@ class Context
                 throw new Exception("Variable %s not found".format(name));
             }
         }
+
+        public void defineFunction(string name, Function fn)
+        {
+            defineVariable(name, Variant(fn));
+        }
+
+        public Function resolveFunction(string name)
+        {
+            auto value = resolveVariable(name);
+            if(!value.convertsTo!Function)
+            {
+                import std.format : format;
+                throw new Exception("Variable %s is not a function".format(name));
+            }
+            return value.get!Function;
+        }
+    }
+
+    /// A function value: its declaration plus the environment it was defined in.
+    static class Function
+    {
+        ParseTree declaration;
+        Environment closure;
+        this(ParseTree declaration, Environment closure)
+        {
+            this.declaration = declaration;
+            this.closure = closure;
+        }
+    }
+
+    private static ParseTree[] childrenNamed(ParseTree tree, string name)
+    {
+        import std.algorithm : filter;
+        import std.array : array;
+        return tree.children.filter!(child => child.name == name).array;
     }
 
     private Environment globals;
@@ -136,6 +171,12 @@ class Context
                 break;
             case "Silver.IfStatement":
                 interpretIfStatement(ast, variables);
+                break;
+            case "Silver.FunctionDeclaration":
+                interpretFunctionDeclaration(ast, variables);
+                break;
+            case "Silver.CallStatement":
+                interpretExpression(ast[0], variables);
                 break;
             default:
             {
@@ -221,6 +262,7 @@ class Context
             case "Silver.Literal":
             case "Silver.NumberLiteral":
             case "Silver.Postfix":
+            case "Silver.FunctionParam":
                 return interpretExpression(ast.children[0], variables);
             case "Silver.UnsignedLiteral":
                 return Variant(ast.matches[0].to!int);
@@ -241,12 +283,64 @@ class Context
                     return Variant(input.to!bool);
                 }
             }
+            case "Silver.CallExpression":
+                return interpretCall(ast, variables);
             default:
             {
                 import std.format : format;
                 throw new Exception("Unhandled expression ast: %s".format(ast.name));
             }
         }
+    }
+
+    private void interpretFunctionDeclaration(ParseTree ast, Environment variables)
+    {
+        auto name = ast.children[0].matches[0];
+        variables.defineFunction(name, new Function(ast, variables));
+    }
+
+    private Variant interpretCall(ParseTree ast, Environment variables)
+    {
+        import std.format : format;
+
+        auto functionName = ast.children[0].matches[0];
+        auto fn = variables.resolveFunction(functionName);
+
+        string[] params;
+        foreach (paramDefs; childrenNamed(fn.declaration, "Silver.FunctionParamDefs"))
+        {
+            foreach (param; paramDefs.children)
+            {
+                params ~= param.matches[0];
+            }
+        }
+
+        auto callArgs = childrenNamed(ast, "Silver.CallArgs");
+        if(callArgs.length > 1)
+        {
+            throw new Exception("Chained calls are not supported");
+        }
+        ParseTree[] args = callArgs.length == 1 ? callArgs[0].children : [];
+        if(args.length != params.length)
+        {
+            throw new Exception("%s expects %s arguments, got %s".format(functionName, params.length, args.length));
+        }
+
+        // The parent is the environment the function was defined in, not the caller's.
+        Environment functionEnv = new Environment(fn.closure);
+        foreach (i, arg; args)
+        {
+            // Arguments are evaluated in the caller's environment.
+            functionEnv.defineVariable(params[i], interpretExpression(arg, variables));
+        }
+
+        foreach (block; childrenNamed(fn.declaration, "Silver.StatementBlock"))
+        {
+            interpret(block, functionEnv);
+        }
+
+        auto returnStatement = childrenNamed(fn.declaration, "Silver.ReturnStatement")[0];
+        return interpretExpression(returnStatement[0], functionEnv);
     }
 
     private Variant operate(string operator, Variant lhs, Variant rhs)

@@ -199,6 +199,70 @@ unittest
      var a = 2").should.throwException!Exception.withMessage("Duplicate declaration of variable a");
 }
 
+
+@("Call function")
+unittest
+{
+    runProgram("def f()
+        return 1
+     end
+     print f()").should.equal("1");
+}
+
+@("Call function with arguments")
+unittest
+{
+    runProgram("def add(a, b)
+        var c = a + b
+        return c
+     end
+     print add(1, 2)").should.equal("3");
+}
+
+@("Function sees variables from where it was defined")
+unittest
+{
+    runProgram("var x = 1
+     def f()
+        return x + 1
+     end
+     print f()").should.equal("2");
+}
+
+@("Function does not see caller's variables")
+unittest
+{
+    runProgram("var x = 1
+     def show()
+        return x
+     end
+     def caller()
+        var x = 2
+        return show()
+     end
+     print caller()").should.equal("1");
+}
+
+@("Function locals do not leak")
+unittest
+{
+    runProgram("def f()
+        var local = 1
+        return local
+     end
+     f()
+     print local").should.throwException!Exception.withMessage("Variable local not found");
+}
+
+@("Wrong argument count")
+unittest
+{
+    runProgram("def f(a)
+        return a
+     end
+     print f()").should.throwException!Exception.withMessage("f expects 1 arguments, got 0");
+}
+
 private string errorMessage(ParseTree tree)
 {
     ParseTree terminal = tree;

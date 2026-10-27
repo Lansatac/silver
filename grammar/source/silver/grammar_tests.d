@@ -3,30 +3,29 @@ module silver.grammar_tests;
 import pegged.grammar : ParseTree;
 import silver.grammar;
 
-version(unittest)
+version (unittest)
 {
     import fluent.asserts;
     import std.typecons;
 
-
     immutable skippable = [
-            "Silver.Expression",
-            "Silver.OrExpression",
-            "Silver.AndExpression",
-            "Silver.EqExpression",
-            "Silver.AdditionExpression",
-            "Silver.MultiplyExpression",
-            "Silver.Unary",
-            "Silver.Postfix",
-            "Silver.Eval",
-        ];
+        "Silver.Expression",
+        "Silver.OrExpression",
+        "Silver.AndExpression",
+        "Silver.EqExpression",
+        "Silver.AdditionExpression",
+        "Silver.MultiplyExpression",
+        "Silver.Unary",
+        "Silver.Postfix",
+        "Silver.Eval",
+    ];
 
     // Steps down through expression levels that matched no operator
     ParseTree unwrap(ParseTree tree)
     {
         import std.algorithm : canFind;
 
-        while(skippable.canFind(tree.name) && tree.children.length == 1)
+        while (skippable.canFind(tree.name) && tree.children.length == 1)
             tree = tree[0];
         return tree;
     }
@@ -48,13 +47,14 @@ version(unittest)
         string failure;
         return parse(input, failure);
     }
+
     bool parse(string input, ref string failure)
     {
         import std.conv : to;
-        
+
         auto parseTree = Silver(input);
 
-        if(!parseTree.successful)
+        if (!parseTree.successful)
         {
             failure = parseTree.failMsg ~ "\n" ~ parseTree.to!string;
             //writeln("ParseFailure:\n" ~ parseTree.toString);
@@ -66,20 +66,19 @@ version(unittest)
     bool isEquivilent(ParseTree lhs, ParseTree rhs)
     {
         import std.range : zip;
-        import std.algorithm: canFind;
-        
+        import std.algorithm : canFind;
 
         lhs = lhs.unwrap;
         rhs = rhs.unwrap;
 
-        if((lhs.name == rhs.name)
-        && (lhs.successful == rhs.successful)
-        && (lhs.matches == rhs.matches)
-        && (lhs.children.length == rhs.children.length))
+        if ((lhs.name == rhs.name)
+            && (lhs.successful == rhs.successful)
+            && (lhs.matches == rhs.matches)
+            && (lhs.children.length == rhs.children.length))
         {
             foreach (children; lhs.children.zip(rhs.children))
             {
-                if(children[0].isEquivilent(children[1]))
+                if (children[0].isEquivilent(children[1]))
                 {
                     continue;
                 }
@@ -96,9 +95,10 @@ version(unittest)
         import std.conv : to;
         import std.algorithm : map;
         import std.format : format;
-        
+
         return diffTree(lhs, rhs)
-            .map!(_ => "%s: %s is not the same as %s: %s".format(_[0].name, _[0].matches, _[1].name, _[1].matches))
+            .map!(_ => "%s: %s is not the same as %s: %s".format(_[0].name, _[0].matches, _[1].name, _[1]
+                    .matches))
             .join("\n--------------------\n");
     }
 
@@ -107,15 +107,15 @@ version(unittest)
         import std.range : zip;
         import std.format;
 
-        if((lhs.name == rhs.name)
-        && (lhs.successful == rhs.successful)
-        && (lhs.matches == rhs.matches)
-        && (lhs.children.length == rhs.children.length))
+        if ((lhs.name == rhs.name)
+            && (lhs.successful == rhs.successful)
+            && (lhs.matches == rhs.matches)
+            && (lhs.children.length == rhs.children.length))
         {
             Tuple!(ParseTree, ParseTree)[] diffs;
             foreach (children; lhs.children.zip(rhs.children))
             {
-                if(children[0].isEquivilent(children[1]))
+                if (children[0].isEquivilent(children[1]))
                 {
                     continue;
                 }
@@ -178,9 +178,9 @@ unittest
 @("Keyword-prefixed Variables")
 unittest
 {
-    shouldParse("printer = 1");  // read as `print er`, then ` = 1` is left over
-    shouldParse("x = reader");   // read as `read`, then `er` is left over
-    shouldParse("printl a");     // 'print' matches first; `l` becomes the expression
+    shouldParse("printer = 1"); // read as `print er`, then ` = 1` is left over
+    shouldParse("x = reader"); // read as `read`, then `er` is left over
+    shouldParse("printl a"); // 'print' matches first; `l` becomes the expression
 }
 
 @("Parenthesis")
@@ -200,7 +200,7 @@ unittest
 {
     auto implicit = Silver.decimateTree(Silver.Expression("1+2*3"));
     auto explicit = Silver.decimateTree(Silver.Expression("1+(2*3)"));
-    implicit.isEquivilent(explicit).should.equal(true).because("\n"~diff(implicit, explicit));
+    implicit.isEquivilent(explicit).should.equal(true).because("\n" ~ diff(implicit, explicit));
 }
 
 @("Expression Operator Precedence, Complex")
@@ -208,7 +208,7 @@ unittest
 {
     auto implicit = Silver.decimateTree(Silver.Expression("1 + 2 * 3 + 4"));
     auto explicit = Silver.decimateTree(Silver.Expression("1 + (2 * 3) + 4"));
-    implicit.isEquivilent(explicit).should.equal(true).because("\n"~diff(implicit, explicit));
+    implicit.isEquivilent(explicit).should.equal(true).because("\n" ~ diff(implicit, explicit));
 }
 
 @("Expression Operator Precedence, Parenthesis")
@@ -217,7 +217,7 @@ unittest
     auto expr = Silver.decimateTree(Silver.Expression("(1 + 2) * 3")).unwrap;
     auto subexpr = Silver.decimateTree(Silver.AdditionExpression("1 + 2"));
     expr.name.should.equal("Silver.MultiplyExpression");
-    expr[0].isEquivilent(subexpr).should.equal(true).because("\n"~diff(expr[0], subexpr));
+    expr[0].isEquivilent(subexpr).should.equal(true).because("\n" ~ diff(expr[0], subexpr));
 }
 
 @("Expression Operator Precedence, Logical")
@@ -226,8 +226,8 @@ unittest
     auto expr = Silver.decimateTree(Silver.Expression("1 + 2 == 1 + 2")).unwrap;
     auto subexpr = Silver.decimateTree(Silver.AdditionExpression("1 + 2"));
     expr.name.should.equal("Silver.EqExpression");
-    expr[0].isEquivilent(subexpr).should.equal(true).because("\n"~diff(expr[0], subexpr));
-    expr[2].isEquivilent(subexpr).should.equal(true).because("\n"~diff(expr[2], subexpr));
+    expr[0].isEquivilent(subexpr).should.equal(true).because("\n" ~ diff(expr[0], subexpr));
+    expr[2].isEquivilent(subexpr).should.equal(true).because("\n" ~ diff(expr[2], subexpr));
 }
 
 @("Repeated Expression Operator")
@@ -289,7 +289,7 @@ unittest
 @("If Statement")
 unittest
 {
-       `if true then
+    `if true then
             print 1
         end`.shouldParse;
 }
@@ -314,9 +314,8 @@ unittest
         else if true then
             print 2
         end",
-        );
+    );
 }
-
 
 @("If-Else-If-Else Statement")
 unittest
@@ -355,9 +354,7 @@ unittest
 unittest
 {
     `if true then end`.shouldParse;
-    `def f() end`.shouldParse;
 }
-
 
 @("Trailing Newline")
 unittest
@@ -427,7 +424,7 @@ unittest
 {
     auto implicit = Silver.decimateTree(Silver.Expression("a == b && c == d"));
     auto explicit = Silver.decimateTree(Silver.Expression("(a == b) && (c == d)"));
-    implicit.isEquivilent(explicit).should.equal(true).because("\n"~diff(implicit, explicit));
+    implicit.isEquivilent(explicit).should.equal(true).because("\n" ~ diff(implicit, explicit));
 }
 
 @("Expression Operator Precedence, And Before Or")
@@ -435,14 +432,13 @@ unittest
 {
     auto implicit = Silver.decimateTree(Silver.Expression("a || b && c"));
     auto explicit = Silver.decimateTree(Silver.Expression("a || (b && c)"));
-    implicit.isEquivilent(explicit).should.equal(true).because("\n"~diff(implicit, explicit));
+    implicit.isEquivilent(explicit).should.equal(true).because("\n" ~ diff(implicit, explicit));
 }
-
 
 @("Function Definition")
 unittest
 {
-    shouldParse("def a()\nvar a = 1\nend");
-    Silver.FunctionDeclaration("def a() var a = 1 end").successful.should.equal(true);
-    Silver.FunctionDeclaration("def a(a, b) var a = 1 end").successful.should.equal(true);
+    shouldParse("def a()\nreturn 1\nend");
+    Silver.FunctionDeclaration("def a() return 1 end").successful.should.equal(true);
+    Silver.FunctionDeclaration("def a(a, b) return 1 end").successful.should.equal(true);
 }

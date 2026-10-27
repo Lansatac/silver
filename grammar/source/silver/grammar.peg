@@ -15,10 +15,13 @@ Silver:
     VariableDeclaration < :VAR Variable '=' Expression
     AssignmentStatement < AssignTarget '=' Expression
 
-    FunctionDeclaration < :DEF Variable '(' (FunctionParamDef (',' FunctionParamDef)*)? ')' Sep? StatementBlock? :END
+    AssignTarget < Variable
+
+    FunctionDeclaration < :DEF Variable '(' FunctionParamDefs ')' Sep? StatementBlock? ReturnStatement Sep? :END
+    FunctionParamDefs < (FunctionParamDef (',' FunctionParamDef)*)?
     FunctionParamDef < Variable
 
-    AssignTarget < Variable
+    ReturnStatement < :RETURN Expression
 
     CallStatement < CallExpression
 
@@ -91,8 +94,9 @@ Silver:
     TRUE    <- Kword("true")
     FALSE   <- Kword("false")
     READ    <- Kword("read")
+    RETURN  <- Kword("return")
 
-    Keyword  <- VAR / PRINTL / PRINT / IF / THEN / ELSE / END / TRUE / FALSE / READ
+    Keyword  <- VAR / DEF / PRINTL / PRINT / IF / THEN / ELSE / END / TRUE / FALSE / READ / RETURN
     IdentChar <- [a-zA-Z0-9_]
     Variable <- !Keyword identifier
 
