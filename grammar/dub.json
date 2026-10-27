@@ -1,19 +1,16 @@
 {
+	"name": "grammar",
+	"targetType": "library",
 	"dependencies": {
-		"pegged": "0.4.5"
+		"pegged": "0.4.9"
 	},
 	"configurations": [
-		{
-			"name": "library"
-		},
+		{ "name": "library"	},
 		{
 			"name": "unittest",
 			"dependencies": {
-				"fluent-asserts": "1.0.0-beta.2",
-				"silly": "1.1.1"
+				"fluent-asserts": "~>2.1"
 			}
 		}
-	],
-	"name": "grammar",
-	"targetType": "library"
+	]
 }

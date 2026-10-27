@@ -7,7 +7,8 @@ version(unittest)
     import pegged.grammar : ParseTree;
     import silver.grammar;
     import fluent.asserts;
-    import fluentasserts.core.operations.registry;
+    import fluentasserts.operations.registry : Registry;
+    import fluentasserts.core.evaluation.eval : Evaluation;
 
     static this() {
         Registry.instance.register!(string, bool)("parse", &parseResult);
@@ -44,27 +45,25 @@ version(unittest)
         return asString;
     }
 
-    IResult[] parseResult(ref Evaluation evaluation) @safe nothrow
+    void parseResult(ref Evaluation evaluation) @safe nothrow
     {
-        import std.typecons : rebindable;
-
-        string program = evaluation.currentValue.strValue;
+        string program = evaluation.currentValue.strValue[].idup;
         ParseTree tree;
         try{
             tree = safeSilver(program);
         }
         catch(Exception e)
         {
-            return [new MessageResult("Failed to parse with this exception: " ~ e.msg)];
+            evaluation.result.expected.put("program to parse");
+            evaluation.result.actual.put("Failed to parse with this exception: " ~ e.msg);
+            return;
         }
         if(tree.successful)
         {
-            return null;
+            return;
         }
-        return [
-            new MessageResult(tree.safeFailMsg),
-            new MessageResult(program),
-            new MessageResult(tree.safeToString)
-        ];
+        evaluation.result.expected.put("program to parse");
+        evaluation.result.actual.put(
+            tree.safeFailMsg ~ "\n" ~ program ~ "\n" ~ tree.safeToString);
     }
 }

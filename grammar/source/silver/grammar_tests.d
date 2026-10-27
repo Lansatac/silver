@@ -6,7 +6,6 @@ import silver.grammar;
 version(unittest)
 {
     import fluent.asserts;
-    import fluentasserts.core.operations.registry;
     import std.typecons;
 
 

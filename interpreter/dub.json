@@ -1,26 +1,16 @@
 {
 	"name": "interpreter",
+	"targetType": "library",
 	"dependencies": {
 		"silver:grammar": "*"
 	},
 	"configurations": [
-		{
-			"name": "library",
-			"subConfigurations": {
-				"silver:grammar": "library"
-			}
-		},
+		{ "name": "library" },
 		{
 			"name": "unittest",
 			"dependencies": {
-				"fluent-asserts": "1.0.0-beta.2",
-				"silly": "~>1.1.1"
-			},
-			"subConfigurations": {
-				"silver:grammar": "unittest"
+				"fluent-asserts": "~>2.1"
 			}
 		}
-	],
-	
-	"targetType": "library"
+	]
 }

@@ -12,7 +12,7 @@
 	],
 	"targetType": "executable",
 	"copyright": "Copyright © 2020, Jason",
-	"description": "A minimal D application.",
+	"description": "A simple experimental programming language.",
 	"license": "proprietary",
 	"name": "silver"
 }
