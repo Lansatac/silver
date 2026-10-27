@@ -333,6 +333,33 @@ unittest
         end");
 }
 
+@("Single-Line If Statement")
+unittest
+{
+    `if true then print 1 end`.shouldParse;
+    `if true then print 1 else print 2 end`.shouldParse;
+}
+
+@("Semicolon Separators")
+unittest
+{
+    `var a = 1; print a`.shouldParse;
+    `if true then a = 1; print a end`.shouldParse;
+}
+
+@("Missing Separator")
+unittest
+{
+    `var a = 1 print a`.shouldNotParse;
+}
+
+@("Empty Blocks")
+unittest
+{
+    `if true then end`.shouldParse;
+    `def f() end`.shouldParse;
+}
+
 
 @("Trailing Newline")
 unittest
@@ -411,4 +438,13 @@ unittest
     auto implicit = Silver.decimateTree(Silver.Expression("a || b && c"));
     auto explicit = Silver.decimateTree(Silver.Expression("a || (b && c)"));
     implicit.isEquivilent(explicit).should.equal(true).because("\n"~diff(implicit, explicit));
+}
+
+
+@("Function Definition")
+unittest
+{
+    shouldParse("def a()\nvar a = 1\nend");
+    Silver.FunctionDeclaration("def a() var a = 1 end").successful.should.equal(true);
+    Silver.FunctionDeclaration("def a(a, b) var a = 1 end").successful.should.equal(true);
 }

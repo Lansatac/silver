@@ -1,18 +1,22 @@
 Silver:
-    Module         < EOL? StatementBlock eoi
-    StatementBlock < (Statement EOL)+
-    EOL            <: eol+ / eoi
+    Module         < Sep? StatementBlock? eoi
+    StatementBlock < Statement (Sep Statement)* Sep?
+    Sep            <: (eol / ';')+
 
     Statement < (
-                 / DeclarationStatement
+                 / VariableDeclaration
+                 / FunctionDeclaration
                  / PrintStatement
                  / IfStatement
                  / AssignmentStatement
                  / CallStatement
                 )
 
-    DeclarationStatement < :VAR Variable '=' Expression
+    VariableDeclaration < :VAR Variable '=' Expression
     AssignmentStatement < AssignTarget '=' Expression
+
+    FunctionDeclaration < :DEF Variable '(' (FunctionParamDef (',' FunctionParamDef)*)? ')' Sep? StatementBlock? :END
+    FunctionParamDef < Variable
 
     AssignTarget < Variable
 
@@ -21,9 +25,9 @@ Silver:
     PrintStatement < (PRINT / PRINTL) Expression
 
     IfStatement < IfBlock ElseIfBlock* ElseBlock? :END
-    IfBlock < :IF Expression :THEN EOL StatementBlock
-    ElseIfBlock < :ELSE :IF Expression :THEN EOL StatementBlock
-    ElseBlock < :ELSE EOL StatementBlock
+    IfBlock < :IF Expression :THEN Sep? StatementBlock?
+    ElseIfBlock < :ELSE :IF Expression :THEN Sep? StatementBlock?
+    ElseBlock < :ELSE Sep? StatementBlock?
     
     Expression     < OrExpression
     OrExpression   < AndExpression (OrOperator AndExpression)*
@@ -77,6 +81,7 @@ Silver:
     Kword(K)   <- K !IdentChar
 
     VAR     <- Kword("var")
+    DEF     <- Kword("def")
     PRINT   <- Kword("print")
     PRINTL  <- Kword("printl")
     IF      <- Kword("if")

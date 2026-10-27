@@ -105,7 +105,7 @@ class Context
                     interpret(statement, variables);
                 }
                 break;
-            case "Silver.DeclarationStatement":
+            case "Silver.VariableDeclaration":
                 auto name = ast.children[0].matches[0];
                 auto value = interpretExpression(ast[1], variables);
                 variables.defineVariable(name, value);
