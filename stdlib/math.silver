@@ -1,0 +1,23 @@
+def square(x)
+    return x * x
+end
+
+def cube(x)
+    return x * square(x)
+end
+
+def pow(base, exponent)
+    var result = 1
+    if !(exponent == 0) then
+        result = base * pow(base, exponent - 1)
+    end
+    return result
+end
+
+def factorial(n)
+    var result = 1
+    if !(n == 0) then
+        result = n * factorial(n - 1)
+    end
+    return result
+end
