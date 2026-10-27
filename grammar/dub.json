@@ -1,6 +1,7 @@
 {
 	"name": "grammar",
 	"targetType": "library",
+	"stringImportPaths": ["source/silver"],
 	"dependencies": {
 		"pegged": "0.4.9"
 	},
