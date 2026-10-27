@@ -10,16 +10,18 @@ version(unittest)
 
 
 
-    void shouldParse(string input)
+    // file/line default to the caller's location and are passed to `should`,
+    // so failures are reported at the test rather than inside these helpers
+    void shouldParse(string input, string file = __FILE__, size_t line = __LINE__)
     {
         string failure;
-        parse(input, failure).should.equal(true).because(failure);
+        should(parse(input, failure), file, line).equal(true).because(failure);
     }
 
-    void shouldNotParse(string input)
+    void shouldNotParse(string input, string file = __FILE__, size_t line = __LINE__)
     {
         string failure;
-        parse(input, failure).should.equal(false);
+        should(parse(input, failure), file, line).equal(false);
     }
 
     bool parse(string input)
