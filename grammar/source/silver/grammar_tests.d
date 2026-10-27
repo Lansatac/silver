@@ -323,3 +323,73 @@ unittest
 
 ");
 }
+
+@("Blank Lines Between Statements")
+unittest
+{
+    shouldParse("var a = 1\n\nprint a");
+    shouldParse("var a = 1\n\n\nprint a");
+}
+
+@("Leading Newline")
+unittest
+{
+    shouldParse("\nvar a = 1");
+}
+
+@("Trailing Whitespace After Then")
+unittest
+{
+    // Escaped so editors don't strip the trailing spaces
+    shouldParse("if true then  \n    print 1\nend");
+}
+
+@("Trailing Whitespace After Else")
+unittest
+{
+    shouldParse("if true then\n    print 1\nelse  \n    print 2\nend");
+}
+
+@("Hexadecimal Literal")
+unittest
+{
+    shouldParse("a = 0x1F");
+    shouldParse("a = 0xff");
+}
+
+@("Binary Literal")
+unittest
+{
+    shouldParse("a = 0b101");
+    shouldParse("a = 0b1010_0101");
+}
+
+@("Scientific Literal Without Decimal")
+unittest
+{
+    shouldParse("a = 1e5");
+    shouldParse("a = 1E-5");
+}
+
+@("Unary Minus")
+unittest
+{
+    shouldParse("a = -b");
+    shouldParse("a = -(1 + 2)");
+}
+
+@("Expression Operator Precedence, Equality Before And")
+unittest
+{
+    auto implicit = Silver.decimateTree(Silver.Expression("a == b && c == d"));
+    auto explicit = Silver.decimateTree(Silver.Expression("(a == b) && (c == d)"));
+    implicit.isEquivilent(explicit).should.equal(true).because("\n"~diff(implicit, explicit));
+}
+
+@("Expression Operator Precedence, And Before Or")
+unittest
+{
+    auto implicit = Silver.decimateTree(Silver.Expression("a || b && c"));
+    auto explicit = Silver.decimateTree(Silver.Expression("a || (b && c)"));
+    implicit.isEquivilent(explicit).should.equal(true).because("\n"~diff(implicit, explicit));
+}
