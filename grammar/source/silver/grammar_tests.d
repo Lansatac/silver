@@ -16,6 +16,12 @@ version(unittest)
         parse(input, failure).should.equal(true).because(failure);
     }
 
+    void shouldNotParse(string input)
+    {
+        string failure;
+        parse(input, failure).should.equal(false);
+    }
+
     bool parse(string input)
     {
         string failure;
@@ -106,13 +112,13 @@ version(unittest)
 @("Basic Assignment")
 unittest
 {
-    shouldParse("a=b;");
+    shouldParse("a=b");
 }
 
 @("Assignment to literal")
 unittest
 {
-    shouldParse("a=true;");
+    shouldParse("a=true");
 }
 
 @("Basic Addition")
@@ -133,10 +139,30 @@ unittest
     Silver.Expression("1+2+3").successful.should.equal(true);
 }
 
-@("Print Expression")
+@("Print Statement")
 unittest
 {
-    Silver.Expression("print a").successful.should.equal(true);
+    Silver.Statement("print a").successful.should.equal(true);
+}
+
+@("Keyword-like Variable")
+unittest
+{
+    auto tree = Silver("variable = 1");
+    tree.successful.should.equal(true);
+
+    // Silver -> Module -> StatementBlock -> Statement -> <kind>
+    auto statement = tree[0][0][0][0];
+    statement.name.should.equal("Silver.AssignmentStatement");
+    statement[0].matches.should.equal(["variable"]);
+}
+
+@("Keyword-prefixed Variables")
+unittest
+{
+    shouldParse("printer = 1");  // read as `print er`, then ` = 1` is left over
+    shouldParse("x = reader");   // read as `read`, then `er` is left over
+    shouldParse("printl a");     // 'print' matches first; `l` becomes the expression
 }
 
 @("Parenthesis")
@@ -191,49 +217,61 @@ unittest
     Silver.Expression("1+2+3").successful.should.equal(true);
 }
 
+@("Single-Line")
+unittest
+{
+    shouldParse(`print a`);
+}
+
 @("Multi-Line")
 unittest
 {
-    shouldParse(`var a = 0;
-    print a;`);
+    shouldParse(`var a = 0
+    print a`);
+}
+
+@("Two Statements Single-Line")
+unittest
+{
+    shouldNotParse(`var a = 0 print a`);
 }
 
 @("Assign To Function Call")
 unittest
 {
-    shouldParse("a=b();");
+    shouldParse("a=b()");
 }
 
 @("Function Call - Empty")
 unittest
 {
-    shouldParse("a();");
+    shouldParse("a()");
 }
 
 @("Function Calls - Single Parameter")
 unittest
 {
-    Silver.Expression("a(b);").successful.should.equal(true);
+    Silver.Expression("a(b)").successful.should.equal(true);
 }
 
 @("Function Calls - Multiple Parameters")
 unittest
 {
-    shouldParse("a(b,c);");
+    shouldParse("a(b,c)");
 }
 
 @("Nested function Calls")
 unittest
 {
-    shouldParse("a(b());");
-    shouldParse("a(b(),c());");
+    shouldParse("a(b())");
+    shouldParse("a(b(),c())");
 }
 
 @("If Statement")
 unittest
 {
        `if true then
-            print 1;
+            print 1
         end`.shouldParse;
 }
 
@@ -242,9 +280,9 @@ unittest
 {
     shouldParse(
         r"if true then
-            print 1;
+            print 1
         else
-            print 2;
+            print 2
         end");
 }
 
@@ -253,9 +291,9 @@ unittest
 {
     shouldParse(
         r"if true then
-            print 1;
+            print 1
         else if true then
-            print 2;
+            print 2
         end",
         );
 }
@@ -266,10 +304,20 @@ unittest
 {
     shouldParse(
         r"if true then
-            print 1;
+            print 1
         else if true then
-            print 2;
+            print 2
         else
-            print 3;
+            print 3
         end");
+}
+
+
+@("Trailing Newline")
+unittest
+{
+    shouldParse(
+        r"var a = 1
+
+");
 }

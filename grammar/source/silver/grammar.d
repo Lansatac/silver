@@ -6,7 +6,9 @@ debug import std.stdio;
 
 mixin(pegged.grammar.grammar(`
 Silver:
-    Module < Statement+ eoi
+    Module < StatementBlock eol* eoi
+
+    StatementBlock < Statement (eol Statement)*
 
     Statement < (
                  / DeclarationStatement
@@ -16,27 +18,26 @@ Silver:
                  / CallStatement
                 )
 
-    DeclarationStatement < 'var' Variable '=' Expression  ';'
-    
-    AssignmentStatement < AssignTarget '=' Expression  ';'
+    DeclarationStatement < :VAR Variable '=' Expression
+    AssignmentStatement < AssignTarget '=' Expression
 
     AssignTarget < Variable
 
-    CallStatement < CallExpression ';'
+    CallStatement < CallExpression
 
-    PrintStatement < ('print' / 'printl') Expression ';'
+    PrintStatement < (PRINT / PRINTL) Expression
 
-    IfStatement <- IfBlock (ElseIfBlock)* (ElseBlock)? "end"
-    IfBlock <- "if" Expression "then" Statement+
-    ElseIfBlock <- "else if" Expression "then" Statement+
-    ElseBlock <- "else" Statement+
+    IfStatement < IfBlock (eol ElseIfBlock)* (eol ElseBlock)? eol :END
+    IfBlock <- :IF Expression :THEN eol StatementBlock
+    ElseIfBlock < :ELSE :IF Expression :THEN eol StatementBlock
+    ElseBlock <- :ELSE eol StatementBlock
     
     Expression < LogicalExpression /
                  AdditionExpression /
                  MultiplyExpression /
                  Eval
 
-    ReadExpression < 'read'
+    ReadExpression < READ
 
     CallExpression < Expression '(' (FunctionParam (:',' FunctionParam)*)? ')'
     FunctionParam < Expression
@@ -64,7 +65,7 @@ Silver:
 
     AssignOp <  "~=" / "+=" / "-=" / "*=" / "^=" / "|=" / "&=" / "/=" / "="
 
-    BooleanLiteral <- "true" / "false"
+    BooleanLiteral <- TRUE / FALSE
 
     NumberLiteral <-  ScientificLiteral
                     / FloatingLiteral
@@ -81,5 +82,22 @@ Silver:
     BinaryLiteral     <~ "0b" [01] [01_]*
     SignLiteral       <- '-' / '+'
 
-    Variable <- identifier
+    Kword(K)   <- K !IdentChar
+
+    VAR     <- Kword("var")
+    PRINT   <- Kword("print")
+    PRINTL  <- Kword("printl")
+    IF      <- Kword("if")
+    THEN    <- Kword("then")
+    ELSE    <- Kword("else")
+    END     <- Kword("end")
+    TRUE    <- Kword("true")
+    FALSE   <- Kword("false")
+    READ    <- Kword("read")
+
+    Keyword  <- VAR / PRINTL / PRINT / IF / THEN / ELSE / END / TRUE / FALSE / READ
+    IdentChar <- [a-zA-Z0-9_]
+    Variable <- !Keyword identifier
+
+    Spacing <- :(' ' / '\t')*
 `));

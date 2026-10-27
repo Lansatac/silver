@@ -37,7 +37,7 @@ version(unittest)
     {
         import std.format;
 
-        auto program = `var variable = %s;`.format(expression);
+        auto program = `var variable = %s`.format(expression);
         auto parseTree = Silver(program);
         if(!parseTree.successful)
         {
@@ -65,7 +65,7 @@ version(unittest)
 @("Simple program")
 unittest
 {
-    interpret("var a = 1;").should.equal(0);
+    interpret("var a = 1").should.equal(0);
 }
 
 
@@ -98,7 +98,7 @@ unittest
 unittest
 {
     import std.conv;
-    auto tree = Silver("var a = 2 * 2 + 1;");
+    auto tree = Silver("var a = 2 * 2 + 1");
     tree.successful.should.equal(true);
     evaluateExpression("2 * 2 + 1").get!int.should.equal(5).because(tree.to!string);
 }
@@ -114,16 +114,20 @@ unittest
 @("If Statements - true")
 unittest
 {
-    runProgram("var a = 1; if true then a = 2; end print a;").should.equal("2");
+    runProgram("var a = 1
+     if true then
+        a = 2
+     end
+     print a").should.equal("2");
 }
 
 @("If Statements - false")
 unittest
 {
     auto parseTree = Silver(
-        r"var a = 1;
+        r"var a = 1
           if false then
-            a = 2;
+            a = 2
           end
           ");
     if(!parseTree.successful)
@@ -140,11 +144,11 @@ unittest
 unittest
 {
     auto parseTree = Silver(
-        r"var a = 1;
+        r"var a = 1
           if false then
-            a = 2;
+            a = 2
           else
-            a = 3;
+            a = 3
           end
           ");
     if(!parseTree.successful)

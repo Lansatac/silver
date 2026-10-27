@@ -57,6 +57,7 @@ class Context
                 interpret(ast.children[0], variables);
                 break;
             case "Silver.Module":
+            case "Silver.StatementBlock":
                 foreach (statement; ast.children)
                 {
                     interpret(statement, variables);
@@ -73,7 +74,7 @@ class Context
                 variables[$-1][name] = value;
             break;
             case "Silver.PrintStatement":
-                auto value = interpretExpression(ast[0], variables);
+                auto value = interpretExpression(ast[1], variables);
                 if(ast.matches[0] == "print")
                 {
                     programOutput ~= value.to!string;
