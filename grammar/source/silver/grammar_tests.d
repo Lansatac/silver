@@ -31,18 +31,16 @@ version(unittest)
         return tree;
     }
 
-
-
-    void shouldParse(string input)
+    void shouldParse(string input, string file = __FILE__, size_t line = __LINE__)
     {
         string failure;
-        parse(input, failure).should.equal(true).because(failure);
+        should(parse(input, failure), file, line).equal(true).because(failure);
     }
 
-    void shouldNotParse(string input)
+    void shouldNotParse(string input, string file = __FILE__, size_t line = __LINE__)
     {
         string failure;
-        parse(input, failure).should.equal(false);
+        should(parse(input, failure), file, line).equal(false);
     }
 
     bool parse(string input)
