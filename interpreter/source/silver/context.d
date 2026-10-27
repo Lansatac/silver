@@ -18,6 +18,7 @@ class Context
     nothrow this(ParseTree program, bool useStdOut = false)
     {
         this.program = program;
+        this.useStdOut = useStdOut;
     }
 
     private Array!(Variant[string]) globals;
@@ -143,25 +144,40 @@ class Context
     {
         import std.conv : to, ConvException;
         import std.string : strip;
-        import std.range : slide, drop;
+        import std.range : chunks, drop;
         switch(ast.name)
         {
             case "Silver.Expression":
                 return interpretExpression(ast[0], variables);
             case "Silver.AdditionExpression":
             case "Silver.MultiplyExpression":
-            case "Silver.LogicalExpression":
+            case "Silver.OrExpression":
+            case "Silver.AndExpression":
+            case "Silver.EqExpression":
                 auto lhs = interpretExpression(ast[0], variables);
-                foreach(children;ast.children.drop(1).slide(2))
+                foreach(children;ast.children.drop(1).chunks(2))
                 {
                     auto operator = children[0].matches[0];
                     auto rhs = interpretExpression(children[1], variables);
                     lhs = operate(operator, lhs, rhs);
                 }
                 return lhs;
+            case "Silver.Unary":
+            if(ast.children.length == 2)
+            {
+                auto value = interpretExpression(ast[1], variables);
+                if(ast.children.length == 2)
+                {
+                    auto operator = ast[0].matches[0];
+                    return unaryOperate(operator, value);
+                }
+                return value;
+            }
+            return interpretExpression(ast[0], variables);
             case "Silver.Eval":
             case "Silver.Literal":
             case "Silver.NumberLiteral":
+            case "Silver.Postfix":
                 return interpretExpression(ast.children[0], variables);
             case "Silver.UnsignedLiteral":
                 return Variant(ast.matches[0].to!int);
@@ -211,6 +227,32 @@ class Context
             return Variant(lhs.get!bool || rhs.get!bool);
         default:
             throw new Exception("Unsupported operator " ~ operator);
+        }
+    }
+
+        private Variant unaryOperate(string operator, Variant value)
+    {
+        //writefln("%s %s %s", lhs, operator, rhs);
+        switch(operator)
+        {
+        case "-":
+            if(value.convertsTo!double)
+            {
+                return Variant(-value.get!double);
+            }
+            else if(value.convertsTo!int)
+            {
+                return Variant(-value.get!int);
+            }
+            else
+            {
+                import std.conv : to;
+                throw new Exception("Unsupported unary operator " ~ operator ~ " for type " ~ value.type.to!string);
+            }
+        case "!":
+            return Variant(!value.get!bool);
+        default:
+            throw new Exception("Unsupported unary operator " ~ operator);
         }
     }
 }

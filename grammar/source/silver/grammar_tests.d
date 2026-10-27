@@ -9,19 +9,40 @@ version(unittest)
     import std.typecons;
 
 
+    immutable skippable = [
+            "Silver.Expression",
+            "Silver.OrExpression",
+            "Silver.AndExpression",
+            "Silver.EqExpression",
+            "Silver.AdditionExpression",
+            "Silver.MultiplyExpression",
+            "Silver.Unary",
+            "Silver.Postfix",
+            "Silver.Eval",
+        ];
 
-    // file/line default to the caller's location and are passed to `should`,
-    // so failures are reported at the test rather than inside these helpers
-    void shouldParse(string input, string file = __FILE__, size_t line = __LINE__)
+    // Steps down through expression levels that matched no operator
+    ParseTree unwrap(ParseTree tree)
     {
-        string failure;
-        should(parse(input, failure), file, line).equal(true).because(failure);
+        import std.algorithm : canFind;
+
+        while(skippable.canFind(tree.name) && tree.children.length == 1)
+            tree = tree[0];
+        return tree;
     }
 
-    void shouldNotParse(string input, string file = __FILE__, size_t line = __LINE__)
+
+
+    void shouldParse(string input)
     {
         string failure;
-        should(parse(input, failure), file, line).equal(false);
+        parse(input, failure).should.equal(true).because(failure);
+    }
+
+    void shouldNotParse(string input)
+    {
+        string failure;
+        parse(input, failure).should.equal(false);
     }
 
     bool parse(string input)
@@ -48,13 +69,10 @@ version(unittest)
     {
         import std.range : zip;
         import std.algorithm: canFind;
+        
 
-        auto skippable = ["Silver.Expression", "Silver.Eval"];
-
-        while(skippable.canFind(lhs.name))
-            lhs = lhs[0];
-        while(skippable.canFind(rhs.name))
-            rhs = rhs[0];
+        lhs = lhs.unwrap;
+        rhs = rhs.unwrap;
 
         if((lhs.name == rhs.name)
         && (lhs.successful == rhs.successful)
@@ -198,20 +216,21 @@ unittest
 @("Expression Operator Precedence, Parenthesis")
 unittest
 {
-    auto expr = Silver.decimateTree(Silver.Expression("(1 + 2) * 3"));
+    auto expr = Silver.decimateTree(Silver.Expression("(1 + 2) * 3")).unwrap;
     auto subexpr = Silver.decimateTree(Silver.AdditionExpression("1 + 2"));
-    expr[0][0].isEquivilent(subexpr).should.equal(true).because("\n"~diff(expr[0][0], subexpr));
+    expr.name.should.equal("Silver.MultiplyExpression");
+    expr[0].isEquivilent(subexpr).should.equal(true).because("\n"~diff(expr[0], subexpr));
 }
 
 @("Expression Operator Precedence, Logical")
 unittest
 {
-    auto expr = Silver.decimateTree(Silver.LogicalExpression("1 + 2 == 1 + 2"));
+    auto expr = Silver.decimateTree(Silver.Expression("1 + 2 == 1 + 2")).unwrap;
     auto subexpr = Silver.decimateTree(Silver.AdditionExpression("1 + 2"));
+    expr.name.should.equal("Silver.EqExpression");
     expr[0].isEquivilent(subexpr).should.equal(true).because("\n"~diff(expr[0], subexpr));
     expr[2].isEquivilent(subexpr).should.equal(true).because("\n"~diff(expr[2], subexpr));
 }
-
 
 @("Repeated Expression Operator")
 unittest

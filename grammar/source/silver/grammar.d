@@ -6,9 +6,9 @@ debug import std.stdio;
 
 mixin(pegged.grammar.grammar(`
 Silver:
-    Module < StatementBlock eol* eoi
-
-    StatementBlock < Statement (eol+ Statement)*
+    Module         < EOL? StatementBlock eoi
+    StatementBlock < (Statement EOL)+
+    EOL            <: eol+ / eoi
 
     Statement < (
                  / DeclarationStatement
@@ -27,54 +27,53 @@ Silver:
 
     PrintStatement < (PRINT / PRINTL) Expression
 
-    IfStatement < IfBlock (eol ElseIfBlock)* (eol ElseBlock)? eol :END
-    IfBlock <- :IF Expression :THEN eol StatementBlock
-    ElseIfBlock < :ELSE :IF Expression :THEN eol StatementBlock
-    ElseBlock <- :ELSE eol StatementBlock
+    IfStatement < IfBlock ElseIfBlock* ElseBlock? :END
+    IfBlock < :IF Expression :THEN EOL StatementBlock
+    ElseIfBlock < :ELSE :IF Expression :THEN EOL StatementBlock
+    ElseBlock < :ELSE EOL StatementBlock
     
-    Expression < LogicalExpression /
-                 AdditionExpression /
-                 MultiplyExpression /
-                 Eval
+    Expression     < OrExpression
+    OrExpression   < AndExpression (OrOperator AndExpression)*
+    AndExpression  < EqExpression (AndOperator EqExpression)*
+    EqExpression   < AdditionExpression ((EqOperator) AdditionExpression)*
+    AdditionExpression < MultiplyExpression (AdditionOperator MultiplyExpression)*
+    MultiplyExpression < Unary (MultiplyOperator Unary)*
+    Unary          < UnaryOperator? Postfix
+    UnaryOperator  < "-" / "!"    
 
     ReadExpression < READ
 
-    CallExpression < Expression '(' (FunctionParam (:',' FunctionParam)*)? ')'
-    FunctionParam < Expression
+    Postfix        < CallExpression / Eval
+    CallExpression < Eval CallArgs+
+    CallArgs       < :'(' (FunctionParam (:',' FunctionParam)*)? :')'
+    FunctionParam  < Expression    
 
-    LogicalOperator    < "==" / "&&" / "||"
-    LogicalExpression  < (AdditionExpression / MultiplyExpression / Eval)
-                         (LogicalOperator (AdditionExpression / MultiplyExpression / Eval))+
-
-    AdditionOperator   < "+" / "-"
-    AdditionExpression < (MultiplyExpression / Eval)
-                         (AdditionOperator (MultiplyExpression / Eval))+
-
-    MultiplyOperator   < "*" / "/"
-    MultiplyExpression < Eval
-                        (MultiplyOperator Eval)+
-    
     Eval <  :'(' Expression :')'
-            / ReadExpression
-            / CallExpression
-            / Literal
-            / Variable
+        / ReadExpression
+        / Literal
+        / Variable
 
     Literal < BooleanLiteral
             / NumberLiteral
+
+    OrOperator <  "||"
+    AndOperator < "&&"
+    EqOperator <  "==" / "!="
+    AdditionOperator <  "+" / "-"
+    MultiplyOperator <  "*" / "/" / "%" / "^"
 
     AssignOp <  "~=" / "+=" / "-=" / "*=" / "^=" / "|=" / "&=" / "/=" / "="
 
     BooleanLiteral <- TRUE / FALSE
 
     NumberLiteral <-  ScientificLiteral
+                    / HexaLiteral
+                    / BinaryLiteral
                     / FloatingLiteral
                     / UnsignedLiteral
                     / IntegerLiteral
-                    / HexaLiteral
-                    / BinaryLiteral
 
-    ScientificLiteral <~ FloatingLiteral ( ('e' / 'E' ) IntegerLiteral )
+    ScientificLiteral <~ (FloatingLiteral / IntegerLiteral) ( ('e' / 'E' ) IntegerLiteral )
     FloatingLiteral   <~ IntegerLiteral ('.' UnsignedLiteral )
     UnsignedLiteral   <~ [0-9]+
     IntegerLiteral    <~ SignLiteral? UnsignedLiteral
