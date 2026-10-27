@@ -160,6 +160,45 @@ unittest
     context.getGlobals()["a"].get!int.should.equal(3);
 }
 
+@("Block scope - inner declaration does not leak")
+unittest
+{
+    runProgram("if true then
+        var b = 2
+     end
+     print b").should.throwException!Exception.withMessage("Variable b not found");
+}
+
+@("Block scope - assignment updates outer variable")
+unittest
+{
+    runProgram("var a = 1
+     if false then
+        a = 2
+     else
+        a = 3
+     end
+     print a").should.equal("3");
+}
+
+@("Block scope - shadowing")
+unittest
+{
+    runProgram("var a = 1
+     if true then
+        var a = 2
+        print a
+     end
+     print a").should.equal("21");
+}
+
+@("Block scope - duplicate declaration in same scope")
+unittest
+{
+    runProgram("var a = 1
+     var a = 2").should.throwException!Exception.withMessage("Duplicate declaration of variable a");
+}
+
 private string errorMessage(ParseTree tree)
 {
     ParseTree terminal = tree;

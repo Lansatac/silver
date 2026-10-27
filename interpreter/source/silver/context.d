@@ -21,34 +21,75 @@ class Context
         this.useStdOut = useStdOut;
     }
 
-    private Array!(Variant[string]) globals;
+    static class Environment
+    {
+        Variant[string] variables;
+        Environment parent;
+        this(Environment parent = null)
+        {
+            this.parent = parent;
+        }
+
+        public void defineVariable(string name, Variant value)
+        {   
+            if(name in variables)
+            {
+                import std.format;
+                throw new Exception("Duplicate declaration of variable %s".format(name));
+            }
+            variables[name] = value;
+        }
+
+        public void setVariable(string name, Variant value)
+        {
+            if(name in variables)
+            {
+                variables[name] = value;
+            }
+            else if(parent !is null)
+            {
+                parent.setVariable(name, value);
+            }
+            else
+            {
+                import std.format : format;
+                throw new Exception("Variable %s not found".format(name));
+            }
+        }
+
+        public Variant resolveVariable(string name)
+        {
+            if(name in variables)
+            {
+                return variables[name];
+            }
+            else if(parent !is null)
+            {
+                return parent.resolveVariable(name);
+            }
+            else
+            {
+                import std.format : format;
+                throw new Exception("Variable %s not found".format(name));
+            }
+        }
+    }
+
+    private Environment globals;
 
     const(Variant[string]) getGlobals() const
     {
-        return globals[0];
+        return globals.variables;
     }
 
     /// Executes the ast.
     void run()
     {
-        globals.insert((Variant[string]).init);
+        globals = new Environment();
         interpret(program, globals);
     }
 
-    private void declareVariable(Array!(Variant[string]) variables, string name, Variant value)
-    {
-        foreach_reverse(stack; variables)
-        {
-            if(name in stack)
-            {
-                import std.format;
-                throw new Exception("Duplicate declaration of variable %s".format(name));
-            }
-        }
-        variables[$-1][name] = value;
-    }
-
-    private void interpret(ParseTree ast, Array!(Variant[string]) variables)
+    private void interpret(ParseTree ast, Environment variables)
     {
         import std.conv : to;
         switch(ast.name)
@@ -67,12 +108,12 @@ class Context
             case "Silver.DeclarationStatement":
                 auto name = ast.children[0].matches[0];
                 auto value = interpretExpression(ast[1], variables);
-                declareVariable(variables, name, value);
+                variables.defineVariable(name, value);
             break;
             case "Silver.AssignmentStatement":
                 auto name = ast.children[0].matches[0];
                 auto value = interpretExpression(ast[1], variables);
-                variables[$-1][name] = value;
+                variables.setVariable(name, value);
             break;
             case "Silver.PrintStatement":
                 auto value = interpretExpression(ast[1], variables);
@@ -104,7 +145,7 @@ class Context
     }
 
     
-    private void interpretIfStatement(ParseTree ast, Array!(Variant[string]) variables)
+    private void interpretIfStatement(ParseTree ast, Environment variables)
     {
         foreach (block; ast.children)
         {
@@ -122,25 +163,27 @@ class Context
 
                 if(testValue.get!bool)
                 {
+                    Environment blockEnv = new Environment(variables);
                     foreach (statement; bodyStatements)
                     {
-                        interpret(statement, variables);
+                        interpret(statement, blockEnv);
                     }
                     break; // test successful, skip the rest
                 }
             }
             else
             {
+                Environment blockEnv = new Environment(variables);
                 foreach (statement; block.children)
                 {
-                    interpret(statement, variables);
+                    interpret(statement, blockEnv);
                 }
             }
             
         }
     }
 
-    private Variant interpretExpression(ParseTree ast, Array!(Variant[string]) variables)
+    private Variant interpretExpression(ParseTree ast, Environment variables)
     {
         import std.conv : to, ConvException;
         import std.string : strip;
@@ -185,7 +228,7 @@ class Context
                 return Variant(ast.matches[0].to!int);
             case "Silver.Variable":
                 auto name = ast.matches[0];
-                return variables[$-1][name];
+                return variables.resolveVariable(name);
             case "Silver.BooleanLiteral":
                 return Variant(ast.matches[0].to!bool);
             case "Silver.ReadExpression":
