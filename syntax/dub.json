@@ -1,9 +1,11 @@
 {
-	"name": "grammar",
+	"name": "syntax",
+	"description": "Silver's parser.",
 	"targetType": "library",
 	"stringImportPaths": ["source/silver"],
 	"dependencies": {
-		"pegged": "0.4.9"
+		"pegged": "0.4.9",
+		"silver:ast": "*"
 	},
 	"configurations": [
 		{ "name": "library"	},

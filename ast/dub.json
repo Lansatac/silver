@@ -1,0 +1,5 @@
+{
+	"name": "ast",
+	"description": "Silver's abstract syntax tree.",
+	"targetType": "library"
+}

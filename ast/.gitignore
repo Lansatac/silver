@@ -1,0 +1,15 @@
+.dub
+docs.json
+__dummy.html
+docs/
+/ast
+ast.so
+ast.dylib
+ast.dll
+ast.a
+ast.lib
+ast-test-*
+*.exe
+*.o
+*.obj
+*.lst

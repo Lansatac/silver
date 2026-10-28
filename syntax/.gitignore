@@ -1,0 +1,15 @@
+.dub
+docs.json
+__dummy.html
+docs/
+/syntax
+syntax.so
+syntax.dylib
+syntax.dll
+syntax.a
+syntax.lib
+syntax-test-*
+*.exe
+*.o
+*.obj
+*.lst

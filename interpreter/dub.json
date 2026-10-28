@@ -2,7 +2,8 @@
 	"name": "interpreter",
 	"targetType": "library",
 	"dependencies": {
-		"silver:grammar": "*"
+		"silver:ast": "*",
+		"silver:syntax": "*"
 	},
 	"configurations": [
 		{ "name": "library" },

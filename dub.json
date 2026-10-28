@@ -3,11 +3,12 @@
 		"Jason"
 	],
 	"dependencies": {
-		"silver:grammar": "*",
+		"silver:syntax": "*",
 		"silver:interpreter": "*"
 	},
 	"subPackages": [
-		"./grammar/",
+		"./ast/",
+		"./syntax/",
 		"./interpreter/"
 	],
 	"targetType": "executable",
