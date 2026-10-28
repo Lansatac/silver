@@ -442,3 +442,25 @@ unittest
     Silver.FunctionDeclaration("def a() return 1 end").successful.should.equal(true);
     Silver.FunctionDeclaration("def a(a, b) return 1 end").successful.should.equal(true);
 }
+
+@("Import")
+unittest
+{
+    shouldParse("import module");
+    Silver.ImportStatement("import module").successful.should.equal(true);
+}
+
+@("Qualified names")
+unittest
+{
+    shouldParse("a.b.c");
+    Silver.QualifiedName("a.b.c").successful.should.equal(true);
+}
+
+
+@("Function Call On Function Return Value")
+unittest
+{
+    shouldParse("f()()");
+    Silver.Postfix("f()()").successful.should.equal(true);
+}

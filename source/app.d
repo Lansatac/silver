@@ -23,5 +23,5 @@ int main(string[] args)
 		return 1;
 	}
 
-	return interpret(programFile.readText);
+	return interpret(programFile.readText, programFile);
 }

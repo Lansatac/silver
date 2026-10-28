@@ -4,6 +4,7 @@ Silver:
     Sep            <: (eol / ';')+
 
     Statement < (
+                 / ImportStatement
                  / VariableDeclaration
                  / FunctionDeclaration
                  / PrintStatement
@@ -11,6 +12,10 @@ Silver:
                  / AssignmentStatement
                  / CallStatement
                 )
+
+    QualifiedName <- identifier ('.' identifier)*
+
+    ImportStatement < :IMPORT QualifiedName
 
     VariableDeclaration < :VAR Variable '=' Expression
     AssignmentStatement < AssignTarget '=' Expression
@@ -23,7 +28,7 @@ Silver:
 
     ReturnStatement < :RETURN Expression
 
-    CallStatement < CallExpression
+    CallStatement < Postfix
 
     PrintStatement < (PRINT / PRINTL) Expression
 
@@ -43,15 +48,16 @@ Silver:
 
     ReadExpression < READ
 
-    Postfix        < CallExpression / Eval
-    CallExpression < Eval CallArgs+
-    CallArgs       < :'(' (FunctionParam (:',' FunctionParam)*)? :')'
+    Postfix        < Eval PostfixOp*
+    PostfixOp      < CallArgs / MemberAccess
+    MemberAccess   < :'.' identifier
+    CallArgs       < '(' (FunctionParam (:',' FunctionParam)*)? ')'
     FunctionParam  < Expression    
 
-    Eval <  :'(' Expression :')'
-        / ReadExpression
-        / Literal
-        / Variable
+    Eval           <  :'(' Expression :')'
+                      / ReadExpression
+                      / Literal
+                      / Variable
 
     Literal < BooleanLiteral
             / NumberLiteral
@@ -95,8 +101,9 @@ Silver:
     FALSE   <- Kword("false")
     READ    <- Kword("read")
     RETURN  <- Kword("return")
+    IMPORT  <- Kword("import")
 
-    Keyword  <- VAR / DEF / PRINTL / PRINT / IF / THEN / ELSE / END / TRUE / FALSE / READ / RETURN
+    Keyword  <- VAR / DEF / PRINTL / PRINT / IF / THEN / ELSE / END / TRUE / FALSE / READ / RETURN / IMPORT
     IdentChar <- [a-zA-Z0-9_]
     Variable <- !Keyword identifier
 

@@ -1,35 +1,37 @@
 module silver.interpreter;
 
 import std.stdio;
+import std.path;
 
 import silver.grammar;
+import silver.parse;
 import silver.context;
 import pegged.grammar : ParseTree;
 
-version(unittest) import fluent.asserts;
+version (unittest) import fluent.asserts;
 
 /// Interprets a string representing silver code.
-int interpret(string code)
+int interpret(string code, string filename = "<input>")
 {
-    auto parseTree = Silver(code);
-
-    //writeln(parseTree);
-
-    if(!parseTree.successful)
+    ParseTree parseTree;
+    try
     {
-        writeln(parseTree.errorMessage);
+        parseTree = parse(code, filename);
+    }
+    catch (ParseException e)
+    {
+        writeln(e.msg);
         return 1;
     }
 
-    auto context = new Context(parseTree, true);
+    auto context = new Context(parseTree, [absolutePath("./stdlib")], true);
 
     context.run();
 
     return 0;
 }
 
-
-version(unittest)
+version (unittest)
 {
     import std.variant;
 
@@ -39,24 +41,23 @@ version(unittest)
 
         auto program = `var variable = %s`.format(expression);
         auto parseTree = Silver(program);
-        if(!parseTree.successful)
+        if (!parseTree.successful)
         {
             throw new Exception(parseTree.failMsg);
         }
-        auto context = new Context(parseTree);
+        auto context = new Context(parseTree, []);
         context.run();
         return context.getGlobals()["variable"];
     }
 
-    
     string runProgram(string program)
     {
         auto parseTree = Silver(program);
-        if(!parseTree.successful)
+        if (!parseTree.successful)
         {
             throw new Exception(parseTree.failMsg);
         }
-        auto context = new Context(parseTree);
+        auto context = new Context(parseTree, [absolutePath("./stdlib")]);
         context.run();
         return context.ProgramOutput;
     }
@@ -68,13 +69,11 @@ unittest
     interpret("var a = 1").should.equal(0);
 }
 
-
 @("Global Variable Assignment")
 unittest
 {
     evaluateExpression("1").get!int.should.equal(1);
 }
-
 
 @("Addition")
 unittest
@@ -98,6 +97,7 @@ unittest
 unittest
 {
     import std.conv;
+
     auto tree = Silver("var a = 2 * 2 + 1");
     tree.successful.should.equal(true);
     evaluateExpression("2 * 2 + 1").get!int.should.equal(5).because(tree.to!string);
@@ -109,7 +109,6 @@ unittest
     evaluateExpression("(1 + 2) * 2").get!int.should.equal(6);
     evaluateExpression("2 * (1 + 2)").get!int.should.equal(6);
 }
-
 
 @("If Statements - true")
 unittest
@@ -130,15 +129,14 @@ unittest
             a = 2
           end
           ");
-    if(!parseTree.successful)
+    if (!parseTree.successful)
     {
         throw new Exception(parseTree.failMsg);
     }
-    auto context = new Context(parseTree);
+    auto context = new Context(parseTree, []);
     context.run();
     context.getGlobals()["a"].get!int.should.equal(1);
 }
-
 
 @("If-Else Statements")
 unittest
@@ -151,11 +149,11 @@ unittest
             a = 3
           end
           ");
-    if(!parseTree.successful)
+    if (!parseTree.successful)
     {
         throw new Exception(parseTree.failMsg);
     }
-    auto context = new Context(parseTree);
+    auto context = new Context(parseTree, []);
     context.run();
     context.getGlobals()["a"].get!int.should.equal(3);
 }
@@ -196,9 +194,9 @@ unittest
 unittest
 {
     runProgram("var a = 1
-     var a = 2").should.throwException!Exception.withMessage("Duplicate declaration of variable a");
+     var a = 2").should.throwException!Exception.withMessage(
+        "Duplicate declaration of variable a");
 }
-
 
 @("Call function")
 unittest
@@ -263,22 +261,9 @@ unittest
      print f()").should.throwException!Exception.withMessage("f expects 1 arguments, got 0");
 }
 
-private string errorMessage(ParseTree tree)
+@("Import stdlib")
+unittest
 {
-    ParseTree terminal = tree;
-
-    while(terminal.children.length > 0)
-    {
-        foreach (child; terminal.children)
-        {
-            if(!child.successful)
-            {
-                terminal = child;
-                break;
-            }
-        }
-    }
-
-    return terminal.failMsg;
+    runProgram("import math
+    print math.square(4)").should.equal("16");
 }
-
