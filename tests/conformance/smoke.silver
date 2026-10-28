@@ -1,0 +1,62 @@
+
+var a = 2
+var b = 3
+var c = 4
+
+
+printl a + b * c
+printl (a + b) * c
+printl a * b + c * a
+printl 20 / b - 1
+printl -a + b
+printl -(a + b)
+printl a - -b
+
+printl 1 + 2 == 3
+printl 1 + 2 == 4
+printl true || false && false
+printl (true || false) && false
+printl !false
+printl !(a == 2) || b == 3
+printl a == 2 && b == 3 && c == 4
+
+var total = 0
+total = total + a
+total = total + b
+
+total = total * c
+printl total
+
+if total == 20 then
+    printl 1
+
+    if a == 2 then
+        printl 2
+    else
+        printl 0
+    end
+
+else if total == 0 then
+    printl 0
+
+else
+    printl 0
+end
+
+if false then
+    printl 0
+else if a + b == 5 then
+    printl 3
+else
+    printl 0
+end
+
+if false then
+    printl 0
+else
+    printl 4
+end
+
+print 5
+print 6
+printl 7
