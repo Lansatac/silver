@@ -6,6 +6,7 @@ Silver:
     Statement           < (
                            / ImportStatement
                            / VariableDeclaration
+                           / ValueDeclaration
                            / FunctionDeclaration
                            / PrintStatement
                            / IfStatement

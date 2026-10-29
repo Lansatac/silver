@@ -58,14 +58,19 @@ private Stmt convertStatement(ParseTree cst, string file)
     case "Silver.Statement":
         return convertStatement(cst[0], file);
     case "Silver.VariableDeclaration":
+    case "Silver.ValueDeclaration":
+        // Both are `Variable '=' Expression` once the keyword is discarded.
         auto name = cst[0].matches[0];
         auto expr = convertExpression(cst[1], file);
-        return Stmt(spanOf(cst, file), StmtKind(VarDecl(name, expr)));
+        auto mutable = cst.name == "Silver.VariableDeclaration";
+        return Stmt(spanOf(cst, file), StmtKind(VarDecl(name, expr, mutable)));
     case "Silver.AssignmentStatement":
-        auto name = cst.children[0].matches[0];
+        // The target is a Postfix, so `a.b = 1` keeps its member access.
+        cst[0].validateNodeIs("Silver.AssignTarget");
+        auto target = convertExpression(cst[0][0], file);
         auto op = toAssignOp(cst.children[1].matches[0]);
         auto expr = convertExpression(cst[2], file);
-        return Stmt(spanOf(cst, file), StmtKind(AssignStmt(Expr(spanOf(cst.children[0], file), ExprKind(VariableRef(name))), op, expr)));
+        return Stmt(spanOf(cst, file), StmtKind(AssignStmt(target, op, expr)));
     case "Silver.PrintStatement":
         auto expr = convertExpression(cst[1], file);
         if (cst.matches[0] == "print")
@@ -78,15 +83,19 @@ private Stmt convertStatement(ParseTree cst, string file)
         }
     case "Silver.IfStatement":
         return convertIfStatement(cst, file);
-    // case "Silver.FunctionDeclaration":
-    //     return convertFunctionDeclaration(cst, variables);
-    //     break;
-    // case "Silver.CallStatement":
-    //     return convertExpression(cst[0], variables);
-    //     break;
-    // case "Silver.ImportStatement":
-    //     return convertImportStatement(cst, variables);
-    //     break;
+    case "Silver.FunctionDeclaration":
+        return convertFunctionDeclaration(cst, file);
+    case "Silver.ReturnStatement":
+        return Stmt(spanOf(cst, file), StmtKind(ReturnStmt(convertExpression(cst[0], file))));
+    case "Silver.CallStatement":
+        return Stmt(spanOf(cst, file), StmtKind(ExprStmt(convertExpression(cst[0], file))));
+    case "Silver.ImportStatement":
+        import std.algorithm : filter;
+        import std.array : array;
+        // QualifiedName's matches are the identifiers with the '.'s between them.
+        cst[0].validateNodeIs("Silver.QualifiedName");
+        auto path = cst[0].matches.filter!(m => m != ".").array;
+        return Stmt(spanOf(cst, file), StmtKind(ImportStmt(path)));
     default:
         throw new Exception("cstToAst: statement '%s' not supported yet".format(cst.name));
     }
@@ -142,12 +151,18 @@ private Expr convertExpression(ParseTree cst, string file)
             return Expr(span, ExprKind(BinaryExpr(BinaryOp.Power, boxed(base), boxed(exponent))));
         }
     case "Silver.Postfix":
-        if (cst.children.length == 1)
+        // `Eval PostfixOp*`, folded left so `m.f(1)` is `call (m.f) 1`.
         {
-            return convertExpression(cst[0], file);
+            auto lhs = convertExpression(cst[0], file);
+            foreach (postfixOp; cst.children.drop(1))
+            {
+                postfixOp.validateNodeIs("Silver.PostfixOp");
+                lhs = convertPostfixOp(lhs, postfixOp[0], file);
+            }
+            return lhs;
         }
-        // TODO: calls and member access need Call/MemberAccess nodes.
-        break;
+    case "Silver.ReadExpression":
+        return Expr(spanOf(cst, file), ExprKind(ReadExpr()));
     case "Silver.BooleanLiteral":
         return Expr(spanOf(cst, file), ExprKind(BoolLiteral(cst.matches[0].to!bool)));
     case "Silver.UnsignedLiteral":
@@ -167,6 +182,60 @@ private Expr convertExpression(ParseTree cst, string file)
         break;
     }
     throw new Exception("cstToAst: expression '%s' not supported yet".format(cst.name));
+}
+
+/// Applies one postfix operation (a call or member access) to `lhs`.
+private Expr convertPostfixOp(Expr lhs, ParseTree op, string file)
+{
+    auto span = Span(file, lhs.span.start, op.end);
+    switch (op.name)
+    {
+    case "Silver.CallArgs":
+        Expr[] args;
+        foreach (param; op.children)
+        {
+            param.validateNodeIs("Silver.FunctionParam");
+            args ~= convertExpression(param[0], file);
+        }
+        return Expr(span, ExprKind(CallExpr(boxed(lhs), args)));
+    case "Silver.MemberAccess":
+        return Expr(span, ExprKind(MemberAccess(boxed(lhs), op.matches[0])));
+    default:
+        throw new Exception("Expected call or member access, got '%s'".format(op.name));
+    }
+}
+
+/// `def name(FunctionParamDefs?) StatementBlock? ReturnStatement end`.
+/// FunctionParamDefs and StatementBlock are absent rather than empty when
+/// there are no params or statements, so children are matched by name.
+private Stmt convertFunctionDeclaration(ParseTree cst, string file)
+{
+    cst.validateNodeIs("Silver.FunctionDeclaration");
+    auto name = cst[0].matches[0];
+
+    string[] params;
+    Stmt[] body;
+    foreach (child; cst.children[1 .. $])
+    {
+        switch (child.name)
+        {
+        case "Silver.FunctionParamDefs":
+            foreach (param; child.children)
+            {
+                params ~= param.matches[0];
+            }
+            break;
+        case "Silver.StatementBlock":
+            body ~= convertStatementBlock(child, file);
+            break;
+        case "Silver.ReturnStatement":
+            body ~= convertStatement(child, file);
+            break;
+        default:
+            throw new Exception("Unexpected '%s' in function declaration".format(child.name));
+        }
+    }
+    return Stmt(spanOf(cst, file), StmtKind(FunctionDecl(name, params, body)));
 }
 
 private UnaryOp toUnaryOp(string op)
@@ -361,6 +430,51 @@ unittest
 {
     auto m = convertSource("if a then end");
     printStmt(m.statements[0]).should.equal("(if a () ())");
+}
+
+@("cstToAst: calls and member access fold left")
+unittest
+{
+    auto m = convertSource("f(1, x)()\nvar y = m.x.f(2) + 1\nvar r = read");
+    m.statements.length.should.equal(3);
+    printStmt(m.statements[0]).should.equal("(call (call f 1 x))");
+    printStmt(m.statements[1]).should.equal("(var y (Add (call (. (. m x) f) 2) 1))");
+    printStmt(m.statements[2]).should.equal("(var r read)");
+}
+
+@("cstToAst: val and var declarations")
+unittest
+{
+    auto m = convertSource("val x = 1\nvar y = x\nval value = 2");
+    m.statements.length.should.equal(3);
+    printStmt(m.statements[0]).should.equal("(val x 1)");
+    printStmt(m.statements[1]).should.equal("(var y x)");
+    printStmt(m.statements[2]).should.equal("(val value 2)");
+}
+
+@("cstToAst: assignment to a member")
+unittest
+{
+    auto m = convertSource("a.b += 3");
+    printStmt(m.statements[0]).should.equal("(assign (. a b) AddAssign 3)");
+}
+
+@("cstToAst: import")
+unittest
+{
+    auto m = convertSource("import io\nimport a.b.c");
+    m.statements.length.should.equal(2);
+    printStmt(m.statements[0]).should.equal("(import io)");
+    printStmt(m.statements[1]).should.equal("(import a.b.c)");
+}
+
+@("cstToAst: function declarations")
+unittest
+{
+    auto m = convertSource("def h(p, q)\nvar z = p\nreturn z + q\nend\ndef k() return 1 end");
+    m.statements.length.should.equal(2);
+    printStmt(m.statements[0]).should.equal("(def h (p q) ((var z p) (return (Add z q))))");
+    printStmt(m.statements[1]).should.equal("(def k () ((return 1)))");
 }
 // ---------------------------------------------------------------------------
 // Old interpreter code, kept for reference while porting.
