@@ -43,6 +43,9 @@ package string errorMessage(ParseTree tree)
     return terminal.failMsg;
 }
 
+
+version (unittest) import fluent.asserts;
+
 version(unittest)
 {
     /// Returns the ParseException message for `source`, or null if it parses.
@@ -50,7 +53,7 @@ version(unittest)
     {
         try
         {
-            parse(source, sourceName);
+            parseCst(source, sourceName);
         }
         catch(ParseException e)
         {
@@ -63,7 +66,7 @@ version(unittest)
 @("parse returns the tree for valid source")
 unittest
 {
-    parse("var a = 1").successful.should.equal(true);
+    parseCst("var a = 1").successful.should.equal(true);
 }
 
 @("parse throws on invalid source")

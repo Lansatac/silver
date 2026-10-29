@@ -319,7 +319,7 @@ version(unittest)
 
     private Module convertSource(string source)
     {
-        return cstToAst(parse(source), "test");
+        return parse(source, "test", "test");
     }
 }
 
