@@ -1,16 +1,16 @@
 module silver.context;
 
-import pegged.grammar : ParseTree;
-
-debug import std.stdio;
+import std.sumtype;
+import silver.ast;
+import silver.ast : AstModule = Module, AstStatement = Stmt;
 
 class Context
 {
     import std.variant;
     import std.container.array;
-    import silver.grammar_tests;
+    //import std.regex;
 
-    private ParseTree program;
+    private AstModule program;
 
     private bool useStdOut;
     private string programOutput;
@@ -20,7 +20,7 @@ class Context
         return programOutput;
     }
 
-    nothrow this(ParseTree program, string[] importPaths, bool useStdOut = false)
+    nothrow this(AstModule program, string[] importPaths, bool useStdOut = false)
     {
         this.program = program;
         this.useStdOut = useStdOut;
@@ -30,13 +30,15 @@ class Context
     static class Environment
     {
         Variant[string] variables;
+        /// Names declared with `val`, which can't be reassigned.
+        bool[string] immutables;
         Environment parent;
         this(Environment parent = null)
         {
             this.parent = parent;
         }
 
-        public void defineVariable(string name, Variant value)
+        public void defineVariable(string name, Variant value, bool mutable = true)
         {
             if (name in variables)
             {
@@ -45,12 +47,22 @@ class Context
                 throw new Exception("Duplicate declaration of variable %s".format(name));
             }
             variables[name] = value;
+            if (!mutable)
+            {
+                immutables[name] = true;
+            }
         }
 
         public void setVariable(string name, Variant value)
         {
             if (name in variables)
             {
+                if (name in immutables)
+                {
+                    import std.format : format;
+
+                    throw new Exception("Cannot assign to val %s".format(name));
+                }
                 variables[name] = value;
             }
             else if (parent !is null)
@@ -132,9 +144,9 @@ class Context
 
     static class Function
     {
-        ParseTree declaration;
+        const FunctionDecl declaration;
         Environment closure;
-        this(ParseTree declaration, Environment closure)
+        this(const FunctionDecl declaration, Environment closure)
         {
             this.declaration = declaration;
             this.closure = closure;
@@ -142,16 +154,8 @@ class Context
 
         override string toString() const
         {
-            return declaration.matches[0];
+            return declaration.name;
         }
-    }
-
-    private static ParseTree[] childrenNamed(ParseTree tree, string name)
-    {
-        import std.algorithm : filter;
-        import std.array : array;
-
-        return tree.children.filter!(child => child.name == name).array;
     }
 
     private Environment globals;
@@ -165,253 +169,263 @@ class Context
     void run()
     {
         globals = new Environment();
-        interpret(program, globals);
+        execute(program, globals);
     }
 
-    private void interpret(ParseTree ast, Environment variables)
+    private void execute(AstModule ast, Environment variables)
+    {
+        foreach (child; ast.statements)
+        {
+            execute(child, variables);
+        }
+    }
+
+    private void execute(AstStatement ast, Environment variables)
+    {
+        ast.kind.match!(s => execute(s, variables));
+    }
+
+    private void execute(const VarDecl ast, Environment variables)
+    {
+        auto value = ast.value.kind.match!(s => evaluate(s, variables));
+        variables.defineVariable(ast.name, value, ast.mutable);
+    }
+
+    private void execute(const AssignStmt ast, Environment variables)
+    {
+        if (!ast.target.kind.has!VariableRef)
+        {
+            throw new Exception("PH: Can only assign to a variable");
+        }
+        auto name = ast.target.kind.get!VariableRef.name;
+        auto value = evaluate(ast.value, variables);
+        variables.setVariable(name, value);
+    }
+
+    private void execute(const PrintStmt ast, Environment variables)
+    {
+        import std.conv : to;
+        import std.stdio;
+
+
+        auto value = evaluate(ast.expr, variables);
+        if (!ast.newline)
+        {
+            programOutput ~= value.to!string;
+            if (useStdOut)
+            {
+                write(value);
+            }
+        }
+        else
+        {
+            programOutput ~= value.to!string ~ "\n";
+            if (useStdOut)
+            {
+                writeln(value);
+            }
+        }
+    }
+
+    private void execute(const IfStmt ast, Environment variables)
     {
         import std.conv : to;
 
-        switch (ast.name)
+        auto condition = evaluate(ast.condition, variables);
+        if (condition.get!bool)
         {
-        case "Silver":
-        case "Silver.Statement":
-            interpret(ast.children[0], variables);
-            break;
-        case "Silver.Module":
-        case "Silver.StatementBlock":
-            foreach (statement; ast.children)
+            Environment blockEnv = new Environment(variables);
+            foreach (statement; ast.body)
             {
-                interpret(statement, variables);
+                execute(statement, blockEnv);
             }
-            break;
-        case "Silver.VariableDeclaration":
-            auto name = ast.children[0].matches[0];
-            auto value = interpretExpression(ast[1], variables);
-            variables.defineVariable(name, value);
-            break;
-        case "Silver.AssignmentStatement":
-            auto name = ast.children[0].matches[0];
-            auto value = interpretExpression(ast[1], variables);
-            variables.setVariable(name, value);
-            break;
-        case "Silver.PrintStatement":
-            auto value = interpretExpression(ast[1], variables);
-            if (ast.matches[0] == "print")
+        }
+        else
+        {
+            Environment blockEnv = new Environment(variables);
+            foreach (statement; ast.elseBody)
             {
-                programOutput ~= value.to!string;
-                if (useStdOut)
-                {
-                    write(value);
-                }
-            }
-            else
-            {
-                programOutput ~= value.to!string ~ "\n";
-                if (useStdOut)
-                {
-                    writeln(value);
-                }
-            }
-            break;
-        case "Silver.IfStatement":
-            interpretIfStatement(ast, variables);
-            break;
-        case "Silver.FunctionDeclaration":
-            interpretFunctionDeclaration(ast, variables);
-            break;
-        case "Silver.CallStatement":
-            interpretExpression(ast[0], variables);
-            break;
-        case "Silver.ImportStatement":
-            interpretImportStatement(ast, variables);
-            break;
-        default:
-            {
-                writefln("Unhandled ast: %s", ast.name);
+                execute(statement, blockEnv);
             }
         }
     }
 
-    private void interpretIfStatement(ParseTree ast, Environment variables)
+    private void execute(const FunctionDecl ast, Environment variables)
     {
-        foreach (block; ast.children)
-        {
-            if (block.name == "Silver.IfBlock" || block.name == "Silver.ElseIfBlock")
-            {
-                ParseTree testExpression = block[0];
-                auto bodyStatements = block.children[1 .. $];
-                auto testValue = interpretExpression(testExpression, variables);
-
-                if (!testValue.convertsTo!bool)
-                {
-                    import std.format : format;
-
-                    throw new Exception("'%s' is not a boolean value".format(
-                            testExpression.input[testExpression.begin .. testExpression.end]));
-                }
-
-                if (testValue.get!bool)
-                {
-                    Environment blockEnv = new Environment(variables);
-                    foreach (statement; bodyStatements)
-                    {
-                        interpret(statement, blockEnv);
-                    }
-                    break; // test successful, skip the rest
-                }
-            }
-            else
-            {
-                Environment blockEnv = new Environment(variables);
-                foreach (statement; block.children)
-                {
-                    interpret(statement, blockEnv);
-                }
-            }
-
-        }
+        variables.defineFunction(ast.name, new Function(ast, variables));
     }
 
-    private void interpretImportStatement(ParseTree ast, Environment variables)
+    private void execute(const ImportStmt ast, Environment variables)
     {
-        auto moduleName = ast.matches[0];
-        auto loadedModule = loadModule(moduleName);
-        variables.defineVariable(moduleName, Variant(loadedModule));
+        import std.array : join;
+
+        auto loadedModule = loadModule(ast.path);
+        variables.defineVariable(ast.path.join("."), Variant(loadedModule));
     }
 
-    private Module loadModule(string moduleName)
+    private Module loadModule(const (string[]) moduleChain)
     {
         import std.file : exists, readText;
         import std.path : buildPath;
         import std.format : format;
+        import std.array : join;
         import silver.parse;
 
         foreach (importPath; importPaths)
         {
-            auto modulePath = buildPath(importPath, moduleName ~ ".silver");
+            auto modulePath = buildPath(importPath, moduleChain.join("/") ~ ".silver");
             if (exists(modulePath))
             {
                 auto moduleSource = readText(modulePath);
-                auto moduleAst = parse(moduleSource, modulePath);
+                auto moduleName = moduleChain.join(".");
+                auto moduleAst = parse(moduleSource, moduleName, modulePath);
                 auto moduleEnv = new Environment();
-                interpret(moduleAst, moduleEnv);
+                execute(moduleAst, moduleEnv);
 
                 return new Module(moduleName, moduleEnv);
             }
         }
-
-        throw new Exception("Module '%s' not found".format(moduleName));
+    
+        throw new Exception("Module '%s'.silver not found".format(moduleChain.join("/")));
     }
 
-    private Variant interpretExpression(ParseTree ast, Environment variables)
+    private void execute(const ExprStmt ast, Environment variables)
     {
-        import std.conv : to, ConvException;
-        import std.string : strip;
-        import std.range : chunks, drop;
+        evaluate(ast.expr, variables);
+    }
 
-        switch (ast.name)
+    private Variant evaluate(const Expr ast, Environment variables)
+    {
+        return ast.kind.match!(s => evaluate(s, variables));
+    }
+
+    private Variant evaluate(const BoolLiteral ast, Environment variables)
+    {
+        return Variant(ast.value);
+    }
+
+    private Variant evaluate(const IntLiteral ast, Environment variables)
+    {
+        return Variant(ast.value);
+    }
+
+    private Variant evaluate(const FloatLiteral ast, Environment variables)
+    {
+        return Variant(ast.value);
+    }
+
+    private Variant evaluate(const VariableRef ast, Environment variables)
+    {
+        return variables.resolveVariable(ast.name);
+    }
+
+    private Variant evaluate(const UnaryExpr ast, Environment variables)
+    {
+        auto value = evaluate(*ast.operand, variables);
+        return unaryOperate(ast.op, value);
+    }
+
+    private Variant evaluate(const BinaryExpr ast, Environment variables)
+    {
+        auto lhs = evaluate(*ast.left, variables);
+
+        // `and`/`or` short-circuit, so the right side is only evaluated if needed.
+        if (ast.op == BinaryOp.And || ast.op == BinaryOp.Or)
         {
-        case "Silver.Expression":
-            return interpretExpression(ast[0], variables);
-        case "Silver.AdditionExpression":
-        case "Silver.MultiplyExpression":
-        case "Silver.OrExpression":
-        case "Silver.AndExpression":
-        case "Silver.EqExpression":
-            auto lhs = interpretExpression(ast[0], variables);
-            foreach (children; ast.children.drop(1).chunks(2))
+            auto left = lhs.get!bool;
+            if (ast.op == BinaryOp.And ? !left : left)
             {
-                auto operator = children[0].matches[0];
-                auto rhs = interpretExpression(children[1], variables);
-                lhs = operate(operator, lhs, rhs);
+                return Variant(left);
             }
-            return lhs;
-        case "Silver.Unary":
-            if (ast.children.length == 2)
-            {
-                auto value = interpretExpression(ast[1], variables);
-                if (ast.children.length == 2)
-                {
-                    auto operator = ast[0].matches[0];
-                    return unaryOperate(operator, value);
-                }
-                return value;
-            }
-            return interpretExpression(ast[0], variables);
-        case "Silver.PowerExpression":
-            if (ast.children.length == 3)
-            {
-                auto base = interpretExpression(ast[0], variables);
-                auto exponent = interpretExpression(ast[2], variables);
-                return operate(ast[1].matches[0], base, exponent);
-            }
-            return interpretExpression(ast[0], variables);
-        case "Silver.Eval":
-        case "Silver.Literal":
-        case "Silver.NumberLiteral":
-        case "Silver.FunctionParam":
-            return interpretExpression(ast.children[0], variables);
-        case "Silver.UnsignedLiteral":
-            return Variant(ast.matches[0].to!int);
-        case "Silver.HexaLiteral":
-            return Variant(ast.matches[0].to!int);
-        case "Silver.Variable":
-            auto name = ast.matches[0];
-            return variables.resolveVariable(name);
-        case "Silver.BooleanLiteral":
-            return Variant(ast.matches[0].to!bool);
-        case "Silver.ReadExpression":
-            {
-                auto input = readln().strip;
-                try
-                {
-                    return Variant(input.to!int);
-                }
-                catch (ConvException)
-                {
-                    return Variant(input.to!bool);
-                }
-            }
-        case "Silver.Postfix":
-            return interpretPostfix(ast, variables);
-        default:
-            {
-                import std.format : format;
+            return Variant(evaluate(*ast.right, variables).get!bool);
+        }
 
-                throw new Exception("Unhandled expression ast: %s".format(ast.name));
-            }
+        auto rhs = evaluate(*ast.right, variables);
+        return operate(ast.op, lhs, rhs);
+    }
+
+    private Variant evaluate(const CallExpr ast, Environment variables)
+    {
+        auto callee = evaluate(*ast.callee, variables);
+
+        Variant[] args;
+        foreach (arg; ast.args)
+        {
+            args ~= evaluate(arg, variables);
+        }
+        return call(callee, args, variables);
+    }
+
+    /// Thrown by `return` and caught by the call that's running the function.
+    private class ReturnSignal : Exception
+    {
+        Variant value;
+        this(Variant value)
+        {
+            super("return outside of a function"); // what you see if it escapes to top level
+            this.value = value;
         }
     }
 
-    private void interpretFunctionDeclaration(ParseTree ast, Environment variables)
+    private void execute(const ReturnStmt r, Environment env)
     {
-        auto name = ast.children[0].matches[0];
-        variables.defineFunction(name, new Function(ast, variables));
+        throw new ReturnSignal(evaluate(r.value, env));
     }
 
-    private Variant interpretPostfix(ParseTree ast, Environment variables)
+    private Variant call(Variant callee, Variant[] args, Environment variables)
     {
-        import std.range : drop;
+        import std.format : format;
 
-        auto eval = ast.children[0];
-        auto lhs = interpretExpression(eval, variables);
-        foreach (postFixOp; ast.children.drop(1))
+        if (!callee.convertsTo!Function)
         {
-            switch (postFixOp[0].name)
+            throw new Exception("%s is not a function".format(callee));
+        }
+        auto fn = callee.get!Function;
+        if (args.length != fn.declaration.params.length)
+        {
+            throw new Exception("%s expects %s arguments, got %s".format(
+                    fn.declaration.name, fn.declaration.params.length, args.length));
+        }
+
+        Environment functionEnv = new Environment(fn.closure);
+        foreach (i, arg; args)
+        {
+            // Arguments are evaluated in the caller's environment.
+            functionEnv.defineVariable(fn.declaration.params[i], arg);
+        }
+
+        try
+        {
+            foreach (statement; fn.declaration.body)
             {
-            case "Silver.CallArgs":
-                lhs = interpretCall(lhs.get!Function, postFixOp, variables);
-                break;
-            case "Silver.MemberAccess":
-                auto memberName = postFixOp[0].matches[0]; // the identifier after the '.'
-                lhs = memberOf(lhs, memberName);
-                break;
-            default:
-                break;
+                execute(statement, functionEnv);
             }
         }
-        return lhs;
+        catch (ReturnSignal signal)
+        {
+            return signal.value;
+        }
+
+        throw new Exception("function did not return a value");
+    }
+
+    private Variant evaluate(const MemberAccess ast, Environment variables)
+    {
+        import std.format : format;
+
+        auto object = evaluate(*ast.object, variables);
+        if (object.convertsTo!Module)
+        {
+            return object.get!Module.member(ast.member);
+        }
+        throw new Exception("%s has no member %s".format(object, ast.member));
+    }
+
+    private Variant evaluate(const ReadExpr ast, Environment variables)
+    {
+        import std.stdio : readln;
+
+        return Variant(readln());
     }
 
     private Variant memberOf(Variant value, string memberName)
@@ -426,96 +440,61 @@ class Context
         throw new Exception("%s has no member %s".format(value, memberName));
     }
 
-    private Variant interpretCall(Function fn, ParseTree callArgsAst, Environment variables)
-    {
-        import std.format : format;
-
-        string[] params;
-        foreach (paramDefs; childrenNamed(fn.declaration, "Silver.FunctionParamDefs"))
-        {
-            foreach (param; paramDefs.children)
-            {
-                params ~= param.matches[0];
-            }
-        }
-
-        auto callArgs = callArgsAst.children;
-        ParseTree[] args = callArgsAst.children.length == 1 ? callArgs[0].children : [
-        ];
-        if (args.length != params.length)
-        {
-            throw new Exception("%s expects %s arguments, got %s".format(fn, params.length, args
-                    .length));
-        }
-
-        // The parent is the environment the function was defined in, not the caller's.
-        Environment functionEnv = new Environment(fn.closure);
-        foreach (i, arg; args)
-        {
-            // Arguments are evaluated in the caller's environment.
-            functionEnv.defineVariable(params[i], interpretExpression(arg, variables));
-        }
-
-        foreach (block; childrenNamed(fn.declaration, "Silver.StatementBlock"))
-        {
-            interpret(block, functionEnv);
-        }
-
-        auto returnStatement = childrenNamed(fn.declaration, "Silver.ReturnStatement")[0];
-        return interpretExpression(returnStatement[0], functionEnv);
-    }
-
-    private Variant operate(string operator, Variant lhs, Variant rhs)
+    private Variant operate(BinaryOp operator, Variant lhs, Variant rhs)
     {
         //writefln("%s %s %s", lhs, operator, rhs);
-        switch (operator)
+        final switch (operator)
         {
-        case "+":
+        case BinaryOp.Add:
             return lhs + rhs;
-        case "-":
+        case BinaryOp.Subtract:
             return lhs - rhs;
-        case "*":
+        case BinaryOp.Multiply:
             return lhs * rhs;
-        case "/":
+        case BinaryOp.Divide:
             return lhs / rhs;
-        case "^":
+        case BinaryOp.Modulo:
+            return lhs % rhs;
+        case BinaryOp.Power:
             return lhs ^^ rhs;
-        case "==":
+        case BinaryOp.Equal:
             return Variant(lhs == rhs);
-        case "&&":
-            return Variant(lhs.get!bool && rhs.get!bool);
-        case "||":
-            return Variant(lhs.get!bool || rhs.get!bool);
-        default:
-            throw new Exception("Unsupported operator " ~ operator);
+        case BinaryOp.NotEqual:
+            return Variant(lhs != rhs);
+        case BinaryOp.And:
+        case BinaryOp.Or:
+            assert(0, "and/or short-circuit in evaluate(BinaryExpr)");
         }
     }
 
-    private Variant unaryOperate(string operator, Variant value)
+    private Variant unaryOperate(UnaryOp operator, Variant value)
     {
         //writefln("%s %s %s", lhs, operator, rhs);
-        switch (operator)
+        final switch (operator)
         {
-        case "-":
-            if (value.convertsTo!double)
+        case UnaryOp.Minus:
+            // Check long first: long implicitly converts to double, so the
+            // other order would turn every negated integer into a float.
+            if (value.convertsTo!long)
+            {
+                return Variant(-value.get!long);
+            }
+            else if (value.convertsTo!double)
             {
                 return Variant(-value.get!double);
-            }
-            else if (value.convertsTo!int)
-            {
-                return Variant(-value.get!int);
             }
             else
             {
                 import std.conv : to;
 
                 throw new Exception(
-                    "Unsupported unary operator " ~ operator ~ " for type " ~ value.type.to!string);
+                    "Unsupported unary operator " ~ operator.to!string ~ " for type " ~ value
+                        .type.to!string);
             }
-        case "!":
+        case UnaryOp.Plus:
+            return value;
+        case UnaryOp.Not:
             return Variant(!value.get!bool);
-        default:
-            throw new Exception("Unsupported unary operator " ~ operator);
         }
     }
 }

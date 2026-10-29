@@ -3,20 +3,21 @@ module silver.interpreter;
 import std.stdio;
 import std.path;
 
-import silver.grammar;
-import silver.parse;
+import silver.parse : parse, ParseException;
+import silver.cstToAst : cstToAst;
 import silver.context;
-import pegged.grammar : ParseTree;
+// Renamed because Context has its own (runtime) Module class.
+import silver.ast : AstModule = Module, printModule;
 
 version (unittest) import fluent.asserts;
 
 /// Interprets a string representing silver code.
 int interpret(string code, string filename = "<input>")
 {
-    ParseTree parseTree;
+    AstModule program;
     try
     {
-        parseTree = parse(code, filename);
+        program = parse(code, filename.baseName.stripExtension, filename);
     }
     catch (ParseException e)
     {
@@ -24,7 +25,7 @@ int interpret(string code, string filename = "<input>")
         return 1;
     }
 
-    auto context = new Context(parseTree, [absolutePath("./stdlib")], true);
+    auto context = new Context(program, [absolutePath("./stdlib")], true);
 
     context.run();
 
@@ -35,29 +36,25 @@ version (unittest)
 {
     import std.variant;
 
+    /// Parses and lowers `program`, throwing on a parse error.
+    AstModule toAst(string program)
+    {
+        return parse(program, "test", "test");
+    }
+
     Variant evaluateExpression(string expression)
     {
         import std.format;
 
-        auto program = `var variable = %s`.format(expression);
-        auto parseTree = Silver(program);
-        if (!parseTree.successful)
-        {
-            throw new Exception(parseTree.failMsg);
-        }
-        auto context = new Context(parseTree, []);
+        auto program = toAst(`var variable = %s`.format(expression));
+        auto context = new Context(program, []);
         context.run();
         return context.getGlobals()["variable"];
     }
 
     string runProgram(string program)
     {
-        auto parseTree = Silver(program);
-        if (!parseTree.successful)
-        {
-            throw new Exception(parseTree.failMsg);
-        }
-        auto context = new Context(parseTree, [absolutePath("./stdlib")]);
+        auto context = new Context(toAst(program), [absolutePath("./stdlib")]);
         context.run();
         return context.ProgramOutput;
     }
@@ -72,42 +69,39 @@ unittest
 @("Global Variable Assignment")
 unittest
 {
-    evaluateExpression("1").get!int.should.equal(1);
+    evaluateExpression("1").get!long.should.equal(1);
 }
 
 @("Addition")
 unittest
 {
-    evaluateExpression("1 + 2").get!int.should.equal(3);
+    evaluateExpression("1 + 2").get!long.should.equal(3);
 }
 
 @("Multiplication")
 unittest
 {
-    evaluateExpression("2 * 2").get!int.should.equal(4);
+    evaluateExpression("2 * 2").get!long.should.equal(4);
 }
 
 @("Operator Precedence LTR")
 unittest
 {
-    evaluateExpression("1 + 2 * 2").get!int.should.equal(5);
+    evaluateExpression("1 + 2 * 2").get!long.should.equal(5);
 }
 
 @("Operator Precedence RTL")
 unittest
 {
-    import std.conv;
-
-    auto tree = Silver("var a = 2 * 2 + 1");
-    tree.successful.should.equal(true);
-    evaluateExpression("2 * 2 + 1").get!int.should.equal(5).because(tree.to!string);
+    auto program = toAst("var a = 2 * 2 + 1");
+    evaluateExpression("2 * 2 + 1").get!long.should.equal(5).because(printModule(program));
 }
 
 @("Operator Precedence Parenthetical")
 unittest
 {
-    evaluateExpression("(1 + 2) * 2").get!int.should.equal(6);
-    evaluateExpression("2 * (1 + 2)").get!int.should.equal(6);
+    evaluateExpression("(1 + 2) * 2").get!long.should.equal(6);
+    evaluateExpression("2 * (1 + 2)").get!long.should.equal(6);
 }
 
 @("If Statements - true")
@@ -123,39 +117,29 @@ unittest
 @("If Statements - false")
 unittest
 {
-    auto parseTree = Silver(
+    auto context = new Context(toAst(
         r"var a = 1
           if false then
             a = 2
           end
-          ");
-    if (!parseTree.successful)
-    {
-        throw new Exception(parseTree.failMsg);
-    }
-    auto context = new Context(parseTree, []);
+          "), []);
     context.run();
-    context.getGlobals()["a"].get!int.should.equal(1);
+    context.getGlobals()["a"].get!long.should.equal(1);
 }
 
 @("If-Else Statements")
 unittest
 {
-    auto parseTree = Silver(
+    auto context = new Context(toAst(
         r"var a = 1
           if false then
             a = 2
           else
             a = 3
           end
-          ");
-    if (!parseTree.successful)
-    {
-        throw new Exception(parseTree.failMsg);
-    }
-    auto context = new Context(parseTree, []);
+          "), []);
     context.run();
-    context.getGlobals()["a"].get!int.should.equal(3);
+    context.getGlobals()["a"].get!long.should.equal(3);
 }
 
 @("Block scope - inner declaration does not leak")
@@ -266,4 +250,11 @@ unittest
 {
     runProgram("import math
     print math.square(4)").should.equal("16");
+}
+
+@("val cannot be reassigned")
+unittest
+{
+    runProgram("val a = 1
+     a = 2").should.throwException!Exception.withMessage("Cannot assign to val a");
 }
