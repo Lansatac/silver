@@ -1,20 +1,29 @@
 {
 	"name": "syntax",
 	"description": "Silver's parser.",
-	"targetType": "library",
-	"stringImportPaths": ["source/silver"],
 	"dependencies": {
 		"pegged": "0.4.9",
 		"silver:ast": "*"
 	},
+	"targetType": "library",
 	"configurations": [
-		{ "name": "library"	},
 		{
-			"name": "unittest",
+			"targetType": "library",
+			"name": "library"
+		},
+		{
 			"dependencies": {
+				"silly": "~>1.2.0-dev.2",
 				"fluent-asserts": "~>2.1"
 			},
-			"libs-windows": ["psapi"]
+			"targetType": "library",
+			"libs-windows": [
+				"psapi"
+			],
+			"name": "unittest"
 		}
+	],
+	"stringImportPaths": [
+		"source/silver"
 	]
 }

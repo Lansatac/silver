@@ -2,18 +2,18 @@
 	"authors": [
 		"Jason"
 	],
-	"dependencies": {
-		"silver:syntax": "*",
-		"silver:interpreter": "*"
-	},
 	"subPackages": [
 		"./ast/",
 		"./syntax/",
 		"./interpreter/"
 	],
-	"targetType": "executable",
-	"copyright": "Copyright © 2020, Jason",
-	"description": "A simple experimental programming language.",
 	"license": "proprietary",
-	"name": "silver"
+	"copyright": "Copyright © 2020, Jason",
+	"name": "silver",
+	"description": "A simple experimental programming language.",
+	"dependencies": {
+		"silver:interpreter": "*",
+		"silver:syntax": "*"
+	},
+	"targetType": "executable"
 }
