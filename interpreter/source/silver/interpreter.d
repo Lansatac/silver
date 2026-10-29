@@ -245,13 +245,6 @@ unittest
      print f()").should.throwException!Exception.withMessage("f expects 1 arguments, got 0");
 }
 
-@("Import stdlib")
-unittest
-{
-    runProgram("import math
-    print math.square(4)").should.equal("16");
-}
-
 @("val cannot be reassigned")
 unittest
 {

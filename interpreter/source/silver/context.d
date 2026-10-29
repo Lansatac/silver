@@ -193,11 +193,11 @@ class Context
 
     private void execute(const AssignStmt ast, Environment variables)
     {
-        if (!ast.target.kind.has!VariableRef)
-        {
-            throw new Exception("PH: Can only assign to a variable");
-        }
-        auto name = ast.target.kind.get!VariableRef.name;
+        // ast is const, so the target's kind holds const types; matching on
+        // `const VariableRef` avoids has!/get! failing on the qualifier.
+        auto name = ast.target.kind.match!(
+            (const VariableRef v) => v.name,
+            (_) => throw new Exception("PH: Can only assign to a variable"));
         auto value = evaluate(ast.value, variables);
         variables.setVariable(name, value);
     }
@@ -299,19 +299,30 @@ class Context
         return ast.kind.match!(s => evaluate(s, variables));
     }
 
+    /// Wraps a value in a Variant with type qualifiers stripped.
+    /// Fields of const AST nodes are const, and Variant records that, so
+    /// `Variant(ast.value)` would make a later `get!long` throw.
+    private static Variant makeValue(T)(T value)
+    {
+        import std.traits : Unqual;
+
+        Unqual!T unqualified = value;
+        return Variant(unqualified);
+    }
+
     private Variant evaluate(const BoolLiteral ast, Environment variables)
     {
-        return Variant(ast.value);
+        return makeValue(ast.value);
     }
 
     private Variant evaluate(const IntLiteral ast, Environment variables)
     {
-        return Variant(ast.value);
+        return makeValue(ast.value);
     }
 
     private Variant evaluate(const FloatLiteral ast, Environment variables)
     {
-        return Variant(ast.value);
+        return makeValue(ast.value);
     }
 
     private Variant evaluate(const VariableRef ast, Environment variables)
