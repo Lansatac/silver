@@ -465,3 +465,44 @@ unittest
     shouldParse("f()()");
     Silver.Postfix("f()()").successful.should.equal(true);
 }
+@("Line Comments")
+unittest
+{
+    shouldParse("// leading comment\na = 1");
+    shouldParse("a = 1 // trailing comment\nb = 2");
+    shouldParse("a = 1\n// between statements\nb = 2");
+    shouldParse("a = 1 // comment at end of input");
+    shouldParse("// only a comment");
+    shouldParse("a = 4 / 2 // division is not a comment");
+}
+
+@("Line Comment Does Not Hide Separator")
+unittest
+{
+    // The comment ends at the newline, so `b = 2` must still be its own statement
+    auto tree = Silver("a = 1 // comment\nb = 2");
+    tree.successful.should.equal(true);
+    tree[0][0].children.length.should.equal(2);
+}
+
+@("Block Comments")
+unittest
+{
+    shouldParse("a = /* inline */ 1");
+    shouldParse("/* leading */ a = 1");
+    shouldParse("a = 1\n/* spans\n   lines */\nb = 2");
+    shouldParse("/* only a comment */");
+}
+
+@("Nested Block Comments")
+unittest
+{
+    shouldParse("a = 1 /* outer /* inner */ still outer */");
+    shouldNotParse("a = 1 /* outer /* inner */");
+}
+
+@("Block Comment Newlines Are Not Separators")
+unittest
+{
+    shouldNotParse("a = 1 /*\n*/ b = 2");
+}

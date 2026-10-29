@@ -1,7 +1,7 @@
 Silver:
     Module              < Sep? StatementBlock? eoi
     StatementBlock      < Statement (Sep Statement)* Sep?
-    Sep                 <: (eol / ';')+
+    Sep                 <: ((eol / ';') Spacing)+
 
     Statement           < (
                            / ImportStatement
@@ -113,4 +113,10 @@ Silver:
     IdentChar           <- [a-zA-Z0-9_]
     Variable            <- !Keyword identifier
 
-    Spacing             <- :(' ' / '\t')*
+    Spacing             <- :(' ' / '\t' / Comment)*
+
+    # Line comments stop before the newline so it still acts as a separator.
+    # Block comments nest, and any newlines inside them are not separators.
+    Comment             <- LineComment / BlockComment
+    LineComment         <- "//" (!eol .)*
+    BlockComment        <- "/*" (BlockComment / !"*/" .)* "*/"
