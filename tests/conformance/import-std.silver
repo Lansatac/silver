@@ -1,0 +1,6 @@
+import math
+
+printl(math.pow(2, 2))
+printl(math.pow(2, 3))
+printl(math.pow(2, 10))
+printl(math.factorial(5))

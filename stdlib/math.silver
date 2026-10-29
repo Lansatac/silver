@@ -1,11 +1,3 @@
-def square(x)
-    return x * x
-end
-
-def cube(x)
-    return x * square(x)
-end
-
 def pow(base, exponent)
     var result = 1
     if !(exponent == 0) then

@@ -1,0 +1,532 @@
+module silver.cstToAst;
+
+import std.format : format;
+import pegged.grammar : ParseTree;
+import silver.ast;
+
+version(unittest) import fluent.asserts;
+
+/// Lowers a parse tree from silver.parse into an AST Module.
+/// `file` is recorded in every node's Span, for error messages.
+Module cstToAst(ParseTree tree, string moduleName, string file = "<input>")
+{
+    return convertModule(tree, moduleName, file);
+}
+
+private Module convertModule(ParseTree tree, string moduleName, string file)
+{
+    tree.validateNodeIs("Silver");
+    tree[0].validateNodeIs("Silver.Module");
+
+    // The StatementBlock is optional: an empty module has no children.
+    Stmt[] statements;
+    if (tree[0].children.length > 0)
+    {
+        tree[0][0].validateNodeIs("Silver.StatementBlock");
+        statements = convertStatementBlock(tree[0][0], file);
+    }
+    return Module(moduleName, spanOf(tree, file), statements);
+}
+
+void validateNodeIs(ParseTree tree, string type)
+{
+    if (tree.name != type)
+    {
+        throw new Exception("Expected node of type '%s', got '%s'".format(type, tree.name));
+    }
+}
+
+private Span spanOf(ParseTree cst, string file)
+{
+    return Span(file, cst.begin, cst.end);
+}
+
+private Stmt[] convertStatementBlock(ParseTree cst, string file)
+{
+    Stmt[] statements;
+    foreach (statement; cst.children)
+    {
+        statements ~= convertStatement(statement, file);
+    }
+    return statements;
+}
+
+private Stmt convertStatement(ParseTree cst, string file)
+{
+    switch (cst.name)
+    {
+    case "Silver.Statement":
+        return convertStatement(cst[0], file);
+    case "Silver.VariableDeclaration":
+        auto name = cst[0].matches[0];
+        auto expr = convertExpression(cst[1], file);
+        return Stmt(spanOf(cst, file), StmtKind(VarDecl(name, expr)));
+    case "Silver.AssignmentStatement":
+        auto name = cst.children[0].matches[0];
+        auto op = toAssignOp(cst.children[1].matches[0]);
+        auto expr = convertExpression(cst[2], file);
+        return Stmt(spanOf(cst, file), StmtKind(AssignStmt(Expr(spanOf(cst.children[0], file), ExprKind(VariableRef(name))), op, expr)));
+    case "Silver.PrintStatement":
+        auto expr = convertExpression(cst[1], file);
+        if (cst.matches[0] == "print")
+        {
+            return Stmt(spanOf(cst, file), StmtKind(PrintStmt(expr, false)));
+        }
+        else
+        {
+            return Stmt(spanOf(cst, file), StmtKind(PrintStmt(expr, true)));
+        }
+    case "Silver.IfStatement":
+        return convertIfStatement(cst, file);
+    // case "Silver.FunctionDeclaration":
+    //     return convertFunctionDeclaration(cst, variables);
+    //     break;
+    // case "Silver.CallStatement":
+    //     return convertExpression(cst[0], variables);
+    //     break;
+    // case "Silver.ImportStatement":
+    //     return convertImportStatement(cst, variables);
+    //     break;
+    default:
+        throw new Exception("cstToAst: statement '%s' not supported yet".format(cst.name));
+    }
+}
+
+private Expr convertExpression(ParseTree cst, string file)
+{
+    import std.conv : to;
+    import std.range : chunks, drop;
+
+    switch (cst.name)
+    {
+    case "Silver.Expression":
+    case "Silver.Eval":
+    case "Silver.Literal":
+    case "Silver.NumberLiteral":
+        return convertExpression(cst[0], file);
+    case "Silver.OrExpression":
+    case "Silver.AndExpression":
+    case "Silver.EqExpression":
+    case "Silver.AdditionExpression":
+    case "Silver.MultiplyExpression":
+        // `X (Op X)*`, folded left so `1 - 2 - 3` is `(1 - 2) - 3`.
+        auto lhs = convertExpression(cst[0], file);
+        foreach (pair; cst.children.drop(1).chunks(2))
+        {
+            auto op = toBinaryOp(pair[0].matches[0]);
+            auto rhs = convertExpression(pair[1], file);
+            auto span = Span(file, lhs.span.start, rhs.span.end);
+            lhs = Expr(span, ExprKind(BinaryExpr(op, boxed(lhs), boxed(rhs))));
+        }
+        return lhs;
+    case "Silver.Unary":
+        if (cst.children.length == 1)
+        {
+            return convertExpression(cst[0], file);
+        }
+            auto op = toUnaryOp(cst[0].matches[0]);
+            auto operand = convertExpression(cst[1], file);
+            auto span = Span(file, cst.begin, operand.span.end);
+            return Expr(span, ExprKind(UnaryExpr(op, boxed(operand))));
+        break;
+    case "Silver.PowerExpression":
+        // `Postfix (^ Unary)?` - the exponent recurses, so `2 ^ 3 ^ 2` is `2 ^ (3 ^ 2)`.
+        {
+            auto base = convertExpression(cst[0], file);
+            if (cst.children.length == 1)
+            {
+                return base;
+            }
+            auto exponent = convertExpression(cst[2], file);
+            auto span = Span(file, base.span.start, exponent.span.end);
+            return Expr(span, ExprKind(BinaryExpr(BinaryOp.Power, boxed(base), boxed(exponent))));
+        }
+    case "Silver.Postfix":
+        if (cst.children.length == 1)
+        {
+            return convertExpression(cst[0], file);
+        }
+        // TODO: calls and member access need Call/MemberAccess nodes.
+        break;
+    case "Silver.BooleanLiteral":
+        return Expr(spanOf(cst, file), ExprKind(BoolLiteral(cst.matches[0].to!bool)));
+    case "Silver.UnsignedLiteral":
+    case "Silver.IntegerLiteral":
+        return Expr(spanOf(cst, file), ExprKind(IntLiteral(cst.matches[0].to!long)));
+    case "Silver.FloatingLiteral":
+        return Expr(spanOf(cst, file), ExprKind(FloatLiteral(cst.matches[0].to!double)));
+    case "Silver.Variable":
+        return Expr(spanOf(cst, file), ExprKind(VariableRef(cst.matches[0])));
+    case "Silver.ScientificLiteral":
+        return Expr(spanOf(cst, file), ExprKind(FloatLiteral(cst.matches[0].to!double)));
+    case "Silver.HexaLiteral":
+        return Expr(spanOf(cst, file), ExprKind(IntLiteral(cst.matches[0].to!long)));
+    case "Silver.BinaryLiteral":
+        return Expr(spanOf(cst, file), ExprKind(IntLiteral(cst.matches[0].to!long)));
+    default:
+        break;
+    }
+    throw new Exception("cstToAst: expression '%s' not supported yet".format(cst.name));
+}
+
+private UnaryOp toUnaryOp(string op)
+{
+    switch (op)
+    {
+    case "+":
+        return UnaryOp.Plus;
+    case "-":
+        return UnaryOp.Minus;
+    case "!":
+        return UnaryOp.Not;
+    default:
+        throw new Exception("Unknown unary operator '%s'".format(op));
+    }
+}
+
+private AssignOp toAssignOp(string op)
+{
+    switch (op)
+    {
+    case "=":
+        return AssignOp.Assign;
+    case "+=":
+        return AssignOp.AddAssign;
+    case "-=":
+        return AssignOp.SubtractAssign;
+    case "*=":
+        return AssignOp.MultiplyAssign;
+    case "/=":
+        return AssignOp.DivideAssign;
+    case "%=":
+        return AssignOp.ModuloAssign;
+    case "^=":
+        return AssignOp.PowerAssign;
+    default:
+        throw new Exception("Unknown assignment operator '%s'".format(op));
+    }
+}
+
+private BinaryOp toBinaryOp(string op)
+{
+    switch (op)
+    {
+    case "+":
+        return BinaryOp.Add;
+    case "-":
+        return BinaryOp.Subtract;
+    case "*":
+        return BinaryOp.Multiply;
+    case "/":
+        return BinaryOp.Divide;
+    case "%":
+        return BinaryOp.Modulo;
+    case "^":
+        return BinaryOp.Power;
+    case "==":
+        return BinaryOp.Equal;
+    case "!=":
+        return BinaryOp.NotEqual;
+    case "&&":
+        return BinaryOp.And;
+    case "||":
+        return BinaryOp.Or;
+    default:
+        throw new Exception("Unknown binary operator '%s'".format(op));
+    }
+}
+
+/// Copies `e` to the heap, for nodes that hold child expressions by pointer.
+private Expr* boxed(Expr e)
+{
+    auto p = new Expr;
+    *p = e;
+    return p;
+}
+
+version(unittest)
+{
+    import silver.parse : parse;
+
+    private Module convertSource(string source)
+    {
+        return cstToAst(parse(source), "test");
+    }
+}
+
+@("cstToAst: precedence and parentheses")
+unittest
+{
+    auto m = convertSource("var x = (1 + y) * 2");
+    m.statements.length.should.equal(1);
+    printStmt(m.statements[0]).should.equal("(var x (Multiply (Add 1 y) 2))");
+}
+
+@("cstToAst: binary operators are left-associative")
+unittest
+{
+    auto m = convertSource("var x = 1 - 2 - 3\nvar y = a == b");
+    m.statements.length.should.equal(2);
+    printStmt(m.statements[0]).should.equal("(var x (Subtract (Subtract 1 2) 3))");
+    printStmt(m.statements[1]).should.equal("(var y (Equal a b))");
+}
+
+@("cstToAst: power binds tighter than multiply and unary, and is right-associative")
+unittest
+{
+    auto m = convertSource("var a = 2 * 3 ^ 2\nvar b = 2 ^ 3 ^ 2\nvar c = -2 ^ 2\nvar d = 2 ^ -1");
+    m.statements.length.should.equal(4);
+    printStmt(m.statements[0]).should.equal("(var a (Multiply 2 (Power 3 2)))");
+    printStmt(m.statements[1]).should.equal("(var b (Power 2 (Power 3 2)))");
+    printStmt(m.statements[2]).should.equal("(var c (Minus (Power 2 2)))");
+    printStmt(m.statements[3]).should.equal("(var d (Power 2 (Minus 1)))");
+}
+
+
+
+@("cstToAst: unary operators")
+unittest
+{
+    auto m = convertSource("var x = -1\nvar y = !a");
+    m.statements.length.should.equal(2);
+    printStmt(m.statements[0]).should.equal("(var x (Minus 1))");
+    printStmt(m.statements[1]).should.equal("(var y (Not a))");
+}
+
+/// `IfBlock ElseIfBlock* ElseBlock? END`. Each `else if` becomes an IfStmt
+/// nested in the previous one's elseBody.
+private Stmt convertIfStatement(ParseTree cst, string file)
+{
+    cst.validateNodeIs("Silver.IfStatement");
+    auto ifBlock = cst[0];
+    ifBlock.validateNodeIs("Silver.IfBlock");
+
+    auto condition = convertExpression(ifBlock[0], file);
+    auto body = convertOptionalBlock(ifBlock, 1, file);
+    auto elseBody = convertElseChain(cst.children[1 .. $], cst, file);
+    return Stmt(spanOf(cst, file), StmtKind(IfStmt(condition, body, elseBody)));
+}
+
+/// Converts the blocks after the IfBlock (`ElseIfBlock* ElseBlock?`) into an
+/// elseBody, building from the end so each IfStmt is complete when created.
+/// `ifStatement` is the enclosing IfStatement, which every nested if's span
+/// runs to the end of.
+private Stmt[] convertElseChain(ParseTree[] blocks, ParseTree ifStatement, string file)
+{
+    if (blocks.length == 0)
+    {
+        return [];
+    }
+
+    auto block = blocks[0];
+    switch (block.name)
+    {
+    case "Silver.ElseBlock":
+        return convertOptionalBlock(block, 0, file);
+    case "Silver.ElseIfBlock":
+        auto condition = convertExpression(block[0], file);
+        auto body = convertOptionalBlock(block, 1, file);
+        auto elseBody = convertElseChain(blocks[1 .. $], ifStatement, file);
+        auto span = Span(file, block.begin, ifStatement.end);
+        return [Stmt(span, StmtKind(IfStmt(condition, body, elseBody)))];
+    default:
+        throw new Exception("Expected else or else-if block, got '%s'".format(block.name));
+    }
+}
+
+/// Converts `cst[index]` as a StatementBlock, or returns [] if the optional
+/// block is absent (e.g. `if x then end`).
+private Stmt[] convertOptionalBlock(ParseTree cst, size_t index, string file)
+{
+    if (cst.children.length <= index)
+    {
+        return [];
+    }
+    return convertStatementBlock(cst[index], file);
+}
+
+@("cstToAst: if with else-if chain and else")
+unittest
+{
+    auto source = "if a then\nvar x = 1\nelse if b then\nvar x = 2\n"
+        ~ "else if c then\nvar x = 3\nelse\nvar x = 4\nend";
+    auto m = convertSource(source);
+    m.statements.length.should.equal(1);
+    printStmt(m.statements[0]).should.equal(
+        "(if a ((var x 1)) ((if b ((var x 2)) ((if c ((var x 3)) ((var x 4)))))))");
+}
+
+@("cstToAst: if with empty body and no else")
+unittest
+{
+    auto m = convertSource("if a then end");
+    printStmt(m.statements[0]).should.equal("(if a () ())");
+}
+// ---------------------------------------------------------------------------
+// Old interpreter code, kept for reference while porting.
+// ---------------------------------------------------------------------------
+
+
+// private void interpretImportStatement(ParseTree cst, Environment variables)
+// {
+//     auto moduleName = cst.matches[0];
+//     auto loadedModule = loadModule(moduleName);
+//     variables.defineVariable(moduleName, Variant(loadedModule));
+// }
+
+// private Module loadModule(string moduleName)
+// {
+//     import std.file : exists, readText;
+//     import std.path : buildPath;
+//     import std.format : format;
+//     import silver.parse;
+
+//     foreach (importPath; importPaths)
+//     {
+//         auto modulePath = buildPath(importPath, moduleName ~ ".silver");
+//         if (exists(modulePath))
+//         {
+//             auto moduleSource = readText(modulePath);
+//             auto moduleAst = parse(moduleSource, modulePath);
+//             auto moduleEnv = new Environment();
+//             interpret(moduleAst, moduleEnv);
+
+//             return new Module(moduleName, moduleEnv);
+//         }
+//     }
+
+//     throw new Exception("Module '%s' not found".format(moduleName));
+// }
+
+// private void interpretFunctionDeclaration(ParseTree ast, Environment variables)
+// {
+//     auto name = ast.children[0].matches[0];
+//     variables.defineFunction(name, new Function(ast, variables));
+// }
+//
+// private Variant interpretPostfix(ParseTree ast, Environment variables)
+// {
+//     import std.range : drop;
+//
+//     auto eval = ast.children[0];
+//     auto lhs = convertExpression(eval);
+//     foreach (postFixOp; ast.children.drop(1))
+//     {
+//         switch (postFixOp[0].name)
+//         {
+//         case "Silver.CallArgs":
+//             lhs = interpretCall(lhs.get!Function, postFixOp, variables);
+//             break;
+//         case "Silver.MemberAccess":
+//             auto memberName = postFixOp[0].matches[0]; // the identifier after the '.'
+//             lhs = memberOf(lhs, memberName);
+//             break;
+//         default:
+//             break;
+//         }
+//     }
+//     return lhs;
+// }
+//
+// private Variant memberOf(Variant value, string memberName)
+// {
+//     if (value.convertsTo!Module)
+//     {
+//         return value.get!Module.member(memberName);
+//     }
+//
+//     import std.format : format;
+//
+//     throw new Exception("%s has no member %s".format(value, memberName));
+// }
+//
+// private Variant interpretCall(Function fn, ParseTree callArgsAst, Environment variables)
+// {
+//     import std.format : format;
+//
+//     string[] params;
+//     foreach (paramDefs; childrenNamed(fn.declaration, "Silver.FunctionParamDefs"))
+//     {
+//         foreach (param; paramDefs.children)
+//         {
+//             params ~= param.matches[0];
+//         }
+//     }
+//
+//     auto callArgs = callArgsAst.children;
+//     ParseTree[] args = callArgsAst.children.length == 1 ? callArgs[0].children : [
+//     ];
+//     if (args.length != params.length)
+//     {
+//         throw new Exception("%s expects %s arguments, got %s".format(fn, params.length, args
+//                 .length));
+//     }
+//
+//     // The parent is the environment the function was defined in, not the caller's.
+//     Environment functionEnv = new Environment(fn.closure);
+//     foreach (i, arg; args)
+//     {
+//         // Arguments are evaluated in the caller's environment.
+//         functionEnv.defineVariable(params[i], interpretExpression(arg, variables));
+//     }
+//
+//     foreach (block; childrenNamed(fn.declaration, "Silver.StatementBlock"))
+//     {
+//         interpret(block, functionEnv);
+//     }
+//
+//     auto returnStatement = childrenNamed(fn.declaration, "Silver.ReturnStatement")[0];
+//     return interpretExpression(returnStatement[0], functionEnv);
+// }
+//
+// private Variant operate(string operator, Variant lhs, Variant rhs)
+// {
+//     //writefln("%s %s %s", lhs, operator, rhs);
+//     switch (operator)
+//     {
+//     case "+":
+//         return lhs + rhs;
+//     case "-":
+//         return lhs - rhs;
+//     case "*":
+//         return lhs * rhs;
+//     case "/":
+//         return lhs / rhs;
+//     case "==":
+//         return Variant(lhs == rhs);
+//     case "&&":
+//         return Variant(lhs.get!bool && rhs.get!bool);
+//     case "||":
+//         return Variant(lhs.get!bool || rhs.get!bool);
+//     default:
+//         throw new Exception("Unsupported operator " ~ operator);
+//     }
+// }
+//
+// private Variant unaryOperate(string operator, Variant value)
+// {
+//     //writefln("%s %s %s", lhs, operator, rhs);
+//     switch (operator)
+//     {
+//     case "-":
+//         if (value.convertsTo!double)
+//         {
+//             return Variant(-value.get!double);
+//         }
+//         else if (value.convertsTo!int)
+//         {
+//             return Variant(-value.get!int);
+//         }
+//         else
+//         {
+//             import std.conv : to;
+//
+//             throw new Exception(
+//                 "Unsupported unary operator " ~ operator ~ " for type " ~ value.type.to!string);
+//         }
+//     case "!":
+//         return Variant(!value.get!bool);
+//     default:
+//         throw new Exception("Unsupported unary operator " ~ operator);
+//     }
+// }

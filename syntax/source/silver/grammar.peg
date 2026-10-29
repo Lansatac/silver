@@ -1,110 +1,115 @@
 Silver:
-    Module         < Sep? StatementBlock? eoi
-    StatementBlock < Statement (Sep Statement)* Sep?
-    Sep            <: (eol / ';')+
+    Module              < Sep? StatementBlock? eoi
+    StatementBlock      < Statement (Sep Statement)* Sep?
+    Sep                 <: (eol / ';')+
 
-    Statement < (
-                 / ImportStatement
-                 / VariableDeclaration
-                 / FunctionDeclaration
-                 / PrintStatement
-                 / IfStatement
-                 / AssignmentStatement
-                 / CallStatement
-                )
+    Statement           < (
+                           / ImportStatement
+                           / VariableDeclaration
+                           / FunctionDeclaration
+                           / PrintStatement
+                           / IfStatement
+                           / AssignmentStatement
+                           / CallStatement
+                          )
 
-    QualifiedName <- identifier ('.' identifier)*
+    QualifiedName       <- identifier ('.' identifier)*
 
-    ImportStatement < :IMPORT QualifiedName
+    ImportStatement     < :IMPORT QualifiedName
+    
+    ValueDeclaration    < :VAL Variable '=' Expression
 
     VariableDeclaration < :VAR Variable '=' Expression
-    AssignmentStatement < AssignTarget '=' Expression
+    AssignmentStatement < AssignTarget AssignOp Expression
+    AssignOp            < "+=" / "-=" / "*=" / "/=" / "^=" / "=" !"="
 
-    AssignTarget < Variable
+    AssignTarget        < Postfix
 
     FunctionDeclaration < :DEF Variable '(' FunctionParamDefs ')' Sep? StatementBlock? ReturnStatement Sep? :END
-    FunctionParamDefs < (FunctionParamDef (',' FunctionParamDef)*)?
-    FunctionParamDef < Variable
+    FunctionParamDefs   < (FunctionParamDef (',' FunctionParamDef)*)?
+    FunctionParamDef    < Variable
 
-    ReturnStatement < :RETURN Expression
+    ReturnStatement     < :RETURN Expression
 
-    CallStatement < Postfix
+    CallStatement       < Postfix
 
-    PrintStatement < (PRINT / PRINTL) Expression
+    PrintStatement      < (PRINT / PRINTL) Expression
 
-    IfStatement < IfBlock ElseIfBlock* ElseBlock? :END
-    IfBlock < :IF Expression :THEN Sep? StatementBlock?
-    ElseIfBlock < :ELSE :IF Expression :THEN Sep? StatementBlock?
-    ElseBlock < :ELSE Sep? StatementBlock?
+    IfStatement         < IfBlock ElseIfBlock* ElseBlock? :END
+    IfBlock             < :IF Expression :THEN Sep? StatementBlock?
+    ElseIfBlock         < :ELSE :IF Expression :THEN Sep? StatementBlock?
+    ElseBlock           < :ELSE Sep? StatementBlock?
     
-    Expression     < OrExpression
-    OrExpression   < AndExpression (OrOperator AndExpression)*
-    AndExpression  < EqExpression (AndOperator EqExpression)*
-    EqExpression   < AdditionExpression ((EqOperator) AdditionExpression)*
-    AdditionExpression < MultiplyExpression (AdditionOperator MultiplyExpression)*
-    MultiplyExpression < Unary (MultiplyOperator Unary)*
-    Unary          < UnaryOperator? Postfix
-    UnaryOperator  < "-" / "!"    
+    Expression          < OrExpression
+    OrExpression        < AndExpression (OrOperator AndExpression)*
+    AndExpression       < EqExpression (AndOperator EqExpression)*
+    EqExpression        < AdditionExpression ((EqOperator) AdditionExpression)*
+    AdditionExpression  < MultiplyExpression (AdditionOperator MultiplyExpression)*
+    MultiplyExpression  < Unary (MultiplyOperator Unary)*
+    Unary               < UnaryOperator? PowerExpression
+    UnaryOperator       < "-" / "!"
+    PowerExpression     < Postfix (PowerOperator Unary)?
 
-    ReadExpression < READ
+    ReadExpression      < READ
 
-    Postfix        < Eval PostfixOp*
-    PostfixOp      < CallArgs / MemberAccess
-    MemberAccess   < :'.' identifier
-    CallArgs       < '(' (FunctionParam (:',' FunctionParam)*)? ')'
-    FunctionParam  < Expression    
+    Postfix             < Eval PostfixOp*
+    PostfixOp           < CallArgs / MemberAccess
+    MemberAccess        < :'.' identifier
+    CallArgs            < '(' (FunctionParam (:',' FunctionParam)*)? ')'
+    FunctionParam       < Expression    
 
-    Eval           <  :'(' Expression :')'
-                      / ReadExpression
-                      / Literal
-                      / Variable
+    Eval                < :'(' Expression :')'
+                             / ReadExpression
+                             / Literal
+                             / Variable
 
-    Literal < BooleanLiteral
-            / NumberLiteral
+    Literal             <  BooleanLiteral
+                         / NumberLiteral
 
-    OrOperator <  "||"
-    AndOperator < "&&"
-    EqOperator <  "==" / "!="
-    AdditionOperator <  "+" / "-"
-    MultiplyOperator <  "*" / "/" / "%" / "^"
+    OrOperator          <  "||"
+    AndOperator         < "&&"
+    EqOperator          <  "==" / "!="
+    AdditionOperator    <  "+" / "-"
+    MultiplyOperator    <  "*" / "/" / "%"
+    PowerOperator       <  "^"
 
-    AssignOp <  "~=" / "+=" / "-=" / "*=" / "^=" / "|=" / "&=" / "/=" / "="
 
-    BooleanLiteral <- TRUE / FALSE
+    BooleanLiteral      <- TRUE / FALSE
 
-    NumberLiteral <-  ScientificLiteral
-                    / HexaLiteral
-                    / BinaryLiteral
-                    / FloatingLiteral
-                    / UnsignedLiteral
-                    / IntegerLiteral
+    NumberLiteral       <-  ScientificLiteral
+                          / HexaLiteral
+                          / BinaryLiteral
+                          / FloatingLiteral
+                          / UnsignedLiteral
+                          / IntegerLiteral
 
-    ScientificLiteral <~ (FloatingLiteral / IntegerLiteral) ( ('e' / 'E' ) IntegerLiteral )
-    FloatingLiteral   <~ IntegerLiteral ('.' UnsignedLiteral )
-    UnsignedLiteral   <~ [0-9]+
-    IntegerLiteral    <~ SignLiteral? UnsignedLiteral
-    HexaLiteral       <~ "0x" [0-9a-fA-F]+
-    BinaryLiteral     <~ "0b" [01] [01_]*
-    SignLiteral       <- '-' / '+'
+    ScientificLiteral   <~ (FloatingLiteral / IntegerLiteral) ( ('e' / 'E' ) IntegerLiteral )
+    FloatingLiteral     <~ IntegerLiteral ('.' UnsignedLiteral )
+    UnsignedLiteral     <~ [0-9]+
+    IntegerLiteral      <~ SignLiteral? UnsignedLiteral
+    HexaLiteral         <~ "0x" [0-9a-fA-F]+
+    BinaryLiteral       <~ "0b" [01] [01_]*
+    SignLiteral         <- '-' / '+'
 
-    Kword(K)   <- K !IdentChar
+    Kword(K)            <- K !IdentChar
 
-    VAR     <- Kword("var")
-    DEF     <- Kword("def")
-    PRINT   <- Kword("print")
-    PRINTL  <- Kword("printl")
-    IF      <- Kword("if")
-    THEN    <- Kword("then")
-    ELSE    <- Kword("else")
-    END     <- Kword("end")
-    TRUE    <- Kword("true")
-    FALSE   <- Kword("false")
-    READ    <- Kword("read")
-    RETURN  <- Kword("return")
-    IMPORT  <- Kword("import")
+    VAL                 <- Kword("val")
+    VAR                 <- Kword("var")
+    DEF                 <- Kword("def")
+    PRINT               <- Kword("print")
+    PRINTL              <- Kword("printl")
+    IF                  <- Kword("if")
+    THEN                <- Kword("then")
+    ELSE                <- Kword("else")
+    END                 <- Kword("end")
+    TRUE                <- Kword("true")
+    FALSE               <- Kword("false")
+    READ                <- Kword("read")
+    RETURN              <- Kword("return")
+    IMPORT              <- Kword("import")
 
-    Keyword  <- VAR / DEF / PRINTL / PRINT / IF / THEN / ELSE / END / TRUE / FALSE / READ / RETURN / IMPORT
-    IdentChar <- [a-zA-Z0-9_]
-    Variable <- !Keyword identifier
+    Keyword             <- VAL / VAR / DEF / PRINTL / PRINT / IF / THEN / ELSE / END / TRUE / FALSE / READ / RETURN / IMPORT
+    IdentChar           <- [a-zA-Z0-9_]
+    Variable            <- !Keyword identifier
 
-    Spacing <- :(' ' / '\t')*
+    Spacing             <- :(' ' / '\t')*

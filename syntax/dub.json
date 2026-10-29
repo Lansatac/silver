@@ -13,7 +13,8 @@
 			"name": "unittest",
 			"dependencies": {
 				"fluent-asserts": "~>2.1"
-			}
+			},
+			"libs-windows": ["psapi"]
 		}
 	]
 }

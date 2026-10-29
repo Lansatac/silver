@@ -339,6 +339,14 @@ class Context
                 return value;
             }
             return interpretExpression(ast[0], variables);
+        case "Silver.PowerExpression":
+            if (ast.children.length == 3)
+            {
+                auto base = interpretExpression(ast[0], variables);
+                auto exponent = interpretExpression(ast[2], variables);
+                return operate(ast[1].matches[0], base, exponent);
+            }
+            return interpretExpression(ast[0], variables);
         case "Silver.Eval":
         case "Silver.Literal":
         case "Silver.NumberLiteral":
@@ -470,6 +478,8 @@ class Context
             return lhs * rhs;
         case "/":
             return lhs / rhs;
+        case "^":
+            return lhs ^^ rhs;
         case "==":
             return Variant(lhs == rhs);
         case "&&":

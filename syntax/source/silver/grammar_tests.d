@@ -16,6 +16,7 @@ version (unittest)
         "Silver.AdditionExpression",
         "Silver.MultiplyExpression",
         "Silver.Unary",
+        "Silver.PowerExpression",
         "Silver.Postfix",
         "Silver.Eval",
     ];
