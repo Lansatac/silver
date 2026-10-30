@@ -160,10 +160,13 @@ unittest
     Silver.Expression("1+2+3").successful.should.equal(true);
 }
 
-@("Print Statement")
+@("Native Function Declaration")
 unittest
 {
-    Silver.Statement("print a").successful.should.equal(true);
+    shouldParse("native def print(value : Any) : Unit");
+    shouldParse("native def now() : Int");
+    shouldNotParse("native def f() : Int => 1"); // natives have no body
+    shouldNotParse("native val a = 1");
 }
 
 @("Keyword-like Variable")
@@ -181,9 +184,8 @@ unittest
 @("Keyword-prefixed Variables")
 unittest
 {
-    shouldParse("printer = 1"); // read as `print er`, then ` = 1` is left over
     shouldParse("x = reader"); // read as `read`, then `er` is left over
-    shouldParse("printl a"); // 'print' matches first; `l` becomes the expression
+    shouldParse("natives = 1");
 }
 
 @("Parenthesis")
@@ -242,20 +244,20 @@ unittest
 @("Single-Line")
 unittest
 {
-    shouldParse(`print a`);
+    shouldParse(`print(a)`);
 }
 
 @("Multi-Line")
 unittest
 {
     shouldParse(`mutable val a = 0
-    print a`);
+    print(a)`);
 }
 
 @("Two Statements Single-Line")
 unittest
 {
-    shouldNotParse(`mutable val a = 0 print a`);
+    shouldNotParse(`mutable val a = 0 print(a)`);
 }
 
 @("Assign To Function Call")
@@ -293,7 +295,7 @@ unittest
 unittest
 {
     `if true {
-            print 1
+            print(1)
         }`.shouldParse;
 }
 
@@ -302,9 +304,9 @@ unittest
 {
     shouldParse(
         r"if true {
-            print 1
+            print(1)
         } else {
-            print 2
+            print(2)
         }");
 }
 
@@ -313,9 +315,9 @@ unittest
 {
     shouldParse(
         r"if true {
-            print 1
+            print(1)
         } else if true {
-            print 2
+            print(2)
         }",
     );
 }
@@ -325,40 +327,40 @@ unittest
 {
     shouldParse(
         r"if true {
-            print 1
+            print(1)
         } else if true {
-            print 2
+            print(2)
         } else {
-            print 3
+            print(3)
         }");
 }
 
 @("Single-Line If Statement")
 unittest
 {
-    `if true { print 1 }`.shouldParse;
-    `if true { print 1 } else { print 2 }`.shouldParse;
+    `if true { print(1) }`.shouldParse;
+    `if true { print(1) } else { print(2) }`.shouldParse;
     `if true => f() else g()`.shouldParse;
 }
 
 @("Old If Syntax Is Gone")
 unittest
 {
-    `if true then print 1 end`.shouldNotParse;
+    `if true then print(1) end`.shouldNotParse;
     `if true then 1 else 2`.shouldNotParse;
 }
 
 @("Semicolon Separators")
 unittest
 {
-    `mutable val a = 1; print a`.shouldParse;
-    `if true { a = 1; print a }`.shouldParse;
+    `mutable val a = 1; print(a)`.shouldParse;
+    `if true { a = 1; print(a) }`.shouldParse;
 }
 
 @("Missing Separator")
 unittest
 {
-    `mutable val a = 1 print a`.shouldNotParse;
+    `mutable val a = 1 print(a)`.shouldNotParse;
 }
 
 @("Empty Blocks")
@@ -383,8 +385,8 @@ unittest
 @("Blank Lines Between Statements")
 unittest
 {
-    shouldParse("mutable val a = 1\n\nprint a");
-    shouldParse("mutable val a = 1\n\n\nprint a");
+    shouldParse("mutable val a = 1\n\nprint(a)");
+    shouldParse("mutable val a = 1\n\n\nprint(a)");
 }
 
 @("Leading Newline")
@@ -397,13 +399,13 @@ unittest
 unittest
 {
     // Escaped so editors don't strip the trailing spaces
-    shouldParse("if true {  \n    print 1\n}");
+    shouldParse("if true {  \n    print(1)\n}");
 }
 
 @("Trailing Whitespace After Else")
 unittest
 {
-    shouldParse("if true {\n    print 1\n} else {  \n    print 2\n}");
+    shouldParse("if true {\n    print(1)\n} else {  \n    print(2)\n}");
 }
 
 @("Hexadecimal Literal")

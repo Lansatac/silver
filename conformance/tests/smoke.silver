@@ -4,59 +4,59 @@ val b = 3
 val c = 4
 
 
-printl a + b * c
-printl (a + b) * c
-printl a * b + c * a
-printl 20 / b - 1
-printl -a + b
-printl -(a + b)
-printl a - -b
+printl(a + b * c)
+printl((a + b) * c)
+printl(a * b + c * a)
+printl(20 / b - 1)
+printl(-a + b)
+printl(-(a + b))
+printl(a - -b)
 
-printl 1 + 2 == 3
-printl 1 + 2 == 4
-printl true || false && false
-printl (true || false) && false
-printl !false
-printl !(a == 2) || b == 3
-printl a == 2 && b == 3 && c == 4
+printl(1 + 2 == 3)
+printl(1 + 2 == 4)
+printl(true || false && false)
+printl((true || false) && false)
+printl(!false)
+printl(!(a == 2) || b == 3)
+printl(a == 2 && b == 3 && c == 4)
 
 mutable val total = 0
 total = total + a
 total = total + b
 
 total = total * c
-printl total
+printl(total)
 
 if total == 20 {
-    printl 1
+    printl(1)
 
     if a == 2 {
-        printl 2
+        printl(2)
     } else {
-        printl 0
+        printl(0)
     }
 
 } else if total == 0 {
-    printl 0
+    printl(0)
 
 } else {
-    printl 0
+    printl(0)
 }
 
 if false {
-    printl 0
+    printl(0)
 } else if a + b == 5 {
-    printl 3
+    printl(3)
 } else {
-    printl 0
+    printl(0)
 }
 
 if false {
-    printl 0
+    printl(0)
 } else {
-    printl 4
+    printl(4)
 }
 
-print 5
-print 6
-printl 7
+print(5)
+print(6)
+printl(7)

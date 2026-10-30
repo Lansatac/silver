@@ -10,7 +10,7 @@ Silver:
                             / VariableDeclaration
                             / ValueDeclaration
                             / FunctionDeclaration
-                            / PrintStatement
+                            / NativeFunctionDeclaration
                             / ReturnStatement
                             / AssignmentStatement
                             / ExpressionStatement
@@ -31,6 +31,8 @@ Silver:
     # `=>` introduces a single expression and `{}` a block, for functions and ifs alike.
     # A newline may follow `=>`, since it can't end a statement.
     FunctionDeclaration  < :DEF Variable :'(' FunctionParamDefs :')' TypeAnnotation (:'=>' Sep? Expression / Block)
+    # A native function has no body: the implementation is bound by the runtime.
+    NativeFunctionDeclaration < :NATIVE :DEF Variable :'(' FunctionParamDefs :')' TypeAnnotation
     FunctionParamDefs    < (FunctionParamDef (',' FunctionParamDef)*)?
     FunctionParamDef     < Variable TypeAnnotation
 
@@ -42,8 +44,6 @@ Silver:
     ReturnStatement      < RETURN Expression?
 
     ExpressionStatement  < Expression
-
-    PrintStatement       < (PRINT / PRINTL) Expression
 
     TypeAnnotation       < :':' Type
 
@@ -142,8 +142,7 @@ Silver:
     VAL                 <- Kword("val")
     MUTABLE             <- Kword("mutable")
     DEF                 <- Kword("def")
-    PRINT               <- Kword("print")
-    PRINTL              <- Kword("printl")
+    NATIVE              <- Kword("native")
     IF                  <- Kword("if")
     ELSE                <- Kword("else")
     TRUE                <- Kword("true")
@@ -152,7 +151,7 @@ Silver:
     RETURN              <- Kword("return")
     IMPORT              <- Kword("import")
 
-    Keyword             <- VAL / MUTABLE / DEF / PRINTL / PRINT / IF / ELSE / TRUE / FALSE / READ / RETURN / IMPORT
+    Keyword             <- VAL / MUTABLE / DEF / NATIVE / IF / ELSE / TRUE / FALSE / READ / RETURN / IMPORT
     IdentChar           <- [a-zA-Z0-9_]
     Variable            <- !Keyword ValueName
 

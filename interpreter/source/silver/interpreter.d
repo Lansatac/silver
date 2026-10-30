@@ -123,7 +123,7 @@ unittest
      if true {
         a = 2
      }
-     print a").should.equal("2");
+     print(a)").should.equal("2");
 }
 
 @("If Statements - false")
@@ -160,7 +160,7 @@ unittest
     runProgram("if true {
         val b = 2
      }
-     print b").should.throwException!SilverRuntimeException.withMessage("Variable b not found");
+     print(b)").should.throwException!SilverRuntimeException.withMessage("Variable b not found");
 }
 
 @("Block scope - assignment updates outer variable")
@@ -172,7 +172,7 @@ unittest
      } else {
         a = 3
      }
-     print a").should.equal("3");
+     print(a)").should.equal("3");
 }
 
 @("Block scope - shadowing")
@@ -181,9 +181,9 @@ unittest
     runProgram("val a = 1
      if true {
         val a = 2
-        print a
+        print(a)
      }
-     print a").should.equal("21");
+     print(a)").should.equal("21");
 }
 
 @("Block scope - duplicate declaration in same scope")
@@ -198,7 +198,7 @@ unittest
 unittest
 {
     runProgram("def f() : Int => 1
-     print f()").should.equal("1");
+     print(f())").should.equal("1");
 }
 
 @("Call function with arguments")
@@ -208,7 +208,7 @@ unittest
         val c = a + b
         c
      }
-     print add(1, 2)").should.equal("3");
+     print(add(1, 2))").should.equal("3");
 }
 
 @("Function sees variables from where it was defined")
@@ -216,7 +216,7 @@ unittest
 {
     runProgram("val x = 1
      def f() : Int => x + 1
-     print f()").should.equal("2");
+     print(f())").should.equal("2");
 }
 
 @("Function does not see caller's variables")
@@ -228,7 +228,7 @@ unittest
         val x = 2
         show()
      }
-     print caller()").should.equal("1");
+     print(caller())").should.equal("1");
 }
 
 @("Function locals do not leak")
@@ -239,14 +239,14 @@ unittest
         local
      }
      f()
-     print local").should.throwException!SilverRuntimeException.withMessage("Variable local not found");
+     print(local)").should.throwException!SilverRuntimeException.withMessage("Variable local not found");
 }
 
 @("Wrong argument count")
 unittest
 {
     runProgram("def f(a : Int) : Int => a
-     print f()").should.throwException!SilverRuntimeException.withMessage("f expects 1 arguments, got 0");
+     print(f())").should.throwException!SilverRuntimeException.withMessage("f expects 1 arguments, got 0");
 }
 
 @("val cannot be reassigned")
@@ -273,4 +273,40 @@ unittest
         e.sourceLine.should.equal(2);
         e.msg.should.equal("Cannot assign to val 'a'. Declare as 'mutable val' to reassign it.");
     }
+}
+
+@("print and printl are native functions from the prelude")
+unittest
+{
+    runProgram("print(1)
+     printl(2)
+     print(true)").should.equal("12\ntrue");
+}
+
+@("Native functions are values")
+unittest
+{
+    runProgram("val p = printl
+     p(3)").should.equal("3\n");
+}
+
+@("Prelude names can be shadowed")
+unittest
+{
+    runProgram("def print(value : Int) : Int => value
+     printl(print(4))").should.equal("4\n");
+}
+
+@("Native function without a binding")
+unittest
+{
+    runProgram("native def missing() : Unit").should.throwException!SilverRuntimeException.withMessage(
+        "No native binding for missing");
+}
+
+@("Native function argument count is checked")
+unittest
+{
+    runProgram("print()").should.throwException!SilverRuntimeException.withMessage(
+        "print expects 1 arguments, got 0");
 }

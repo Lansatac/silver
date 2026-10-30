@@ -177,14 +177,7 @@ struct Stmt
     StmtKind kind;
 }
 
-alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, PrintStmt, ImportStmt, FunctionDecl,
-    ReturnStmt);
-
-struct PrintStmt
-{
-    Expr expr;
-    bool newline;
-}
+alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, ImportStmt, FunctionDecl, ReturnStmt);
 
 struct VarDecl
 {
@@ -214,12 +207,15 @@ struct ImportStmt
 
 /// `def name(params): Type => expr` or `def name(params): Type { ... }`.
 /// A block body is a BlockExpr, so either way the body is one expression.
+/// `native def name(params): Type` has no body; the runtime binds it by name.
 struct FunctionDecl
 {
     string name;
     string[] params;
+    /// null when `native` is set.
     Expr* body;
     string returnType;
+    bool native;
 }
 
 /// `return value`. A bare `return` has a UnitLiteral value.
@@ -244,10 +240,11 @@ string printStmt(const Stmt s)
     return s.kind.match!(
         (const VarDecl v) => format("(%s %s %s)", v.mutable ? "mutable val" : "val", v.name, printExpr(v.value)),
         (const ExprStmt e) => printExpr(e.expr),
-        (const PrintStmt p) => format("(%s %s)", p.newline ? "printl" : "print", printExpr(p.expr)),
         (const AssignStmt a) => format("(assign %s %s %s)", printExpr(a.target), a.op, printExpr(a.value)),
         (const ImportStmt i) => format("(import %s)", i.path.join(".")),
-        (const FunctionDecl f) => format("(def %s (%s) : %s %s)", f.name, f.params.join(" "), f.returnType, printExpr(*f.body)),
+        (const FunctionDecl f) => f.native
+            ? format("(native def %s (%s) : %s)", f.name, f.params.join(" "), f.returnType)
+            : format("(def %s (%s) : %s %s)", f.name, f.params.join(" "), f.returnType, printExpr(*f.body)),
         (const ReturnStmt r) => format("(return %s)", printExpr(r.value)),
     );
 }

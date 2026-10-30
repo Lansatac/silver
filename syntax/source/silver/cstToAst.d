@@ -78,17 +78,8 @@ private Stmt convertStatement(ParseTree cst, string file)
         auto op = toAssignOp(cst.children[1].matches[0]);
         auto expr = convertExpression(cst[2], file);
         return Stmt(spanOf(cst, file), StmtKind(AssignStmt(target, op, expr)));
-    case "Silver.PrintStatement":
-        auto expr = convertExpression(cst[1], file);
-        if (cst.matches[0] == "print")
-        {
-            return Stmt(spanOf(cst, file), StmtKind(PrintStmt(expr, false)));
-        }
-        else
-        {
-            return Stmt(spanOf(cst, file), StmtKind(PrintStmt(expr, true)));
-        }
     case "Silver.FunctionDeclaration":
+    case "Silver.NativeFunctionDeclaration":
         return convertFunctionDeclaration(cst, file);
     case "Silver.ReturnStatement":
         // `RETURN Expression?`; the keyword is kept so a bare `return` still has a node.
@@ -235,12 +226,17 @@ private Expr convertPostfixOp(Expr lhs, ParseTree op, string file)
     }
 }
 
-/// `DEF Variable FunctionParamDefs? TypeAnnotation ('=>' Expression / Block)`.
+/// `DEF Variable FunctionParamDefs? TypeAnnotation ('=>' Expression / Block)`,
+/// or `NATIVE DEF Variable FunctionParamDefs? TypeAnnotation` with no body.
 /// FunctionParamDefs is absent rather than empty when there are no params,
 /// so children are matched by name.
 private Stmt convertFunctionDeclaration(ParseTree cst, string file)
 {
-    cst.validateNodeIs("Silver.FunctionDeclaration");
+    auto native = cst.name == "Silver.NativeFunctionDeclaration";
+    if (!native)
+    {
+        cst.validateNodeIs("Silver.FunctionDeclaration");
+    }
     auto name = cst[0].matches[0];
 
     string[] params;
@@ -267,7 +263,7 @@ private Stmt convertFunctionDeclaration(ParseTree cst, string file)
             throw new Exception("Unexpected '%s' in function declaration".format(child.name));
         }
     }
-    return Stmt(spanOf(cst, file), StmtKind(FunctionDecl(name, params, body, returnType)));
+    return Stmt(spanOf(cst, file), StmtKind(FunctionDecl(name, params, body, returnType, native)));
 }
 
 /// `{ Statement* }`. When the last statement is an expression it becomes the
@@ -519,6 +515,15 @@ unittest
     m2.statements.length.should.equal(2);
     printStmt(m2.statements[0]).should.equal("(def h (p q) : Int (block (val z p) => (Add z q)))");
     printStmt(m2.statements[1]).should.equal("(def k () : Int 1)");
+}
+
+@("cstToAst: native function declarations")
+unittest
+{
+    auto m = convertSource("native def print(value : Any) : Unit\nnative def now() : Int");
+    m.statements.length.should.equal(2);
+    printStmt(m.statements[0]).should.equal("(native def print (value) : Unit)");
+    printStmt(m.statements[1]).should.equal("(native def now () : Int)");
 }
 
 @("cstToAst: if expressions")

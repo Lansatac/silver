@@ -171,14 +171,21 @@ class Context
         }
     }
 
+    /// The D implementation behind a `native def`. Arguments are already
+    /// evaluated and their count checked against the declaration.
+    alias NativeFunction = Variant delegate(Variant[] args);
+
     static class Function
     {
         const FunctionDecl declaration;
         Environment closure;
-        this(const FunctionDecl declaration, Environment closure)
+        /// Set when the declaration is `native`; the body is null then.
+        NativeFunction native;
+        this(const FunctionDecl declaration, Environment closure, NativeFunction native = null)
         {
             this.declaration = declaration;
             this.closure = closure;
+            this.native = native;
         }
 
         override string toString() const
@@ -188,6 +195,11 @@ class Context
     }
 
     private Environment globals;
+    /// Names every module can see without importing them, loaded from
+    /// prelude.silver. Module environments are its children, so they can shadow it.
+    private Environment prelude;
+    /// Implementations for `native def`s, by function name.
+    private NativeFunction[string] nativeBindings;
 
     const(Variant[string]) getGlobals() const
     {
@@ -197,9 +209,11 @@ class Context
     /// Executes the ast.
     void run()
     {
-        globals = new Environment();
+        bindNatives();
         try
         {
+            prelude = loadPrelude();
+            globals = new Environment(prelude);
             execute(program, globals);
         }
         catch (ReturnSignal signal)
@@ -262,34 +276,47 @@ class Context
         variables.setVariable(name, value);
     }
 
-    private void execute(const PrintStmt ast, Environment variables)
+    private void bindNatives()
+    {
+        nativeBindings["print"] = (Variant[] args) => output(args[0], false);
+        nativeBindings["printl"] = (Variant[] args) => output(args[0], true);
+    }
+
+    private Variant output(Variant value, bool newline)
     {
         import std.conv : to;
-        import std.stdio;
+        import std.stdio : write, writeln;
 
-
-        auto value = evaluate(ast.expr, variables);
-        if (!ast.newline)
+        programOutput ~= value.to!string ~ (newline ? "\n" : "");
+        if (useStdOut)
         {
-            programOutput ~= value.to!string;
-            if (useStdOut)
+            if (newline)
+            {
+                writeln(value);
+            }
+            else
             {
                 write(value);
             }
         }
-        else
-        {
-            programOutput ~= value.to!string ~ "\n";
-            if (useStdOut)
-            {
-                writeln(value);
-            }
-        }
+        return Variant(Unit());
     }
 
     private void execute(const FunctionDecl ast, Environment variables)
     {
-        variables.defineFunction(ast.name, new Function(ast, variables));
+        if (!ast.native)
+        {
+            variables.defineFunction(ast.name, new Function(ast, variables));
+            return;
+        }
+        auto binding = ast.name in nativeBindings;
+        if (binding is null)
+        {
+            import std.format : format;
+
+            throw new Exception("No native binding for %s".format(ast.name));
+        }
+        variables.defineFunction(ast.name, new Function(ast, variables, *binding));
     }
 
     private void execute(const ImportStmt ast, Environment variables)
@@ -302,9 +329,32 @@ class Context
 
     private Module loadModule(const (string[]) moduleChain)
     {
+        import std.format : format;
+        import std.array : join;
+
+        auto moduleEnv = new Environment(prelude);
+        if (!tryLoadModule(moduleChain, moduleEnv))
+        {
+            throw new Exception("Module '%s'.silver not found".format(moduleChain.join("/")));
+        }
+        return new Module(moduleChain.join("."), moduleEnv);
+    }
+
+    /// Loads prelude.silver if an import path has one. Contexts without a
+    /// standard library (e.g. in tests) get an empty prelude.
+    private Environment loadPrelude()
+    {
+        auto preludeEnv = new Environment();
+        tryLoadModule(["prelude"], preludeEnv);
+        return preludeEnv;
+    }
+
+    /// Finds the module on the import paths and executes it into `moduleEnv`.
+    /// Returns false if no import path has it.
+    private bool tryLoadModule(const (string[]) moduleChain, Environment moduleEnv)
+    {
         import std.file : exists, readText;
         import std.path : buildPath;
-        import std.format : format;
         import std.array : join;
         import silver.parse;
 
@@ -314,17 +364,13 @@ class Context
             if (exists(modulePath))
             {
                 auto moduleSource = readText(modulePath);
-                auto moduleName = moduleChain.join(".");
-                auto moduleAst = parse(moduleSource, moduleName, modulePath);
+                auto moduleAst = parse(moduleSource, moduleChain.join("."), modulePath);
                 sourceFiles[modulePath] = moduleSource;
-                auto moduleEnv = new Environment();
                 execute(moduleAst, moduleEnv);
-
-                return new Module(moduleName, moduleEnv);
+                return true;
             }
         }
-    
-        throw new Exception("Module '%s'.silver not found".format(moduleChain.join("/")));
+        return false;
     }
 
     private void execute(const ExprStmt ast, Environment variables)
@@ -469,6 +515,11 @@ class Context
         {
             throw new Exception("%s expects %s arguments, got %s".format(
                     fn.declaration.name, fn.declaration.params.length, args.length));
+        }
+
+        if (fn.native !is null)
+        {
+            return fn.native(args);
         }
 
         Environment functionEnv = new Environment(fn.closure);
