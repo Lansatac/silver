@@ -5,10 +5,9 @@ import std.path;
 
 import silver.parse : parse, ParseException;
 import silver.cstToAst : cstToAst;
-import silver.context;
+import silver.context : Context, SilverRuntimeException;
 // Renamed because Context has its own (runtime) Module class.
 import silver.ast : AstModule = Module, printModule;
-
 version (unittest) import fluent.asserts;
 
 /// Interprets a string representing silver code.
@@ -25,9 +24,22 @@ int interpret(string code, string filename = "<input>")
         return 1;
     }
 
-    auto context = new Context(program, [absolutePath("./stdlib")], true);
-
-    context.run();
+    auto context = new Context(program, [absolutePath("./stdlib")], true, code);
+    try
+    {
+        context.run();
+    }
+    catch (SilverRuntimeException e)
+    {
+        import std.path;
+        stderr.writefln("%s:%s: %s", buildNormalizedPath(absolutePath( e.sourceFile)), e.sourceLine, e.msg);
+        return 1;
+    }
+    catch (ParseException e)
+    {
+        stderr.writeln(e.msg);
+        return 1;
+    }
 
     return 0;
 }
@@ -46,7 +58,7 @@ version (unittest)
     {
         import std.format;
 
-        auto program = toAst(`var variable = %s`.format(expression));
+        auto program = toAst(`val variable = %s`.format(expression));
         auto context = new Context(program, []);
         context.run();
         return context.getGlobals()["variable"];
@@ -63,7 +75,7 @@ version (unittest)
 @("Simple program")
 unittest
 {
-    interpret("var a = 1").should.equal(0);
+    interpret("val a = 1").should.equal(0);
 }
 
 @("Global Variable Assignment")
@@ -93,7 +105,7 @@ unittest
 @("Operator Precedence RTL")
 unittest
 {
-    auto program = toAst("var a = 2 * 2 + 1");
+    auto program = toAst("val a = 2 * 2 + 1");
     evaluateExpression("2 * 2 + 1").get!long.should.equal(5).because(printModule(program));
 }
 
@@ -107,7 +119,7 @@ unittest
 @("If Statements - true")
 unittest
 {
-    runProgram("var a = 1
+    runProgram("mutable val a = 1
      if true then
         a = 2
      end
@@ -118,7 +130,7 @@ unittest
 unittest
 {
     auto context = new Context(toAst(
-        r"var a = 1
+        r"val a = 1
           if false then
             a = 2
           end
@@ -131,7 +143,7 @@ unittest
 unittest
 {
     auto context = new Context(toAst(
-        r"var a = 1
+        r"mutable val a = 1
           if false then
             a = 2
           else
@@ -146,7 +158,7 @@ unittest
 unittest
 {
     runProgram("if true then
-        var b = 2
+        val b = 2
      end
      print b").should.throwException!Exception.withMessage("Variable b not found");
 }
@@ -154,7 +166,7 @@ unittest
 @("Block scope - assignment updates outer variable")
 unittest
 {
-    runProgram("var a = 1
+    runProgram("mutable val a = 1
      if false then
         a = 2
      else
@@ -166,9 +178,9 @@ unittest
 @("Block scope - shadowing")
 unittest
 {
-    runProgram("var a = 1
+    runProgram("val a = 1
      if true then
-        var a = 2
+        val a = 2
         print a
      end
      print a").should.equal("21");
@@ -177,61 +189,55 @@ unittest
 @("Block scope - duplicate declaration in same scope")
 unittest
 {
-    runProgram("var a = 1
-     var a = 2").should.throwException!Exception.withMessage(
+    runProgram("val a = 1
+     val a = 2").should.throwException!Exception.withMessage(
         "Duplicate declaration of variable a");
 }
 
 @("Call function")
 unittest
 {
-    runProgram("def f()
-        return 1
-     end
+    runProgram("def f() : Int => 1
      print f()").should.equal("1");
 }
 
 @("Call function with arguments")
 unittest
 {
-    runProgram("def add(a, b)
-        var c = a + b
-        return c
-     end
+    runProgram("def add(a : Int, b : Int) : Int {
+        val c = a + b
+        c
+     }
      print add(1, 2)").should.equal("3");
 }
 
 @("Function sees variables from where it was defined")
 unittest
 {
-    runProgram("var x = 1
-     def f()
-        return x + 1
-     end
+    runProgram("val x = 1
+     def f() : Int => x + 1
      print f()").should.equal("2");
 }
 
 @("Function does not see caller's variables")
 unittest
 {
-    runProgram("var x = 1
-     def show()
-        return x
-     end
-     def caller()
-        var x = 2
-        return show()
-     end
+    runProgram("val x = 1
+     def show() : Int => x
+     def caller() : Int {
+        val x = 2
+        show()
+     }
      print caller()").should.equal("1");
 }
 
 @("Function locals do not leak")
 unittest
 {
-    runProgram("def f()
-        var local = 1
-        return local
-     end
+    runProgram("def f() : Int {
+        val local = 1
+        local
+     }
      f()
      print local").should.throwException!Exception.withMessage("Variable local not found");
 }
@@ -239,9 +245,7 @@ unittest
 @("Wrong argument count")
 unittest
 {
-    runProgram("def f(a)
-        return a
-     end
+    runProgram("def f(a : Int) : Int => a
      print f()").should.throwException!Exception.withMessage("f expects 1 arguments, got 0");
 }
 
@@ -250,4 +254,23 @@ unittest
 {
     runProgram("val a = 1
      a = 2").should.throwException!Exception.withMessage("Cannot assign to val a");
+}
+
+@("Runtime errors report their Silver source location")
+unittest
+{
+    auto source = "val a = 1\n    a = 2";
+    auto program = parse(source, "test", "test.silver");
+    auto context = new Context(program, [], false, source);
+    try
+    {
+        context.run();
+        assert(false, "Expected assignment to val to fail");
+    }
+    catch (SilverRuntimeException e)
+    {
+        assert(e.sourceFile == "test.silver");
+        assert(e.sourceLine == 2);
+        assert(e.msg == "Cannot assign to val a");
+    }
 }

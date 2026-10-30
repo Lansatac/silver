@@ -1,7 +1,7 @@
 
-var a = 2
-var b = 3
-var c = 4
+val a = 2
+val b = 3
+val c = 4
 
 
 printl a + b * c
@@ -20,7 +20,7 @@ printl !false
 printl !(a == 2) || b == 3
 printl a == 2 && b == 3 && c == 4
 
-var total = 0
+mutable val total = 0
 total = total + a
 total = total + b
 

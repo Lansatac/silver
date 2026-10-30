@@ -56,6 +56,7 @@ private Stmt convertStatement(ParseTree cst, string file)
     switch (cst.name)
     {
     case "Silver.Statement":
+    case "Silver.TopLevelStatement":
         return convertStatement(cst[0], file);
     case "Silver.VariableDeclaration":
     case "Silver.ValueDeclaration":
@@ -113,11 +114,13 @@ private Expr convertExpression(ParseTree cst, string file)
     case "Silver.Literal":
     case "Silver.NumberLiteral":
         return convertExpression(cst[0], file);
+    case "Silver.RelationalExpression":
     case "Silver.OrExpression":
     case "Silver.AndExpression":
     case "Silver.EqExpression":
     case "Silver.AdditionExpression":
     case "Silver.MultiplyExpression":
+    case "Silver.CoalesceExpression":
         // `X (Op X)*`, folded left so `1 - 2 - 3` is `(1 - 2) - 3`.
         auto lhs = convertExpression(cst[0], file);
         foreach (pair; cst.children.drop(1).chunks(2))
@@ -205,16 +208,15 @@ private Expr convertPostfixOp(Expr lhs, ParseTree op, string file)
     }
 }
 
-/// `def name(FunctionParamDefs?) StatementBlock? ReturnStatement end`.
-/// FunctionParamDefs and StatementBlock are absent rather than empty when
-/// there are no params or statements, so children are matched by name.
 private Stmt convertFunctionDeclaration(ParseTree cst, string file)
 {
+    // FunctionDeclaration  < :DEF Variable '(' FunctionParamDefs ')' TypeAnnotation '=>' '{' FunctionBlock? '}'
     cst.validateNodeIs("Silver.FunctionDeclaration");
     auto name = cst[0].matches[0];
 
     string[] params;
-    Stmt[] body;
+    FunctionBody body;
+    string returnType;
     foreach (child; cst.children[1 .. $])
     {
         switch (child.name)
@@ -225,18 +227,35 @@ private Stmt convertFunctionDeclaration(ParseTree cst, string file)
                 params ~= param.matches[0];
             }
             break;
-        case "Silver.StatementBlock":
-            body ~= convertStatementBlock(child, file);
+        case "Silver.TypeAnnotation":
+            returnType = child.matches[0];
             break;
-        case "Silver.ReturnStatement":
-            body ~= convertStatement(child, file);
+        case "Silver.FunctionBlock":
+            body = convertFunctionBlock(child, file);
+            break;
+        case "Silver.Expression":
+            body = FunctionBody([], convertExpression(child, file));
             break;
         default:
             throw new Exception("Unexpected '%s' in function declaration".format(child.name));
         }
     }
-    return Stmt(spanOf(cst, file), StmtKind(FunctionDecl(name, params, body)));
+    return Stmt(spanOf(cst, file), StmtKind(FunctionDecl(name, params, body, returnType)));
 }
+
+private FunctionBody convertFunctionBlock(ParseTree cst, string file)
+{
+    FunctionBody body;
+    body.statements = [];
+    foreach (statement; cst.children[0 .. $ - 1])
+    {
+        body.statements ~= convertStatement(statement, file);
+    }
+    body.returnExpr = convertExpression(cst.children[$ - 1], file);
+    return body;
+}
+
+
 
 private UnaryOp toUnaryOp(string op)
 {
@@ -300,6 +319,16 @@ private BinaryOp toBinaryOp(string op)
         return BinaryOp.And;
     case "||":
         return BinaryOp.Or;
+    case "<":
+        return BinaryOp.Less;
+    case "<=":
+        return BinaryOp.LessEqual;
+    case ">":
+        return BinaryOp.Greater;
+    case ">=":
+        return BinaryOp.GreaterEqual;
+    case "??":
+        return BinaryOp.Coalesce;
     default:
         throw new Exception("Unknown binary operator '%s'".format(op));
     }
@@ -326,29 +355,29 @@ version(unittest)
 @("cstToAst: precedence and parentheses")
 unittest
 {
-    auto m = convertSource("var x = (1 + y) * 2");
+    auto m = convertSource("val x = (1 + y) * 2");
     m.statements.length.should.equal(1);
-    printStmt(m.statements[0]).should.equal("(var x (Multiply (Add 1 y) 2))");
+    printStmt(m.statements[0]).should.equal("(val x (Multiply (Add 1 y) 2))");
 }
 
 @("cstToAst: binary operators are left-associative")
 unittest
 {
-    auto m = convertSource("var x = 1 - 2 - 3\nvar y = a == b");
+    auto m = convertSource("val x = 1 - 2 - 3\nval y = a == b");
     m.statements.length.should.equal(2);
-    printStmt(m.statements[0]).should.equal("(var x (Subtract (Subtract 1 2) 3))");
-    printStmt(m.statements[1]).should.equal("(var y (Equal a b))");
+    printStmt(m.statements[0]).should.equal("(val x (Subtract (Subtract 1 2) 3))");
+    printStmt(m.statements[1]).should.equal("(val y (Equal a b))");
 }
 
 @("cstToAst: power binds tighter than multiply and unary, and is right-associative")
 unittest
 {
-    auto m = convertSource("var a = 2 * 3 ^ 2\nvar b = 2 ^ 3 ^ 2\nvar c = -2 ^ 2\nvar d = 2 ^ -1");
+    auto m = convertSource("val a = 2 * 3 ^ 2\nval b = 2 ^ 3 ^ 2\nval c = -2 ^ 2\nval d = 2 ^ -1");
     m.statements.length.should.equal(4);
-    printStmt(m.statements[0]).should.equal("(var a (Multiply 2 (Power 3 2)))");
-    printStmt(m.statements[1]).should.equal("(var b (Power 2 (Power 3 2)))");
-    printStmt(m.statements[2]).should.equal("(var c (Minus (Power 2 2)))");
-    printStmt(m.statements[3]).should.equal("(var d (Power 2 (Minus 1)))");
+    printStmt(m.statements[0]).should.equal("(val a (Multiply 2 (Power 3 2)))");
+    printStmt(m.statements[1]).should.equal("(val b (Power 2 (Power 3 2)))");
+    printStmt(m.statements[2]).should.equal("(val c (Minus (Power 2 2)))");
+    printStmt(m.statements[3]).should.equal("(val d (Power 2 (Minus 1)))");
 }
 
 
@@ -356,10 +385,10 @@ unittest
 @("cstToAst: unary operators")
 unittest
 {
-    auto m = convertSource("var x = -1\nvar y = !a");
+    auto m = convertSource("val x = -1\nval y = !a");
     m.statements.length.should.equal(2);
-    printStmt(m.statements[0]).should.equal("(var x (Minus 1))");
-    printStmt(m.statements[1]).should.equal("(var y (Not a))");
+    printStmt(m.statements[0]).should.equal("(val x (Minus 1))");
+    printStmt(m.statements[1]).should.equal("(val y (Not a))");
 }
 
 /// `IfBlock ElseIfBlock* ElseBlock? END`. Each `else if` becomes an IfStmt
@@ -417,12 +446,12 @@ private Stmt[] convertOptionalBlock(ParseTree cst, size_t index, string file)
 @("cstToAst: if with else-if chain and else")
 unittest
 {
-    auto source = "if a then\nvar x = 1\nelse if b then\nvar x = 2\n"
-        ~ "else if c then\nvar x = 3\nelse\nvar x = 4\nend";
+    auto source = "if a then\nval x = 1\nelse if b then\nval x = 2\n"
+        ~ "else if c then\nval x = 3\nelse\nval x = 4\nend";
     auto m = convertSource(source);
     m.statements.length.should.equal(1);
     printStmt(m.statements[0]).should.equal(
-        "(if a ((var x 1)) ((if b ((var x 2)) ((if c ((var x 3)) ((var x 4)))))))");
+        "(if a ((val x 1)) ((if b ((val x 2)) ((if c ((val x 3)) ((val x 4)))))))");
 }
 
 @("cstToAst: if with empty body and no else")
@@ -435,21 +464,28 @@ unittest
 @("cstToAst: calls and member access fold left")
 unittest
 {
-    auto m = convertSource("f(1, x)()\nvar y = m.x.f(2) + 1\nvar r = read");
+    auto m = convertSource("f(1, x)()\nval y = m.x.f(2) + 1\nval r = read");
     m.statements.length.should.equal(3);
     printStmt(m.statements[0]).should.equal("(call (call f 1 x))");
-    printStmt(m.statements[1]).should.equal("(var y (Add (call (. (. m x) f) 2) 1))");
-    printStmt(m.statements[2]).should.equal("(var r read)");
+    printStmt(m.statements[1]).should.equal("(val y (Add (call (. (. m x) f) 2) 1))");
+    printStmt(m.statements[2]).should.equal("(val r read)");
 }
 
-@("cstToAst: val and var declarations")
+@("cstToAst: val declarations")
 unittest
 {
-    auto m = convertSource("val x = 1\nvar y = x\nval value = 2");
+    auto m = convertSource("val x = 1\nval y = x\nval value = 2");
     m.statements.length.should.equal(3);
     printStmt(m.statements[0]).should.equal("(val x 1)");
-    printStmt(m.statements[1]).should.equal("(var y x)");
+    printStmt(m.statements[1]).should.equal("(val y x)");
     printStmt(m.statements[2]).should.equal("(val value 2)");
+}
+
+@("cstToAst: mutable val")
+unittest
+{
+    auto m = convertSource("mutable val x = 1");
+    printStmt(m.statements[0]).should.equal("(mutable val x 1)");
 }
 
 @("cstToAst: assignment to a member")
@@ -471,8 +507,12 @@ unittest
 @("cstToAst: function declarations")
 unittest
 {
-    auto m = convertSource("def h(p, q)\nvar z = p\nreturn z + q\nend\ndef k() return 1 end");
-    m.statements.length.should.equal(2);
-    printStmt(m.statements[0]).should.equal("(def h (p q) ((var z p) (return (Add z q))))");
-    printStmt(m.statements[1]).should.equal("(def k () ((return 1)))");
+    auto m1 = convertSource("def f() : Int => 1");
+    m1.statements.length.should.equal(1);
+    printStmt(m1.statements[0]).should.equal("(def f () : Int () 1)");
+
+    auto m2 = convertSource("def h(p : Int, q:Int) : Int {\nval z = p\nz + q\n}\ndef k() : Int => 1");
+    m2.statements.length.should.equal(2);
+    printStmt(m2.statements[0]).should.equal("(def h (p q) : Int ((val z p)) (Add z q))");
+    printStmt(m2.statements[1]).should.equal("(def k () : Int () 1)");
 }

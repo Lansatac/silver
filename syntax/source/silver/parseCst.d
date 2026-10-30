@@ -66,19 +66,19 @@ version(unittest)
 @("parse returns the tree for valid source")
 unittest
 {
-    parseCst("var a = 1").successful.should.equal(true);
+    parseCst("val a = 1").successful.should.equal(true);
 }
 
 @("parse throws on invalid source")
 unittest
 {
-    parseError("var = 1").should.not.equal(null);
+    parseError("val = 1").should.not.equal(null);
 }
 
 @("parse error names the source")
 unittest
 {
-    parseError("var = 1", "math.silver").should.startWith("math.silver: ");
+    parseError("val = 1", "math.silver").should.startWith("math.silver: ");
 }
 
 @("parse error on a failure that isn't a child node terminates")

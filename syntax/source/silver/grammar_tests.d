@@ -13,6 +13,8 @@ version (unittest)
         "Silver.OrExpression",
         "Silver.AndExpression",
         "Silver.EqExpression",
+        "Silver.RelationalExpression",
+        "Silver.CoalesceExpression",
         "Silver.AdditionExpression",
         "Silver.MultiplyExpression",
         "Silver.Unary",
@@ -246,14 +248,14 @@ unittest
 @("Multi-Line")
 unittest
 {
-    shouldParse(`var a = 0
+    shouldParse(`mutable val a = 0
     print a`);
 }
 
 @("Two Statements Single-Line")
 unittest
 {
-    shouldNotParse(`var a = 0 print a`);
+    shouldNotParse(`mutable val a = 0 print a`);
 }
 
 @("Assign To Function Call")
@@ -341,14 +343,14 @@ unittest
 @("Semicolon Separators")
 unittest
 {
-    `var a = 1; print a`.shouldParse;
+    `mutable val a = 1; print a`.shouldParse;
     `if true then a = 1; print a end`.shouldParse;
 }
 
 @("Missing Separator")
 unittest
 {
-    `var a = 1 print a`.shouldNotParse;
+    `mutable val a = 1 print a`.shouldNotParse;
 }
 
 @("Empty Blocks")
@@ -361,7 +363,7 @@ unittest
 unittest
 {
     shouldParse(
-        r"var a = 1
+        r"mutable val a = 1
 
 ");
 }
@@ -369,14 +371,14 @@ unittest
 @("Blank Lines Between Statements")
 unittest
 {
-    shouldParse("var a = 1\n\nprint a");
-    shouldParse("var a = 1\n\n\nprint a");
+    shouldParse("mutable val a = 1\n\nprint a");
+    shouldParse("mutable val a = 1\n\n\nprint a");
 }
 
 @("Leading Newline")
 unittest
 {
-    shouldParse("\nvar a = 1");
+    shouldParse("\nmutable val a = 1");
 }
 
 @("Trailing Whitespace After Then")
@@ -439,9 +441,10 @@ unittest
 @("Function Definition")
 unittest
 {
-    shouldParse("def a()\nreturn 1\nend");
-    Silver.FunctionDeclaration("def a() return 1 end").successful.should.equal(true);
-    Silver.FunctionDeclaration("def a(a, b) return 1 end").successful.should.equal(true);
+    shouldParse("def a() : Int => 1");
+    Silver.FunctionDeclaration("def a() : Int => 1").successful.should.equal(true);
+    Silver.FunctionDeclaration("def a() : Int { 1 }").successful.should.equal(true);
+    Silver.FunctionDeclaration("def a(a : Int, b : Int) : Int => 1").successful.should.equal(true);
 }
 
 @("Import")
@@ -505,4 +508,170 @@ unittest
 unittest
 {
     shouldNotParse("a = 1 /*\n*/ b = 2");
+}
+
+@("Value Declarations")
+unittest
+{
+    shouldParse("val a = 1");
+    shouldParse("val a: Int = 1");
+    shouldNotParse("val a");
+    shouldNotParse("val a: Int");
+}
+
+@("Mutable Declarations")
+unittest
+{
+    shouldParse("mutable val a = 1");
+    shouldParse("mutable val a: Int = 1");
+    shouldParse("mutable val a: Int?"); // defaults to None
+    shouldNotParse("mutable val a");
+    shouldNotParse("mutable a = 1");
+}
+
+@("Case-Sensitive Names")
+unittest
+{
+    shouldParse("val point: Point = origin");
+    shouldNotParse("val Point = 1");
+    shouldNotParse("val a: point = 1");
+    shouldParse("val _unused = 1");
+}
+
+@("Type Annotations")
+unittest
+{
+    shouldParse("val a: Int? = 1");
+    shouldParse("val a: Int?? = 1");
+    shouldParse("val a: math.Vector = v");
+    shouldParse("val a: List<Int> = []");
+    shouldParse("val a: Map<String, List<Int?>> = [:]");
+    shouldParse("val a: () = ()");
+    shouldParse("val a: () -> Int = f");
+    shouldParse("val a: (Int, Int) -> Int = f");
+    shouldParse("val a: (Int) -> (Int) -> Int = f");
+    shouldParse("val a: ((Int) -> Int)? = None");
+    shouldNotParse("val a: List<> = []");
+}
+
+@("Optional Binds Tighter Than Function Arrow")
+unittest
+{
+    auto type = Silver.decimateTree(Silver.Type("(Int) -> Int?"));
+    type.successful.should.equal(true);
+    // Type -> BaseType -> FunctionType; the `?` belongs to the return type
+    type[0][0].name.should.equal("Silver.FunctionType");
+    type.children.length.should.equal(1);
+}
+
+@("Relational Operators")
+unittest
+{
+    shouldParse("a = b < c");
+    shouldParse("a = b <= c");
+    shouldParse("a = b > c");
+    shouldParse("a = b >= c");
+    shouldParse("a = b + 1 < c == true");
+    shouldNotParse("a = b < c < d");
+}
+
+@("Expression Operator Precedence, Relational Before Equality")
+unittest
+{
+    auto implicit = Silver.decimateTree(Silver.Expression("a < b == c > d"));
+    auto explicit = Silver.decimateTree(Silver.Expression("(a < b) == (c > d)"));
+    implicit.isEquivilent(explicit).should.equal(true).because("\n" ~ diff(implicit, explicit));
+}
+
+@("Coalesce Operator")
+unittest
+{
+    shouldParse("a = b ?? 0");
+    shouldParse("a = b ?? c ?? 0");
+}
+
+@("Expression Operator Precedence, Coalesce")
+unittest
+{
+    // Between addition and comparison, and right-associative
+    auto implicit = Silver.decimateTree(Silver.Expression("a ?? b + 1 < c ?? d ?? e"));
+    auto explicit = Silver.decimateTree(Silver.Expression("(a ?? (b + 1)) < (c ?? (d ?? e))"));
+    implicit.isEquivilent(explicit).should.equal(true).because("\n" ~ diff(implicit, explicit));
+}
+
+@("Optional Chaining")
+unittest
+{
+    shouldParse("a = b?.c");
+    shouldParse("a = b?.c?.d ?? 0");
+    shouldParse("a = b?.c()");
+}
+
+@("Propagate None")
+unittest
+{
+    shouldParse("a = b?");
+    shouldParse("a = b?.c? + 1");
+    shouldParse("a = f()? ?? 0");
+
+    auto postfix = Silver.decimateTree(Silver.Postfix("b?"));
+    postfix[1].name.should.equal("Silver.PostfixOp");
+    postfix[1][0].name.should.equal("Silver.PropagateNone");
+}
+
+@("Constructors")
+unittest
+{
+    shouldParse("a = None");
+    shouldParse("a = Some(1)");
+    shouldParse("a = Some(Some(1))");
+}
+
+@("Unit Literal")
+unittest
+{
+    shouldParse("a = ()");
+    shouldParse("f(())");
+}
+
+@("List Literals")
+unittest
+{
+    shouldParse("a = []");
+    shouldParse("a = [1]");
+    shouldParse("a = [1, 2, 3]");
+    shouldParse("a = [1, 2, 3,]");
+    shouldParse("a = [[1, 2], [3]]");
+    shouldParse("a = [f(1), b + c]");
+    shouldNotParse("a = [,]");
+    shouldNotParse("a = [1 2]");
+}
+
+@("Map Literals")
+unittest
+{
+    shouldParse("a = [:]");
+    shouldParse("a = [1: 2]");
+    shouldParse("a = [1: 2, 3: 4]");
+    shouldParse("a = [1: 2, 3: 4,]");
+    shouldParse("a = [k: [1, 2], j: []]");
+    shouldNotParse("a = [1: 2, 3]");
+    shouldNotParse("a = [:,]");
+}
+
+@("Empty Map Is Not An Empty List")
+unittest
+{
+    Silver.decimateTree(Silver.CollectionLiteral("[]"))[0].name.should.equal("Silver.ListLiteral");
+    Silver.decimateTree(Silver.CollectionLiteral("[:]"))[0].name.should.equal("Silver.MapLiteral");
+}
+
+@("Indexing")
+unittest
+{
+    shouldParse("a = xs[0]");
+    shouldParse("a = xs[i + 1][j]");
+    shouldParse("a = m[k] ?? 0");
+    shouldParse("xs[0] = 1");
+    shouldParse("a = [1, 2][0]");
 }

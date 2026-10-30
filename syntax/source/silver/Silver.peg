@@ -1,0 +1,173 @@
+Silver:
+    Module               < StatementBlock? eoi
+    StatementBlock       < Sep? TopLevelStatement (Sep TopLevelStatement)* Sep?
+    Sep                  <: ((eol / ';') Spacing)+
+
+    TopLevelStatement    < (
+                            / ImportStatement
+                            / FunctionDeclaration
+
+                            
+                            / VariableDeclaration
+                            / ValueDeclaration
+                            / FunctionDeclaration
+                            / PrintStatement
+                            / IfStatement
+                            / AssignmentStatement
+                            / CallStatement
+                           )
+
+    Statement            < (
+                            / VariableDeclaration
+                            / ValueDeclaration
+                            / FunctionDeclaration
+                            / PrintStatement
+                            / IfStatement
+                            / AssignmentStatement
+                            / CallStatement
+                           )
+
+    QualifiedName        <- ValueName ('.' ValueName)*
+
+    ImportStatement      < :IMPORT QualifiedName
+
+    ValueDeclaration     < :VAL Variable TypeAnnotation? '=' Expression
+    VariableDeclaration  < :MUTABLE :VAL Variable (TypeAnnotation ('=' Expression)? / '=' Expression)
+    
+    AssignmentStatement  < AssignTarget AssignOp Expression
+    AssignOp             < "+=" / "-=" / "*=" / "/=" / "^=" / "=" !"="
+
+    AssignTarget         < Postfix
+
+    FunctionDeclaration  < :DEF Variable '(' FunctionParamDefs ')' TypeAnnotation (('=>' Expression) / ('{' FunctionBlock? '}'))
+    FunctionParamDefs    < (FunctionParamDef (',' FunctionParamDef)*)?
+    FunctionParamDef     < Variable TypeAnnotation
+
+    FunctionBlock       < Sep? (Statement Sep !'}')* Expression Sep?
+
+    ReturnStatement      < :RETURN Expression
+
+    CallStatement        < Postfix
+
+    PrintStatement       < (PRINT / PRINTL) Expression
+
+    IfStatement          < IfBlock ElseIfBlock* ElseBlock? :END
+    IfBlock              < :IF Expression :THEN Sep? StatementBlock?
+    ElseIfBlock          < :ELSE :IF Expression :THEN Sep? StatementBlock?
+    ElseBlock            < :ELSE Sep? StatementBlock?
+
+    TypeAnnotation       < :':' Type
+
+    # `?` binds tighter than `->`, so `(Int) -> Int?` returns an optional
+    Type                 < BaseType OptionMark*
+    OptionMark           <- "?"
+    BaseType             < FunctionType / UnitType / :'(' Type :')' / NamedType
+    FunctionType         < :'(' (Type (:',' Type)*)? :')' :"->" Type
+    UnitType             < '(' ')'
+    NamedType            < TypePath TypeArguments?
+    TypePath             <- (ValueName '.')* TypeName
+    TypeArguments        < :'<' Type (:',' Type)* :'>'
+
+    Expression           < OrExpression
+    OrExpression         < AndExpression (OrOperator AndExpression)*
+    AndExpression        < EqExpression (AndOperator EqExpression)*
+    EqExpression         < RelationalExpression ((EqOperator) RelationalExpression)*
+    RelationalExpression < CoalesceExpression (RelationalOperator CoalesceExpression)?
+    CoalesceExpression   < AdditionExpression (CoalesceOperator CoalesceExpression)?
+    AdditionExpression   < MultiplyExpression (AdditionOperator MultiplyExpression)*
+    MultiplyExpression   < Unary (MultiplyOperator Unary)*
+    Unary                < UnaryOperator? PowerExpression
+    UnaryOperator        < "-" / "!"
+    PowerExpression      < Postfix (PowerOperator Unary)?
+
+    ReadExpression       < READ
+
+    Postfix              < Eval PostfixOp*
+    PostfixOp            < CallArgs / IndexArgs / SafeMemberAccess / MemberAccess / PropagateNone
+    MemberAccess         < :'.' identifier
+    SafeMemberAccess     < :"?." identifier
+    PropagateNone        <- "?" !("?" / ".")
+    IndexArgs            < :'[' Expression :']'
+    CallArgs             < '(' (FunctionParam (:',' FunctionParam)*)? ')'
+    FunctionParam        < Expression
+
+    Eval                 < UnitLiteral
+                              / :'(' Expression :')'
+                              / ReadExpression
+                              / Literal
+                              / CollectionLiteral
+                              / Variable
+                              / TypeName
+
+    Literal              <  BooleanLiteral
+                          / NumberLiteral
+
+    UnitLiteral          < '(' ')'
+
+    # Map is tried first so `[:]` and `[k: v]` aren't read as lists
+    CollectionLiteral   < MapLiteral / ListLiteral
+    # Brackets are kept so empty literals still match text; decimateTree drops nodes that match nothing
+    ListLiteral         < '[' (Expression (:',' Expression)* :','?)? ']'
+    MapLiteral          < '[' ':' ']'
+                         / '[' MapEntry (:',' MapEntry)* :','? ']'
+    MapEntry            < Expression :':' Expression
+
+    OrOperator          <  "||"
+    AndOperator         < "&&"
+    EqOperator          <  "==" / "!="
+    RelationalOperator  < "<=" / ">=" / "<" / ">"
+    CoalesceOperator    < "??"
+    AdditionOperator    <  "+" / "-"
+    MultiplyOperator    <  "*" / "/" / "%"
+    PowerOperator       <  "^"
+
+
+    BooleanLiteral      <- TRUE / FALSE
+
+    NumberLiteral       <-  ScientificLiteral
+                          / HexaLiteral
+                          / BinaryLiteral
+                          / FloatingLiteral
+                          / UnsignedLiteral
+                          / IntegerLiteral
+
+    ScientificLiteral   <~ (FloatingLiteral / IntegerLiteral) ( ('e' / 'E' ) IntegerLiteral )
+    FloatingLiteral     <~ IntegerLiteral ('.' UnsignedLiteral )
+    UnsignedLiteral     <~ [0-9]+
+    IntegerLiteral      <~ SignLiteral? UnsignedLiteral
+    HexaLiteral         <~ "0x" [0-9a-fA-F]+
+    BinaryLiteral       <~ "0b" [01] [01_]*
+    SignLiteral         <- '-' / '+'
+
+    Kword(K)            <- K !IdentChar
+
+    VAL                 <- Kword("val")
+    MUTABLE             <- Kword("mutable")
+    DEF                 <- Kword("def")
+    PRINT               <- Kword("print")
+    PRINTL              <- Kword("printl")
+    IF                  <- Kword("if")
+    THEN                <- Kword("then")
+    ELSE                <- Kword("else")
+    END                 <- Kword("end")
+    TRUE                <- Kword("true")
+    FALSE               <- Kword("false")
+    READ                <- Kword("read")
+    RETURN              <- Kword("return")
+    IMPORT              <- Kword("import")
+
+    Keyword             <- VAL / MUTABLE / DEF / PRINTL / PRINT / IF / THEN / ELSE / END / TRUE / FALSE / READ / RETURN / IMPORT
+    IdentChar           <- [a-zA-Z0-9_]
+    Variable            <- !Keyword ValueName
+
+    # Case is significant: uppercase names are types and constructors, lowercase are values
+    ValueName           <~ [a-z_] IdentChar*
+    TypeName            <~ [A-Z] IdentChar*
+
+    Spacing             <- :(' ' / '\t' / Comment)*
+
+    # Line comments stop before the newline so it still acts as a separator.
+    # Block comments nest, and any newlines inside them are not separators.
+    Comment             <- LineComment / BlockComment
+    LineComment         <- "//" (!eol .)*
+    BlockComment        <- "/*" (BlockComment / !"*/" .)* "*/"

@@ -3,6 +3,20 @@ module silver.context;
 import std.sumtype;
 import silver.ast;
 import silver.ast : AstModule = Module, AstStatement = Stmt;
+import silver.parse : ParseException;
+
+class SilverRuntimeException : Exception
+{
+    string sourceFile;
+    size_t sourceLine;
+
+    this(string message, string sourceFile, size_t sourceLine)
+    {
+        super(message);
+        this.sourceFile = sourceFile;
+        this.sourceLine = sourceLine;
+    }
+}
 
 class Context
 {
@@ -15,16 +29,22 @@ class Context
     private bool useStdOut;
     private string programOutput;
     private string[] importPaths;
+    private string[string] sourceFiles;
     public const(string) ProgramOutput()
     {
         return programOutput;
     }
 
-    nothrow this(AstModule program, string[] importPaths, bool useStdOut = false)
+    nothrow this(AstModule program, string[] importPaths, bool useStdOut = false,
+        string source = null)
     {
         this.program = program;
         this.useStdOut = useStdOut;
         this.importPaths = importPaths;
+        if (source !is null)
+        {
+            sourceFiles[program.span.file] = source;
+        }
     }
 
     static class Environment
@@ -61,7 +81,7 @@ class Context
                 {
                     import std.format : format;
 
-                    throw new Exception("Cannot assign to val %s".format(name));
+                    throw new Exception("Cannot assign to val '%s'. Declare as 'mutable val' to reassign it.".format(name));
                 }
                 variables[name] = value;
             }
@@ -182,7 +202,26 @@ class Context
 
     private void execute(AstStatement ast, Environment variables)
     {
-        ast.kind.match!(s => execute(s, variables));
+        try
+        {
+            ast.kind.match!(s => execute(s, variables));
+        }
+        catch (SilverRuntimeException e)
+        {
+            throw e;
+        }
+        catch (ReturnSignal signal)
+        {
+            throw signal;
+        }
+        catch (ParseException e)
+        {
+            throw e;
+        }
+        catch (Exception e)
+        {
+            throw runtimeError(ast.span, e);
+        }
     }
 
     private void execute(const VarDecl ast, Environment variables)
@@ -279,6 +318,7 @@ class Context
                 auto moduleSource = readText(modulePath);
                 auto moduleName = moduleChain.join(".");
                 auto moduleAst = parse(moduleSource, moduleName, modulePath);
+                sourceFiles[modulePath] = moduleSource;
                 auto moduleEnv = new Environment();
                 execute(moduleAst, moduleEnv);
 
@@ -296,7 +336,35 @@ class Context
 
     private Variant evaluate(const Expr ast, Environment variables)
     {
-        return ast.kind.match!(s => evaluate(s, variables));
+        try
+        {
+            return ast.kind.match!(s => evaluate(s, variables));
+        }
+        catch (SilverRuntimeException e)
+        {
+            throw e;
+        }
+        catch (Exception e)
+        {
+            throw runtimeError(ast.span, e);
+        }
+    }
+
+    private SilverRuntimeException runtimeError(Span span, Exception error)
+    {
+        size_t line = 1;
+        if (auto source = span.file in sourceFiles)
+        {
+            auto offset = span.start < source.length ? span.start : source.length;
+            foreach (character; (*source)[0 .. offset])
+            {
+                if (character == '\n')
+                {
+                    line++;
+                }
+            }
+        }
+        return new SilverRuntimeException(error.msg, span.file, line);
     }
 
     /// Wraps a value in a Variant with type qualifiers stripped.
@@ -407,7 +475,7 @@ class Context
 
         try
         {
-            foreach (statement; fn.declaration.body)
+            foreach (statement; fn.declaration.body.statements)
             {
                 execute(statement, functionEnv);
             }
@@ -417,7 +485,7 @@ class Context
             return signal.value;
         }
 
-        throw new Exception("function did not return a value");
+        return evaluate(fn.declaration.body.returnExpr, functionEnv);
     }
 
     private Variant evaluate(const MemberAccess ast, Environment variables)
@@ -475,6 +543,16 @@ class Context
         case BinaryOp.And:
         case BinaryOp.Or:
             assert(0, "and/or short-circuit in evaluate(BinaryExpr)");
+        case BinaryOp.Less:
+            return Variant(lhs < rhs);
+        case BinaryOp.LessEqual:
+            return Variant(lhs <= rhs);
+        case BinaryOp.Greater:
+            return Variant(lhs > rhs);
+        case BinaryOp.GreaterEqual:
+            return Variant(lhs >= rhs);
+        case BinaryOp.Coalesce:
+            throw new Exception("Coalesce operator not implemented");
         }
     }
 

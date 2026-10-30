@@ -4,4 +4,4 @@ import pegged.grammar;
 
 debug import std.stdio;
 
-mixin(pegged.grammar.grammar(import("grammar.peg")));
+mixin(pegged.grammar.grammar(import("Silver.peg")));

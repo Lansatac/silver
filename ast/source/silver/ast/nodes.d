@@ -64,6 +64,11 @@ enum BinaryOp
     NotEqual,
     And,
     Or,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    Coalesce,
 }
 
 enum UnaryOp
@@ -153,8 +158,6 @@ struct PrintStmt
     bool newline;
 }
 
-/// `var name = value` (mutable) or `val name = value` (can't be reassigned).
-/// `mutable` restricts the binding only, not the value it refers to.
 struct VarDecl
 {
     string name;
@@ -189,14 +192,18 @@ struct ImportStmt
     string[] path;
 }
 
-/// `def name(params) ... return value end`. The grammar requires a trailing
-/// return, which is lowered to the last statement of `body`, so early returns
-/// can be added later without changing this node.
 struct FunctionDecl
 {
     string name;
     string[] params;
-    Stmt[] body;
+    FunctionBody body;
+    string returnType;
+}
+
+struct FunctionBody
+{
+    Stmt[] statements;
+    Expr returnExpr;
 }
 
 struct ReturnStmt
@@ -218,13 +225,13 @@ string printStmt(const Stmt s)
     import std.array : join;
     import std.format : format;
     return s.kind.match!(
-        (const VarDecl v) => format("(%s %s %s)", v.mutable ? "var" : "val", v.name, printExpr(v.value)),
+        (const VarDecl v) => format("(%s %s %s)", v.mutable ? "mutable val" : "val", v.name, printExpr(v.value)),
         (const ExprStmt e) => printExpr(e.expr),
         (const IfStmt i) => format("(if %s (%s) (%s))", printExpr(i.condition), i.body.map!(printStmt).join(" "), i.elseBody.map!(printStmt).join(" ")),
         (const PrintStmt p) => format("(%s %s)", p.newline ? "printl" : "print", printExpr(p.expr)),
         (const AssignStmt a) => format("(assign %s %s %s)", printExpr(a.target), a.op, printExpr(a.value)),
         (const ImportStmt i) => format("(import %s)", i.path.join(".")),
-        (const FunctionDecl f) => format("(def %s (%s) (%s))", f.name, f.params.join(" "), f.body.map!(printStmt).join(" ")),
+        (const FunctionDecl f) => format("(def %s (%s) : %s (%s) %s)", f.name, f.params.join(" "), f.returnType, f.body.statements.map!(printStmt).join(" "), printExpr(f.body.returnExpr)),
         (const ReturnStmt r) => format("(return %s)", printExpr(r.value)),
     );
 }
@@ -232,10 +239,9 @@ string printStmt(const Stmt s)
 @("Build and match a statement")
 unittest
 {
-    // var x = 1
     Span span;
     auto one = Expr(span, ExprKind(IntLiteral(1)));
-    auto decl = Stmt(span, StmtKind(VarDecl("x", one, true)));
+    auto decl = Stmt(span, StmtKind(VarDecl("x", one, false)));
 
-    assert(printStmt(decl) == "(var x 1)");
+    assert(printStmt(decl) == "(val x 1)");
 }
