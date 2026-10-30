@@ -113,7 +113,12 @@ private Expr convertExpression(ParseTree cst, string file)
     case "Silver.Eval":
     case "Silver.Literal":
     case "Silver.NumberLiteral":
+    case "Silver.IfExpressionBlock": // IfExpressionBlock < Sep? (('{' ExpressionBlock '}') / Expression) Sep?
         return convertExpression(cst[0], file);
+    case "Silver.ExpressionBlock":
+        return convertBlockExpr(cst, file);
+    case "Silver.IfExpression":
+        return convertIfExpression(cst, file);
     case "Silver.RelationalExpression":
     case "Silver.OrExpression":
     case "Silver.AndExpression":
@@ -187,6 +192,17 @@ private Expr convertExpression(ParseTree cst, string file)
     throw new Exception("cstToAst: expression '%s' not supported yet".format(cst.name));
 }
 
+private Expr convertIfExpression(ParseTree cst, string file)
+{
+     // IfExpression < :IF Expression :THEN IfExpressionBlock :ELSE IfExpressionBlock
+    cst.validateNodeIs("Silver.IfExpression");
+    auto condition = convertExpression(cst[0], file);
+    auto thenBranch = convertExpression(cst[1], file);
+    auto elseBranch = convertExpression(cst[2], file);
+    auto span = Span(file, condition.span.start, elseBranch.span.end);
+    return Expr(span, ExprKind(IfExpr(boxed(condition), boxed(thenBranch), boxed(elseBranch))));
+}
+
 /// Applies one postfix operation (a call or member access) to `lhs`.
 private Expr convertPostfixOp(Expr lhs, ParseTree op, string file)
 {
@@ -210,12 +226,12 @@ private Expr convertPostfixOp(Expr lhs, ParseTree op, string file)
 
 private Stmt convertFunctionDeclaration(ParseTree cst, string file)
 {
-    // FunctionDeclaration  < :DEF Variable '(' FunctionParamDefs ')' TypeAnnotation '=>' '{' FunctionBlock? '}'
+    // FunctionDeclaration  < :DEF Variable '(' FunctionParamDefs ')' TypeAnnotation '=>' '{' ExpressionBlock? '}'
     cst.validateNodeIs("Silver.FunctionDeclaration");
     auto name = cst[0].matches[0];
 
     string[] params;
-    FunctionBody body;
+    Expr* body;
     string returnType;
     foreach (child; cst.children[1 .. $])
     {
@@ -230,11 +246,11 @@ private Stmt convertFunctionDeclaration(ParseTree cst, string file)
         case "Silver.TypeAnnotation":
             returnType = child.matches[0];
             break;
-        case "Silver.FunctionBlock":
-            body = convertFunctionBlock(child, file);
+        case "Silver.ExpressionBlock":
+            body = boxed(convertBlockExpr(child, file));
             break;
         case "Silver.Expression":
-            body = FunctionBody([], convertExpression(child, file));
+            body = boxed(Expr(spanOf(child, file), ExprKind(BlockExpr([], boxed(convertExpression(child, file))))));
             break;
         default:
             throw new Exception("Unexpected '%s' in function declaration".format(child.name));
@@ -243,16 +259,17 @@ private Stmt convertFunctionDeclaration(ParseTree cst, string file)
     return Stmt(spanOf(cst, file), StmtKind(FunctionDecl(name, params, body, returnType)));
 }
 
-private FunctionBody convertFunctionBlock(ParseTree cst, string file)
+private Expr convertBlockExpr(ParseTree cst, string file)
 {
-    FunctionBody body;
+    // ExpressionBlock < Sep? (Statement Sep !'}')* Expression Sep?
+    BlockExpr body;
     body.statements = [];
     foreach (statement; cst.children[0 .. $ - 1])
     {
         body.statements ~= convertStatement(statement, file);
     }
-    body.returnExpr = convertExpression(cst.children[$ - 1], file);
-    return body;
+    body.returnExpr = boxed(convertExpression(cst.children[$ - 1], file));
+    return Expr(spanOf(cst, file), ExprKind(body));
 }
 
 
@@ -509,10 +526,27 @@ unittest
 {
     auto m1 = convertSource("def f() : Int => 1");
     m1.statements.length.should.equal(1);
-    printStmt(m1.statements[0]).should.equal("(def f () : Int () 1)");
+    printStmt(m1.statements[0]).should.equal("(def f () : Int (block  1))");
 
     auto m2 = convertSource("def h(p : Int, q:Int) : Int {\nval z = p\nz + q\n}\ndef k() : Int => 1");
     m2.statements.length.should.equal(2);
-    printStmt(m2.statements[0]).should.equal("(def h (p q) : Int ((val z p)) (Add z q))");
-    printStmt(m2.statements[1]).should.equal("(def k () : Int () 1)");
+    printStmt(m2.statements[0]).should.equal("(def h (p q) : Int (block (val z p) (Add z q)))");
+    printStmt(m2.statements[1]).should.equal("(def k () : Int (block  1))");
+}
+
+
+@("cstToAst: if expressions")
+unittest
+{
+    auto m1 = convertSource("val a = if b then 1 else 2");
+    m1.statements.length.should.equal(1);
+    printStmt(m1.statements[0]).should.equal("(val a (if b 1 2))");
+
+    auto m2 = convertSource("val a = if b then
+    {
+        val a = 1
+        a
+    } else 2");
+    m2.statements.length.should.equal(1);
+    printStmt(m2.statements[0]).should.equal("(val a (if b (block (val a 1) a) 2))");
 }

@@ -18,7 +18,7 @@ struct Expr
 }
 
 alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, VariableRef, UnaryExpr, BinaryExpr,
-    CallExpr, MemberAccess, ReadExpr);
+    CallExpr, MemberAccess, ReadExpr, IfExpr, BlockExpr);
 
 struct BoolLiteral
 {
@@ -110,6 +110,13 @@ struct ReadExpr
 {
 }
 
+struct IfExpr
+{
+    Expr* condition;
+    Expr* trueBody;
+    Expr* falseBody;
+}
+
 string printExpr(const Expr e)
 {
     import std.algorithm : map;
@@ -126,6 +133,8 @@ string printExpr(const Expr e)
         (const CallExpr c) => format("(call %s%s)", printExpr(*c.callee), c.args.map!(a => " " ~ printExpr(a)).join),
         (const MemberAccess m) => format("(. %s %s)", printExpr(*m.object), m.member),
         (const ReadExpr r) => "read",
+        (const IfExpr i) => format("(if %s %s %s)", printExpr(*i.condition), printExpr(*i.trueBody), printExpr(*i.falseBody)),
+        (const BlockExpr b) => format("(block %s %s)", b.statements.map!(s => printStmt(s)).join, printExpr(*b.returnExpr)),
     );
 }
 
@@ -196,14 +205,14 @@ struct FunctionDecl
 {
     string name;
     string[] params;
-    FunctionBody body;
+    Expr* body;
     string returnType;
 }
 
-struct FunctionBody
+struct BlockExpr
 {
     Stmt[] statements;
-    Expr returnExpr;
+    Expr* returnExpr;
 }
 
 struct ReturnStmt
@@ -231,7 +240,7 @@ string printStmt(const Stmt s)
         (const PrintStmt p) => format("(%s %s)", p.newline ? "printl" : "print", printExpr(p.expr)),
         (const AssignStmt a) => format("(assign %s %s %s)", printExpr(a.target), a.op, printExpr(a.value)),
         (const ImportStmt i) => format("(import %s)", i.path.join(".")),
-        (const FunctionDecl f) => format("(def %s (%s) : %s (%s) %s)", f.name, f.params.join(" "), f.returnType, f.body.statements.map!(printStmt).join(" "), printExpr(f.body.returnExpr)),
+        (const FunctionDecl f) => format("(def %s (%s) : %s %s)", f.name, f.params.join(" "), f.returnType, printExpr(*f.body)),
         (const ReturnStmt r) => format("(return %s)", printExpr(r.value)),
     );
 }

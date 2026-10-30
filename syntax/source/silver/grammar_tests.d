@@ -675,3 +675,17 @@ unittest
     shouldParse("xs[0] = 1");
     shouldParse("a = [1, 2][0]");
 }
+
+@("If Expression")
+unittest
+{
+    shouldParse("a = if b then 1 else 2");
+    shouldParse("a = if b then 1 else if c then 2 else 3");
+    shouldParse(r"
+a =  if b then {
+        val a = 1
+        a
+     }
+     else 2
+    ");
+}

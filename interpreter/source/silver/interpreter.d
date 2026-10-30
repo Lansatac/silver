@@ -160,7 +160,7 @@ unittest
     runProgram("if true then
         val b = 2
      end
-     print b").should.throwException!Exception.withMessage("Variable b not found");
+     print b").should.throwException!SilverRuntimeException.withMessage("Variable b not found");
 }
 
 @("Block scope - assignment updates outer variable")
@@ -190,7 +190,7 @@ unittest
 unittest
 {
     runProgram("val a = 1
-     val a = 2").should.throwException!Exception.withMessage(
+     val a = 2").should.throwException!SilverRuntimeException.withMessage(
         "Duplicate declaration of variable a");
 }
 
@@ -239,21 +239,21 @@ unittest
         local
      }
      f()
-     print local").should.throwException!Exception.withMessage("Variable local not found");
+     print local").should.throwException!SilverRuntimeException.withMessage("Variable local not found");
 }
 
 @("Wrong argument count")
 unittest
 {
     runProgram("def f(a : Int) : Int => a
-     print f()").should.throwException!Exception.withMessage("f expects 1 arguments, got 0");
+     print f()").should.throwException!SilverRuntimeException.withMessage("f expects 1 arguments, got 0");
 }
 
 @("val cannot be reassigned")
 unittest
 {
     runProgram("val a = 1
-     a = 2").should.throwException!Exception.withMessage("Cannot assign to val a");
+     a = 2").should.throwException!SilverRuntimeException.withMessage("Cannot assign to val 'a'. Declare as 'mutable val' to reassign it.");
 }
 
 @("Runtime errors report their Silver source location")
@@ -269,8 +269,8 @@ unittest
     }
     catch (SilverRuntimeException e)
     {
-        assert(e.sourceFile == "test.silver");
-        assert(e.sourceLine == 2);
-        assert(e.msg == "Cannot assign to val a");
+        e.sourceFile.should.equal("test.silver");
+        e.sourceLine.should.equal(2);
+        e.msg.should.equal("Cannot assign to val 'a'. Declare as 'mutable val' to reassign it.");
     }
 }

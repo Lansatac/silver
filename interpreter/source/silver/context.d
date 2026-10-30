@@ -475,17 +475,13 @@ class Context
 
         try
         {
-            foreach (statement; fn.declaration.body.statements)
-            {
-                execute(statement, functionEnv);
-            }
+            return evaluate(*fn.declaration.body, functionEnv);
         }
         catch (ReturnSignal signal)
         {
             return signal.value;
         }
 
-        return evaluate(fn.declaration.body.returnExpr, functionEnv);
     }
 
     private Variant evaluate(const MemberAccess ast, Environment variables)
@@ -505,6 +501,32 @@ class Context
         import std.stdio : readln;
 
         return Variant(readln());
+    }
+
+    private Variant evaluate(const IfExpr ast, Environment variables)
+    {
+        auto condition = evaluate(*ast.condition, variables);
+        if (condition.convertsTo!bool)
+        {
+            if (condition.get!bool)
+            {
+                return evaluate(*ast.trueBody, variables);
+            }
+            else
+            {
+                return evaluate(*ast.falseBody, variables);
+            }
+        }
+        throw new Exception("If condition must be a boolean");
+    }
+
+    private Variant evaluate(const BlockExpr ast, Environment variables)
+    {
+        foreach (statement; ast.statements)
+        {
+            execute(statement, variables);
+        }
+        return evaluate(*ast.returnExpr, variables);
     }
 
     private Variant memberOf(Variant value, string memberName)

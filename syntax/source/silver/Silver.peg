@@ -39,11 +39,11 @@ Silver:
 
     AssignTarget         < Postfix
 
-    FunctionDeclaration  < :DEF Variable '(' FunctionParamDefs ')' TypeAnnotation (('=>' Expression) / ('{' FunctionBlock? '}'))
+    FunctionDeclaration  < :DEF Variable '(' FunctionParamDefs ')' TypeAnnotation (('=>' Expression) / ('{' ExpressionBlock? '}'))
     FunctionParamDefs    < (FunctionParamDef (',' FunctionParamDef)*)?
     FunctionParamDef     < Variable TypeAnnotation
 
-    FunctionBlock       < Sep? (Statement Sep !'}')* Expression Sep?
+    ExpressionBlock       < Sep? (Statement Sep !'}')* Expression Sep?
 
     ReturnStatement      < :RETURN Expression
 
@@ -91,13 +91,18 @@ Silver:
     CallArgs             < '(' (FunctionParam (:',' FunctionParam)*)? ')'
     FunctionParam        < Expression
 
-    Eval                 < UnitLiteral
+    Eval                 < 
+                              / IfExpression
+                              / UnitLiteral
                               / :'(' Expression :')'
                               / ReadExpression
                               / Literal
                               / CollectionLiteral
                               / Variable
                               / TypeName
+
+    IfExpression         < :IF Expression :THEN IfExpressionBlock :ELSE IfExpressionBlock
+    IfExpressionBlock    < Sep? (('{' ExpressionBlock '}') / Expression) Sep?
 
     Literal              <  BooleanLiteral
                           / NumberLiteral
