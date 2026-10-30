@@ -1,0 +1,31 @@
+// if without else has the value (), and blocks may end in a statement
+
+mutable val count = 0
+if true { count = count + 1 }
+if false { count = count + 10 }
+printl(count)
+
+// A Unit function whose body ends in an if whose branches end in statements
+def classify(n: Int): Unit {
+    if n < 0 {
+        printl(-1)
+    } else if n == 0 {
+        printl(0)
+    } else {
+        printl(1)
+    }
+}
+classify(-3)
+classify(0)
+classify(3)
+
+// A Unit function ending in a statement
+def report(n: Int): Unit {
+    printl(n)
+}
+report(9)
+
+// An empty body is Unit
+def nothing(): Unit {}
+nothing()
+printl(42)

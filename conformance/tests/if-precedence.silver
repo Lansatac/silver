@@ -1,0 +1,16 @@
+// if binds as loosely as possible: the else branch extends to the right
+
+val a = if false => 1 else 2 + 3
+printl(a)
+
+// Parentheses are needed to use an if as an operand
+val b = (if true => 1 else 2) + 10
+printl(b)
+
+// Conditions are full expressions
+val c = if 1 + 1 == 2 && 3 > 2 => 1 else 0
+printl(c)
+
+// The then branch stops at `else`
+val d = if true => 2 * 3 + 1 else 0
+printl(d)

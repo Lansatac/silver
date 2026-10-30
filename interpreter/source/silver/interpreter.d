@@ -120,9 +120,9 @@ unittest
 unittest
 {
     runProgram("mutable val a = 1
-     if true then
+     if true {
         a = 2
-     end
+     }
      print a").should.equal("2");
 }
 
@@ -131,9 +131,9 @@ unittest
 {
     auto context = new Context(toAst(
         r"val a = 1
-          if false then
+          if false {
             a = 2
-          end
+          }
           "), []);
     context.run();
     context.getGlobals()["a"].get!long.should.equal(1);
@@ -144,11 +144,11 @@ unittest
 {
     auto context = new Context(toAst(
         r"mutable val a = 1
-          if false then
+          if false {
             a = 2
-          else
+          } else {
             a = 3
-          end
+          }
           "), []);
     context.run();
     context.getGlobals()["a"].get!long.should.equal(3);
@@ -157,9 +157,9 @@ unittest
 @("Block scope - inner declaration does not leak")
 unittest
 {
-    runProgram("if true then
+    runProgram("if true {
         val b = 2
-     end
+     }
      print b").should.throwException!SilverRuntimeException.withMessage("Variable b not found");
 }
 
@@ -167,11 +167,11 @@ unittest
 unittest
 {
     runProgram("mutable val a = 1
-     if false then
+     if false {
         a = 2
-     else
+     } else {
         a = 3
-     end
+     }
      print a").should.equal("3");
 }
 
@@ -179,10 +179,10 @@ unittest
 unittest
 {
     runProgram("val a = 1
-     if true then
+     if true {
         val a = 2
         print a
-     end
+     }
      print a").should.equal("21");
 }
 

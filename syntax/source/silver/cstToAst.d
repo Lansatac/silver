@@ -60,9 +60,15 @@ private Stmt convertStatement(ParseTree cst, string file)
         return convertStatement(cst[0], file);
     case "Silver.VariableDeclaration":
     case "Silver.ValueDeclaration":
-        // Both are `Variable '=' Expression` once the keyword is discarded.
+        // `Variable TypeAnnotation? '=' Expression` once the keywords are discarded.
+        // The type isn't recorded yet, so only the last child's position matters.
         auto name = cst[0].matches[0];
-        auto expr = convertExpression(cst[1], file);
+        if (cst.children[$ - 1].name != "Silver.Expression")
+        {
+            // `mutable val x: Int?` with no initializer
+            throw new Exception("cstToAst: declaration without an initializer not supported yet");
+        }
+        auto expr = convertExpression(cst.children[$ - 1], file);
         auto mutable = cst.name == "Silver.VariableDeclaration";
         return Stmt(spanOf(cst, file), StmtKind(VarDecl(name, expr, mutable)));
     case "Silver.AssignmentStatement":
@@ -82,13 +88,15 @@ private Stmt convertStatement(ParseTree cst, string file)
         {
             return Stmt(spanOf(cst, file), StmtKind(PrintStmt(expr, true)));
         }
-    case "Silver.IfStatement":
-        return convertIfStatement(cst, file);
     case "Silver.FunctionDeclaration":
         return convertFunctionDeclaration(cst, file);
     case "Silver.ReturnStatement":
-        return Stmt(spanOf(cst, file), StmtKind(ReturnStmt(convertExpression(cst[0], file))));
-    case "Silver.CallStatement":
+        // `RETURN Expression?`; the keyword is kept so a bare `return` still has a node.
+        auto value = cst.children.length > 1
+            ? convertExpression(cst[1], file)
+            : Expr(spanOf(cst, file), ExprKind(UnitLiteral()));
+        return Stmt(spanOf(cst, file), StmtKind(ReturnStmt(value)));
+    case "Silver.ExpressionStatement":
         return Stmt(spanOf(cst, file), StmtKind(ExprStmt(convertExpression(cst[0], file))));
     case "Silver.ImportStatement":
         import std.algorithm : filter;
@@ -113,10 +121,13 @@ private Expr convertExpression(ParseTree cst, string file)
     case "Silver.Eval":
     case "Silver.Literal":
     case "Silver.NumberLiteral":
-    case "Silver.IfExpressionBlock": // IfExpressionBlock < Sep? (('{' ExpressionBlock '}') / Expression) Sep?
+    case "Silver.IfBranch":
+    case "Silver.ElseBranch":
         return convertExpression(cst[0], file);
-    case "Silver.ExpressionBlock":
-        return convertBlockExpr(cst, file);
+    case "Silver.Block":
+        return convertBlock(cst, file);
+    case "Silver.UnitLiteral":
+        return Expr(spanOf(cst, file), ExprKind(UnitLiteral()));
     case "Silver.IfExpression":
         return convertIfExpression(cst, file);
     case "Silver.RelationalExpression":
@@ -192,15 +203,15 @@ private Expr convertExpression(ParseTree cst, string file)
     throw new Exception("cstToAst: expression '%s' not supported yet".format(cst.name));
 }
 
+/// `IF Expression IfBranch (ELSE ElseBranch)?`. An else-if is just an
+/// ElseBranch whose expression is another IfExpression.
 private Expr convertIfExpression(ParseTree cst, string file)
 {
-     // IfExpression < :IF Expression :THEN IfExpressionBlock :ELSE IfExpressionBlock
     cst.validateNodeIs("Silver.IfExpression");
     auto condition = convertExpression(cst[0], file);
     auto thenBranch = convertExpression(cst[1], file);
-    auto elseBranch = convertExpression(cst[2], file);
-    auto span = Span(file, condition.span.start, elseBranch.span.end);
-    return Expr(span, ExprKind(IfExpr(boxed(condition), boxed(thenBranch), boxed(elseBranch))));
+    Expr* elseBranch = cst.children.length > 2 ? boxed(convertExpression(cst[2], file)) : null;
+    return Expr(spanOf(cst, file), ExprKind(IfExpr(boxed(condition), boxed(thenBranch), elseBranch)));
 }
 
 /// Applies one postfix operation (a call or member access) to `lhs`.
@@ -224,9 +235,11 @@ private Expr convertPostfixOp(Expr lhs, ParseTree op, string file)
     }
 }
 
+/// `DEF Variable FunctionParamDefs? TypeAnnotation ('=>' Expression / Block)`.
+/// FunctionParamDefs is absent rather than empty when there are no params,
+/// so children are matched by name.
 private Stmt convertFunctionDeclaration(ParseTree cst, string file)
 {
-    // FunctionDeclaration  < :DEF Variable '(' FunctionParamDefs ')' TypeAnnotation '=>' '{' ExpressionBlock? '}'
     cst.validateNodeIs("Silver.FunctionDeclaration");
     auto name = cst[0].matches[0];
 
@@ -246,11 +259,9 @@ private Stmt convertFunctionDeclaration(ParseTree cst, string file)
         case "Silver.TypeAnnotation":
             returnType = child.matches[0];
             break;
-        case "Silver.ExpressionBlock":
-            body = boxed(convertBlockExpr(child, file));
-            break;
+        case "Silver.Block":
         case "Silver.Expression":
-            body = boxed(Expr(spanOf(child, file), ExprKind(BlockExpr([], boxed(convertExpression(child, file))))));
+            body = boxed(convertExpression(child, file));
             break;
         default:
             throw new Exception("Unexpected '%s' in function declaration".format(child.name));
@@ -259,20 +270,25 @@ private Stmt convertFunctionDeclaration(ParseTree cst, string file)
     return Stmt(spanOf(cst, file), StmtKind(FunctionDecl(name, params, body, returnType)));
 }
 
-private Expr convertBlockExpr(ParseTree cst, string file)
+/// `{ Statement* }`. When the last statement is an expression it becomes the
+/// block's value; otherwise the value is null, meaning ().
+private Expr convertBlock(ParseTree cst, string file)
 {
-    // ExpressionBlock < Sep? (Statement Sep !'}')* Expression Sep?
-    BlockExpr body;
-    body.statements = [];
-    foreach (statement; cst.children[0 .. $ - 1])
+    cst.validateNodeIs("Silver.Block");
+    auto statements = cst.children;
+    BlockExpr block;
+    if (statements.length > 0 && statements[$ - 1][0].name == "Silver.ExpressionStatement")
     {
-        body.statements ~= convertStatement(statement, file);
+        // Statement -> ExpressionStatement -> Expression
+        block.value = boxed(convertExpression(statements[$ - 1][0][0], file));
+        statements = statements[0 .. $ - 1];
     }
-    body.returnExpr = boxed(convertExpression(cst.children[$ - 1], file));
-    return Expr(spanOf(cst, file), ExprKind(body));
+    foreach (statement; statements)
+    {
+        block.statements ~= convertStatement(statement, file);
+    }
+    return Expr(spanOf(cst, file), ExprKind(block));
 }
-
-
 
 private UnaryOp toUnaryOp(string op)
 {
@@ -408,76 +424,47 @@ unittest
     printStmt(m.statements[1]).should.equal("(val y (Not a))");
 }
 
-/// `IfBlock ElseIfBlock* ElseBlock? END`. Each `else if` becomes an IfStmt
-/// nested in the previous one's elseBody.
-private Stmt convertIfStatement(ParseTree cst, string file)
-{
-    cst.validateNodeIs("Silver.IfStatement");
-    auto ifBlock = cst[0];
-    ifBlock.validateNodeIs("Silver.IfBlock");
-
-    auto condition = convertExpression(ifBlock[0], file);
-    auto body = convertOptionalBlock(ifBlock, 1, file);
-    auto elseBody = convertElseChain(cst.children[1 .. $], cst, file);
-    return Stmt(spanOf(cst, file), StmtKind(IfStmt(condition, body, elseBody)));
-}
-
-/// Converts the blocks after the IfBlock (`ElseIfBlock* ElseBlock?`) into an
-/// elseBody, building from the end so each IfStmt is complete when created.
-/// `ifStatement` is the enclosing IfStatement, which every nested if's span
-/// runs to the end of.
-private Stmt[] convertElseChain(ParseTree[] blocks, ParseTree ifStatement, string file)
-{
-    if (blocks.length == 0)
-    {
-        return [];
-    }
-
-    auto block = blocks[0];
-    switch (block.name)
-    {
-    case "Silver.ElseBlock":
-        return convertOptionalBlock(block, 0, file);
-    case "Silver.ElseIfBlock":
-        auto condition = convertExpression(block[0], file);
-        auto body = convertOptionalBlock(block, 1, file);
-        auto elseBody = convertElseChain(blocks[1 .. $], ifStatement, file);
-        auto span = Span(file, block.begin, ifStatement.end);
-        return [Stmt(span, StmtKind(IfStmt(condition, body, elseBody)))];
-    default:
-        throw new Exception("Expected else or else-if block, got '%s'".format(block.name));
-    }
-}
-
-/// Converts `cst[index]` as a StatementBlock, or returns [] if the optional
-/// block is absent (e.g. `if x then end`).
-private Stmt[] convertOptionalBlock(ParseTree cst, size_t index, string file)
-{
-    if (cst.children.length <= index)
-    {
-        return [];
-    }
-    return convertStatementBlock(cst[index], file);
-}
-
 @("cstToAst: if with else-if chain and else")
 unittest
 {
-    auto source = "if a then\nval x = 1\nelse if b then\nval x = 2\n"
-        ~ "else if c then\nval x = 3\nelse\nval x = 4\nend";
-    auto m = convertSource(source);
+    auto m = convertSource("if a => 1 else if b => 2 else if c { val x = 3 } else { 4 }");
     m.statements.length.should.equal(1);
     printStmt(m.statements[0]).should.equal(
-        "(if a ((val x 1)) ((if b ((val x 2)) ((if c ((val x 3)) ((val x 4)))))))");
+        "(if a 1 (if b 2 (if c (block (val x 3)) (block => 4))))");
 }
 
-@("cstToAst: if with empty body and no else")
+@("cstToAst: if without else, and empty blocks")
 unittest
 {
-    auto m = convertSource("if a then end");
-    printStmt(m.statements[0]).should.equal("(if a () ())");
+    auto m = convertSource("if a {}\nif a => b");
+    printStmt(m.statements[0]).should.equal("(if a (block))");
+    printStmt(m.statements[1]).should.equal("(if a b)");
 }
 
+@("cstToAst: a block's value is its last statement only if that's an expression")
+unittest
+{
+    auto m = convertSource("val a = { val x = 1\nx }\nval b = { x = 1 }\nval c = { f()\ng() }");
+    printStmt(m.statements[0]).should.equal("(val a (block (val x 1) => x))");
+    printStmt(m.statements[1]).should.equal("(val b (block (assign x Assign 1)))");
+    printStmt(m.statements[2]).should.equal("(val c (block (call f) => (call g)))");
+}
+
+@("cstToAst: return")
+unittest
+{
+    auto m = convertSource("def f(): Int {\nreturn 1\n}\ndef g(): Unit {\nreturn\n}");
+    printStmt(m.statements[0]).should.equal("(def f () : Int (block (return 1)))");
+    printStmt(m.statements[1]).should.equal("(def g () : Unit (block (return ())))");
+}
+
+@("cstToAst: typed declarations")
+unittest
+{
+    auto m = convertSource("val x: Int = 1\nmutable val y: Int? = 2");
+    printStmt(m.statements[0]).should.equal("(val x 1)");
+    printStmt(m.statements[1]).should.equal("(mutable val y 2)");
+}
 @("cstToAst: calls and member access fold left")
 unittest
 {
@@ -526,27 +513,26 @@ unittest
 {
     auto m1 = convertSource("def f() : Int => 1");
     m1.statements.length.should.equal(1);
-    printStmt(m1.statements[0]).should.equal("(def f () : Int (block  1))");
+    printStmt(m1.statements[0]).should.equal("(def f () : Int 1)");
 
-    auto m2 = convertSource("def h(p : Int, q:Int) : Int {\nval z = p\nz + q\n}\ndef k() : Int => 1");
+    auto m2 = convertSource("def h(p : Int, q:Int) : Int {\nval z = p\nz + q\n}\ndef k() : Int =>\n    1");
     m2.statements.length.should.equal(2);
-    printStmt(m2.statements[0]).should.equal("(def h (p q) : Int (block (val z p) (Add z q)))");
-    printStmt(m2.statements[1]).should.equal("(def k () : Int (block  1))");
+    printStmt(m2.statements[0]).should.equal("(def h (p q) : Int (block (val z p) => (Add z q)))");
+    printStmt(m2.statements[1]).should.equal("(def k () : Int 1)");
 }
-
 
 @("cstToAst: if expressions")
 unittest
 {
-    auto m1 = convertSource("val a = if b then 1 else 2");
+    auto m1 = convertSource("val a = if b => 1 else 2");
     m1.statements.length.should.equal(1);
     printStmt(m1.statements[0]).should.equal("(val a (if b 1 2))");
 
-    auto m2 = convertSource("val a = if b then
-    {
+    auto m2 = convertSource("val a = if b {
         val a = 1
         a
-    } else 2");
+    }
+    else 2");
     m2.statements.length.should.equal(1);
-    printStmt(m2.statements[0]).should.equal("(val a (if b (block (val a 1) a) 2))");
+    printStmt(m2.statements[0]).should.equal("(val a (if b (block (val a 1) => a) 2))");
 }

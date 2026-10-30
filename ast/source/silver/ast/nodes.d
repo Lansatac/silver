@@ -18,7 +18,12 @@ struct Expr
 }
 
 alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, VariableRef, UnaryExpr, BinaryExpr,
-    CallExpr, MemberAccess, ReadExpr, IfExpr, BlockExpr);
+    CallExpr, MemberAccess, ReadExpr, IfExpr, BlockExpr, UnitLiteral);
+
+/// `()`, the only value of type Unit.
+struct UnitLiteral
+{
+}
 
 struct BoolLiteral
 {
@@ -110,11 +115,21 @@ struct ReadExpr
 {
 }
 
+/// `if c => a else b` or `if c { ... } else { ... }`.
+/// `falseBody` is null when there's no else, and the if's value is then ().
 struct IfExpr
 {
     Expr* condition;
     Expr* trueBody;
     Expr* falseBody;
+}
+
+/// `{ statements }`, which has its own scope. `value` is the last statement when
+/// that's an expression, and null otherwise, in which case the block's value is ().
+struct BlockExpr
+{
+    Stmt[] statements;
+    Expr* value;
 }
 
 string printExpr(const Expr e)
@@ -133,8 +148,12 @@ string printExpr(const Expr e)
         (const CallExpr c) => format("(call %s%s)", printExpr(*c.callee), c.args.map!(a => " " ~ printExpr(a)).join),
         (const MemberAccess m) => format("(. %s %s)", printExpr(*m.object), m.member),
         (const ReadExpr r) => "read",
-        (const IfExpr i) => format("(if %s %s %s)", printExpr(*i.condition), printExpr(*i.trueBody), printExpr(*i.falseBody)),
-        (const BlockExpr b) => format("(block %s %s)", b.statements.map!(s => printStmt(s)).join, printExpr(*b.returnExpr)),
+        (const IfExpr i) => i.falseBody is null
+            ? format("(if %s %s)", printExpr(*i.condition), printExpr(*i.trueBody))
+            : format("(if %s %s %s)", printExpr(*i.condition), printExpr(*i.trueBody), printExpr(*i.falseBody)),
+        (const BlockExpr b) => format("(block%s%s)", b.statements.map!(s => " " ~ printStmt(s)).join,
+            b.value is null ? "" : " => " ~ printExpr(*b.value)),
+        (const UnitLiteral u) => "()",
     );
 }
 
@@ -158,7 +177,7 @@ struct Stmt
     StmtKind kind;
 }
 
-alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, IfStmt, PrintStmt, ImportStmt, FunctionDecl,
+alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, PrintStmt, ImportStmt, FunctionDecl,
     ReturnStmt);
 
 struct PrintStmt
@@ -181,18 +200,10 @@ struct AssignStmt
     Expr value;
 }
 
-/// An expression evaluated for its effect, e.g. a call.
+/// An expression evaluated for its effect, e.g. a call or an if.
 struct ExprStmt
 {
     Expr expr;
-}
-
-/// An if statement with optional else-if and else blocks.
-struct IfStmt
-{
-    Expr condition;
-    Stmt[] body;
-    Stmt[] elseBody;
 }
 
 /// `import a.b`; `path` is the dotted name split into parts, e.g. ["a", "b"].
@@ -201,6 +212,8 @@ struct ImportStmt
     string[] path;
 }
 
+/// `def name(params): Type => expr` or `def name(params): Type { ... }`.
+/// A block body is a BlockExpr, so either way the body is one expression.
 struct FunctionDecl
 {
     string name;
@@ -209,12 +222,7 @@ struct FunctionDecl
     string returnType;
 }
 
-struct BlockExpr
-{
-    Stmt[] statements;
-    Expr* returnExpr;
-}
-
+/// `return value`. A bare `return` has a UnitLiteral value.
 struct ReturnStmt
 {
     Expr value;
@@ -236,7 +244,6 @@ string printStmt(const Stmt s)
     return s.kind.match!(
         (const VarDecl v) => format("(%s %s %s)", v.mutable ? "mutable val" : "val", v.name, printExpr(v.value)),
         (const ExprStmt e) => printExpr(e.expr),
-        (const IfStmt i) => format("(if %s (%s) (%s))", printExpr(i.condition), i.body.map!(printStmt).join(" "), i.elseBody.map!(printStmt).join(" ")),
         (const PrintStmt p) => format("(%s %s)", p.newline ? "printl" : "print", printExpr(p.expr)),
         (const AssignStmt a) => format("(assign %s %s %s)", printExpr(a.target), a.op, printExpr(a.value)),
         (const ImportStmt i) => format("(import %s)", i.path.join(".")),

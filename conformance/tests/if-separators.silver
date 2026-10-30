@@ -1,0 +1,29 @@
+// Statements must be able to follow an if expression on the next line
+
+val a = if true => 1 else 2
+val b = 3
+printl(a + b)
+
+val c = if true {
+    1
+} else {
+    2
+}
+val d = c + 1
+printl(d)
+
+// The same inside a function body
+def f(): Int {
+    val x = if false => 10 else 20
+    val y = 1
+    x + y
+}
+printl(f())
+
+// An if expression as the final value of a block
+def g(n: Int): Int {
+    val doubled = n * 2
+    if doubled > 5 => doubled else 0
+}
+printl(g(1))
+printl(g(3))

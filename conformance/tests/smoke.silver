@@ -27,35 +27,35 @@ total = total + b
 total = total * c
 printl total
 
-if total == 20 then
+if total == 20 {
     printl 1
 
-    if a == 2 then
+    if a == 2 {
         printl 2
-    else
+    } else {
         printl 0
-    end
+    }
 
-else if total == 0 then
+} else if total == 0 {
     printl 0
 
-else
+} else {
     printl 0
-end
+}
 
-if false then
+if false {
     printl 0
-else if a + b == 5 then
+} else if a + b == 5 {
     printl 3
-else
+} else {
     printl 0
-end
+}
 
-if false then
+if false {
     printl 0
-else
+} else {
     printl 4
-end
+}
 
 print 5
 print 6

@@ -1,15 +1,15 @@
 def pow(base : Float, exponent : Float) : Float {
     mutable val result = 1
-    if !(exponent == 0) then
+    if !(exponent == 0) {
         result = base * pow(base, exponent - 1)
-    end
+    }
     result
 }
 
 def factorial(n : Int) : Int {
     mutable val result = 1
-    if !(n == 0) then
+    if !(n == 0) {
         result = n * factorial(n - 1)
-    end
+    }
     result
 }

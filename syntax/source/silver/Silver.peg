@@ -3,28 +3,17 @@ Silver:
     StatementBlock       < Sep? TopLevelStatement (Sep TopLevelStatement)* Sep?
     Sep                  <: ((eol / ';') Spacing)+
 
-    TopLevelStatement    < (
-                            / ImportStatement
-                            / FunctionDeclaration
+    TopLevelStatement    < ImportStatement / Statement
 
-                            
-                            / VariableDeclaration
-                            / ValueDeclaration
-                            / FunctionDeclaration
-                            / PrintStatement
-                            / IfStatement
-                            / AssignmentStatement
-                            / CallStatement
-                           )
-
+    # ExpressionStatement is last: anything that isn't another kind of statement is an expression
     Statement            < (
                             / VariableDeclaration
                             / ValueDeclaration
                             / FunctionDeclaration
                             / PrintStatement
-                            / IfStatement
+                            / ReturnStatement
                             / AssignmentStatement
-                            / CallStatement
+                            / ExpressionStatement
                            )
 
     QualifiedName        <- ValueName ('.' ValueName)*
@@ -33,28 +22,28 @@ Silver:
 
     ValueDeclaration     < :VAL Variable TypeAnnotation? '=' Expression
     VariableDeclaration  < :MUTABLE :VAL Variable (TypeAnnotation ('=' Expression)? / '=' Expression)
-    
+
     AssignmentStatement  < AssignTarget AssignOp Expression
     AssignOp             < "+=" / "-=" / "*=" / "/=" / "^=" / "=" !"="
 
     AssignTarget         < Postfix
 
-    FunctionDeclaration  < :DEF Variable '(' FunctionParamDefs ')' TypeAnnotation (('=>' Expression) / ('{' ExpressionBlock? '}'))
+    # `=>` introduces a single expression and `{}` a block, for functions and ifs alike.
+    # A newline may follow `=>`, since it can't end a statement.
+    FunctionDeclaration  < :DEF Variable :'(' FunctionParamDefs :')' TypeAnnotation (:'=>' Sep? Expression / Block)
     FunctionParamDefs    < (FunctionParamDef (',' FunctionParamDef)*)?
     FunctionParamDef     < Variable TypeAnnotation
 
-    ExpressionBlock       < Sep? (Statement Sep !'}')* Expression Sep?
+    # A block's value is its last statement if that's an expression, otherwise ().
+    # The braces are kept so an empty block still matches text; decimateTree drops nodes that match nothing.
+    Block                < '{' Sep? (Statement (Sep Statement)* Sep?)? '}'
 
-    ReturnStatement      < :RETURN Expression
+    # The value is optional so `return` alone returns ()
+    ReturnStatement      < RETURN Expression?
 
-    CallStatement        < Postfix
+    ExpressionStatement  < Expression
 
     PrintStatement       < (PRINT / PRINTL) Expression
-
-    IfStatement          < IfBlock ElseIfBlock* ElseBlock? :END
-    IfBlock              < :IF Expression :THEN Sep? StatementBlock?
-    ElseIfBlock          < :ELSE :IF Expression :THEN Sep? StatementBlock?
-    ElseBlock            < :ELSE Sep? StatementBlock?
 
     TypeAnnotation       < :':' Type
 
@@ -68,7 +57,15 @@ Silver:
     TypePath             <- (ValueName '.')* TypeName
     TypeArguments        < :'<' Type (:',' Type)* :'>'
 
-    Expression           < OrExpression
+    # `if` binds loosest, so it can't be an operand without parentheses: `(if c => 1 else 2) + 3`
+    Expression           < IfExpression / OrExpression
+
+    # Without an else the value is (). `else` may start a new line, since it can't start a statement.
+    # A braced else branch ends at its brace; an unbraced one extends as far right as it can.
+    IfExpression         < :IF Expression IfBranch (Sep? :ELSE ElseBranch)?
+    IfBranch             < :'=>' Sep? Expression / Block
+    ElseBranch           < Block / Expression
+
     OrExpression         < AndExpression (OrOperator AndExpression)*
     AndExpression        < EqExpression (AndOperator EqExpression)*
     EqExpression         < RelationalExpression ((EqOperator) RelationalExpression)*
@@ -91,18 +88,14 @@ Silver:
     CallArgs             < '(' (FunctionParam (:',' FunctionParam)*)? ')'
     FunctionParam        < Expression
 
-    Eval                 < 
-                              / IfExpression
-                              / UnitLiteral
-                              / :'(' Expression :')'
-                              / ReadExpression
-                              / Literal
-                              / CollectionLiteral
-                              / Variable
-                              / TypeName
-
-    IfExpression         < :IF Expression :THEN IfExpressionBlock :ELSE IfExpressionBlock
-    IfExpressionBlock    < Sep? (('{' ExpressionBlock '}') / Expression) Sep?
+    Eval                 < UnitLiteral
+                         / :'(' Expression :')'
+                         / Block
+                         / ReadExpression
+                         / Literal
+                         / CollectionLiteral
+                         / Variable
+                         / TypeName
 
     Literal              <  BooleanLiteral
                           / NumberLiteral
@@ -152,16 +145,14 @@ Silver:
     PRINT               <- Kword("print")
     PRINTL              <- Kword("printl")
     IF                  <- Kword("if")
-    THEN                <- Kword("then")
     ELSE                <- Kword("else")
-    END                 <- Kword("end")
     TRUE                <- Kword("true")
     FALSE               <- Kword("false")
     READ                <- Kword("read")
     RETURN              <- Kword("return")
     IMPORT              <- Kword("import")
 
-    Keyword             <- VAL / MUTABLE / DEF / PRINTL / PRINT / IF / THEN / ELSE / END / TRUE / FALSE / READ / RETURN / IMPORT
+    Keyword             <- VAL / MUTABLE / DEF / PRINTL / PRINT / IF / ELSE / TRUE / FALSE / READ / RETURN / IMPORT
     IdentChar           <- [a-zA-Z0-9_]
     Variable            <- !Keyword ValueName
 

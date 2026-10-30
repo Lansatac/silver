@@ -1,0 +1,33 @@
+// Each block gets its own scope
+
+val t = 0
+val a = if true {
+    val t = 1
+    t
+} else 0
+printl(a)
+// The block's `t` shadowed the outer one and did not leak
+printl(t)
+
+// A second block may declare the same name again
+val b = if true {
+    val t = 2
+    t
+} else 0
+printl(b)
+
+// Calling a function twice re-declares its block locals each time
+def g(): Int => if true {
+    val local = 3
+    local
+} else 0
+printl(g() + g())
+
+// Assigning to an outer mutable from inside a block updates the outer binding
+mutable val count = 0
+val c = if true {
+    count = count + 5
+    count
+} else 0
+printl(c)
+printl(count)

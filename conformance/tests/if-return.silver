@@ -1,0 +1,18 @@
+// `return` exits the innermost function, even from inside an if
+
+def firstPositive(a: Int, b: Int): Int {
+    if a > 0 { return a }
+    if b > 0 { return b }
+    0
+}
+printl(firstPositive(1, 2))
+printl(firstPositive(-1, 2))
+printl(firstPositive(-1, -2))
+
+// Returning from inside an if expression's block skips the rest of the function
+def clamp(n: Int): Int {
+    val r = if n > 10 { return 10 } else n
+    r
+}
+printl(clamp(50))
+printl(clamp(5))

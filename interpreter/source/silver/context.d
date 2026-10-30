@@ -18,6 +18,15 @@ class SilverRuntimeException : Exception
     }
 }
 
+/// The runtime value of `()`, e.g. a block that doesn't end in an expression.
+struct Unit
+{
+    string toString() const
+    {
+        return "()";
+    }
+}
+
 class Context
 {
     import std.variant;
@@ -189,7 +198,14 @@ class Context
     void run()
     {
         globals = new Environment();
-        execute(program, globals);
+        try
+        {
+            execute(program, globals);
+        }
+        catch (ReturnSignal signal)
+        {
+            throw runtimeError(signal.span, new Exception("return outside of a function"));
+        }
     }
 
     private void execute(AstModule ast, Environment variables)
@@ -206,13 +222,18 @@ class Context
         {
             ast.kind.match!(s => execute(s, variables));
         }
+        catch (ReturnSignal signal)
+        {
+            if (!signal.located)
+            {
+                signal.span = ast.span;
+                signal.located = true;
+            }
+            throw signal;
+        }
         catch (SilverRuntimeException e)
         {
             throw e;
-        }
-        catch (ReturnSignal signal)
-        {
-            throw signal;
         }
         catch (ParseException e)
         {
@@ -262,29 +283,6 @@ class Context
             if (useStdOut)
             {
                 writeln(value);
-            }
-        }
-    }
-
-    private void execute(const IfStmt ast, Environment variables)
-    {
-        import std.conv : to;
-
-        auto condition = evaluate(ast.condition, variables);
-        if (condition.get!bool)
-        {
-            Environment blockEnv = new Environment(variables);
-            foreach (statement; ast.body)
-            {
-                execute(statement, blockEnv);
-            }
-        }
-        else
-        {
-            Environment blockEnv = new Environment(variables);
-            foreach (statement; ast.elseBody)
-            {
-                execute(statement, blockEnv);
             }
         }
     }
@@ -436,12 +434,19 @@ class Context
     }
 
     /// Thrown by `return` and caught by the call that's running the function.
-    private class ReturnSignal : Exception
+    /// It's a Throwable rather than an Exception so that the `catch (Exception)`
+    /// handlers that turn errors into SilverRuntimeExceptions don't swallow it.
+    private class ReturnSignal : Throwable
     {
         Variant value;
+        /// Where the `return` is, for the error if it escapes to top level.
+        /// Filled in by the enclosing execute(AstStatement).
+        Span span;
+        bool located;
+
         this(Variant value)
         {
-            super("return outside of a function"); // what you see if it escapes to top level
+            super("return outside of a function");
             this.value = value;
         }
     }
@@ -512,21 +517,32 @@ class Context
             {
                 return evaluate(*ast.trueBody, variables);
             }
-            else
+            else if (ast.falseBody !is null)
             {
                 return evaluate(*ast.falseBody, variables);
             }
+            return Variant(Unit());
         }
         throw new Exception("If condition must be a boolean");
     }
 
     private Variant evaluate(const BlockExpr ast, Environment variables)
     {
+        auto blockEnv = new Environment(variables);
         foreach (statement; ast.statements)
         {
-            execute(statement, variables);
+            execute(statement, blockEnv);
         }
-        return evaluate(*ast.returnExpr, variables);
+        if (ast.value is null)
+        {
+            return Variant(Unit());
+        }
+        return evaluate(*ast.value, blockEnv);
+    }
+
+    private Variant evaluate(const UnitLiteral ast, Environment variables)
+    {
+        return Variant(Unit());
     }
 
     private Variant memberOf(Variant value, string memberName)

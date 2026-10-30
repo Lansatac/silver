@@ -172,8 +172,8 @@ unittest
     auto tree = Silver("variable = 1");
     tree.successful.should.equal(true);
 
-    // Silver -> Module -> StatementBlock -> Statement -> <kind>
-    auto statement = tree[0][0][0][0];
+    // Silver -> Module -> StatementBlock -> TopLevelStatement -> Statement -> <kind>
+    auto statement = tree[0][0][0][0][0];
     statement.name.should.equal("Silver.AssignmentStatement");
     statement[0].matches.should.equal(["variable"]);
 }
@@ -292,31 +292,31 @@ unittest
 @("If Statement")
 unittest
 {
-    `if true then
+    `if true {
             print 1
-        end`.shouldParse;
+        }`.shouldParse;
 }
 
 @("If-Else Statement")
 unittest
 {
     shouldParse(
-        r"if true then
+        r"if true {
             print 1
-        else
+        } else {
             print 2
-        end");
+        }");
 }
 
 @("If-Else-If Statement")
 unittest
 {
     shouldParse(
-        r"if true then
+        r"if true {
             print 1
-        else if true then
+        } else if true {
             print 2
-        end",
+        }",
     );
 }
 
@@ -324,27 +324,35 @@ unittest
 unittest
 {
     shouldParse(
-        r"if true then
+        r"if true {
             print 1
-        else if true then
+        } else if true {
             print 2
-        else
+        } else {
             print 3
-        end");
+        }");
 }
 
 @("Single-Line If Statement")
 unittest
 {
-    `if true then print 1 end`.shouldParse;
-    `if true then print 1 else print 2 end`.shouldParse;
+    `if true { print 1 }`.shouldParse;
+    `if true { print 1 } else { print 2 }`.shouldParse;
+    `if true => f() else g()`.shouldParse;
+}
+
+@("Old If Syntax Is Gone")
+unittest
+{
+    `if true then print 1 end`.shouldNotParse;
+    `if true then 1 else 2`.shouldNotParse;
 }
 
 @("Semicolon Separators")
 unittest
 {
     `mutable val a = 1; print a`.shouldParse;
-    `if true then a = 1; print a end`.shouldParse;
+    `if true { a = 1; print a }`.shouldParse;
 }
 
 @("Missing Separator")
@@ -356,7 +364,11 @@ unittest
 @("Empty Blocks")
 unittest
 {
-    `if true then end`.shouldParse;
+    `if true {}`.shouldParse;
+    `if true { } else {
+    }`.shouldParse;
+    `def f(): Unit {}`.shouldParse;
+    `val a = {}`.shouldParse;
 }
 
 @("Trailing Newline")
@@ -381,17 +393,17 @@ unittest
     shouldParse("\nmutable val a = 1");
 }
 
-@("Trailing Whitespace After Then")
+@("Trailing Whitespace After Opening Brace")
 unittest
 {
     // Escaped so editors don't strip the trailing spaces
-    shouldParse("if true then  \n    print 1\nend");
+    shouldParse("if true {  \n    print 1\n}");
 }
 
 @("Trailing Whitespace After Else")
 unittest
 {
-    shouldParse("if true then\n    print 1\nelse  \n    print 2\nend");
+    shouldParse("if true {\n    print 1\n} else {  \n    print 2\n}");
 }
 
 @("Hexadecimal Literal")
@@ -445,6 +457,17 @@ unittest
     Silver.FunctionDeclaration("def a() : Int => 1").successful.should.equal(true);
     Silver.FunctionDeclaration("def a() : Int { 1 }").successful.should.equal(true);
     Silver.FunctionDeclaration("def a(a : Int, b : Int) : Int => 1").successful.should.equal(true);
+    shouldParse("def a() : Int =>\n    1");
+    shouldParse("def a() : Int => {\n    1\n}");
+    shouldNotParse("def a() => 1");
+}
+
+@("Return")
+unittest
+{
+    shouldParse("def a() : Int {\n    return 1\n}");
+    shouldParse("def a() : Unit {\n    return\n}");
+    shouldParse("def a() : Int {\n    if b { return 1 }\n    2\n}");
 }
 
 @("Import")
@@ -679,13 +702,65 @@ unittest
 @("If Expression")
 unittest
 {
-    shouldParse("a = if b then 1 else 2");
-    shouldParse("a = if b then 1 else if c then 2 else 3");
+    shouldParse("a = if b => 1 else 2");
+    shouldParse("a = if b => 1 else if c => 2 else 3");
+    shouldParse("a = if b { 1 } else { 2 }");
+    shouldParse("a = if b => 1 else { 2 }");
+    shouldParse("a = if b { 1 } else 2");
+    shouldParse("a = if b =>\n    1\nelse 2");
     shouldParse(r"
-a =  if b then {
+a =  if b {
         val a = 1
         a
      }
      else 2
     ");
+    shouldNotParse("a = if b 1 else 2");
+}
+
+@("Statements Can Follow An If Expression")
+unittest
+{
+    auto tree = Silver("a = if b => 1 else 2\nc = 3");
+    tree.successful.should.equal(true);
+    tree[0][0].children.length.should.equal(2);
+
+    shouldParse("a = if b {\n    1\n} else {\n    2\n}\nc = 3");
+}
+
+@("If Binds Loosest")
+unittest
+{
+    // The else branch extends as far right as it can
+    auto ifExpr = Silver.decimateTree(Silver.Expression("if a => 1 else 2 + 3"))[0];
+    ifExpr.name.should.equal("Silver.IfExpression");
+    ifExpr[2][0].unwrap.name.should.equal("Silver.AdditionExpression");
+
+    // An if can only be an operand inside parentheses
+    shouldParse("x = (if a => 1 else 2) + 3");
+    shouldNotParse("x = 1 + if a => 2 else 3");
+
+    // A braced else branch ends at its brace
+    shouldNotParse("x = if a { 1 } else { 2 } + 3");
+
+    // Function arguments are full expressions
+    shouldParse("f(if a => 1 else 2)");
+}
+
+@("Dangling Else Binds To The Nearest If")
+unittest
+{
+    auto outer = Silver.decimateTree(Silver.Expression("if a => if b => 1 else 2"))[0];
+    outer.name.should.equal("Silver.IfExpression");
+    outer.children.length.should.equal(2); // condition and then-branch, no else
+    outer[1][0][0].name.should.equal("Silver.IfExpression");
+    outer[1][0][0].children.length.should.equal(3);
+}
+
+@("Blocks As Expressions")
+unittest
+{
+    shouldParse("val a = {\n    val b = 1\n    b + 1\n}");
+    shouldParse("{\n    val scoped = 1\n}");
+    shouldNotParse("{ import io }");
 }
