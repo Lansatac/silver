@@ -11,6 +11,70 @@ struct Module
     Stmt[] statements;
 }
 
+/// A type as written in source. Names aren't resolved, so `Int` is a NamedType
+/// like any other; the checker's resolved types are a separate representation.
+struct TypeExpr
+{
+    Span span;
+    TypeExprKind kind;
+}
+
+/// `T?`.
+struct OptionType
+{
+    TypeExpr* inner;
+}
+
+/// `Int`, `math.Vector`, `List<Int>`; `path` is the dotted name split into parts.
+struct NamedType
+{
+    string[] path;
+    /// Empty when there are no type arguments.
+    TypeExpr[] args;
+}
+
+/// `(Int, Int) -> Int`.
+struct FunctionType
+{
+    TypeExpr[] params;
+    TypeExpr* returnType;
+}
+
+/// `()`.
+struct UnitType
+{
+}
+
+alias TypeExprKind = SumType!(OptionType, NamedType, FunctionType, UnitType);
+
+/// Prints a type the way it's written in source.
+string printTypeExpr(const TypeExpr t)
+{
+    import std.algorithm : map;
+    import std.array : join;
+
+    return t.kind.match!(
+        (const OptionType o) => printOptionInner(*o.inner) ~ "?",
+        (const NamedType n) => n.path.join(".")
+            ~ (n.args.length > 0 ? "<" ~ n.args.map!printTypeExpr.join(", ") ~ ">" : ""),
+        (const FunctionType f) => "(" ~ f.params.map!printTypeExpr.join(", ") ~ ") -> "
+            ~ printTypeExpr(*f.returnType),
+        (const UnitType u) => "()",
+    );
+}
+
+/// `(Int) -> Int?` returns an option and `Int??` doesn't parse, so an optional
+/// function or option needs its inner type parenthesized.
+private string printOptionInner(const TypeExpr inner)
+{
+    auto needsParens = inner.kind.match!(
+        (const FunctionType _) => true,
+        (const OptionType _) => true,
+        _ => false,
+    );
+    return needsParens ? "(" ~ printTypeExpr(inner) ~ ")" : printTypeExpr(inner);
+}
+
 struct Expr
 {
     Span span;
@@ -184,6 +248,8 @@ struct VarDecl
 {
     string name;
     Expr value;
+    /// null when the type isn't annotated.
+    TypeExpr* type;
     bool mutable;
 }
 
@@ -206,16 +272,23 @@ struct ImportStmt
     string[] path;
 }
 
+/// `name: Type` in a function declaration.
+struct Param
+{
+    string name;
+    TypeExpr type;
+}
+
 /// `def name(params): Type => expr` or `def name(params): Type { ... }`.
 /// A block body is a BlockExpr, so either way the body is one expression.
 /// `native def name(params): Type` has no body; the runtime binds it by name.
 struct FunctionDecl
 {
     string name;
-    string[] params;
+    Param[] params;
     /// null when `native` is set.
     Expr* body;
-    string returnType;
+    TypeExpr returnType;
     bool native;
 }
 
@@ -239,15 +312,26 @@ string printStmt(const Stmt s)
     import std.array : join;
     import std.format : format;
     return s.kind.match!(
-        (const VarDecl v) => format("(%s %s %s)", v.mutable ? "mutable val" : "val", v.name, printExpr(v.value)),
+        (const VarDecl v) => format("(%s %s%s %s)", v.mutable ? "mutable val" : "val", v.name,
+            v.type is null ? "" : ": " ~ printTypeExpr(*v.type), printExpr(v.value)),
         (const ExprStmt e) => printExpr(e.expr),
         (const AssignStmt a) => format("(assign %s %s %s)", printExpr(a.target), a.op, printExpr(a.value)),
         (const ImportStmt i) => format("(import %s)", i.path.join(".")),
         (const FunctionDecl f) => f.native
-            ? format("(native def %s (%s) : %s)", f.name, f.params.join(" "), f.returnType)
-            : format("(def %s (%s) : %s %s)", f.name, f.params.join(" "), f.returnType, printExpr(*f.body)),
+            ? format("(native def %s %s)", f.name, printSignature(f))
+            : format("(def %s %s %s)", f.name, printSignature(f), printExpr(*f.body)),
         (const ReturnStmt r) => format("(return %s)", printExpr(r.value)),
     );
+}
+
+/// `(a: Int, b: Int): Int`, as written in source.
+private string printSignature(const FunctionDecl f)
+{
+    import std.algorithm : map;
+    import std.array : join;
+
+    return "(" ~ f.params.map!(p => p.name ~ ": " ~ printTypeExpr(p.type)).join(", ") ~ "): "
+        ~ printTypeExpr(f.returnType);
 }
 
 @("Build and match a statement")
@@ -255,7 +339,7 @@ unittest
 {
     Span span;
     auto one = Expr(span, ExprKind(IntLiteral(1)));
-    auto decl = Stmt(span, StmtKind(VarDecl("x", one, false)));
+    auto decl = Stmt(span, StmtKind(VarDecl("x", one, null, false)));
 
     assert(printStmt(decl) == "(val x 1)");
 }

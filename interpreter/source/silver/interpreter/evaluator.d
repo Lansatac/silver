@@ -66,7 +66,7 @@ class Evaluator
         }
     }
 
-    private void execute(Module ast, Environment variables)
+    private void execute(const Module ast, Environment variables)
     {
         foreach (child; ast.statements)
         {
@@ -74,7 +74,7 @@ class Evaluator
         }
     }
 
-    private void execute(Stmt ast, Environment variables)
+    private void execute(const Stmt ast, Environment variables)
     {
         try
         {
@@ -321,7 +321,7 @@ class Evaluator
         foreach (i, arg; args)
         {
             // Arguments are evaluated in the caller's environment.
-            functionEnv.defineVariable(fn.declaration.params[i], arg);
+            functionEnv.defineVariable(fn.declaration.params[i].name, arg);
         }
 
         try

@@ -67,6 +67,6 @@ private auto parseStatements(Case c)
     }
     catch (Exception e)
     {
-        throw new Exception("lowering failed: " ~ e.msg, c.file, c.line);
+        throw new Exception("lowering failed: " ~ e.msg, c.file, c.line, e);
     }
 }

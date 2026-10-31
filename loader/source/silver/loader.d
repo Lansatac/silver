@@ -216,7 +216,7 @@ unittest
     auto importB = Stmt(span, StmtKind(ImportStmt(["b"])));
 
     auto functionBody = new Expr(span, ExprKind(BlockExpr([importA], null)));
-    auto functionDecl = Stmt(span, StmtKind(FunctionDecl("f", [], functionBody, "Unit", false)));
+    auto functionDecl = Stmt(span, StmtKind(FunctionDecl("f", [], functionBody, TypeExpr(span, TypeExprKind(NamedType(["Unit"]))), false)));
 
     auto condition = new Expr(span, ExprKind(BoolLiteral(true)));
     auto branch = new Expr(span, ExprKind(BlockExpr([importB], null)));

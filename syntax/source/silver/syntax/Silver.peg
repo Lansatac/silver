@@ -43,7 +43,7 @@ Silver:
 
     TypeAnnotation       < :':' Type
 
-    Type                 < BaseType OptionMark*
+    Type                 <- BaseType OptionMark?
     OptionMark           <- "?"
     BaseType             < FunctionType / UnitType / :'(' Type :')' / NamedType
     FunctionType         < :'(' (Type (:',' Type)*)? :')' :"->" Type

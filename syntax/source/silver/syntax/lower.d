@@ -61,7 +61,6 @@ private Stmt convertStatement(ParseTree cst, string file)
     case "Silver.VariableDeclaration":
     case "Silver.ValueDeclaration":
         // `Identifier TypeAnnotation? '=' Expression` once the keywords are discarded.
-        // The type isn't recorded yet, so only the last child's position matters.
         auto name = cst[0].matches[0];
         if (cst.children[$ - 1].name != "Silver.Expression")
         {
@@ -69,8 +68,13 @@ private Stmt convertStatement(ParseTree cst, string file)
             throw new Exception("lower: declaration without an initializer not supported yet");
         }
         auto expr = convertExpression(cst.children[$ - 1], file);
+        TypeExpr* typeExpr = null;
+        if (cst[1].name == "Silver.TypeAnnotation")
+        {
+            typeExpr = boxed(convertTypeExpression(cst[1], file));
+        }
         auto mutable = cst.name == "Silver.VariableDeclaration";
-        return Stmt(spanOf(cst, file), StmtKind(VarDecl(name, expr, mutable)));
+        return Stmt(spanOf(cst, file), StmtKind(VarDecl(name, expr, typeExpr, mutable)));
     case "Silver.AssignmentStatement":
         // The target is a Postfix, so `a.b = 1` keeps its member access.
         cst[0].validateNodeIs("Silver.AssignTarget");
@@ -84,20 +88,62 @@ private Stmt convertStatement(ParseTree cst, string file)
     case "Silver.ReturnStatement":
         // `RETURN Expression?`; the keyword is kept so a bare `return` still has a node.
         auto value = cst.children.length > 1
-            ? convertExpression(cst[1], file)
-            : Expr(spanOf(cst, file), ExprKind(UnitLiteral()));
+            ? convertExpression(cst[1], file) : Expr(spanOf(cst, file), ExprKind(UnitLiteral()));
         return Stmt(spanOf(cst, file), StmtKind(ReturnStmt(value)));
     case "Silver.ExpressionStatement":
         return Stmt(spanOf(cst, file), StmtKind(ExprStmt(convertExpression(cst[0], file))));
     case "Silver.ImportStatement":
         import std.algorithm : filter;
         import std.array : array;
+
         // QualifiedName's matches are the identifiers with the '.'s between them.
         cst[0].validateNodeIs("Silver.QualifiedName");
         auto path = cst[0].matches.filter!(m => m != ".").array;
         return Stmt(spanOf(cst, file), StmtKind(ImportStmt(path)));
     default:
         throw new Exception("lower: statement '%s' not supported yet".format(cst.name));
+    }
+}
+
+/// `TypeAnnotation`, or any of the rules under `Type`.
+/// `BaseType` and the parenthesized `( Type )` add no node of their own.
+private TypeExpr convertTypeExpression(ParseTree cst, string file)
+{
+    import std.algorithm : map;
+    import std.array : array;
+
+    switch (cst.name)
+    {
+    case "Silver.TypeAnnotation":
+    case "Silver.BaseType":
+        return convertTypeExpression(cst[0], file);
+    case "Silver.Type":
+        // `BaseType OptionMark?`
+        auto base = convertTypeExpression(cst[0], file);
+        if (cst.children.length == 1)
+        {
+            return base;
+        }
+        return TypeExpr(spanOf(cst, file), TypeExprKind(OptionType(boxed(base))));
+    case "Silver.NamedType":
+        // `TypePath TypeArguments?`. TypePath's children are just the names, without the '.'s.
+        cst[0].validateNodeIs("Silver.TypePath");
+        auto path = cst[0].children.map!(part => part.matches[0]).array;
+        TypeExpr[] args;
+        if (cst.children.length > 1)
+        {
+            args = cst[1].children.map!(a => convertTypeExpression(a, file)).array;
+        }
+        return TypeExpr(spanOf(cst, file), TypeExprKind(NamedType(path, args)));
+    case "Silver.FunctionType":
+        // The parameter types, then the return type.
+        auto params = cst[0 .. $ - 1].map!(p => convertTypeExpression(p, file)).array;
+        auto returnType = boxed(convertTypeExpression(cst[$ - 1], file));
+        return TypeExpr(spanOf(cst, file), TypeExprKind(FunctionType(params, returnType)));
+    case "Silver.UnitType":
+        return TypeExpr(spanOf(cst, file), TypeExprKind(UnitType()));
+    default:
+        throw new Exception("lower: type expression '%s' not supported yet".format(cst.name));
     }
 }
 
@@ -145,10 +191,10 @@ private Expr convertExpression(ParseTree cst, string file)
         {
             return convertExpression(cst[0], file);
         }
-            auto op = toUnaryOp(cst[0].matches[0]);
-            auto operand = convertExpression(cst[1], file);
-            auto span = Span(file, cst.begin, operand.span.end);
-            return Expr(span, ExprKind(UnaryExpr(op, boxed(operand))));
+        auto op = toUnaryOp(cst[0].matches[0]);
+        auto operand = convertExpression(cst[1], file);
+        auto span = Span(file, cst.begin, operand.span.end);
+        return Expr(span, ExprKind(UnaryExpr(op, boxed(operand))));
         break;
     case "Silver.PowerExpression":
         // `Postfix (^ Unary)?` - the exponent recurses, so `2 ^ 3 ^ 2` is `2 ^ (3 ^ 2)`.
@@ -248,9 +294,9 @@ private Stmt convertFunctionDeclaration(ParseTree cst, string file)
     }
     auto name = cst[0].matches[0];
 
-    string[] params;
+    Param[] params;
     Expr* body;
-    string returnType;
+    TypeExpr returnType;
     foreach (child; cst.children[1 .. $])
     {
         switch (child.name)
@@ -258,11 +304,11 @@ private Stmt convertFunctionDeclaration(ParseTree cst, string file)
         case "Silver.Params":
             foreach (param; child.children)
             {
-                params ~= param.matches[0];
+                params ~= Param(param.matches[0], convertTypeExpression(param[1], file));
             }
             break;
         case "Silver.TypeAnnotation":
-            returnType = child.matches[0];
+            returnType = convertTypeExpression(child, file);
             break;
         case "Silver.Block":
         case "Silver.Expression":
@@ -372,10 +418,10 @@ private BinaryOp toBinaryOp(string op)
     }
 }
 
-/// Copies `e` to the heap, for nodes that hold child expressions by pointer.
-private Expr* boxed(Expr e)
+/// Copies `node` to the heap, for nodes that hold their children by pointer.
+private T* boxed(T)(T node)
 {
-    auto p = new Expr;
-    *p = e;
+    auto p = new T;
+    *p = node;
     return p;
 }

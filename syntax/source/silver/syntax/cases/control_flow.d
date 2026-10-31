@@ -60,7 +60,7 @@ immutable Case[] blocks = [
 
     parsesAs("if true {}", "(if true (block))"),
     parsesAs("if true { } else {\n    }", "(if true (block) (block))"),
-    parsesAs("def f(): Unit {}", "(def f () : Unit (block))"),
+    parsesAs("def f(): Unit {}", "(def f (): Unit (block))"),
     parsesAs("val a = {}", "(val a (block))"),
 ];
 
