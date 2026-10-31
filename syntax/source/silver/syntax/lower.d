@@ -74,14 +74,20 @@ private Stmt convertStatement(ParseTree cst, string file)
             typeExpr = boxed(convertTypeExpression(cst[1], file));
         }
         auto mutable = cst.name == "Silver.VariableDeclaration";
-        return Stmt(spanOf(cst, file), StmtKind(VarDecl(name, expr, typeExpr, mutable)));
+        return Stmt(spanOf(cst, file), StmtKind(VarDecl(name, spanOf(cst[0], file), expr, typeExpr, mutable)));
     case "Silver.AssignmentStatement":
         // The target is a Postfix, so `a.b = 1` keeps its member access.
         cst[0].validateNodeIs("Silver.AssignTarget");
         auto target = convertExpression(cst[0][0], file);
-        auto op = toAssignOp(cst.children[1].matches[0]);
+        auto op = cst[1].matches[0];
         auto expr = convertExpression(cst[2], file);
-        return Stmt(spanOf(cst, file), StmtKind(AssignStmt(target, op, expr)));
+        if (op != "=")
+        {
+            // `a += 1` becomes `a = a + 1`, so nothing past lowering sees compound assignment.
+            auto binary = BinaryExpr(toBinaryOp(op[0 .. $ - 1]), boxed(target), boxed(expr));
+            expr = Expr(Span(file, target.span.start, expr.span.end), ExprKind(binary));
+        }
+        return Stmt(spanOf(cst, file), StmtKind(AssignStmt(target, expr)));
     case "Silver.FunctionDeclaration":
     case "Silver.NativeFunctionDeclaration":
         return convertFunctionDeclaration(cst, file);
@@ -304,7 +310,7 @@ private Stmt convertFunctionDeclaration(ParseTree cst, string file)
         case "Silver.Params":
             foreach (param; child.children)
             {
-                params ~= Param(param.matches[0], convertTypeExpression(param[1], file));
+                params ~= Param(param.matches[0], spanOf(param[0], file), convertTypeExpression(param[1], file));
             }
             break;
         case "Silver.TypeAnnotation":
@@ -318,7 +324,7 @@ private Stmt convertFunctionDeclaration(ParseTree cst, string file)
             throw new Exception("Unexpected '%s' in function declaration".format(child.name));
         }
     }
-    return Stmt(spanOf(cst, file), StmtKind(FunctionDecl(name, params, body, returnType, native)));
+    return Stmt(spanOf(cst, file), StmtKind(FunctionDecl(name, spanOf(cst[0], file), params, body, returnType, native)));
 }
 
 /// `{ Statement* }`. When the last statement is an expression it becomes the
@@ -353,29 +359,6 @@ private UnaryOp toUnaryOp(string op)
         return UnaryOp.Not;
     default:
         throw new Exception("Unknown unary operator '%s'".format(op));
-    }
-}
-
-private AssignOp toAssignOp(string op)
-{
-    switch (op)
-    {
-    case "=":
-        return AssignOp.Assign;
-    case "+=":
-        return AssignOp.AddAssign;
-    case "-=":
-        return AssignOp.SubtractAssign;
-    case "*=":
-        return AssignOp.MultiplyAssign;
-    case "/=":
-        return AssignOp.DivideAssign;
-    case "%=":
-        return AssignOp.ModuloAssign;
-    case "^=":
-        return AssignOp.PowerAssign;
-    default:
-        throw new Exception("Unknown assignment operator '%s'".format(op));
     }
 }
 

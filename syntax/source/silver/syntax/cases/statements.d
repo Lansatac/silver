@@ -5,13 +5,21 @@ version (unittest):
 import silver.syntax.cases.core;
 
 immutable Case[] assignments = [
-    parsesAs("a=b", "(assign a Assign b)"),
-    parsesAs("a.b += 3", "(assign (. a b) AddAssign 3)"),
+    parsesAs("a=b", "(assign a b)"),
+
+    // Compound assignment is lowered to plain assignment.
+    parsesAs("a += 3", "(assign a (Add a 3))"),
+    parsesAs("a -= 3", "(assign a (Subtract a 3))"),
+    parsesAs("a *= 3", "(assign a (Multiply a 3))"),
+    parsesAs("a /= 3", "(assign a (Divide a 3))"),
+    parsesAs("a ^= 3", "(assign a (Power a 3))"),
+    parsesAs("a.b += 3", "(assign (. a b) (Add (. a b) 3))"),
+    parsesAs("a *= b + 1", "(assign a (Multiply a (Add b 1)))"),
 
     // Names that start with, or look like, keywords
-    parsesAs("variable = 1", "(assign variable Assign 1)"),
-    parsesAs("x = reader", "(assign x Assign reader)"),
-    parsesAs("natives = 1", "(assign natives Assign 1)"),
+    parsesAs("variable = 1", "(assign variable 1)"),
+    parsesAs("x = reader", "(assign x reader)"),
+    parsesAs("natives = 1", "(assign natives 1)"),
 ];
 
 immutable Case[] declarations = [

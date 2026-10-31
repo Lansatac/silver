@@ -12,7 +12,7 @@ immutable Case[] postfix = [
     parsesAs("a(b())", "(call a (call b))"),
     parsesAs("a(b(),c())", "(call a (call b) (call c))"),
     parsesAs("f()()", "(call (call f))"),
-    parsesAs("a=b()", "(assign a Assign (call b))"),
+    parsesAs("a=b()", "(assign a (call b))"),
     parsesAs("a.b.c", "(. (. a b) c)"),
     parsesAs("val r = read()", "(val r (call read))"),
     parsesAs("f(1, x)()\nval y = m.x.f(2) + 1", [

@@ -118,6 +118,33 @@ unittest
     evaluator.globals["a"].get!long.should.equal(3);
 }
 
+@("Compound assignment applies its operator")
+unittest
+{
+    runProgram("mutable val a = 10
+     a += 5
+     a -= 3
+     a *= 2
+     print(a)").should.equal("24");
+}
+
+@("While loops until the condition is false")
+unittest
+{
+    runProgram("mutable val i = 0
+     while i < 3 {
+        i += 1
+     }
+     print(i)").should.equal("3");
+}
+
+@("While condition must be a boolean")
+unittest
+{
+    runProgram("while 1 { }").should.throwException!RuntimeError.withMessage(
+        "While condition must be a boolean");
+}
+
 @("Block scope - inner declaration does not leak")
 unittest
 {

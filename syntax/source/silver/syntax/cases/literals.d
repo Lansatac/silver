@@ -5,11 +5,11 @@ version (unittest):
 import silver.syntax.cases.core;
 
 immutable Case[] literals = [
-    parsesAs("a = true", "(assign a Assign true)"),
-    parsesAs("a = 1.5", "(assign a Assign 1.5)"),
-    parsesAs("a = 1e5", "(assign a Assign 100000)"),
-    parsesAs("a = 1E-5", "(assign a Assign 1e-05)"),
-    parsesAs("a = ()", "(assign a Assign ())"),
+    parsesAs("a = true", "(assign a true)"),
+    parsesAs("a = 1.5", "(assign a 1.5)"),
+    parsesAs("a = 1e5", "(assign a 100000)"),
+    parsesAs("a = 1E-5", "(assign a 1e-05)"),
+    parsesAs("a = ()", "(assign a ())"),
     parsesAs("f(())", "(call f ())"),
 ];
 

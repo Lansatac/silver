@@ -109,17 +109,6 @@ struct Identifier
     string name;
 }
 
-enum AssignOp
-{
-    Assign,
-    AddAssign,
-    SubtractAssign,
-    MultiplyAssign,
-    DivideAssign,
-    ModuloAssign,
-    PowerAssign,
-}
-
 enum BinaryOp
 {
     Add,
@@ -247,16 +236,17 @@ alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, ImportStmt, FunctionDec
 struct VarDecl
 {
     string name;
+    Span nameSpan;
     Expr value;
     /// null when the type isn't annotated.
     TypeExpr* type;
     bool mutable;
 }
 
+/// `target = value`. Lowering rewrites `a += 1` to `a = a + 1`.
 struct AssignStmt
 {
     Expr target;
-    AssignOp op;
     Expr value;
 }
 
@@ -276,6 +266,7 @@ struct ImportStmt
 struct Param
 {
     string name;
+    Span nameSpan;
     TypeExpr type;
 }
 
@@ -285,6 +276,7 @@ struct Param
 struct FunctionDecl
 {
     string name;
+    Span nameSpan;
     Param[] params;
     /// null when `native` is set.
     Expr* body;
@@ -315,7 +307,7 @@ string printStmt(const Stmt s)
         (const VarDecl v) => format("(%s %s%s %s)", v.mutable ? "mutable val" : "val", v.name,
             v.type is null ? "" : ": " ~ printTypeExpr(*v.type), printExpr(v.value)),
         (const ExprStmt e) => printExpr(e.expr),
-        (const AssignStmt a) => format("(assign %s %s %s)", printExpr(a.target), a.op, printExpr(a.value)),
+        (const AssignStmt a) => format("(assign %s %s)", printExpr(a.target), printExpr(a.value)),
         (const ImportStmt i) => format("(import %s)", i.path.join(".")),
         (const FunctionDecl f) => f.native
             ? format("(native def %s %s)", f.name, printSignature(f))
@@ -339,7 +331,7 @@ unittest
 {
     Span span;
     auto one = Expr(span, ExprKind(IntLiteral(1)));
-    auto decl = Stmt(span, StmtKind(VarDecl("x", one, null, false)));
+    auto decl = Stmt(span, StmtKind(VarDecl("x", span, one, null, false)));
 
     assert(printStmt(decl) == "(val x 1)");
 }

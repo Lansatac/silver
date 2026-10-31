@@ -348,32 +348,34 @@ class Evaluator
 
     private Variant evaluate(const WhileExpr ast, Environment variables)
     {
-        auto condition = evaluate(*ast.condition, variables);
-        while(condition.convertsTo!bool && condition.get!bool)
+        while (evaluateCondition(*ast.condition, variables, "While"))
         {
             evaluate(*ast.body, variables);
-            condition = evaluate(*ast.condition, variables);
         }
-
         return Variant(Unit());
     }
 
     private Variant evaluate(const IfExpr ast, Environment variables)
     {
-        auto condition = evaluate(*ast.condition, variables);
-        if (condition.convertsTo!bool)
+        if (evaluateCondition(*ast.condition, variables, "If"))
         {
-            if (condition.get!bool)
-            {
-                return evaluate(*ast.trueBody, variables);
-            }
-            else if (ast.falseBody !is null)
-            {
-                return evaluate(*ast.falseBody, variables);
-            }
-            return Variant(Unit());
+            return evaluate(*ast.trueBody, variables);
         }
-        throw new Exception("If condition must be a boolean");
+        else if (ast.falseBody !is null)
+        {
+            return evaluate(*ast.falseBody, variables);
+        }
+        return Variant(Unit());
+    }
+
+    private bool evaluateCondition(const Expr condition, Environment variables, string construct)
+    {
+        auto value = evaluate(condition, variables);
+        if (!value.convertsTo!bool)
+        {
+            throw new Exception(construct ~ " condition must be a boolean");
+        }
+        return value.get!bool;
     }
 
     private Variant evaluate(const BlockExpr ast, Environment variables)
