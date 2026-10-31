@@ -2,7 +2,7 @@ module silver.syntax.cst;
 
 import pegged.grammar : ParseTree;
 import pegged.peg : Position;
-import silver.ast : Diagnostic, Span;
+import silver.ast : Diagnostic, Severity, Span;
 import silver.syntax.grammar : Silver;
 import silver.syntax.parse : ParseException;
 
@@ -17,7 +17,7 @@ package ParseTree parseCst(string source, string sourceName = "<input>")
         auto failure = deepestFailure(tree);
         throw new ParseException(Diagnostic(Span(sourceName, failure.end, failure.end),
                 failure.failMsg((Position _, string left, string right, const ParseTree node)
-                    => describeFailure(left, right, node))));
+                    => describeFailure(left, right, node)), Severity.Error));
     }
     return tree;
 }

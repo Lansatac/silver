@@ -203,7 +203,7 @@ class Evaluator
 
     private RuntimeError runtimeError(Span span, Exception error)
     {
-        return new RuntimeError(Diagnostic(span, error.msg));
+        return new RuntimeError(Diagnostic(span, error.msg, Severity.Error));
     }
 
     /// Wraps a value in a Variant with type qualifiers stripped.

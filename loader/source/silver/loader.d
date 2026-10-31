@@ -11,13 +11,14 @@ import silver.syntax.parse : parse;
 
 /// Parses `source` (the entry module, read from `file`) and everything it needs:
 /// prelude.ag if an import path has one, and every imported module, transitively.
-/// Each file's text is added to `sources`, so errors can be reported even if loading fails.
-/// Throws: ParseException, or DiagnosticException for an import that isn't on any import path.
-Program load(string source, string file, string[] importPaths, SourceMap sources)
+/// Each file's text is added to `context.sources`, so errors can be reported even if loading fails.
+/// An import that isn't on any import path is reported to `context.collector` and skipped.
+/// Throws: ParseException.
+Program load(string source, string file, string[] importPaths, SourceContext context)
 {
-    sources.add(file, source);
+    context.sources.add(file, source);
     Program program;
-    program.sources = sources;
+    program.sources = context.sources;
     program.main = parse(source, baseName(file).stripExtension, file);
 
     // Modules whose imports haven't been followed yet.
@@ -25,7 +26,7 @@ Program load(string source, string file, string[] importPaths, SourceMap sources
     auto preludePath = findModule(["prelude"], importPaths);
     if (preludePath !is null)
     {
-        program.modules["prelude"] = parseModuleFile(preludePath, "prelude", sources);
+        program.modules["prelude"] = parseModuleFile(preludePath, "prelude", context);
         unscanned ~= *program.modules["prelude"];
     }
 
@@ -45,13 +46,14 @@ Program load(string source, string file, string[] importPaths, SourceMap sources
             auto modulePath = findModule(path, importPaths);
             if (modulePath is null)
             {
-                throw new DiagnosticException(Diagnostic(importNode.span,
-                        format("Module '%s.ag' not found", path.join("/"))));
+                context.collector.reportError(importNode.span, format("Module '%s.ag' not found", path.join("/")));
+                continue;
             }
-            program.modules[name] = parseModuleFile(modulePath, name, sources);
+            program.modules[name] = parseModuleFile(modulePath, name, context);
             unscanned ~= *program.modules[name];
         }
     }
+
     return program;
 }
 
@@ -77,12 +79,12 @@ private string findModule(string[] chain, string[] importPaths)
     return null;
 }
 
-/// Reads and parses the module at `path`. The text is recorded in `sources` before
+/// Reads and parses the module at `path`. The text is recorded in `context.sources` before
 /// parsing, so a parse error can be reported against it.
-private Module* parseModuleFile(string path, string name, SourceMap sources)
+private Module* parseModuleFile(string path, string name, SourceContext context)
 {
     auto text = readText(path);
-    sources.add(path, text);
+    context.sources.add(path, text);
     auto loaded = new Module;
     *loaded = parse(text, name, path);
     return loaded;
@@ -149,6 +151,8 @@ private Stmt[] importsIn(Expr* expr)
 version (unittest)
 {
     import fluent.asserts;
+    import std.algorithm : map, sort;
+    import std.array : array;
     import std.file : mkdirRecurse, rmdirRecurse, tempDir, write;
     import std.string : indexOf;
     import silver.syntax.parse : ParseException;
@@ -180,7 +184,7 @@ unittest
         ["a.ag": "import b", "b.ag": "val b = 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("import a", "main.ag", [directory], new SourceMap);
+    auto program = load("import a", "main.ag", [directory], new SourceContext);
     assert("a" in program.modules);
     assert("b" in program.modules);
     program.modules.length.should.equal(2);
@@ -192,7 +196,7 @@ unittest
     auto directory = makeModuleDirectory("dotted", ["a/b.ag": "val b = 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("import a.b", "main.ag", [directory], new SourceMap);
+    auto program = load("import a.b", "main.ag", [directory], new SourceContext);
     assert("a.b" in program.modules);
     program.modules["a.b"].name.should.equal("a.b");
 }
@@ -204,7 +208,7 @@ unittest
         ["a.ag": "import b", "b.ag": "import a"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("import a", "main.ag", [directory], new SourceMap);
+    auto program = load("import a", "main.ag", [directory], new SourceContext);
     program.modules.length.should.equal(2);
 }
 
@@ -229,24 +233,38 @@ unittest
     found[1].kind.get!ImportStmt.path.join(".").should.equal("b");
 }
 
-@("load throws for an import that isn't on any import path")
+@("load reports an import that isn't on any import path and keeps going")
 unittest
 {
     auto directory = makeModuleDirectory("missing", ["a.ag": "val a = 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto source = "val x = 1\nimport nope";
-    try
-    {
-        load(source, "main.ag", [directory], new SourceMap);
-        assert(false, "Expected a missing module error");
-    }
-    catch (DiagnosticException e)
-    {
-        e.diagnostic.message.should.equal("Module 'nope.ag' not found");
-        e.diagnostic.span.file.should.equal("main.ag");
-        e.diagnostic.span.start.should.equal(source.indexOf("import nope"));
-    }
+    auto source = "val x = 1
+import nope
+import a";
+    auto context = new SourceContext;
+    auto program = load(source, "main.ag", [directory], context);
+
+    auto errors = context.collector.errors.array;
+    errors.length.should.equal(1);
+    errors[0].message.should.equal("Module 'nope.ag' not found");
+    errors[0].span.file.should.equal("main.ag");
+    errors[0].span.start.should.equal(source.indexOf("import nope"));
+    assert("a" in program.modules);
+}
+
+@("load reports every missing import")
+unittest
+{
+    auto directory = makeModuleDirectory("missing-several", ["a.ag": "import gone"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto context = new SourceContext;
+    load("import nope
+import a", "main.ag", [directory], context);
+
+    context.collector.errors.map!(d => d.message.idup).array.sort.array.should.equal(
+        ["Module 'gone.ag' not found", "Module 'nope.ag' not found"]);
 }
 
 @("standardLibraryPath holds prelude.ag")
@@ -261,7 +279,7 @@ unittest
     auto directory = makeModuleDirectory("prelude", ["prelude.ag": "val p = 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("val x = 1", "main.ag", [directory], new SourceMap);
+    auto program = load("val x = 1", "main.ag", [directory], new SourceContext);
     assert("prelude" in program.modules);
 }
 
@@ -271,7 +289,7 @@ unittest
     auto directory = makeModuleDirectory("no-prelude", ["a.ag": "val a = 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("val x = 1", "main.ag", [directory], new SourceMap);
+    auto program = load("val x = 1", "main.ag", [directory], new SourceContext);
     assert("prelude" !in program.modules);
     program.modules.length.should.equal(0);
 }
@@ -282,16 +300,16 @@ unittest
     auto directory = makeModuleDirectory("parse-error", ["bad.ag": "val = 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto sources = new SourceMap;
+    auto context = new SourceContext;
     auto badPath = buildPath(directory, "bad.ag");
     try
     {
-        load("import bad", "main.ag", [directory], sources);
+        load("import bad", "main.ag", [directory], context);
         assert(false, "Expected a parse error");
     }
     catch (ParseException e)
     {
         e.diagnostic.span.file.should.equal(badPath);
-        sources.has(badPath).should.equal(true);
+        context.sources.has(badPath).should.equal(true);
     }
 }

@@ -5,7 +5,9 @@ version (unittest)
     import std.file : dirEntries, exists, readText, SpanMode;
     import std.path : baseName, buildNormalizedPath, buildPath, dirName, stripExtension;
     import std.string : replace;
-    import silver.ast : SourceMap;
+    import std.algorithm : map;
+    import std.array : join;
+    import silver.ast : formatDiagnostic, SourceContext;
     import silver.interpreter.evaluator : Evaluator;
     import silver.loader : load, standardLibraryPath;
 }
@@ -25,8 +27,14 @@ unittest
         assert(exists(expectedPath),
             "Missing expected output file for " ~ sourcePath);
 
+        auto context = new SourceContext();
+
         auto source = readText(sourcePath);
-        auto program = load(source, sourcePath, [standardLibraryDirectory], new SourceMap);
+        auto program = load(source, sourcePath, [standardLibraryDirectory], context);
+        assert(!context.collector.hasErrors, "Loading " ~ sourcePath ~ " reported errors:
+"
+                ~ context.collector.errors.map!(d => formatDiagnostic(d, context.sources)).join("
+"));
         auto evaluator = new Evaluator(program);
         evaluator.run();
 

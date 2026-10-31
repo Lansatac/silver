@@ -7,5 +7,6 @@ module silver.ast;
 
 public import silver.ast.span;
 public import silver.ast.diagnostic;
+public import silver.ast.formatting;
 public import silver.ast.nodes;
 public import silver.ast.program;

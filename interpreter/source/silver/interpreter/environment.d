@@ -45,7 +45,7 @@ class Environment
         }
         else
         {
-            throw new Exception("Variable %s not found".format(name));
+            throw new Exception("Variable '%s' not found".format(name));
         }
     }
 
@@ -61,7 +61,7 @@ class Environment
         }
         else
         {
-            throw new Exception("Variable %s not found".format(name));
+            throw new Exception("Variable '%s' not found".format(name));
         }
     }
 }

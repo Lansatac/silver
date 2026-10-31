@@ -9,13 +9,22 @@ version (unittest) import fluent.asserts;
 version (unittest)
 {
     import std.variant;
-    import silver.ast : Program, SourceMap;
+    import silver.ast : formatDiagnostic, Program, SourceContext;
     import silver.loader : load, standardLibraryPath;
 
-    /// Loads `source` as the module `file`, throwing on a parse error.
+    /// Loads `source` as the module `file`, throwing on a parse error and
+    /// failing on any error the loader reports.
     Program loadProgram(string source, string file = "test", string[] importPaths = [])
     {
-        return load(source, file, importPaths, new SourceMap);
+        import std.algorithm : map;
+        import std.array : join;
+
+        auto context = new SourceContext;
+        auto program = load(source, file, importPaths, context);
+        assert(!context.collector.hasErrors, context.collector.errors
+                .map!(d => formatDiagnostic(d, context.sources)).join("
+"));
+        return program;
     }
 
     Variant evaluateExpression(string expression)
@@ -151,7 +160,7 @@ unittest
     runProgram("if true {
         val b = 2
      }
-     print(b)").should.throwException!RuntimeError.withMessage("Variable b not found");
+     print(b)").should.throwException!RuntimeError.withMessage("Variable 'b' not found");
 }
 
 @("Block scope - assignment updates outer variable")
@@ -230,7 +239,7 @@ unittest
         local
      }
      f()
-     print(local)").should.throwException!RuntimeError.withMessage("Variable local not found");
+     print(local)").should.throwException!RuntimeError.withMessage("Variable 'local' not found");
 }
 
 @("Wrong argument count")
@@ -251,8 +260,8 @@ unittest
 unittest
 {
     auto source = "val a = 1\n    a = 2";
-    auto sources = new SourceMap;
-    auto program = load(source, "test.ag", [], sources);
+    auto context = new SourceContext;
+    auto program = load(source, "test.ag", [], context);
     auto evaluator = new Evaluator(program);
     try
     {
@@ -262,7 +271,7 @@ unittest
     catch (RuntimeError e)
     {
         e.diagnostic.span.file.should.equal("test.ag");
-        sources.locate(e.diagnostic.span).line.should.equal(2);
+        context.sources.locate(e.diagnostic.span).line.should.equal(2);
         e.msg.should.equal("Cannot assign to val 'a'. Declare as 'mutable val' to reassign it.");
     }
 }
