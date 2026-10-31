@@ -87,8 +87,8 @@ class SourceMap
 unittest
 {
     auto sources = new SourceMap;
-    sources.add("a.silver", "val a = 1");
-    auto location = sources.locate(Span("a.silver", 4, 5));
+    sources.add("a.ag", "val a = 1");
+    auto location = sources.locate(Span("a.ag", 4, 5));
     assert(location == Location(1, 5));
 }
 
@@ -96,9 +96,9 @@ unittest
 unittest
 {
     auto sources = new SourceMap;
-    sources.add("a.silver", "val a = 1\n    a = 2");
+    sources.add("a.ag", "val a = 1\n    a = 2");
     // The second line starts at offset 10 and its `a` is at offset 14.
-    auto location = sources.locate(Span("a.silver", 14, 15));
+    auto location = sources.locate(Span("a.ag", 14, 15));
     assert(location == Location(2, 5));
 }
 
@@ -106,9 +106,9 @@ unittest
 unittest
 {
     auto sources = new SourceMap;
-    sources.add("a.silver", "val a = 1\n    a = 2");
-    assert(sources.has("a.silver"));
-    assert(!sources.has("b.silver"));
-    assert(sources.format(Diagnostic(Span("a.silver", 14, 15), "boom")) == "a.silver:2:5: boom");
-    assert(sources.format(Diagnostic(Span("b.silver", 0, 0), "boom")) == "b.silver: boom");
+    sources.add("a.ag", "val a = 1\n    a = 2");
+    assert(sources.has("a.ag"));
+    assert(!sources.has("b.ag"));
+    assert(sources.format(Diagnostic(Span("a.ag", 14, 15), "boom")) == "a.ag:2:5: boom");
+    assert(sources.format(Diagnostic(Span("b.ag", 0, 0), "boom")) == "b.ag: boom");
 }

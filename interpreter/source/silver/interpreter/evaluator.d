@@ -36,7 +36,7 @@ class Evaluator
 
     private Environment globalEnvironment;
     /// Names every module can see without importing them, loaded from
-    /// prelude.silver. Module environments are its children, so they can shadow it.
+    /// prelude.ag. Module environments are its children, so they can shadow it.
     private Environment prelude;
     /// Implementations for `native def`s, by function name.
     private NativeFunction[string] nativeBindings;

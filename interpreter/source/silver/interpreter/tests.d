@@ -252,7 +252,7 @@ unittest
 {
     auto source = "val a = 1\n    a = 2";
     auto sources = new SourceMap;
-    auto program = load(source, "test.silver", [], sources);
+    auto program = load(source, "test.ag", [], sources);
     auto evaluator = new Evaluator(program);
     try
     {
@@ -261,7 +261,7 @@ unittest
     }
     catch (RuntimeError e)
     {
-        e.diagnostic.span.file.should.equal("test.silver");
+        e.diagnostic.span.file.should.equal("test.ag");
         sources.locate(e.diagnostic.span).line.should.equal(2);
         e.msg.should.equal("Cannot assign to val 'a'. Declare as 'mutable val' to reassign it.");
     }

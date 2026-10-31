@@ -10,7 +10,7 @@ import silver.ast;
 import silver.syntax.parse : parse;
 
 /// Parses `source` (the entry module, read from `file`) and everything it needs:
-/// prelude.silver if an import path has one, and every imported module, transitively.
+/// prelude.ag if an import path has one, and every imported module, transitively.
 /// Each file's text is added to `sources`, so errors can be reported even if loading fails.
 /// Throws: ParseException, or DiagnosticException for an import that isn't on any import path.
 Program load(string source, string file, string[] importPaths, SourceMap sources)
@@ -46,7 +46,7 @@ Program load(string source, string file, string[] importPaths, SourceMap sources
             if (modulePath is null)
             {
                 throw new DiagnosticException(Diagnostic(importNode.span,
-                        format("Module '%s'.silver not found", path.join("/"))));
+                        format("Module '%s.ag' not found", path.join("/"))));
             }
             program.modules[name] = parseModuleFile(modulePath, name, sources);
             unscanned ~= *program.modules[name];
@@ -55,7 +55,7 @@ Program load(string source, string file, string[] importPaths, SourceMap sources
     return program;
 }
 
-/// Directory holding Silver's standard library (prelude.silver, math.silver, ...).
+/// Directory holding Silver's standard library (prelude.ag, math.ag, ...).
 /// For now it's the repo's stdlib/, found relative to this source file; this is the
 /// place to add an environment variable or install-relative lookup later.
 string standardLibraryPath()
@@ -68,7 +68,7 @@ private string findModule(string[] chain, string[] importPaths)
 {
     foreach (importPath; importPaths)
     {
-        auto path = buildPath(importPath, chain.join("/") ~ ".silver");
+        auto path = buildPath(importPath, chain.join("/") ~ ".ag");
         if (exists(path))
         {
             return path;
@@ -177,10 +177,10 @@ version (unittest)
 unittest
 {
     auto directory = makeModuleDirectory("transitive",
-        ["a.silver": "import b", "b.silver": "val b = 1"]);
+        ["a.ag": "import b", "b.ag": "val b = 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("import a", "main.silver", [directory], new SourceMap);
+    auto program = load("import a", "main.ag", [directory], new SourceMap);
     assert("a" in program.modules);
     assert("b" in program.modules);
     program.modules.length.should.equal(2);
@@ -189,10 +189,10 @@ unittest
 @("load maps a dotted import to a directory")
 unittest
 {
-    auto directory = makeModuleDirectory("dotted", ["a/b.silver": "val b = 1"]);
+    auto directory = makeModuleDirectory("dotted", ["a/b.ag": "val b = 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("import a.b", "main.silver", [directory], new SourceMap);
+    auto program = load("import a.b", "main.ag", [directory], new SourceMap);
     assert("a.b" in program.modules);
     program.modules["a.b"].name.should.equal("a.b");
 }
@@ -201,10 +201,10 @@ unittest
 unittest
 {
     auto directory = makeModuleDirectory("cycle",
-        ["a.silver": "import b", "b.silver": "import a"]);
+        ["a.ag": "import b", "b.ag": "import a"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("import a", "main.silver", [directory], new SourceMap);
+    auto program = load("import a", "main.ag", [directory], new SourceMap);
     program.modules.length.should.equal(2);
 }
 
@@ -232,46 +232,46 @@ unittest
 @("load throws for an import that isn't on any import path")
 unittest
 {
-    auto directory = makeModuleDirectory("missing", ["a.silver": "val a = 1"]);
+    auto directory = makeModuleDirectory("missing", ["a.ag": "val a = 1"]);
     scope (exit) rmdirRecurse(directory);
 
     auto source = "val x = 1\nimport nope";
     try
     {
-        load(source, "main.silver", [directory], new SourceMap);
+        load(source, "main.ag", [directory], new SourceMap);
         assert(false, "Expected a missing module error");
     }
     catch (DiagnosticException e)
     {
-        e.diagnostic.message.should.equal("Module 'nope'.silver not found");
-        e.diagnostic.span.file.should.equal("main.silver");
+        e.diagnostic.message.should.equal("Module 'nope.ag' not found");
+        e.diagnostic.span.file.should.equal("main.ag");
         e.diagnostic.span.start.should.equal(source.indexOf("import nope"));
     }
 }
 
-@("standardLibraryPath holds prelude.silver")
+@("standardLibraryPath holds prelude.ag")
 unittest
 {
-    assert(exists(buildPath(standardLibraryPath(), "prelude.silver")));
+    assert(exists(buildPath(standardLibraryPath(), "prelude.ag")));
 }
 
 @("load includes the prelude when an import path has one")
 unittest
 {
-    auto directory = makeModuleDirectory("prelude", ["prelude.silver": "val p = 1"]);
+    auto directory = makeModuleDirectory("prelude", ["prelude.ag": "val p = 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("val x = 1", "main.silver", [directory], new SourceMap);
+    auto program = load("val x = 1", "main.ag", [directory], new SourceMap);
     assert("prelude" in program.modules);
 }
 
 @("load works without a prelude")
 unittest
 {
-    auto directory = makeModuleDirectory("no-prelude", ["a.silver": "val a = 1"]);
+    auto directory = makeModuleDirectory("no-prelude", ["a.ag": "val a = 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("val x = 1", "main.silver", [directory], new SourceMap);
+    auto program = load("val x = 1", "main.ag", [directory], new SourceMap);
     assert("prelude" !in program.modules);
     program.modules.length.should.equal(0);
 }
@@ -279,14 +279,14 @@ unittest
 @("load records an imported module's text and throws its parse error")
 unittest
 {
-    auto directory = makeModuleDirectory("parse-error", ["bad.silver": "val = 1"]);
+    auto directory = makeModuleDirectory("parse-error", ["bad.ag": "val = 1"]);
     scope (exit) rmdirRecurse(directory);
 
     auto sources = new SourceMap;
-    auto badPath = buildPath(directory, "bad.silver");
+    auto badPath = buildPath(directory, "bad.ag");
     try
     {
-        load("import bad", "main.silver", [directory], sources);
+        load("import bad", "main.ag", [directory], sources);
         assert(false, "Expected a parse error");
     }
     catch (ParseException e)

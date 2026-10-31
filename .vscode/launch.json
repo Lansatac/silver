@@ -11,7 +11,7 @@
             "name": "Build & Debug DUB project",
             "cwd": "${command:dubWorkingDirectory}",
             "program": "${command:dubTarget}",
-            "args": ["conformance/tests/smoke.silver"]
+            "args": ["conformance/tests/smoke.ag"]
         },
     ]
 }

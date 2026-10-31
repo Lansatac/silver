@@ -95,9 +95,9 @@ unittest
 @("parse error names the source")
 unittest
 {
-    auto error = parseError("val = 1", "math.silver");
+    auto error = parseError("val = 1", "math.ag");
     assert(error !is null);
-    error.diagnostic.span.file.should.equal("math.silver");
+    error.diagnostic.span.file.should.equal("math.ag");
 }
 
 @("parse error on a failure that isn't a child node terminates")

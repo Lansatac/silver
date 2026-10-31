@@ -17,7 +17,7 @@ unittest
     auto standardLibraryDirectory = standardLibraryPath();
     size_t filesTested;
 
-    foreach (entry; dirEntries(conformanceDirectory, "*.silver", SpanMode.shallow))
+    foreach (entry; dirEntries(conformanceDirectory, "*.ag", SpanMode.shallow))
     {
         auto sourcePath = entry.name;
         auto expectedPath = buildPath(conformanceDirectory,
@@ -36,5 +36,5 @@ unittest
         filesTested++;
     }
 
-    assert(filesTested > 0, "No conformance .silver files were found");
+    assert(filesTested > 0, "No conformance .ag files were found");
 }
