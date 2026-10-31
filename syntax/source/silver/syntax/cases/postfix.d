@@ -1,8 +1,8 @@
-module silver.syntax_cases.postfix;
+module silver.syntax.cases.postfix;
 
 version (unittest):
 
-import silver.syntax_cases.core;
+import silver.syntax.cases.core;
 
 /// Calls and member access, which fold left.
 immutable Case[] postfix = [

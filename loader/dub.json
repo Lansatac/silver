@@ -1,0 +1,19 @@
+{
+	"name": "loader",
+	"targetType": "library",
+	"dependencies": {
+		"silver:ast": "*",
+		"silver:syntax": "*"
+	},
+	"configurations": [
+		{ "name": "library" },
+		{
+			"name": "unittest",
+			"dependencies": {
+				"silly": "~>1.2.0-dev.2",
+				"fluent-asserts": "~>2.1"
+			},
+			"libs-windows": ["psapi"]
+		}
+	]
+}

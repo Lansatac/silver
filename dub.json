@@ -5,6 +5,7 @@
 	"subPackages": [
 		"./ast/",
 		"./syntax/",
+		"./loader/",
 		"./interpreter/",
 		"./conformance/"
 	],
@@ -14,7 +15,7 @@
 	"description": "A simple experimental programming language.",
 	"dependencies": {
 		"silver:interpreter": "*",
-		"silver:syntax": "*"
+		"silver:loader": "*"
 	},
 	"targetType": "executable"
 }

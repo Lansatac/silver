@@ -1,4 +1,4 @@
-module silver.syntax_cases.core;
+module silver.syntax.cases.core;
 
 version (unittest):
 

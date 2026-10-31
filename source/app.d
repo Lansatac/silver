@@ -1,9 +1,30 @@
 import std.stdio;
 import std.getopt;
 import std.file;
+import std.path;
 
-import silver.grammar;
-import silver.interpreter;
+import silver.ast : DiagnosticException, SourceMap;
+import silver.interpreter.context : Context;
+import silver.loader : load, standardLibraryPath;
+
+/// Interprets a string representing silver code.
+int interpret(string code, string filename = "<input>")
+{
+    auto sources = new SourceMap;
+    try
+    {
+        auto program = load(code, filename, [standardLibraryPath()], sources);
+        auto context = new Context(program, true);
+        context.run();
+    }
+    catch (DiagnosticException e)
+    {
+        stderr.writeln(sources.format(e.diagnostic));
+        return 1;
+    }
+
+    return 0;
+}
 
 ///Application entry point
 int main(string[] args)
@@ -19,7 +40,7 @@ int main(string[] args)
 	auto programFile = args[1];
 	if(!programFile.isFile)
 	{
-		stderr.writefln("'%s' is not a file!");
+		stderr.writefln("'%s' is not a file!", programFile);
 		return 1;
 	}
 

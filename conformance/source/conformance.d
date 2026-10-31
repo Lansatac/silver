@@ -5,8 +5,9 @@ version (unittest)
     import std.file : dirEntries, exists, readText, SpanMode;
     import std.path : absolutePath, baseName, buildPath, dirName, stripExtension;
     import std.string : replace;
-    import silver.context : Context;
-    import silver.parse : parse;
+    import silver.ast : SourceMap;
+    import silver.interpreter.context : Context;
+    import silver.loader : load, standardLibraryPath;
 }
 
 @("Conformance programs match their expected output")
@@ -14,7 +15,7 @@ unittest
 {
     auto packageDirectory = absolutePath(buildPath(dirName(__FILE__), ".."));
     auto conformanceDirectory = buildPath(packageDirectory, "tests");
-    auto standardLibraryDirectory = buildPath(packageDirectory, "..", "stdlib");
+    auto standardLibraryDirectory = standardLibraryPath();
     size_t filesTested;
 
     foreach (entry; dirEntries(conformanceDirectory, "*.silver", SpanMode.shallow))
@@ -26,9 +27,8 @@ unittest
             "Missing expected output file for " ~ sourcePath);
 
         auto source = readText(sourcePath);
-        auto moduleName = baseName(sourcePath).stripExtension;
-        auto program = parse(source, moduleName, sourcePath);
-        auto context = new Context(program, [standardLibraryDirectory], false, source);
+        auto program = load(source, sourcePath, [standardLibraryDirectory], new SourceMap);
+        auto context = new Context(program);
         context.run();
 
         auto expected = readText(expectedPath).replace("\r\n", "\n");

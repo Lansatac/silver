@@ -24,6 +24,6 @@
 		}
 	],
 	"stringImportPaths": [
-		"source/silver"
+		"source/silver/syntax"
 	]
 }

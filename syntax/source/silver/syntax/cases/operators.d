@@ -1,8 +1,8 @@
-module silver.syntax_cases.operators;
+module silver.syntax.cases.operators;
 
 version (unittest):
 
-import silver.syntax_cases.core;
+import silver.syntax.cases.core;
 
 immutable Case[] operators = [
     parsesAs("val x = 1+2", "(val x (Add 1 2))"),

@@ -1,11 +1,11 @@
-/// Checks on the shape of the parse tree, for syntax cstToAst can't lower
-/// yet. Once it can, these belong in a syntax_cases table instead.
-module silver.grammar_tests.structure;
+/// Checks on the shape of the parse tree, for syntax `lower` can't handle
+/// yet. Once it can, these belong in a cases table instead.
+module silver.syntax.grammar_tests.structure;
 
 version (unittest):
 
 import fluent.asserts;
-import silver.grammar;
+import silver.syntax.grammar;
 
 @("Optional Binds Tighter Than Function Arrow")
 unittest

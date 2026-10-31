@@ -1,8 +1,8 @@
-module silver.syntax_cases.functions;
+module silver.syntax.cases.functions;
 
 version (unittest):
 
-import silver.syntax_cases.core;
+import silver.syntax.cases.core;
 
 immutable Case[] functions = [
     parsesAs("def a() : Int => 1", "(def a () : Int 1)"),

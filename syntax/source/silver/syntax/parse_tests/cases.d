@@ -1,11 +1,11 @@
-module silver.parse_tests.cases;
+module silver.syntax.parse_tests.cases;
 
 version (unittest):
 
-import silver.parse_tests.helpers;
-import silver.syntax_cases;
+import silver.syntax.parse_tests.helpers;
+import silver.syntax.cases;
 
-// Not yet lowered by cstToAst, so grammar only for now: radixLiterals,
+// Not yet handled by lower, so grammar only for now: radixLiterals,
 // constructors, collectionLiterals, indexing, optionalChaining,
 // uninitializedDeclarations.
 mixin AstCases!(

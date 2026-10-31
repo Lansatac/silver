@@ -1,11 +1,11 @@
-module silver.parse_result;
+module silver.syntax.parse_result;
 
 debug import std.stdio;
 
 version(unittest)
 {
     import pegged.grammar : ParseTree;
-    import silver.grammar;
+    import silver.syntax.grammar;
     import fluent.asserts;
     import fluentasserts.operations.registry : Registry;
     import fluentasserts.core.evaluation.eval : Evaluation;

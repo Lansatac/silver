@@ -1,8 +1,8 @@
-module silver.syntax_cases.control_flow;
+module silver.syntax.cases.control_flow;
 
 version (unittest):
 
-import silver.syntax_cases.core;
+import silver.syntax.cases.core;
 
 immutable Case[] ifs = [
     parsesAs("if true {\n    print(1)\n}", "(if true (block => (call print 1)))"),

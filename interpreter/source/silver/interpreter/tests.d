@@ -1,72 +1,36 @@
-module silver.interpreter;
+module silver.interpreter.tests;
 
-import std.stdio;
 import std.path;
 
-import silver.parse : parse, ParseException;
-import silver.cstToAst : cstToAst;
-import silver.context : Context, SilverRuntimeException;
-// Renamed because Context has its own (runtime) Module class.
-import silver.ast : AstModule = Module, printModule;
+import silver.interpreter.context : Context, SilverRuntimeException;
+import silver.ast : printModule;
 version (unittest) import fluent.asserts;
-
-/// Interprets a string representing silver code.
-int interpret(string code, string filename = "<input>")
-{
-    AstModule program;
-    try
-    {
-        program = parse(code, filename.baseName.stripExtension, filename);
-    }
-    catch (ParseException e)
-    {
-        writeln(e.msg);
-        return 1;
-    }
-
-    auto context = new Context(program, [absolutePath("./stdlib")], true, code);
-    try
-    {
-        context.run();
-    }
-    catch (SilverRuntimeException e)
-    {
-        import std.path;
-        stderr.writefln("%s:%s: %s", buildNormalizedPath(absolutePath( e.sourceFile)), e.sourceLine, e.msg);
-        return 1;
-    }
-    catch (ParseException e)
-    {
-        stderr.writeln(e.msg);
-        return 1;
-    }
-
-    return 0;
-}
 
 version (unittest)
 {
     import std.variant;
+    import silver.ast : Program, SourceMap;
+    import silver.loader : load, standardLibraryPath;
 
-    /// Parses and lowers `program`, throwing on a parse error.
-    AstModule toAst(string program)
+    /// Loads `source` as the module `file`, throwing on a parse error.
+    Program loadProgram(string source, string file = "test", string[] importPaths = [])
     {
-        return parse(program, "test", "test");
+        return load(source, file, importPaths, new SourceMap);
     }
 
     Variant evaluateExpression(string expression)
     {
         import std.format;
 
-        auto program = toAst(`val variable = %s`.format(expression));
-        auto context = new Context(program, []);
+        auto program = loadProgram(`val variable = %s`.format(expression));
+        auto context = new Context(program);
         context.run();
         return context.getGlobals()["variable"];
     }
 
-    string runProgram(string program)
+    string runProgram(string source)
     {
-        auto context = new Context(toAst(program), [absolutePath("./stdlib")]);
+        auto context = new Context(loadProgram(source, "test", [standardLibraryPath()]));
         context.run();
         return context.ProgramOutput;
     }
@@ -75,7 +39,7 @@ version (unittest)
 @("Simple program")
 unittest
 {
-    interpret("val a = 1").should.equal(0);
+    runProgram("val a = 1").should.equal("");
 }
 
 @("Global Variable Assignment")
@@ -105,8 +69,8 @@ unittest
 @("Operator Precedence RTL")
 unittest
 {
-    auto program = toAst("val a = 2 * 2 + 1");
-    evaluateExpression("2 * 2 + 1").get!long.should.equal(5).because(printModule(program));
+    auto program = loadProgram("val a = 2 * 2 + 1");
+    evaluateExpression("2 * 2 + 1").get!long.should.equal(5).because(printModule(program.main));
 }
 
 @("Operator Precedence Parenthetical")
@@ -129,12 +93,12 @@ unittest
 @("If Statements - false")
 unittest
 {
-    auto context = new Context(toAst(
+    auto context = new Context(loadProgram(
         r"val a = 1
           if false {
             a = 2
           }
-          "), []);
+          "));
     context.run();
     context.getGlobals()["a"].get!long.should.equal(1);
 }
@@ -142,14 +106,14 @@ unittest
 @("If-Else Statements")
 unittest
 {
-    auto context = new Context(toAst(
+    auto context = new Context(loadProgram(
         r"mutable val a = 1
           if false {
             a = 2
           } else {
             a = 3
           }
-          "), []);
+          "));
     context.run();
     context.getGlobals()["a"].get!long.should.equal(3);
 }
@@ -260,8 +224,9 @@ unittest
 unittest
 {
     auto source = "val a = 1\n    a = 2";
-    auto program = parse(source, "test", "test.silver");
-    auto context = new Context(program, [], false, source);
+    auto sources = new SourceMap;
+    auto program = load(source, "test.silver", [], sources);
+    auto context = new Context(program);
     try
     {
         context.run();
@@ -269,8 +234,8 @@ unittest
     }
     catch (SilverRuntimeException e)
     {
-        e.sourceFile.should.equal("test.silver");
-        e.sourceLine.should.equal(2);
+        e.diagnostic.span.file.should.equal("test.silver");
+        sources.locate(e.diagnostic.span).line.should.equal(2);
         e.msg.should.equal("Cannot assign to val 'a'. Declare as 'mutable val' to reassign it.");
     }
 }

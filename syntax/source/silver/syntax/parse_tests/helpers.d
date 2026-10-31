@@ -1,18 +1,18 @@
-module silver.parse_tests.helpers;
+module silver.syntax.parse_tests.helpers;
 
 version (unittest):
 
 import fluent.asserts;
 import silver.ast : printStmt;
-import silver.parse : parse, ParseException;
-import silver.syntax_cases.core;
+import silver.syntax.parse : parse, ParseException;
+import silver.syntax.cases.core;
 
 /// Adds one unittest per case in `tables`, checking what `parse` produces.
 /// Tests are named `table: source`.
 mixin template AstCases(tables...)
 {
-    import silver.parse_tests.helpers : checkAst;
-    import silver.syntax_cases.core : caseName;
+    import silver.syntax.parse_tests.helpers : checkAst;
+    import silver.syntax.cases.core : caseName;
 
     static foreach (table; tables)
     {

@@ -3,7 +3,7 @@
 	"targetType": "library",
 	"dependencies": {
 		"silver:interpreter": "*",
-		"silver:syntax": "*"
+		"silver:loader": "*"
 	},
 	"configurations": [
 		{ "name": "library" },

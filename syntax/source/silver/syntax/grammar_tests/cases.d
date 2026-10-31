@@ -1,9 +1,9 @@
-module silver.grammar_tests.cases;
+module silver.syntax.grammar_tests.cases;
 
 version (unittest):
 
-import silver.grammar_tests.helpers;
-import silver.syntax_cases;
+import silver.syntax.grammar_tests.helpers;
+import silver.syntax.cases;
 
 mixin GrammarCases!(
     layout, comments,

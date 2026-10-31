@@ -1,4 +1,4 @@
-module silver.cstToAst;
+module silver.syntax.lower;
 
 import std.format : format;
 import pegged.grammar : ParseTree;
@@ -6,9 +6,9 @@ import silver.ast;
 
 import std.utf;
 
-/// Lowers a parse tree from silver.parse into an AST Module.
+/// Lowers a parse tree from silver.syntax.parse into an AST Module.
 /// `file` is recorded in every node's Span, for error messages.
-Module cstToAst(ParseTree tree, string moduleName, string file = "<input>")
+Module lower(ParseTree tree, string moduleName, string file = "<input>")
 {
     return convertModule(tree, moduleName, file);
 }
@@ -66,7 +66,7 @@ private Stmt convertStatement(ParseTree cst, string file)
         if (cst.children[$ - 1].name != "Silver.Expression")
         {
             // `mutable val x: Int?` with no initializer
-            throw new Exception("cstToAst: declaration without an initializer not supported yet");
+            throw new Exception("lower: declaration without an initializer not supported yet");
         }
         auto expr = convertExpression(cst.children[$ - 1], file);
         auto mutable = cst.name == "Silver.VariableDeclaration";
@@ -97,7 +97,7 @@ private Stmt convertStatement(ParseTree cst, string file)
         auto path = cst[0].matches.filter!(m => m != ".").array;
         return Stmt(spanOf(cst, file), StmtKind(ImportStmt(path)));
     default:
-        throw new Exception("cstToAst: statement '%s' not supported yet".format(cst.name));
+        throw new Exception("lower: statement '%s' not supported yet".format(cst.name));
     }
 }
 
@@ -193,7 +193,7 @@ private Expr convertExpression(ParseTree cst, string file)
     default:
         break;
     }
-    throw new Exception("cstToAst: expression '%s' not supported yet".format(cst.name));
+    throw new Exception("lower: expression '%s' not supported yet".format(cst.name));
 }
 
 // WhileExpression      < :WHILE Expression Block

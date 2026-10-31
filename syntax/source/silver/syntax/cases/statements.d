@@ -1,8 +1,8 @@
-module silver.syntax_cases.statements;
+module silver.syntax.cases.statements;
 
 version (unittest):
 
-import silver.syntax_cases.core;
+import silver.syntax.cases.core;
 
 immutable Case[] assignments = [
     parsesAs("a=b", "(assign a Assign b)"),

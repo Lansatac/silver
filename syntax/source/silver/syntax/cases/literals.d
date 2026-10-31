@@ -1,8 +1,8 @@
-module silver.syntax_cases.literals;
+module silver.syntax.cases.literals;
 
 version (unittest):
 
-import silver.syntax_cases.core;
+import silver.syntax.cases.core;
 
 immutable Case[] literals = [
     parsesAs("a = true", "(assign a Assign true)"),
@@ -13,7 +13,7 @@ immutable Case[] literals = [
     parsesAs("f(())", "(call f ())"),
 ];
 
-/// Grammar only: cstToAst passes the `0x`/`0b` prefix to `to!long`.
+/// Grammar only: `lower` passes the `0x`/`0b` prefix to `to!long`.
 immutable Case[] radixLiterals = [
     accepts("a = 0x1F"),
     accepts("a = 0xff"),

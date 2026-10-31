@@ -1,20 +1,14 @@
-module silver.context;
+module silver.interpreter.context;
 
 import std.sumtype;
 import silver.ast;
 import silver.ast : AstModule = Module, AstStatement = Stmt;
-import silver.parse : ParseException;
 
-class SilverRuntimeException : Exception
+class SilverRuntimeException : DiagnosticException
 {
-    string sourceFile;
-    size_t sourceLine;
-
-    this(string message, string sourceFile, size_t sourceLine)
+    this(Diagnostic diagnostic)
     {
-        super(message);
-        this.sourceFile = sourceFile;
-        this.sourceLine = sourceLine;
+        super(diagnostic);
     }
 }
 
@@ -33,27 +27,19 @@ class Context
     import std.container.array;
     //import std.regex;
 
-    private AstModule program;
+    private Program program;
 
     private bool useStdOut;
     private string programOutput;
-    private string[] importPaths;
-    private string[string] sourceFiles;
     public const(string) ProgramOutput()
     {
         return programOutput;
     }
 
-    nothrow this(AstModule program, string[] importPaths, bool useStdOut = false,
-        string source = null)
+    nothrow this(Program program, bool useStdOut = false)
     {
         this.program = program;
         this.useStdOut = useStdOut;
-        this.importPaths = importPaths;
-        if (source !is null)
-        {
-            sourceFiles[program.span.file] = source;
-        }
     }
 
     static class Environment
@@ -212,9 +198,14 @@ class Context
         bindNatives();
         try
         {
-            prelude = loadPrelude();
+            prelude = new Environment();
+            auto preludeModule = program.modules.get("prelude", null);
+            if (preludeModule !is null)
+            {
+                execute(*preludeModule, prelude);
+            }
             globals = new Environment(prelude);
-            execute(program, globals);
+            execute(program.main, globals);
         }
         catch (ReturnSignal signal)
         {
@@ -246,10 +237,6 @@ class Context
             throw signal;
         }
         catch (SilverRuntimeException e)
-        {
-            throw e;
-        }
-        catch (ParseException e)
         {
             throw e;
         }
@@ -319,58 +306,22 @@ class Context
         variables.defineFunction(ast.name, new Function(ast, variables, *binding));
     }
 
+    /// Executes the imported module, which the loader has already parsed, into a
+    /// fresh environment, and binds it to the import's dotted name.
     private void execute(const ImportStmt ast, Environment variables)
     {
         import std.array : join;
-
-        auto loadedModule = loadModule(ast.path);
-        variables.defineVariable(ast.path.join("."), Variant(loadedModule));
-    }
-
-    private Module loadModule(const (string[]) moduleChain)
-    {
         import std.format : format;
-        import std.array : join;
 
+        auto name = ast.path.join(".");
+        auto loaded = program.modules.get(name, null);
+        if (loaded is null)
+        {
+            throw new Exception("Module %s was not loaded".format(name));
+        }
         auto moduleEnv = new Environment(prelude);
-        if (!tryLoadModule(moduleChain, moduleEnv))
-        {
-            throw new Exception("Module '%s'.silver not found".format(moduleChain.join("/")));
-        }
-        return new Module(moduleChain.join("."), moduleEnv);
-    }
-
-    /// Loads prelude.silver if an import path has one. Contexts without a
-    /// standard library (e.g. in tests) get an empty prelude.
-    private Environment loadPrelude()
-    {
-        auto preludeEnv = new Environment();
-        tryLoadModule(["prelude"], preludeEnv);
-        return preludeEnv;
-    }
-
-    /// Finds the module on the import paths and executes it into `moduleEnv`.
-    /// Returns false if no import path has it.
-    private bool tryLoadModule(const (string[]) moduleChain, Environment moduleEnv)
-    {
-        import std.file : exists, readText;
-        import std.path : buildPath;
-        import std.array : join;
-        import silver.parse;
-
-        foreach (importPath; importPaths)
-        {
-            auto modulePath = buildPath(importPath, moduleChain.join("/") ~ ".silver");
-            if (exists(modulePath))
-            {
-                auto moduleSource = readText(modulePath);
-                auto moduleAst = parse(moduleSource, moduleChain.join("."), modulePath);
-                sourceFiles[modulePath] = moduleSource;
-                execute(moduleAst, moduleEnv);
-                return true;
-            }
-        }
-        return false;
+        execute(*loaded, moduleEnv);
+        variables.defineVariable(name, Variant(new Module(name, moduleEnv)));
     }
 
     private void execute(const ExprStmt ast, Environment variables)
@@ -396,19 +347,7 @@ class Context
 
     private SilverRuntimeException runtimeError(Span span, Exception error)
     {
-        size_t line = 1;
-        if (auto source = span.file in sourceFiles)
-        {
-            auto offset = span.start < source.length ? span.start : source.length;
-            foreach (character; (*source)[0 .. offset])
-            {
-                if (character == '\n')
-                {
-                    line++;
-                }
-            }
-        }
-        return new SilverRuntimeException(error.msg, span.file, line);
+        return new SilverRuntimeException(Diagnostic(span, error.msg));
     }
 
     /// Wraps a value in a Variant with type qualifiers stripped.

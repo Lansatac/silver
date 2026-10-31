@@ -1,8 +1,8 @@
-module silver.syntax_cases.layout;
+module silver.syntax.cases.layout;
 
 version (unittest):
 
-import silver.syntax_cases.core;
+import silver.syntax.cases.core;
 
 /// Statement separators, blank lines and whitespace.
 immutable Case[] layout = [
