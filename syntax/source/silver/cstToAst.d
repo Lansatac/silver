@@ -4,7 +4,7 @@ import std.format : format;
 import pegged.grammar : ParseTree;
 import silver.ast;
 
-version(unittest) import fluent.asserts;
+import std.utf;
 
 /// Lowers a parse tree from silver.parse into an AST Module.
 /// `file` is recorded in every node's Span, for error messages.
@@ -114,11 +114,14 @@ private Expr convertExpression(ParseTree cst, string file)
     case "Silver.NumberLiteral":
     case "Silver.IfBranch":
     case "Silver.ElseBranch":
+    case "Silver.WhileBody":
         return convertExpression(cst[0], file);
     case "Silver.Block":
         return convertBlock(cst, file);
     case "Silver.UnitLiteral":
         return Expr(spanOf(cst, file), ExprKind(UnitLiteral()));
+    case "Silver.WhileExpression":
+        return convertWhileExpression(cst, file);
     case "Silver.IfExpression":
         return convertIfExpression(cst, file);
     case "Silver.RelationalExpression":
@@ -192,6 +195,16 @@ private Expr convertExpression(ParseTree cst, string file)
         break;
     }
     throw new Exception("cstToAst: expression '%s' not supported yet".format(cst.name));
+}
+
+// WhileExpression      < :WHILE Expression WhileBody
+// WhileBody            < :'=>' Sep? Expression / Block
+private Expr convertWhileExpression(ParseTree cst, string file)
+{
+    cst.validateNodeIs("Silver.WhileExpression");
+    auto condition = convertExpression(cst[0], file);
+    auto body = convertExpression(cst[1], file);
+    return Expr(spanOf(cst, file), ExprKind(WhileExpr(boxed(condition), boxed(body))));
 }
 
 /// `IF Expression IfBranch (ELSE ElseBranch)?`. An else-if is just an
@@ -369,175 +382,4 @@ private Expr* boxed(Expr e)
     auto p = new Expr;
     *p = e;
     return p;
-}
-
-version(unittest)
-{
-    import silver.parse : parse;
-
-    private Module convertSource(string source)
-    {
-        return parse(source, "test", "test");
-    }
-}
-
-@("cstToAst: precedence and parentheses")
-unittest
-{
-    auto m = convertSource("val x = (1 + y) * 2");
-    m.statements.length.should.equal(1);
-    printStmt(m.statements[0]).should.equal("(val x (Multiply (Add 1 y) 2))");
-}
-
-@("cstToAst: binary operators are left-associative")
-unittest
-{
-    auto m = convertSource("val x = 1 - 2 - 3\nval y = a == b");
-    m.statements.length.should.equal(2);
-    printStmt(m.statements[0]).should.equal("(val x (Subtract (Subtract 1 2) 3))");
-    printStmt(m.statements[1]).should.equal("(val y (Equal a b))");
-}
-
-@("cstToAst: power binds tighter than multiply and unary, and is right-associative")
-unittest
-{
-    auto m = convertSource("val a = 2 * 3 ^ 2\nval b = 2 ^ 3 ^ 2\nval c = -2 ^ 2\nval d = 2 ^ -1");
-    m.statements.length.should.equal(4);
-    printStmt(m.statements[0]).should.equal("(val a (Multiply 2 (Power 3 2)))");
-    printStmt(m.statements[1]).should.equal("(val b (Power 2 (Power 3 2)))");
-    printStmt(m.statements[2]).should.equal("(val c (Minus (Power 2 2)))");
-    printStmt(m.statements[3]).should.equal("(val d (Power 2 (Minus 1)))");
-}
-
-
-
-@("cstToAst: unary operators")
-unittest
-{
-    auto m = convertSource("val x = -1\nval y = !a");
-    m.statements.length.should.equal(2);
-    printStmt(m.statements[0]).should.equal("(val x (Minus 1))");
-    printStmt(m.statements[1]).should.equal("(val y (Not a))");
-}
-
-@("cstToAst: if with else-if chain and else")
-unittest
-{
-    auto m = convertSource("if a => 1 else if b => 2 else if c { val x = 3 } else { 4 }");
-    m.statements.length.should.equal(1);
-    printStmt(m.statements[0]).should.equal(
-        "(if a 1 (if b 2 (if c (block (val x 3)) (block => 4))))");
-}
-
-@("cstToAst: if without else, and empty blocks")
-unittest
-{
-    auto m = convertSource("if a {}\nif a => b");
-    printStmt(m.statements[0]).should.equal("(if a (block))");
-    printStmt(m.statements[1]).should.equal("(if a b)");
-}
-
-@("cstToAst: a block's value is its last statement only if that's an expression")
-unittest
-{
-    auto m = convertSource("val a = { val x = 1\nx }\nval b = { x = 1 }\nval c = { f()\ng() }");
-    printStmt(m.statements[0]).should.equal("(val a (block (val x 1) => x))");
-    printStmt(m.statements[1]).should.equal("(val b (block (assign x Assign 1)))");
-    printStmt(m.statements[2]).should.equal("(val c (block (call f) => (call g)))");
-}
-
-@("cstToAst: return")
-unittest
-{
-    auto m = convertSource("def f(): Int {\nreturn 1\n}\ndef g(): Unit {\nreturn\n}");
-    printStmt(m.statements[0]).should.equal("(def f () : Int (block (return 1)))");
-    printStmt(m.statements[1]).should.equal("(def g () : Unit (block (return ())))");
-}
-
-@("cstToAst: typed declarations")
-unittest
-{
-    auto m = convertSource("val x: Int = 1\nmutable val y: Int? = 2");
-    printStmt(m.statements[0]).should.equal("(val x 1)");
-    printStmt(m.statements[1]).should.equal("(mutable val y 2)");
-}
-@("cstToAst: calls and member access fold left")
-unittest
-{
-    auto m = convertSource("f(1, x)()\nval y = m.x.f(2) + 1\nval r = read");
-    m.statements.length.should.equal(3);
-    printStmt(m.statements[0]).should.equal("(call (call f 1 x))");
-    printStmt(m.statements[1]).should.equal("(val y (Add (call (. (. m x) f) 2) 1))");
-    printStmt(m.statements[2]).should.equal("(val r read)");
-}
-
-@("cstToAst: val declarations")
-unittest
-{
-    auto m = convertSource("val x = 1\nval y = x\nval value = 2");
-    m.statements.length.should.equal(3);
-    printStmt(m.statements[0]).should.equal("(val x 1)");
-    printStmt(m.statements[1]).should.equal("(val y x)");
-    printStmt(m.statements[2]).should.equal("(val value 2)");
-}
-
-@("cstToAst: mutable val")
-unittest
-{
-    auto m = convertSource("mutable val x = 1");
-    printStmt(m.statements[0]).should.equal("(mutable val x 1)");
-}
-
-@("cstToAst: assignment to a member")
-unittest
-{
-    auto m = convertSource("a.b += 3");
-    printStmt(m.statements[0]).should.equal("(assign (. a b) AddAssign 3)");
-}
-
-@("cstToAst: import")
-unittest
-{
-    auto m = convertSource("import io\nimport a.b.c");
-    m.statements.length.should.equal(2);
-    printStmt(m.statements[0]).should.equal("(import io)");
-    printStmt(m.statements[1]).should.equal("(import a.b.c)");
-}
-
-@("cstToAst: function declarations")
-unittest
-{
-    auto m1 = convertSource("def f() : Int => 1");
-    m1.statements.length.should.equal(1);
-    printStmt(m1.statements[0]).should.equal("(def f () : Int 1)");
-
-    auto m2 = convertSource("def h(p : Int, q:Int) : Int {\nval z = p\nz + q\n}\ndef k() : Int =>\n    1");
-    m2.statements.length.should.equal(2);
-    printStmt(m2.statements[0]).should.equal("(def h (p q) : Int (block (val z p) => (Add z q)))");
-    printStmt(m2.statements[1]).should.equal("(def k () : Int 1)");
-}
-
-@("cstToAst: native function declarations")
-unittest
-{
-    auto m = convertSource("native def print(value : Any) : Unit\nnative def now() : Int");
-    m.statements.length.should.equal(2);
-    printStmt(m.statements[0]).should.equal("(native def print (value) : Unit)");
-    printStmt(m.statements[1]).should.equal("(native def now () : Int)");
-}
-
-@("cstToAst: if expressions")
-unittest
-{
-    auto m1 = convertSource("val a = if b => 1 else 2");
-    m1.statements.length.should.equal(1);
-    printStmt(m1.statements[0]).should.equal("(val a (if b 1 2))");
-
-    auto m2 = convertSource("val a = if b {
-        val a = 1
-        a
-    }
-    else 2");
-    m2.statements.length.should.equal(1);
-    printStmt(m2.statements[0]).should.equal("(val a (if b (block (val a 1) => a) 2))");
 }

@@ -18,7 +18,7 @@ struct Expr
 }
 
 alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, VariableRef, UnaryExpr, BinaryExpr,
-    CallExpr, MemberAccess, ReadExpr, IfExpr, BlockExpr, UnitLiteral);
+    CallExpr, MemberAccess, ReadExpr, WhileExpr, IfExpr, BlockExpr, UnitLiteral);
 
 /// `()`, the only value of type Unit.
 struct UnitLiteral
@@ -124,6 +124,13 @@ struct IfExpr
     Expr* falseBody;
 }
 
+/// `while c => b` or `while c { ... }`.
+struct WhileExpr
+{
+    Expr* condition;
+    Expr* body;
+}
+
 /// `{ statements }`, which has its own scope. `value` is the last statement when
 /// that's an expression, and null otherwise, in which case the block's value is ().
 struct BlockExpr
@@ -148,6 +155,7 @@ string printExpr(const Expr e)
         (const CallExpr c) => format("(call %s%s)", printExpr(*c.callee), c.args.map!(a => " " ~ printExpr(a)).join),
         (const MemberAccess m) => format("(. %s %s)", printExpr(*m.object), m.member),
         (const ReadExpr r) => "read",
+        (const WhileExpr w) => format("(while %s %s)", printExpr(*w.condition), printExpr(*w.body)),
         (const IfExpr i) => i.falseBody is null
             ? format("(if %s %s)", printExpr(*i.condition), printExpr(*i.trueBody))
             : format("(if %s %s %s)", printExpr(*i.condition), printExpr(*i.trueBody), printExpr(*i.falseBody)),

@@ -559,6 +559,18 @@ class Context
         return Variant(readln());
     }
 
+    private Variant evaluate(const WhileExpr ast, Environment variables)
+    {
+        auto condition = evaluate(*ast.condition, variables);
+        while(condition.convertsTo!bool && condition.get!bool)
+        {
+            evaluate(*ast.body, variables);
+            condition = evaluate(*ast.condition, variables);
+        }
+
+        return Variant(Unit());
+    }
+
     private Variant evaluate(const IfExpr ast, Environment variables)
     {
         auto condition = evaluate(*ast.condition, variables);

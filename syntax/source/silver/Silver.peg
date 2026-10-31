@@ -28,16 +28,12 @@ Silver:
 
     AssignTarget         < Postfix
 
-    # `=>` introduces a single expression and `{}` a block, for functions and ifs alike.
-    # A newline may follow `=>`, since it can't end a statement.
     FunctionDeclaration  < :DEF Variable :'(' FunctionParamDefs :')' TypeAnnotation (:'=>' Sep? Expression / Block)
-    # A native function has no body: the implementation is bound by the runtime.
+
     NativeFunctionDeclaration < :NATIVE :DEF Variable :'(' FunctionParamDefs :')' TypeAnnotation
     FunctionParamDefs    < (FunctionParamDef (',' FunctionParamDef)*)?
     FunctionParamDef     < Variable TypeAnnotation
 
-    # A block's value is its last statement if that's an expression, otherwise ().
-    # The braces are kept so an empty block still matches text; decimateTree drops nodes that match nothing.
     Block                < '{' Sep? (Statement (Sep Statement)* Sep?)? '}'
 
     # The value is optional so `return` alone returns ()
@@ -47,7 +43,6 @@ Silver:
 
     TypeAnnotation       < :':' Type
 
-    # `?` binds tighter than `->`, so `(Int) -> Int?` returns an optional
     Type                 < BaseType OptionMark*
     OptionMark           <- "?"
     BaseType             < FunctionType / UnitType / :'(' Type :')' / NamedType
@@ -57,11 +52,11 @@ Silver:
     TypePath             <- (ValueName '.')* TypeName
     TypeArguments        < :'<' Type (:',' Type)* :'>'
 
-    # `if` binds loosest, so it can't be an operand without parentheses: `(if c => 1 else 2) + 3`
-    Expression           < IfExpression / OrExpression
+    Expression           < WhileExpression / IfExpression / OrExpression
 
-    # Without an else the value is (). `else` may start a new line, since it can't start a statement.
-    # A braced else branch ends at its brace; an unbraced one extends as far right as it can.
+    WhileExpression      < :WHILE Expression WhileBody
+    WhileBody            < :'=>' Sep? Expression / Block
+
     IfExpression         < :IF Expression IfBranch (Sep? :ELSE ElseBranch)?
     IfBranch             < :'=>' Sep? Expression / Block
     ElseBranch           < Block / Expression
@@ -143,6 +138,7 @@ Silver:
     MUTABLE             <- Kword("mutable")
     DEF                 <- Kword("def")
     NATIVE              <- Kword("native")
+    WHILE               <- Kword("while")
     IF                  <- Kword("if")
     ELSE                <- Kword("else")
     TRUE                <- Kword("true")
