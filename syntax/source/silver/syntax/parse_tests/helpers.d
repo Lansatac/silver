@@ -3,7 +3,7 @@ module silver.syntax.parse_tests.helpers;
 version (unittest):
 
 import fluent.asserts;
-import silver.ast : printStmt;
+import silver.ast : BlockExpr, FunctionDecl, Module, printDecl, printExpr, printStmt;
 import silver.syntax.parse : parse, ParseException;
 import silver.syntax.cases.core;
 
@@ -30,21 +30,18 @@ mixin template AstCases(tables...)
 /// Failures are reported at the case's line in its table.
 void checkAst(Case c)
 {
-    import std.algorithm : map;
-    import std.array : array;
-
     final switch (c.outcome)
     {
     case Outcome.parsesAs:
-        should(parseStatements(c).map!(printStmt).array, c.file, c.line).equal(c.ast);
+        should(printCase(parseCase(c), c), c.file, c.line).equal(c.ast);
         break;
     case Outcome.accepts:
-        parseStatements(c);
+        parseCase(c);
         break;
     case Outcome.rejects:
         try
         {
-            parse(c.source, "test", "test");
+            parse(moduleSource(c), "test", "test");
         }
         catch (ParseException)
         {
@@ -55,11 +52,11 @@ void checkAst(Case c)
 }
 
 /// Rethrows any parse failure from the case's line, naming the stage.
-private auto parseStatements(Case c)
+private Module parseCase(Case c)
 {
     try
     {
-        return parse(c.source, "test", "test").statements;
+        return parse(moduleSource(c), "test", "test");
     }
     catch (ParseException e)
     {
@@ -68,5 +65,28 @@ private auto parseStatements(Case c)
     catch (Exception e)
     {
         throw new Exception("lowering failed: " ~ e.msg, c.file, c.line, e);
+    }
+}
+
+/// Prints a parsed case as its table expects: the declarations, or the statements
+/// of `main`'s body followed by its value (a block's last expression is its value).
+private string[] printCase(Module m, Case c)
+{
+    import std.algorithm : map;
+    import std.array : array;
+    import std.sumtype : get;
+
+    final switch (c.level)
+    {
+    case Level.declarations:
+        return m.declarations.map!printDecl.array;
+    case Level.statements:
+        auto block = m.declarations[0].kind.get!FunctionDecl.body.kind.get!BlockExpr;
+        auto printed = block.statements.map!printStmt.array;
+        if (block.value !is null)
+        {
+            printed ~= printExpr(*block.value);
+        }
+        return printed;
     }
 }

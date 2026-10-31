@@ -34,8 +34,12 @@ Program load(string source, string file, string[] importPaths, SourceContext con
     {
         auto current = unscanned[$ - 1];
         unscanned = unscanned[0 .. $ - 1];
-        foreach (importNode; importsIn(current.statements))
+        foreach (importNode; current.declarations)
         {
+            if (!importNode.kind.has!ImportStmt)
+            {
+                continue;
+            }
             auto path = importNode.kind.get!ImportStmt.path;
             auto name = path.join(".");
             // Already loaded, or being loaded further up an import cycle.
@@ -90,64 +94,6 @@ private Module* parseModuleFile(string path, string name, SourceContext context)
     return loaded;
 }
 
-/// The import statements in `statements`, including ones nested in function bodies,
-/// blocks and other expressions. The grammar only allows imports at top level today.
-private Stmt[] importsIn(Stmt[] statements)
-{
-    Stmt[] imports;
-    foreach (statement; statements)
-    {
-        imports ~= importsIn(statement);
-    }
-    return imports;
-}
-
-private Stmt[] importsIn(Stmt statement)
-{
-    return statement.kind.match!(
-        (VarDecl d) => importsIn(d.value),
-        (AssignStmt a) => importsIn(a.target) ~ importsIn(a.value),
-        (ExprStmt e) => importsIn(e.expr),
-        (ImportStmt i) => [statement],
-        (FunctionDecl f) => importsIn(f.body),
-        (ReturnStmt r) => importsIn(r.value),
-    );
-}
-
-private Stmt[] importsIn(Expr expr)
-{
-    return expr.kind.match!(
-        (UnaryExpr u) => importsIn(u.operand),
-        (BinaryExpr b) => importsIn(b.left) ~ importsIn(b.right),
-        (CallExpr c) => importsIn(c.callee) ~ importsIn(c.args),
-        (MemberAccess m) => importsIn(m.object),
-        (WhileExpr w) => importsIn(w.condition) ~ importsIn(w.body),
-        (IfExpr i) => importsIn(i.condition) ~ importsIn(i.trueBody) ~ importsIn(i.falseBody),
-        (BlockExpr b) => importsIn(b.statements) ~ importsIn(b.value),
-        (_) => Stmt[].init,
-    );
-}
-
-private Stmt[] importsIn(Expr[] exprs)
-{
-    Stmt[] imports;
-    foreach (expr; exprs)
-    {
-        imports ~= importsIn(expr);
-    }
-    return imports;
-}
-
-/// An optional child expression, which is null when absent.
-private Stmt[] importsIn(Expr* expr)
-{
-    if (expr is null)
-    {
-        return null;
-    }
-    return importsIn(*expr);
-}
-
 version (unittest)
 {
     import fluent.asserts;
@@ -181,7 +127,7 @@ version (unittest)
 unittest
 {
     auto directory = makeModuleDirectory("transitive",
-        ["a.ag": "import b", "b.ag": "val b = 1"]);
+        ["a.ag": "import b", "b.ag": "def b(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
     auto program = load("import a", "main.ag", [directory], new SourceContext);
@@ -193,7 +139,7 @@ unittest
 @("load maps a dotted import to a directory")
 unittest
 {
-    auto directory = makeModuleDirectory("dotted", ["a/b.ag": "val b = 1"]);
+    auto directory = makeModuleDirectory("dotted", ["a/b.ag": "def b(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
     auto program = load("import a.b", "main.ag", [directory], new SourceContext);
@@ -212,34 +158,13 @@ unittest
     program.modules.length.should.equal(2);
 }
 
-@("imports nested in function bodies, blocks and if branches are found")
-unittest
-{
-    Span span;
-    auto importA = Stmt(span, StmtKind(ImportStmt(["a"])));
-    auto importB = Stmt(span, StmtKind(ImportStmt(["b"])));
-
-    auto functionBody = new Expr(span, ExprKind(BlockExpr([importA], null)));
-    auto functionDecl = Stmt(span, StmtKind(FunctionDecl("f", span, [], functionBody, TypeExpr(span, TypeExprKind(NamedType(["Unit"]))), false)));
-
-    auto condition = new Expr(span, ExprKind(BoolLiteral(true)));
-    auto branch = new Expr(span, ExprKind(BlockExpr([importB], null)));
-    auto ifStatement = Stmt(span, StmtKind(ExprStmt(Expr(span,
-            ExprKind(IfExpr(condition, branch, null))))));
-
-    auto found = importsIn([functionDecl, ifStatement]);
-    found.length.should.equal(2);
-    found[0].kind.get!ImportStmt.path.join(".").should.equal("a");
-    found[1].kind.get!ImportStmt.path.join(".").should.equal("b");
-}
-
 @("load reports an import that isn't on any import path and keeps going")
 unittest
 {
-    auto directory = makeModuleDirectory("missing", ["a.ag": "val a = 1"]);
+    auto directory = makeModuleDirectory("missing", ["a.ag": "def a(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto source = "val x = 1
+    auto source = "def x(): Int => 1
 import nope
 import a";
     auto context = new SourceContext;
@@ -276,20 +201,20 @@ unittest
 @("load includes the prelude when an import path has one")
 unittest
 {
-    auto directory = makeModuleDirectory("prelude", ["prelude.ag": "val p = 1"]);
+    auto directory = makeModuleDirectory("prelude", ["prelude.ag": "def p(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("val x = 1", "main.ag", [directory], new SourceContext);
+    auto program = load("def x(): Int => 1", "main.ag", [directory], new SourceContext);
     assert("prelude" in program.modules);
 }
 
 @("load works without a prelude")
 unittest
 {
-    auto directory = makeModuleDirectory("no-prelude", ["a.ag": "val a = 1"]);
+    auto directory = makeModuleDirectory("no-prelude", ["a.ag": "def a(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("val x = 1", "main.ag", [directory], new SourceContext);
+    auto program = load("def x(): Int => 1", "main.ag", [directory], new SourceContext);
     assert("prelude" !in program.modules);
     program.modules.length.should.equal(0);
 }

@@ -29,7 +29,7 @@ mixin template GrammarCases(tables...)
 /// Failures are reported at the case's line in its table.
 void checkGrammar(Case c)
 {
-    auto tree = Silver(c.source);
+    auto tree = Silver(moduleSource(c));
     final switch (c.outcome)
     {
     case Outcome.parsesAs:

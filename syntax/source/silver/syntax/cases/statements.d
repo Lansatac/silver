@@ -67,6 +67,6 @@ immutable Case[] typeAnnotations = [
 ];
 
 immutable Case[] imports = [
-    parsesAs("import module", "(import module)"),
-    parsesAs("import io\nimport a.b.c", ["(import io)", "(import a.b.c)"]),
+    declaresAs("import module", "(import module)"),
+    declaresAs("import io\nimport a.b.c", ["(import io)", "(import a.b.c)"]),
 ];

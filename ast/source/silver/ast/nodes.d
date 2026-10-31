@@ -8,8 +8,17 @@ struct Module
 {
     string name;
     Span span;
-    Stmt[] statements;
+    Decl[] declarations;
 }
+
+/// A top-level declaration. Modules hold only these; statements live in function bodies.
+struct Decl
+{
+    Span span;
+    DeclKind kind;
+}
+
+alias DeclKind = SumType!(ImportStmt, FunctionDecl);
 
 /// A type as written in source. Names aren't resolved, so `Int` is a NamedType
 /// like any other; the checker's resolved types are a separate representation.
@@ -231,7 +240,7 @@ struct Stmt
     StmtKind kind;
 }
 
-alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, ImportStmt, FunctionDecl, ReturnStmt);
+alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, FunctionDecl, ReturnStmt);
 
 struct VarDecl
 {
@@ -295,7 +304,15 @@ string printModule(const Module m)
     import std.format : format;
     import std.algorithm : map;
     import std.array : join;
-    return m.statements.map!(printStmt).join("\n");
+    return m.declarations.map!(printDecl).join("\n");
+}
+
+string printDecl(const Decl d)
+{
+    return d.kind.match!(
+        (const ImportStmt i) => printImport(i),
+        (const FunctionDecl f) => printFunctionDecl(f),
+    );
 }
 
 string printStmt(const Stmt s)
@@ -308,12 +325,26 @@ string printStmt(const Stmt s)
             v.type is null ? "" : ": " ~ printTypeExpr(*v.type), printExpr(v.value)),
         (const ExprStmt e) => printExpr(e.expr),
         (const AssignStmt a) => format("(assign %s %s)", printExpr(a.target), printExpr(a.value)),
-        (const ImportStmt i) => format("(import %s)", i.path.join(".")),
-        (const FunctionDecl f) => f.native
-            ? format("(native def %s %s)", f.name, printSignature(f))
-            : format("(def %s %s %s)", f.name, printSignature(f), printExpr(*f.body)),
+        (const FunctionDecl f) => printFunctionDecl(f),
         (const ReturnStmt r) => format("(return %s)", printExpr(r.value)),
     );
+}
+
+private string printImport(const ImportStmt i)
+{
+    import std.array : join;
+    import std.format : format;
+
+    return format("(import %s)", i.path.join("."));
+}
+
+private string printFunctionDecl(const FunctionDecl f)
+{
+    import std.format : format;
+
+    return f.native
+        ? format("(native def %s %s)", f.name, printSignature(f))
+        : format("(def %s %s %s)", f.name, printSignature(f), printExpr(*f.body));
 }
 
 /// `(a: Int, b: Int): Int`, as written in source.

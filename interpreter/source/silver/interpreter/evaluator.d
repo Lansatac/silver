@@ -49,28 +49,54 @@ class Evaluator
     void run()
     {
         bindNatives();
-        try
+        prelude = new Environment();
+        auto preludeModule = program.modules.get("prelude", null);
+        if (preludeModule !is null)
         {
-            prelude = new Environment();
-            auto preludeModule = program.modules.get("prelude", null);
-            if (preludeModule !is null)
-            {
-                execute(*preludeModule, prelude);
-            }
-            globalEnvironment = new Environment(prelude);
-            execute(program.main, globalEnvironment);
+            execute(*preludeModule, prelude);
         }
-        catch (ReturnSignal signal)
+        globalEnvironment = new Environment(prelude);
+        execute(program.main, globalEnvironment);
+        callMain();
+    }
+
+    /// Runs the entry module's `main`, which the module's declarations must have defined.
+    private void callMain()
+    {
+        auto entry = "main" in globalEnvironment.variables;
+        if (entry is null || !entry.convertsTo!Function)
         {
-            throw runtimeError(signal.span, new Exception("return outside of a function"));
+            throw runtimeError(program.main.span, new Exception("the entry module must define `def main(): Unit`"));
         }
+        auto main = entry.get!Function;
+        if (main.declaration.params.length > 0)
+        {
+            throw runtimeError(main.declaration.nameSpan, new Exception("`main` must take no parameters"));
+        }
+        call(*entry, [], globalEnvironment);
     }
 
     private void execute(const Module ast, Environment variables)
     {
-        foreach (child; ast.statements)
+        foreach (declaration; ast.declarations)
         {
-            execute(child, variables);
+            execute(declaration, variables);
+        }
+    }
+
+    private void execute(const Decl ast, Environment variables)
+    {
+        try
+        {
+            ast.kind.match!(d => execute(d, variables));
+        }
+        catch (RuntimeError e)
+        {
+            throw e;
+        }
+        catch (Exception e)
+        {
+            throw runtimeError(ast.span, e);
         }
     }
 

@@ -1,9 +1,9 @@
 Silver:
-    Module               < StatementBlock? eoi
-    StatementBlock       < Sep? TopLevelStatement (Sep TopLevelStatement)* Sep?
+    Module               < Declarations? eoi
+    Declarations         < Sep? Declaration (Sep Declaration)* Sep?
     Sep                  <: ((eol / ';') Spacing)+
 
-    TopLevelStatement    < ImportStatement / Statement
+    Declaration          < ImportStatement / FunctionDeclaration / NativeFunctionDeclaration
 
     # ExpressionStatement is last: anything that isn't another kind of statement is an expression
     Statement            < (

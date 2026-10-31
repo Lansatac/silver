@@ -3,12 +3,10 @@ module silver.interpreter.tests;
 import std.path;
 
 import silver.interpreter.evaluator : Evaluator, RuntimeError;
-import silver.ast : printModule;
 version (unittest) import fluent.asserts;
 
 version (unittest)
 {
-    import std.variant;
     import silver.ast : formatDiagnostic, Program, SourceContext;
     import silver.loader : load, standardLibraryPath;
 
@@ -27,72 +25,76 @@ version (unittest)
         return program;
     }
 
-    Variant evaluateExpression(string expression)
-    {
-        import std.format;
-
-        auto program = loadProgram(`val variable = %s`.format(expression));
-        auto evaluator = new Evaluator(program);
-        evaluator.run();
-        return evaluator.globals["variable"];
-    }
-
     string runProgram(string source)
     {
         auto evaluator = new Evaluator(loadProgram(source, "test", [standardLibraryPath()]));
         evaluator.run();
         return evaluator.output;
     }
+
+    /// Runs `body` as the body of the entry module's `main`.
+    string runMain(string body)
+    {
+        return runProgram("def main(): Unit {\n" ~ body ~ "\n}");
+    }
+
+    /// What printing `expression` from `main` shows.
+    string evaluateExpression(string expression)
+    {
+        import std.format;
+
+        return runMain(`print(%s)`.format(expression));
+    }
 }
 
 @("Simple program")
 unittest
 {
-    runProgram("val a = 1").should.equal("");
+    runMain("val a = 1").should.equal("");
 }
 
-@("Global Variable Assignment")
+@("Expressions evaluate to their value")
 unittest
 {
-    evaluateExpression("1").get!long.should.equal(1);
+    evaluateExpression("1").should.equal("1");
 }
 
 @("Addition")
 unittest
 {
-    evaluateExpression("1 + 2").get!long.should.equal(3);
+    evaluateExpression("1 + 2").should.equal("3");
 }
 
 @("Multiplication")
 unittest
 {
-    evaluateExpression("2 * 2").get!long.should.equal(4);
+    evaluateExpression("2 * 2").should.equal("4");
 }
 
 @("Operator Precedence LTR")
 unittest
 {
-    evaluateExpression("1 + 2 * 2").get!long.should.equal(5);
+    evaluateExpression("1 + 2 * 2").should.equal("5");
 }
 
 @("Operator Precedence RTL")
 unittest
 {
-    auto program = loadProgram("val a = 2 * 2 + 1");
-    evaluateExpression("2 * 2 + 1").get!long.should.equal(5).because(printModule(program.main));
+    runMain("val a = 2 * 2 + 1
+     print(a)").should.equal("5");
 }
 
 @("Operator Precedence Parenthetical")
 unittest
 {
-    evaluateExpression("(1 + 2) * 2").get!long.should.equal(6);
-    evaluateExpression("2 * (1 + 2)").get!long.should.equal(6);
+    evaluateExpression("(1 + 2) * 2").should.equal("6");
+    evaluateExpression("2 * (1 + 2)").should.equal("6");
 }
 
 @("If Statements - true")
 unittest
 {
-    runProgram("mutable val a = 1
+    runMain("mutable val a = 1
      if true {
         a = 2
      }
@@ -102,35 +104,29 @@ unittest
 @("If Statements - false")
 unittest
 {
-    auto evaluator = new Evaluator(loadProgram(
-        r"val a = 1
-          if false {
-            a = 2
-          }
-          "));
-    evaluator.run();
-    evaluator.globals["a"].get!long.should.equal(1);
+    runMain("val a = 1
+     if false {
+        a = 2
+     }
+     print(a)").should.equal("1");
 }
 
 @("If-Else Statements")
 unittest
 {
-    auto evaluator = new Evaluator(loadProgram(
-        r"mutable val a = 1
-          if false {
-            a = 2
-          } else {
-            a = 3
-          }
-          "));
-    evaluator.run();
-    evaluator.globals["a"].get!long.should.equal(3);
+    runMain("mutable val a = 1
+     if false {
+        a = 2
+     } else {
+        a = 3
+     }
+     print(a)").should.equal("3");
 }
 
 @("Compound assignment applies its operator")
 unittest
 {
-    runProgram("mutable val a = 10
+    runMain("mutable val a = 10
      a += 5
      a -= 3
      a *= 2
@@ -140,7 +136,7 @@ unittest
 @("While loops until the condition is false")
 unittest
 {
-    runProgram("mutable val i = 0
+    runMain("mutable val i = 0
      while i < 3 {
         i += 1
      }
@@ -150,14 +146,14 @@ unittest
 @("While condition must be a boolean")
 unittest
 {
-    runProgram("while 1 { }").should.throwException!RuntimeError.withMessage(
+    runMain("while 1 { }").should.throwException!RuntimeError.withMessage(
         "While condition must be a boolean");
 }
 
 @("Block scope - inner declaration does not leak")
 unittest
 {
-    runProgram("if true {
+    runMain("if true {
         val b = 2
      }
      print(b)").should.throwException!RuntimeError.withMessage("Variable 'b' not found");
@@ -166,7 +162,7 @@ unittest
 @("Block scope - assignment updates outer variable")
 unittest
 {
-    runProgram("mutable val a = 1
+    runMain("mutable val a = 1
      if false {
         a = 2
      } else {
@@ -178,7 +174,7 @@ unittest
 @("Block scope - shadowing")
 unittest
 {
-    runProgram("val a = 1
+    runMain("val a = 1
      if true {
         val a = 2
         print(a)
@@ -189,7 +185,7 @@ unittest
 @("Block scope - duplicate declaration in same scope")
 unittest
 {
-    runProgram("val a = 1
+    runMain("val a = 1
      val a = 2").should.throwException!RuntimeError.withMessage(
         "Duplicate declaration of variable a");
 }
@@ -198,7 +194,9 @@ unittest
 unittest
 {
     runProgram("def f() : Int => 1
-     print(f())").should.equal("1");
+def main(): Unit {
+     print(f())
+}").should.equal("1");
 }
 
 @("Call function with arguments")
@@ -208,13 +206,15 @@ unittest
         val c = a + b
         c
      }
-     print(add(1, 2))").should.equal("3");
+def main(): Unit {
+     print(add(1, 2))
+}").should.equal("3");
 }
 
 @("Function sees variables from where it was defined")
 unittest
 {
-    runProgram("val x = 1
+    runMain("val x = 1
      def f() : Int => x + 1
      print(f())").should.equal("2");
 }
@@ -222,7 +222,7 @@ unittest
 @("Function does not see caller's variables")
 unittest
 {
-    runProgram("val x = 1
+    runMain("val x = 1
      def show() : Int => x
      def caller() : Int {
         val x = 2
@@ -238,28 +238,32 @@ unittest
         val local = 1
         local
      }
+def main(): Unit {
      f()
-     print(local)").should.throwException!RuntimeError.withMessage("Variable 'local' not found");
+     print(local)
+}").should.throwException!RuntimeError.withMessage("Variable 'local' not found");
 }
 
 @("Wrong argument count")
 unittest
 {
     runProgram("def f(a : Int) : Int => a
-     print(f())").should.throwException!RuntimeError.withMessage("f expects 1 arguments, got 0");
+def main(): Unit {
+     print(f())
+}").should.throwException!RuntimeError.withMessage("f expects 1 arguments, got 0");
 }
 
 @("val cannot be reassigned")
 unittest
 {
-    runProgram("val a = 1
+    runMain("val a = 1
      a = 2").should.throwException!RuntimeError.withMessage("Cannot assign to val 'a'. Declare as 'mutable val' to reassign it.");
 }
 
 @("Runtime errors report their Silver source location")
 unittest
 {
-    auto source = "val a = 1\n    a = 2";
+    auto source = "def main(): Unit {\n    val a = 1\n    a = 2\n}";
     auto context = new SourceContext;
     auto program = load(source, "test.ag", [], context);
     auto evaluator = new Evaluator(program);
@@ -271,7 +275,7 @@ unittest
     catch (RuntimeError e)
     {
         e.diagnostic.span.file.should.equal("test.ag");
-        context.sources.locate(e.diagnostic.span).line.should.equal(2);
+        context.sources.locate(e.diagnostic.span).line.should.equal(3);
         e.msg.should.equal("Cannot assign to val 'a'. Declare as 'mutable val' to reassign it.");
     }
 }
@@ -279,7 +283,7 @@ unittest
 @("print and printl are native functions from the prelude")
 unittest
 {
-    runProgram("print(1)
+    runMain("print(1)
      printl(2)
      print(true)").should.equal("12\ntrue");
 }
@@ -287,7 +291,7 @@ unittest
 @("Native functions are values")
 unittest
 {
-    runProgram("val p = printl
+    runMain("val p = printl
      p(3)").should.equal("3\n");
 }
 
@@ -295,19 +299,45 @@ unittest
 unittest
 {
     runProgram("def print(value : Int) : Int => value
-     printl(print(4))").should.equal("4\n");
+def main(): Unit {
+     printl(print(4))
+}").should.equal("4\n");
 }
 
 @("Native function without a binding")
 unittest
 {
-    runProgram("native def missing() : Unit").should.throwException!RuntimeError.withMessage(
+    runProgram("native def missing() : Unit
+def main(): Unit {}").should.throwException!RuntimeError.withMessage(
         "No native binding for missing");
 }
 
 @("Native function argument count is checked")
 unittest
 {
-    runProgram("print()").should.throwException!RuntimeError.withMessage(
+    runMain("print()").should.throwException!RuntimeError.withMessage(
         "print expects 1 arguments, got 0");
+}
+
+@("A module without main is an error")
+unittest
+{
+    runProgram("def f() : Unit => ()").should.throwException!RuntimeError.withMessage(
+        "the entry module must define `def main(): Unit`");
+}
+
+@("main must take no parameters")
+unittest
+{
+    runProgram("def main(args : Int) : Unit => ()").should.throwException!RuntimeError.withMessage(
+        "`main` must take no parameters");
+}
+
+@("Functions can be declared after main")
+unittest
+{
+    runProgram("def main(): Unit {
+     print(f())
+}
+def f() : Int => 1").should.equal("1");
 }

@@ -18,14 +18,17 @@ private Module convertModule(ParseTree tree, string moduleName, string file)
     tree.validateNodeIs("Silver");
     tree[0].validateNodeIs("Silver.Module");
 
-    // The StatementBlock is optional: an empty module has no children.
-    Stmt[] statements;
+    // The Declarations are optional: an empty module has no children.
+    Decl[] declarations;
     if (tree[0].children.length > 0)
     {
-        tree[0][0].validateNodeIs("Silver.StatementBlock");
-        statements = convertStatementBlock(tree[0][0], file);
+        tree[0][0].validateNodeIs("Silver.Declarations");
+        foreach (declaration; tree[0][0].children)
+        {
+            declarations ~= convertDeclaration(declaration, file);
+        }
     }
-    return Module(moduleName, spanOf(tree, file), statements);
+    return Module(moduleName, spanOf(tree, file), declarations);
 }
 
 void validateNodeIs(ParseTree tree, string type)
@@ -41,14 +44,25 @@ private Span spanOf(ParseTree cst, string file)
     return Span(file, cst.begin, cst.end);
 }
 
-private Stmt[] convertStatementBlock(ParseTree cst, string file)
+private Decl convertDeclaration(ParseTree cst, string file)
 {
-    Stmt[] statements;
-    foreach (statement; cst.children)
+    cst.validateNodeIs("Silver.Declaration");
+    switch (cst[0].name)
     {
-        statements ~= convertStatement(statement, file);
+    case "Silver.ImportStatement":
+        import std.algorithm : filter;
+        import std.array : array;
+
+        // QualifiedName's matches are the identifiers with the '.'s between them.
+        cst[0][0].validateNodeIs("Silver.QualifiedName");
+        auto path = cst[0][0].matches.filter!(m => m != ".").array;
+        return Decl(spanOf(cst[0], file), DeclKind(ImportStmt(path)));
+    case "Silver.FunctionDeclaration":
+    case "Silver.NativeFunctionDeclaration":
+        return Decl(spanOf(cst[0], file), DeclKind(convertFunctionDeclaration(cst[0], file)));
+    default:
+        throw new Exception("lower: declaration '%s' not supported yet".format(cst[0].name));
     }
-    return statements;
 }
 
 private Stmt convertStatement(ParseTree cst, string file)
@@ -56,7 +70,6 @@ private Stmt convertStatement(ParseTree cst, string file)
     switch (cst.name)
     {
     case "Silver.Statement":
-    case "Silver.TopLevelStatement":
         return convertStatement(cst[0], file);
     case "Silver.VariableDeclaration":
     case "Silver.ValueDeclaration":
@@ -90,7 +103,8 @@ private Stmt convertStatement(ParseTree cst, string file)
         return Stmt(spanOf(cst, file), StmtKind(AssignStmt(target, expr)));
     case "Silver.FunctionDeclaration":
     case "Silver.NativeFunctionDeclaration":
-        return convertFunctionDeclaration(cst, file);
+        auto decl = convertFunctionDeclaration(cst, file);
+        return Stmt(spanOf(cst, file), StmtKind(decl));
     case "Silver.ReturnStatement":
         // `RETURN Expression?`; the keyword is kept so a bare `return` still has a node.
         auto value = cst.children.length > 1
@@ -98,14 +112,6 @@ private Stmt convertStatement(ParseTree cst, string file)
         return Stmt(spanOf(cst, file), StmtKind(ReturnStmt(value)));
     case "Silver.ExpressionStatement":
         return Stmt(spanOf(cst, file), StmtKind(ExprStmt(convertExpression(cst[0], file))));
-    case "Silver.ImportStatement":
-        import std.algorithm : filter;
-        import std.array : array;
-
-        // QualifiedName's matches are the identifiers with the '.'s between them.
-        cst[0].validateNodeIs("Silver.QualifiedName");
-        auto path = cst[0].matches.filter!(m => m != ".").array;
-        return Stmt(spanOf(cst, file), StmtKind(ImportStmt(path)));
     default:
         throw new Exception("lower: statement '%s' not supported yet".format(cst.name));
     }
@@ -291,7 +297,7 @@ private Expr convertPostfixOp(Expr lhs, ParseTree op, string file)
 /// or `NATIVE DEF Identifier Params? TypeAnnotation` with no body.
 /// Params is absent rather than empty when there are no params,
 /// so children are matched by name.
-private Stmt convertFunctionDeclaration(ParseTree cst, string file)
+private FunctionDecl convertFunctionDeclaration(ParseTree cst, string file)
 {
     auto native = cst.name == "Silver.NativeFunctionDeclaration";
     if (!native)
@@ -324,7 +330,7 @@ private Stmt convertFunctionDeclaration(ParseTree cst, string file)
             throw new Exception("Unexpected '%s' in function declaration".format(child.name));
         }
     }
-    return Stmt(spanOf(cst, file), StmtKind(FunctionDecl(name, spanOf(cst[0], file), params, body, returnType, native)));
+    return FunctionDecl(name, spanOf(cst[0], file), params, body, returnType, native);
 }
 
 /// `{ Statement* }`. When the last statement is an expression it becomes the

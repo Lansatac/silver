@@ -83,7 +83,7 @@ version(unittest)
 @("parse returns the tree for valid source")
 unittest
 {
-    parseCst("val a = 1").successful.should.equal(true);
+    parseCst("def a(): Int => 1").successful.should.equal(true);
 }
 
 @("parse throws on invalid source")

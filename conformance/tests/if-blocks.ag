@@ -1,31 +1,3 @@
-// Braced if expressions: a block's value is its last expression
-
-val a = if true {
-    val x = 2
-    x * 3
-} else {
-    0
-}
-printl(a)
-
-// `else` may start a new line
-val b = if false {
-    1
-}
-else {
-    2
-}
-printl(b)
-
-// Brace-less and braced branches can be mixed
-val c = if false => 1 else {
-    val y = 4
-    y + 1
-}
-printl(c)
-val d = if true { 7 } else 8
-printl(d)
-
 // else-if chains with blocks
 def grade(n: Int): Int {
     if n >= 90 {
@@ -36,6 +8,37 @@ def grade(n: Int): Int {
         0
     }
 }
-printl(grade(95))
-printl(grade(85))
-printl(grade(10))
+
+def main(): Unit {
+    // Braced if expressions: a block's value is its last expression
+
+    val a = if true {
+        val x = 2
+        x * 3
+    } else {
+        0
+    }
+    printl(a)
+
+    // `else` may start a new line
+    val b = if false {
+        1
+    }
+    else {
+        2
+    }
+    printl(b)
+
+    // Brace-less and braced branches can be mixed
+    val c = if false => 1 else {
+        val y = 4
+        y + 1
+    }
+    printl(c)
+    val d = if true { 7 } else 8
+    printl(d)
+
+    printl(grade(95))
+    printl(grade(85))
+    printl(grade(10))
+}
