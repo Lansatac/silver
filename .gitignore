@@ -3,20 +3,19 @@ docs.json
 __dummy.html
 docs/
 /silver
-silver.so
-silver.dylib
-silver.dll
-silver.a
-silver.lib
-silver-test-*
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*-test-*
 *.exe
 *.o
 *.obj
 *.lst
 *.pdb
 
+# dub writes one per subpackage when run from its directory; the root one is canonical.
+*/dub.selections.json
+
 .vscode/tasks.json
-
-**/silver_*.lib
-
-test.ag

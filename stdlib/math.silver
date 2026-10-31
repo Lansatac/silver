@@ -1,4 +1,4 @@
-def pow(base : Float, exponent : Float) : Float {
+def pow(base: Float, exponent: Float): Float {
     mutable val result = 1
     if !(exponent == 0) {
         result = base * pow(base, exponent - 1)
@@ -6,7 +6,7 @@ def pow(base : Float, exponent : Float) : Float {
     result
 }
 
-def factorial(n : Int) : Int {
+def factorial(n: Int): Int {
     mutable val result = 1
     if !(n == 0) {
         result = n * factorial(n - 1)

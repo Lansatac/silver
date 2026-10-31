@@ -2,7 +2,7 @@ module silver.interpreter.tests;
 
 import std.path;
 
-import silver.interpreter.context : Context, SilverRuntimeException;
+import silver.interpreter.evaluator : Evaluator, RuntimeError;
 import silver.ast : printModule;
 version (unittest) import fluent.asserts;
 
@@ -23,16 +23,16 @@ version (unittest)
         import std.format;
 
         auto program = loadProgram(`val variable = %s`.format(expression));
-        auto context = new Context(program);
-        context.run();
-        return context.getGlobals()["variable"];
+        auto evaluator = new Evaluator(program);
+        evaluator.run();
+        return evaluator.globals["variable"];
     }
 
     string runProgram(string source)
     {
-        auto context = new Context(loadProgram(source, "test", [standardLibraryPath()]));
-        context.run();
-        return context.ProgramOutput;
+        auto evaluator = new Evaluator(loadProgram(source, "test", [standardLibraryPath()]));
+        evaluator.run();
+        return evaluator.output;
     }
 }
 
@@ -93,20 +93,20 @@ unittest
 @("If Statements - false")
 unittest
 {
-    auto context = new Context(loadProgram(
+    auto evaluator = new Evaluator(loadProgram(
         r"val a = 1
           if false {
             a = 2
           }
           "));
-    context.run();
-    context.getGlobals()["a"].get!long.should.equal(1);
+    evaluator.run();
+    evaluator.globals["a"].get!long.should.equal(1);
 }
 
 @("If-Else Statements")
 unittest
 {
-    auto context = new Context(loadProgram(
+    auto evaluator = new Evaluator(loadProgram(
         r"mutable val a = 1
           if false {
             a = 2
@@ -114,8 +114,8 @@ unittest
             a = 3
           }
           "));
-    context.run();
-    context.getGlobals()["a"].get!long.should.equal(3);
+    evaluator.run();
+    evaluator.globals["a"].get!long.should.equal(3);
 }
 
 @("Block scope - inner declaration does not leak")
@@ -124,7 +124,7 @@ unittest
     runProgram("if true {
         val b = 2
      }
-     print(b)").should.throwException!SilverRuntimeException.withMessage("Variable b not found");
+     print(b)").should.throwException!RuntimeError.withMessage("Variable b not found");
 }
 
 @("Block scope - assignment updates outer variable")
@@ -154,7 +154,7 @@ unittest
 unittest
 {
     runProgram("val a = 1
-     val a = 2").should.throwException!SilverRuntimeException.withMessage(
+     val a = 2").should.throwException!RuntimeError.withMessage(
         "Duplicate declaration of variable a");
 }
 
@@ -203,21 +203,21 @@ unittest
         local
      }
      f()
-     print(local)").should.throwException!SilverRuntimeException.withMessage("Variable local not found");
+     print(local)").should.throwException!RuntimeError.withMessage("Variable local not found");
 }
 
 @("Wrong argument count")
 unittest
 {
     runProgram("def f(a : Int) : Int => a
-     print(f())").should.throwException!SilverRuntimeException.withMessage("f expects 1 arguments, got 0");
+     print(f())").should.throwException!RuntimeError.withMessage("f expects 1 arguments, got 0");
 }
 
 @("val cannot be reassigned")
 unittest
 {
     runProgram("val a = 1
-     a = 2").should.throwException!SilverRuntimeException.withMessage("Cannot assign to val 'a'. Declare as 'mutable val' to reassign it.");
+     a = 2").should.throwException!RuntimeError.withMessage("Cannot assign to val 'a'. Declare as 'mutable val' to reassign it.");
 }
 
 @("Runtime errors report their Silver source location")
@@ -226,13 +226,13 @@ unittest
     auto source = "val a = 1\n    a = 2";
     auto sources = new SourceMap;
     auto program = load(source, "test.silver", [], sources);
-    auto context = new Context(program);
+    auto evaluator = new Evaluator(program);
     try
     {
-        context.run();
+        evaluator.run();
         assert(false, "Expected assignment to val to fail");
     }
-    catch (SilverRuntimeException e)
+    catch (RuntimeError e)
     {
         e.diagnostic.span.file.should.equal("test.silver");
         sources.locate(e.diagnostic.span).line.should.equal(2);
@@ -265,13 +265,13 @@ unittest
 @("Native function without a binding")
 unittest
 {
-    runProgram("native def missing() : Unit").should.throwException!SilverRuntimeException.withMessage(
+    runProgram("native def missing() : Unit").should.throwException!RuntimeError.withMessage(
         "No native binding for missing");
 }
 
 @("Native function argument count is checked")
 unittest
 {
-    runProgram("print()").should.throwException!SilverRuntimeException.withMessage(
+    runProgram("print()").should.throwException!RuntimeError.withMessage(
         "print expects 1 arguments, got 0");
 }

@@ -20,6 +20,7 @@ immutable Case[] declarations = [
     parsesAs("val x = 1\nval y = x\nval value = 2", ["(val x 1)", "(val y x)", "(val value 2)"]),
     rejects("val a"),
     rejects("val a: Int"),
+    rejects("val while = 1"), // keywords aren't names
 
     parsesAs("mutable val a = 1", "(mutable val a 1)"),
     parsesAs("mutable val a: Int = 1", "(mutable val a 1)"),

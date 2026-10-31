@@ -1,4 +1,6 @@
 // Everything here is visible in every module without an import.
 
-native def print(value : Any) : Unit
-native def printl(value : Any) : Unit
+native def print(value: Any): Unit
+native def printl(value: Any): Unit
+// Reads a line from input, including its newline.
+native def read(): String

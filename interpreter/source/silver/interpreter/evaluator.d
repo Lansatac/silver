@@ -1,10 +1,12 @@
-module silver.interpreter.context;
+module silver.interpreter.evaluator;
 
 import std.sumtype;
+import std.variant : Variant;
 import silver.ast;
-import silver.ast : AstModule = Module, AstStatement = Stmt;
+import silver.interpreter.environment : Environment;
+import silver.interpreter.values;
 
-class SilverRuntimeException : DiagnosticException
+class RuntimeError : DiagnosticException
 {
     this(Diagnostic diagnostic)
     {
@@ -12,28 +14,18 @@ class SilverRuntimeException : DiagnosticException
     }
 }
 
-/// The runtime value of `()`, e.g. a block that doesn't end in an expression.
-struct Unit
+/// Runs a Program by walking its AST.
+class Evaluator
 {
-    string toString() const
-    {
-        return "()";
-    }
-}
-
-class Context
-{
-    import std.variant;
-    import std.container.array;
-    //import std.regex;
-
     private Program program;
 
     private bool useStdOut;
-    private string programOutput;
-    public const(string) ProgramOutput()
+    private string outputText;
+
+    /// Everything the program has printed so far.
+    string output() const
     {
-        return programOutput;
+        return outputText;
     }
 
     nothrow this(Program program, bool useStdOut = false)
@@ -42,157 +34,18 @@ class Context
         this.useStdOut = useStdOut;
     }
 
-    static class Environment
-    {
-        Variant[string] variables;
-        /// Names declared with `val`, which can't be reassigned.
-        bool[string] immutables;
-        Environment parent;
-        this(Environment parent = null)
-        {
-            this.parent = parent;
-        }
-
-        public void defineVariable(string name, Variant value, bool mutable = true)
-        {
-            if (name in variables)
-            {
-                import std.format;
-
-                throw new Exception("Duplicate declaration of variable %s".format(name));
-            }
-            variables[name] = value;
-            if (!mutable)
-            {
-                immutables[name] = true;
-            }
-        }
-
-        public void setVariable(string name, Variant value)
-        {
-            if (name in variables)
-            {
-                if (name in immutables)
-                {
-                    import std.format : format;
-
-                    throw new Exception("Cannot assign to val '%s'. Declare as 'mutable val' to reassign it.".format(name));
-                }
-                variables[name] = value;
-            }
-            else if (parent !is null)
-            {
-                parent.setVariable(name, value);
-            }
-            else
-            {
-                import std.format : format;
-
-                throw new Exception("Variable %s not found".format(name));
-            }
-        }
-
-        public Variant resolveVariable(string name)
-        {
-            if (name in variables)
-            {
-                return variables[name];
-            }
-            else if (parent !is null)
-            {
-                return parent.resolveVariable(name);
-            }
-            else
-            {
-                import std.format : format;
-
-                throw new Exception("Variable %s not found".format(name));
-            }
-        }
-
-        public void defineFunction(string name, Function fn)
-        {
-            defineVariable(name, Variant(fn));
-        }
-
-        public Function resolveFunction(string name)
-        {
-            auto value = resolveVariable(name);
-            if (!value.convertsTo!Function)
-            {
-                import std.format : format;
-
-                throw new Exception("Variable %s is not a function".format(name));
-            }
-            return value.get!Function;
-        }
-    }
-
-    static class Module
-    {
-        string name;
-        Environment environment;
-        this(string name, Environment environment)
-        {
-            this.name = name;
-            this.environment = environment;
-        }
-
-        /// Looks up a name defined at the module's top level.
-        /// Deliberately does not search parent environments.
-        Variant member(string memberName)
-        {
-            if (auto value = memberName in environment.variables)
-            {
-                return *value;
-            }
-            import std.format : format;
-
-            throw new Exception("Module %s has no member %s".format(name, memberName));
-        }
-
-        override string toString() const
-        {
-            return name;
-        }
-    }
-
-    /// The D implementation behind a `native def`. Arguments are already
-    /// evaluated and their count checked against the declaration.
-    alias NativeFunction = Variant delegate(Variant[] args);
-
-    static class Function
-    {
-        const FunctionDecl declaration;
-        Environment closure;
-        /// Set when the declaration is `native`; the body is null then.
-        NativeFunction native;
-        this(const FunctionDecl declaration, Environment closure, NativeFunction native = null)
-        {
-            this.declaration = declaration;
-            this.closure = closure;
-            this.native = native;
-        }
-
-        override string toString() const
-        {
-            return declaration.name;
-        }
-    }
-
-    private Environment globals;
+    private Environment globalEnvironment;
     /// Names every module can see without importing them, loaded from
     /// prelude.silver. Module environments are its children, so they can shadow it.
     private Environment prelude;
     /// Implementations for `native def`s, by function name.
     private NativeFunction[string] nativeBindings;
 
-    const(Variant[string]) getGlobals() const
+    const(Variant[string]) globals() const
     {
-        return globals.variables;
+        return globalEnvironment.variables;
     }
 
-    /// Executes the ast.
     void run()
     {
         bindNatives();
@@ -204,8 +57,8 @@ class Context
             {
                 execute(*preludeModule, prelude);
             }
-            globals = new Environment(prelude);
-            execute(program.main, globals);
+            globalEnvironment = new Environment(prelude);
+            execute(program.main, globalEnvironment);
         }
         catch (ReturnSignal signal)
         {
@@ -213,7 +66,7 @@ class Context
         }
     }
 
-    private void execute(AstModule ast, Environment variables)
+    private void execute(Module ast, Environment variables)
     {
         foreach (child; ast.statements)
         {
@@ -221,7 +74,7 @@ class Context
         }
     }
 
-    private void execute(AstStatement ast, Environment variables)
+    private void execute(Stmt ast, Environment variables)
     {
         try
         {
@@ -236,7 +89,7 @@ class Context
             }
             throw signal;
         }
-        catch (SilverRuntimeException e)
+        catch (RuntimeError e)
         {
             throw e;
         }
@@ -255,9 +108,9 @@ class Context
     private void execute(const AssignStmt ast, Environment variables)
     {
         // ast is const, so the target's kind holds const types; matching on
-        // `const VariableRef` avoids has!/get! failing on the qualifier.
+        // `const Identifier` avoids has!/get! failing on the qualifier.
         auto name = ast.target.kind.match!(
-            (const VariableRef v) => v.name,
+            (const Identifier i) => i.name,
             (_) => throw new Exception("PH: Can only assign to a variable"));
         auto value = evaluate(ast.value, variables);
         variables.setVariable(name, value);
@@ -265,16 +118,19 @@ class Context
 
     private void bindNatives()
     {
-        nativeBindings["print"] = (Variant[] args) => output(args[0], false);
-        nativeBindings["printl"] = (Variant[] args) => output(args[0], true);
+        import std.stdio : readln;
+
+        nativeBindings["print"] = (Variant[] args) => print(args[0], false);
+        nativeBindings["printl"] = (Variant[] args) => print(args[0], true);
+        nativeBindings["read"] = (Variant[] args) => Variant(readln());
     }
 
-    private Variant output(Variant value, bool newline)
+    private Variant print(Variant value, bool newline)
     {
         import std.conv : to;
         import std.stdio : write, writeln;
 
-        programOutput ~= value.to!string ~ (newline ? "\n" : "");
+        outputText ~= value.to!string ~ (newline ? "\n" : "");
         if (useStdOut)
         {
             if (newline)
@@ -293,7 +149,7 @@ class Context
     {
         if (!ast.native)
         {
-            variables.defineFunction(ast.name, new Function(ast, variables));
+            variables.defineVariable(ast.name, Variant(new Function(ast, variables)));
             return;
         }
         auto binding = ast.name in nativeBindings;
@@ -303,7 +159,7 @@ class Context
 
             throw new Exception("No native binding for %s".format(ast.name));
         }
-        variables.defineFunction(ast.name, new Function(ast, variables, *binding));
+        variables.defineVariable(ast.name, Variant(new Function(ast, variables, *binding)));
     }
 
     /// Executes the imported module, which the loader has already parsed, into a
@@ -321,7 +177,7 @@ class Context
         }
         auto moduleEnv = new Environment(prelude);
         execute(*loaded, moduleEnv);
-        variables.defineVariable(name, Variant(new Module(name, moduleEnv)));
+        variables.defineVariable(name, Variant(new ModuleValue(name, moduleEnv)));
     }
 
     private void execute(const ExprStmt ast, Environment variables)
@@ -335,7 +191,7 @@ class Context
         {
             return ast.kind.match!(s => evaluate(s, variables));
         }
-        catch (SilverRuntimeException e)
+        catch (RuntimeError e)
         {
             throw e;
         }
@@ -345,9 +201,9 @@ class Context
         }
     }
 
-    private SilverRuntimeException runtimeError(Span span, Exception error)
+    private RuntimeError runtimeError(Span span, Exception error)
     {
-        return new SilverRuntimeException(Diagnostic(span, error.msg));
+        return new RuntimeError(Diagnostic(span, error.msg));
     }
 
     /// Wraps a value in a Variant with type qualifiers stripped.
@@ -376,7 +232,7 @@ class Context
         return makeValue(ast.value);
     }
 
-    private Variant evaluate(const VariableRef ast, Environment variables)
+    private Variant evaluate(const Identifier ast, Environment variables)
     {
         return variables.resolveVariable(ast.name);
     }
@@ -420,12 +276,12 @@ class Context
 
     /// Thrown by `return` and caught by the call that's running the function.
     /// It's a Throwable rather than an Exception so that the `catch (Exception)`
-    /// handlers that turn errors into SilverRuntimeExceptions don't swallow it.
+    /// handlers that turn errors into RuntimeErrors don't swallow it.
     private class ReturnSignal : Throwable
     {
         Variant value;
         /// Where the `return` is, for the error if it escapes to top level.
-        /// Filled in by the enclosing execute(AstStatement).
+        /// Filled in by the enclosing execute(Stmt).
         Span span;
         bool located;
 
@@ -476,7 +332,6 @@ class Context
         {
             return signal.value;
         }
-
     }
 
     private Variant evaluate(const MemberAccess ast, Environment variables)
@@ -484,18 +339,11 @@ class Context
         import std.format : format;
 
         auto object = evaluate(*ast.object, variables);
-        if (object.convertsTo!Module)
+        if (object.convertsTo!ModuleValue)
         {
-            return object.get!Module.member(ast.member);
+            return object.get!ModuleValue.member(ast.member);
         }
         throw new Exception("%s has no member %s".format(object, ast.member));
-    }
-
-    private Variant evaluate(const ReadExpr ast, Environment variables)
-    {
-        import std.stdio : readln;
-
-        return Variant(readln());
     }
 
     private Variant evaluate(const WhileExpr ast, Environment variables)
@@ -547,21 +395,8 @@ class Context
         return Variant(Unit());
     }
 
-    private Variant memberOf(Variant value, string memberName)
-    {
-        if (value.convertsTo!Module)
-        {
-            return value.get!Module.member(memberName);
-        }
-
-        import std.format : format;
-
-        throw new Exception("%s has no member %s".format(value, memberName));
-    }
-
     private Variant operate(BinaryOp operator, Variant lhs, Variant rhs)
     {
-        //writefln("%s %s %s", lhs, operator, rhs);
         final switch (operator)
         {
         case BinaryOp.Add:
@@ -598,7 +433,6 @@ class Context
 
     private Variant unaryOperate(UnaryOp operator, Variant value)
     {
-        //writefln("%s %s %s", lhs, operator, rhs);
         final switch (operator)
         {
         case UnaryOp.Minus:

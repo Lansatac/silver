@@ -20,19 +20,19 @@ Silver:
 
     ImportStatement      < :IMPORT QualifiedName
 
-    ValueDeclaration     < :VAL Variable TypeAnnotation? '=' Expression
-    VariableDeclaration  < :MUTABLE :VAL Variable (TypeAnnotation ('=' Expression)? / '=' Expression)
+    ValueDeclaration     < :VAL Identifier TypeAnnotation? '=' Expression
+    VariableDeclaration  < :MUTABLE :VAL Identifier (TypeAnnotation ('=' Expression)? / '=' Expression)
 
     AssignmentStatement  < AssignTarget AssignOp Expression
     AssignOp             < "+=" / "-=" / "*=" / "/=" / "^=" / "=" !"="
 
     AssignTarget         < Postfix
 
-    FunctionDeclaration  < :DEF Variable :'(' FunctionParamDefs :')' TypeAnnotation (:'=>' Sep? Expression / Block)
+    FunctionDeclaration  < :DEF Identifier :'(' Params :')' TypeAnnotation (:'=>' Sep? Expression / Block)
 
-    NativeFunctionDeclaration < :NATIVE :DEF Variable :'(' FunctionParamDefs :')' TypeAnnotation
-    FunctionParamDefs    < (FunctionParamDef (',' FunctionParamDef)*)?
-    FunctionParamDef     < Variable TypeAnnotation
+    NativeFunctionDeclaration < :NATIVE :DEF Identifier :'(' Params :')' TypeAnnotation
+    Params               < (Param (',' Param)*)?
+    Param                < Identifier TypeAnnotation
 
     Block                < '{' Sep? (Statement (Sep Statement)* Sep?)? '}'
 
@@ -71,24 +71,21 @@ Silver:
     UnaryOperator        < "-" / "!"
     PowerExpression      < Postfix (PowerOperator Unary)?
 
-    ReadExpression       < READ
-
     Postfix              < Eval PostfixOp*
     PostfixOp            < CallArgs / IndexArgs / SafeMemberAccess / MemberAccess / PropagateNone
     MemberAccess         < :'.' identifier
     SafeMemberAccess     < :"?." identifier
     PropagateNone        <- "?" !("?" / ".")
     IndexArgs            < :'[' Expression :']'
-    CallArgs             < '(' (FunctionParam (:',' FunctionParam)*)? ')'
-    FunctionParam        < Expression
+    CallArgs             < '(' (Argument (:',' Argument)*)? ')'
+    Argument             < Expression
 
     Eval                 < UnitLiteral
                          / :'(' Expression :')'
                          / Block
-                         / ReadExpression
                          / Literal
                          / CollectionLiteral
-                         / Variable
+                         / Identifier
                          / TypeName
 
     Literal              <  BooleanLiteral
@@ -142,13 +139,12 @@ Silver:
     ELSE                <- Kword("else")
     TRUE                <- Kword("true")
     FALSE               <- Kword("false")
-    READ                <- Kword("read")
     RETURN              <- Kword("return")
     IMPORT              <- Kword("import")
 
-    Keyword             <- VAL / MUTABLE / DEF / NATIVE / IF / ELSE / TRUE / FALSE / READ / RETURN / IMPORT
+    Keyword             <- VAL / MUTABLE / DEF / NATIVE / WHILE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT
     IdentChar           <- [a-zA-Z0-9_]
-    Variable            <- !Keyword ValueName
+    Identifier          <- !Keyword ValueName
 
     # Case is significant: uppercase names are types and constructors, lowercase are values
     ValueName           <~ [a-z_] IdentChar*

@@ -60,7 +60,7 @@ private Stmt convertStatement(ParseTree cst, string file)
         return convertStatement(cst[0], file);
     case "Silver.VariableDeclaration":
     case "Silver.ValueDeclaration":
-        // `Variable TypeAnnotation? '=' Expression` once the keywords are discarded.
+        // `Identifier TypeAnnotation? '=' Expression` once the keywords are discarded.
         // The type isn't recorded yet, so only the last child's position matters.
         auto name = cst[0].matches[0];
         if (cst.children[$ - 1].name != "Silver.Expression")
@@ -173,8 +173,6 @@ private Expr convertExpression(ParseTree cst, string file)
             }
             return lhs;
         }
-    case "Silver.ReadExpression":
-        return Expr(spanOf(cst, file), ExprKind(ReadExpr()));
     case "Silver.BooleanLiteral":
         return Expr(spanOf(cst, file), ExprKind(BoolLiteral(cst.matches[0].to!bool)));
     case "Silver.UnsignedLiteral":
@@ -182,8 +180,8 @@ private Expr convertExpression(ParseTree cst, string file)
         return Expr(spanOf(cst, file), ExprKind(IntLiteral(cst.matches[0].to!long)));
     case "Silver.FloatingLiteral":
         return Expr(spanOf(cst, file), ExprKind(FloatLiteral(cst.matches[0].to!double)));
-    case "Silver.Variable":
-        return Expr(spanOf(cst, file), ExprKind(VariableRef(cst.matches[0])));
+    case "Silver.Identifier":
+        return Expr(spanOf(cst, file), ExprKind(Identifier(cst.matches[0])));
     case "Silver.ScientificLiteral":
         return Expr(spanOf(cst, file), ExprKind(FloatLiteral(cst.matches[0].to!double)));
     case "Silver.HexaLiteral":
@@ -224,10 +222,10 @@ private Expr convertPostfixOp(Expr lhs, ParseTree op, string file)
     {
     case "Silver.CallArgs":
         Expr[] args;
-        foreach (param; op.children)
+        foreach (argument; op.children)
         {
-            param.validateNodeIs("Silver.FunctionParam");
-            args ~= convertExpression(param[0], file);
+            argument.validateNodeIs("Silver.Argument");
+            args ~= convertExpression(argument[0], file);
         }
         return Expr(span, ExprKind(CallExpr(boxed(lhs), args)));
     case "Silver.MemberAccess":
@@ -237,9 +235,9 @@ private Expr convertPostfixOp(Expr lhs, ParseTree op, string file)
     }
 }
 
-/// `DEF Variable FunctionParamDefs? TypeAnnotation ('=>' Expression / Block)`,
-/// or `NATIVE DEF Variable FunctionParamDefs? TypeAnnotation` with no body.
-/// FunctionParamDefs is absent rather than empty when there are no params,
+/// `DEF Identifier Params? TypeAnnotation ('=>' Expression / Block)`,
+/// or `NATIVE DEF Identifier Params? TypeAnnotation` with no body.
+/// Params is absent rather than empty when there are no params,
 /// so children are matched by name.
 private Stmt convertFunctionDeclaration(ParseTree cst, string file)
 {
@@ -257,7 +255,7 @@ private Stmt convertFunctionDeclaration(ParseTree cst, string file)
     {
         switch (child.name)
         {
-        case "Silver.FunctionParamDefs":
+        case "Silver.Params":
             foreach (param; child.children)
             {
                 params ~= param.matches[0];

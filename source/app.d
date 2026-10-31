@@ -4,7 +4,7 @@ import std.file;
 import std.path;
 
 import silver.ast : DiagnosticException, SourceMap;
-import silver.interpreter.context : Context;
+import silver.interpreter.evaluator : Evaluator;
 import silver.loader : load, standardLibraryPath;
 
 /// Interprets a string representing silver code.
@@ -14,8 +14,8 @@ int interpret(string code, string filename = "<input>")
     try
     {
         auto program = load(code, filename, [standardLibraryPath()], sources);
-        auto context = new Context(program, true);
-        context.run();
+        auto evaluator = new Evaluator(program, true);
+        evaluator.run();
     }
     catch (DiagnosticException e)
     {

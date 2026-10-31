@@ -17,8 +17,8 @@ struct Expr
     ExprKind kind;
 }
 
-alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, VariableRef, UnaryExpr, BinaryExpr,
-    CallExpr, MemberAccess, ReadExpr, WhileExpr, IfExpr, BlockExpr, UnitLiteral);
+alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, Identifier, UnaryExpr, BinaryExpr,
+    CallExpr, MemberAccess, WhileExpr, IfExpr, BlockExpr, UnitLiteral);
 
 /// `()`, the only value of type Unit.
 struct UnitLiteral
@@ -40,7 +40,7 @@ struct FloatLiteral
     double value;
 }
 
-struct VariableRef
+struct Identifier
 {
     string name;
 }
@@ -55,7 +55,6 @@ enum AssignOp
     ModuloAssign,
     PowerAssign,
 }
-
 
 enum BinaryOp
 {
@@ -110,11 +109,6 @@ struct MemberAccess
     string member;
 }
 
-/// The `read` keyword: reads a value from input.
-struct ReadExpr
-{
-}
-
 /// `if c => a else b` or `if c { ... } else { ... }`.
 /// `falseBody` is null when there's no else, and the if's value is then ().
 struct IfExpr
@@ -149,12 +143,11 @@ string printExpr(const Expr e)
         (const BoolLiteral b) => b.value.to!string,
         (const IntLiteral l) => l.value.to!string,
         (const FloatLiteral f) => f.value.to!string,
-        (const VariableRef v) => v.name,
+        (const Identifier i) => i.name,
         (const BinaryExpr b) => format("(%s %s %s)", b.op, printExpr(*b.left), printExpr(*b.right)),
         (const UnaryExpr u) => format("(%s %s)", u.op, printExpr(*u.operand)),
         (const CallExpr c) => format("(call %s%s)", printExpr(*c.callee), c.args.map!(a => " " ~ printExpr(a)).join),
         (const MemberAccess m) => format("(. %s %s)", printExpr(*m.object), m.member),
-        (const ReadExpr r) => "read",
         (const WhileExpr w) => format("(while %s %s)", printExpr(*w.condition), printExpr(*w.body)),
         (const IfExpr i) => i.falseBody is null
             ? format("(if %s %s)", printExpr(*i.condition), printExpr(*i.trueBody))
@@ -170,8 +163,8 @@ unittest
 {
     // a + b * 2
     Span span;
-    auto a = new Expr(span, ExprKind(VariableRef("a")));
-    auto b = new Expr(span, ExprKind(VariableRef("b")));
+    auto a = new Expr(span, ExprKind(Identifier("a")));
+    auto b = new Expr(span, ExprKind(Identifier("b")));
     auto two = new Expr(span, ExprKind(IntLiteral(2)));
     auto product = new Expr(span, ExprKind(BinaryExpr(BinaryOp.Multiply, b, two)));
     auto sum = Expr(span, ExprKind(BinaryExpr(BinaryOp.Add, a, product)));
