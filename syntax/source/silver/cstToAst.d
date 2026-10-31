@@ -114,7 +114,6 @@ private Expr convertExpression(ParseTree cst, string file)
     case "Silver.NumberLiteral":
     case "Silver.IfBranch":
     case "Silver.ElseBranch":
-    case "Silver.WhileBody":
         return convertExpression(cst[0], file);
     case "Silver.Block":
         return convertBlock(cst, file);
@@ -197,8 +196,7 @@ private Expr convertExpression(ParseTree cst, string file)
     throw new Exception("cstToAst: expression '%s' not supported yet".format(cst.name));
 }
 
-// WhileExpression      < :WHILE Expression WhileBody
-// WhileBody            < :'=>' Sep? Expression / Block
+// WhileExpression      < :WHILE Expression Block
 private Expr convertWhileExpression(ParseTree cst, string file)
 {
     cst.validateNodeIs("Silver.WhileExpression");

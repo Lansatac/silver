@@ -54,8 +54,7 @@ Silver:
 
     Expression           < WhileExpression / IfExpression / OrExpression
 
-    WhileExpression      < :WHILE Expression WhileBody
-    WhileBody            < :'=>' Sep? Expression / Block
+    WhileExpression      < :WHILE Expression Block
 
     IfExpression         < :IF Expression IfBranch (Sep? :ELSE ElseBranch)?
     IfBranch             < :'=>' Sep? Expression / Block

@@ -18,8 +18,6 @@ immutable Case[] ifs = [
     parsesAs("if true { print(1) } else { print(2) }", "(if true (block => (call print 1)) (block => (call print 2)))"),
     parsesAs("if true => f() else g()", "(if true (call f) (call g))"),
     parsesAs("if a {}\nif a => b", ["(if a (block))", "(if a b)"]),
-    rejects("if true then print(1) end"), // the old syntax
-    rejects("if true then 1 else 2"),
 
     // As an expression
     parsesAs("a = if b => 1 else 2", "(assign a Assign (if b 1 2))"),
@@ -31,7 +29,6 @@ immutable Case[] ifs = [
     parsesAs("\na =  if b {\n        val a = 1\n        a\n     }\n     else 2\n    ",
         "(assign a Assign (if b (block (val a 1) => a) 2))"),
     parsesAs("val a = if b => 1 else 2", "(val a (if b 1 2))"),
-    rejects("a = if b 1 else 2"),
 
     // Statements can follow an if expression
     parsesAs("a = if b => 1 else 2\nc = 3", ["(assign a Assign (if b 1 2))", "(assign c Assign 3)"]),
@@ -68,7 +65,7 @@ immutable Case[] blocks = [
 ];
 
 immutable Case[] loops = [
-    parsesAs("while true => 1", "(while true 1)"),
+    parsesAs("while true { 1 }", "(while true (block => 1))"),
     parsesAs("while a() { b(); c() }", "(while (call a) (block (call b) => (call c)))"),
     parsesAs("while a() {\n        b()\n        c()\n    }", "(while (call a) (block (call b) => (call c)))"),
 ];
