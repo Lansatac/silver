@@ -14,15 +14,25 @@ version (unittest) import fluent.asserts;
 /// Everything sema learned about a Program.
 final class Analysis
 {
-    this(SymbolId[Id!Expr] resolutions)
+    this(SymbolId[Id!Expr] resolutions, Id!FunctionDecl[Id!Expr] callees)
     {
         _resolutions = resolutions;
+        _callees = callees;
     }
 
     private SymbolId[Id!Expr] _resolutions;
     const(SymbolId[Id!Expr]) resolutions() const
     {
         return _resolutions;
+    }
+
+    private Id!FunctionDecl[Id!Expr] _callees;
+    /// The function each direct call invokes, keyed by the call expression. Calls through a
+    /// value (e.g. a function-typed param) have no entry. Kept apart from `resolutions` so
+    /// that overloading, if added, only changes who picks the entry: the type checker.
+    const(Id!FunctionDecl[Id!Expr]) callees() const
+    {
+        return _callees;
     }
 }
 
@@ -93,6 +103,7 @@ final class Analyzer
     private enum preludeName = "prelude";
 
     private SymbolId[Id!Expr] _resolutions;
+    private Id!FunctionDecl[Id!Expr] _callees;
     private Collector _collector;
     /// Each module's own top-level declarations, by module name.
     private Scope[string] _moduleScopes;
@@ -119,7 +130,7 @@ final class Analyzer
         {
             analyzeModule(name, *program.modules[name]);
         }
-        return new Analysis(_resolutions);
+        return new Analysis(_resolutions, _callees);
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
@@ -269,6 +280,13 @@ final class Analyzer
             (const MemberAccess _) => requireValue(expr, resolvePath(expr, scopeTable)),
             (const CallExpr call) {
                 analyzeExpr(*call.callee, scopeTable);
+                if (auto symbol = call.callee.id in _resolutions)
+                {
+                    (*symbol).match!(
+                        (const Id!FunctionDecl func) { _callees[expr.id] = func; },
+                        (_) {},
+                    );
+                }
                 foreach (arg; call.args)
                 {
                     analyzeExpr(arg, scopeTable);

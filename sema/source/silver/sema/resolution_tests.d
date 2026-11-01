@@ -114,6 +114,46 @@ private void shouldResolveTo(const ref Analyzed a, At use, SymbolId expected, st
     }
 }
 
+/// Asserts that the call whose callee name is at `call` directly invokes the function
+/// declared at `declaration`.
+void shouldCall(const ref Analyzed a, At call, At declaration,
+    string file = __FILE__, size_t line = __LINE__)
+{
+    auto expected = declaration.offsetIn(a) in a.names[declaration.moduleName].declarations;
+    if (expected is null)
+    {
+        throw new AssertError(format("%s isn't a declaration", declaration), file, line);
+    }
+    auto callId = call.offsetIn(a) in a.names[call.moduleName].calls;
+    if (callId is null)
+    {
+        throw new AssertError(format("%s isn't the callee of a call", call), file, line);
+    }
+    auto actual = *callId in a.analysis.callees;
+    if (actual is null)
+    {
+        throw new AssertError(format("%s has no callee", call), file, line);
+    }
+    if (SymbolId(*actual) != *expected)
+    {
+        throw new AssertError(format("%s calls %s, expected %s", call, *actual, *expected), file, line);
+    }
+}
+
+/// Asserts that the call whose callee name is at `call` has no static callee.
+void shouldHaveNoCallee(const ref Analyzed a, At call, string file = __FILE__, size_t line = __LINE__)
+{
+    auto callId = call.offsetIn(a) in a.names[call.moduleName].calls;
+    if (callId is null)
+    {
+        throw new AssertError(format("%s isn't the callee of a call", call), file, line);
+    }
+    if (auto actual = *callId in a.analysis.callees)
+    {
+        throw new AssertError(format("%s calls %s, expected no callee", call, *actual), file, line);
+    }
+}
+
 /// Asserts that `use` was left unresolved, e.g. a member of a value.
 void shouldNotResolve(const ref Analyzed a, At use, string file = __FILE__, size_t line = __LINE__)
 {
@@ -198,6 +238,8 @@ struct NameIndex
 {
     Id!Expr[size_t] uses;
     SymbolId[size_t] declarations;
+    /// Call expressions, by where their callee's name starts.
+    Id!Expr[size_t] calls;
 }
 
 NameIndex indexNames(const Module m)
@@ -256,6 +298,11 @@ private final class Indexer
             (const UnaryExpr u) => visit(u.operand),
             (const BinaryExpr b) { visit(b.left); visit(b.right); },
             (const CallExpr c) {
+                c.callee.kind.match!(
+                    (const Identifier _) { index.calls[c.callee.span.start] = e.id; },
+                    (const MemberAccess ma) { index.calls[c.callee.span.end - ma.member.length] = e.id; },
+                    (_) {},
+                );
                 visit(c.callee);
                 foreach (arg; c.args)
                 {
@@ -552,4 +599,27 @@ unittest
 {
     auto a = analyzed("def main(): Unit {\n    def inner(): Unit => ()\n}");
     a.shouldReport(DiagnosticCode.InternalError, At("inner", 1));
+}
+
+@("name resolution records the function a direct call invokes, plain or qualified")
+unittest
+{
+    auto a = analyzed("import std.math
+def twice(x: Int): Int => x * 2
+def main(): Unit {
+    printl(twice(std.math.pow(2, 3)))
+}");
+    a.shouldCall(At("twice", 2), At("twice", 1));
+    a.shouldCall(At("pow", 1), At("pow", 1, "std.math"));
+    a.shouldCall(At("printl", 1), At("printl", 1, "prelude"));
+    a.shouldHaveNoDiagnostics();
+}
+
+@("name resolution records no callee for a call through a function-typed param")
+unittest
+{
+    auto a = analyzed("def apply(f: (Int) -> Int, x: Int): Int => f(x)
+def main(): Unit => ()");
+    a.shouldHaveNoCallee(At("f", 2));
+    a.shouldHaveNoDiagnostics();
 }
