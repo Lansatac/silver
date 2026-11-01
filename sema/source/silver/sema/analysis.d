@@ -28,7 +28,6 @@ final class Analyzer
         {
             analyzeModule(*mod);
         }
-        analyzeModule(program.main);
         return new Analysis();
     }
 
@@ -73,6 +72,9 @@ final class Analyzer
 /// Analyzes every module in `program`, reporting problems to `collector`.
 Analysis analyze(const ref Program program, Collector collector)
 {
+    import silver.sema.entry : checkEntryPoint;
+
+    checkEntryPoint(program, collector);
     auto analyzer = new Analyzer(collector);
     return analyzer.analyzeProgram(program);
 }

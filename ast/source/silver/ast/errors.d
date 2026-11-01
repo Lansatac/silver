@@ -9,6 +9,8 @@ enum DiagnosticCode : string
     ParseError = "P0001",
 
     ModuleNotFound = "L0001",
+    MissingModuleDeclaration = "L0002",
+    ModuleDeclarationMismatch = "L0003",
 
     DuplicateDeclaration = "S0001",
     UnknownName = "S0002",
@@ -21,6 +23,7 @@ enum DiagnosticCode : string
     MainHasParameters = "S0009",
     AssignToImmutable = "S0010",
     InvalidAssignmentTarget = "S0011",
+    MultipleMains = "S0012",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",

@@ -31,17 +31,38 @@ private final class Lowering
         tree.validateNodeIs("Silver");
         tree[0].validateNodeIs("Silver.Module");
 
-        // The Declarations are optional: an empty module has no children.
+        // Both the module line and the declarations are optional.
+        ModuleDeclaration* header;
         Decl[] declarations;
-        if (tree[0].children.length > 0)
+        foreach (child; tree[0].children)
         {
-            tree[0][0].validateNodeIs("Silver.Declarations");
-            foreach (declaration; tree[0][0].children)
+            switch (child.name)
             {
-                declarations ~= convertDeclaration(declaration);
+            case "Silver.ModuleDeclaration":
+                header = new ModuleDeclaration(qualifiedName(child[0]), spanOf(child, file));
+                break;
+            case "Silver.Declarations":
+                foreach (declaration; child.children)
+                {
+                    declarations ~= convertDeclaration(declaration);
+                }
+                break;
+            default:
+                throw new Exception("Unexpected '%s' in module".format(child.name));
             }
         }
-        return Module(ids.next!Module, moduleName, spanOf(tree, file), declarations);
+        return Module(ids.next!Module, moduleName, spanOf(tree, file), declarations, header);
+    }
+
+    /// `a.b.c` as ["a", "b", "c"].
+    private static string[] qualifiedName(ParseTree cst)
+    {
+        import std.algorithm : filter;
+        import std.array : array;
+
+        // QualifiedName's matches are the identifiers with the '.'s between them.
+        cst.validateNodeIs("Silver.QualifiedName");
+        return cst.matches.filter!(m => m != ".").array;
     }
 
 
@@ -51,12 +72,7 @@ private final class Lowering
         switch (cst[0].name)
         {
         case "Silver.ImportStatement":
-            import std.algorithm : filter;
-            import std.array : array;
-
-            // QualifiedName's matches are the identifiers with the '.'s between them.
-            cst[0][0].validateNodeIs("Silver.QualifiedName");
-            auto path = cst[0][0].matches.filter!(m => m != ".").array;
+            auto path = qualifiedName(cst[0][0]);
             return Decl(spanOf(cst[0], file), DeclKind(ImportStmt(ids.next!ImportStmt, path)));
         case "Silver.FunctionDeclaration":
         case "Silver.NativeFunctionDeclaration":

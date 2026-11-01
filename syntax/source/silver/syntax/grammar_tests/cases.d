@@ -11,6 +11,6 @@ mixin GrammarCases!(
     operators, precedence, associativity,
     postfix, indexing, optionalChaining,
     ifs, blocks, loops,
-    assignments, declarations, uninitializedDeclarations, typeAnnotations, imports,
+    assignments, declarations, uninitializedDeclarations, typeAnnotations, moduleDeclarations, imports,
     functions,
 );

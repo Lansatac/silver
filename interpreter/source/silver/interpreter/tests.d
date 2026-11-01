@@ -33,10 +33,13 @@ version (unittest)
     }
 
     /// Runs `source` with `files` (path to text) as modules on an import path,
-    /// ahead of the standard library.
+    /// ahead of the standard library. A file without a `module` line gets one from its path.
     string runWithModules(string source, string[string] files)
     {
+        import std.algorithm : startsWith;
+        import std.array : replace;
         import std.file : mkdirRecurse, rmdirRecurse, tempDir, write;
+        import std.path : stripExtension;
         import std.uuid : randomUUID;
 
         // Unique per call because tests run in parallel.
@@ -46,7 +49,8 @@ version (unittest)
         {
             auto path = buildPath(directory, fileName);
             mkdirRecurse(dirName(path));
-            write(path, text);
+            auto header = text.startsWith("module ") ? "" : "module " ~ fileName.stripExtension.replace("/", ".") ~ "\n";
+            write(path, header ~ text);
         }
         auto evaluator = new Evaluator(loadProgram(source, "test", [directory, standardLibraryPath()]));
         evaluator.run();
@@ -345,7 +349,7 @@ unittest
 unittest
 {
     runProgram("def f() : Unit => ()").should.throwException!RuntimeError.withMessage(
-        "the entry module must define `def main(): Unit`");
+        "the program must define `def main(): Unit` in one of its modules");
 }
 
 @("main must take no parameters")
@@ -499,4 +503,18 @@ def main(): Unit {
     f = 1
 }", ["a.ag": "def f(): Int => 1"]).should.throwException!RuntimeError.withMessage(
         "Cannot assign to imported 'f'");
+}
+
+@("main can be in a module the starting file imports")
+unittest
+{
+    runWithModules("import app", ["app.ag": "def main(): Unit => printl(1)"]).should.equal("1\n");
+}
+
+@("A program with main in two modules is an error")
+unittest
+{
+    runWithModules("import a\ndef main(): Unit => ()", ["a.ag": "def main(): Unit => ()"])
+        .should.throwException!RuntimeError.withMessage(
+            "`main` is defined in more than one module: a, test");
 }

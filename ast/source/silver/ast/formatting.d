@@ -3,12 +3,18 @@ module silver.ast.formatting;
 import silver.ast.diagnostic : Diagnostic, SourceMap;
 
 /// "file(line,column): Severity CODE: message" when the file's text is known,
-/// otherwise "file: Severity CODE: message".
+/// otherwise "file: Severity CODE: message", or just "Severity CODE: message" for a
+/// diagnostic about the whole program, whose span has no file.
 string formatDiagnostic(const Diagnostic diagnostic, const SourceMap sources)
 {
     import std.format : format;
 
     auto file = diagnostic.span.file;
+    if (file.length == 0)
+    {
+        return format("%s %s: %s", diagnostic.severity, cast(string) diagnostic.code,
+            diagnostic.message);
+    }
     if (!sources.has(file))
     {
         return format("%s: %s %s: %s", file, diagnostic.severity, cast(string) diagnostic.code,
@@ -44,4 +50,16 @@ unittest
     auto sources = new SourceMap;
     assert(formatDiagnostic(Diagnostic(DiagnosticCode.ParseError, Span("b.ag", 0, 0), "boom",
             Severity.Error), sources) == "b.ag: Error P0001: boom");
+}
+
+@("formatDiagnostic gives only the severity, code and message for a span without a file")
+unittest
+{
+    import silver.ast.diagnostic : Severity;
+    import silver.ast.errors : DiagnosticCode;
+    import silver.ast.span : Span;
+
+    auto sources = new SourceMap;
+    assert(formatDiagnostic(Diagnostic(DiagnosticCode.MissingMain, Span.init, "no main",
+            Severity.Error), sources) == "Error S0008: no main");
 }

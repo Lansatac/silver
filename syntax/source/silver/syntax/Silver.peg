@@ -1,5 +1,5 @@
 Silver:
-    Module               < Declarations? eoi
+    Module               < Sep? (ModuleDeclaration (Sep Declarations?)? / Declarations?) eoi
     Declarations         < Sep? Declaration (Sep Declaration)* Sep?
     Sep                  <: ((eol / ';') Spacing)+
 
@@ -18,6 +18,7 @@ Silver:
 
     QualifiedName        <- ValueName ('.' ValueName)*
 
+    ModuleDeclaration    < :MODULE QualifiedName
     ImportStatement      < :IMPORT QualifiedName
 
     ValueDeclaration     < :VAL Identifier TypeAnnotation? '=' Expression
@@ -141,8 +142,9 @@ Silver:
     FALSE               <- Kword("false")
     RETURN              <- Kword("return")
     IMPORT              <- Kword("import")
+    MODULE              <- Kword("module")
 
-    Keyword             <- VAL / MUTABLE / DEF / NATIVE / WHILE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT
+    Keyword             <- VAL / MUTABLE / DEF / NATIVE / WHILE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE
     IdentChar           <- [a-zA-Z0-9_]
     Identifier          <- !Keyword ValueName
 

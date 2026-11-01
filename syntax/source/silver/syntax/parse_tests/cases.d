@@ -14,6 +14,6 @@ mixin AstCases!(
     operators, precedence, associativity,
     postfix,
     ifs, blocks, loops,
-    assignments, declarations, typeAnnotations, imports,
+    assignments, declarations, typeAnnotations, moduleDeclarations, imports,
     functions,
 );

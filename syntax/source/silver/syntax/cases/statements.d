@@ -66,6 +66,20 @@ immutable Case[] typeAnnotations = [
     rejects("val a: List<> = xs"),
 ];
 
+immutable Case[] moduleDeclarations = [
+    declaresAs("module app", "(module app)"),
+    declaresAs("module std.math\n", "(module std.math)"),
+    declaresAs("module a.b\nimport c\ndef f(): Int => 1", ["(module a.b)", "(import c)", "(def f (): Int 1)"]),
+    declaresAs("// Header\n\nmodule a.b; import c", ["(module a.b)", "(import c)"]),
+    rejectsDeclaration("module"),
+    rejectsDeclaration("module App"),
+    rejectsDeclaration("module a.b import c"),
+    rejectsDeclaration("import c\nmodule a.b"),
+    rejectsDeclaration("module a\nmodule b"),
+    rejects("module a"),
+    rejects("val module = 1"),
+];
+
 immutable Case[] imports = [
     declaresAs("import module", "(import module)"),
     declaresAs("import io\nimport a.b.c", ["(import io)", "(import a.b.c)"]),

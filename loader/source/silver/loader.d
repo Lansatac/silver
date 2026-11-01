@@ -9,10 +9,15 @@ import std.sumtype;
 import silver.ast;
 import silver.syntax.parse : parse;
 
-/// Parses `source` (the entry module, read from `file`) and everything it needs:
-/// prelude.ag if an import path has one, and every imported module, transitively.
+/// Parses `source` (read from `file`) and everything it needs: prelude.ag if an import
+/// path has one, and every imported module, transitively.
 /// Each file's text is added to `context.sources`, so errors can be reported even if loading fails.
 /// An import that isn't on any import path is reported to `context.collector` and skipped.
+///
+/// Every imported file must start with a `module` line matching the path it was imported by.
+/// `file` may leave it out, and is then named after the file and can't be imported. If it has
+/// one, the line must match the end of `file`'s path, and the rest of that path is searched for
+/// imports first.
 /// Throws: ParseException.
 Program load(string source, string file, string[] importPaths, SourceContext context)
 {
@@ -20,15 +25,32 @@ Program load(string source, string file, string[] importPaths, SourceContext con
     Program program;
     program.sources = context.sources;
     program.ids = new NodeIds;
-    program.main = parse(source, baseName(file).stripExtension, program.ids, file);
+    auto start = new Module;
+    *start = parse(source, baseName(file).stripExtension, program.ids, file);
+    if (auto declaration = start.declaration)
+    {
+        start.name = declaration.path.join(".");
+        auto root = rootOf(file, declaration.path);
+        if (root is null)
+        {
+            context.collector.reportError(DiagnosticCode.ModuleDeclarationMismatch, declaration.span,
+                format("Module '%s' must be in a file at %s.ag",
+                    start.name, declaration.path.join("/")));
+        }
+        else
+        {
+            importPaths = root ~ importPaths;
+        }
+    }
+    program.modules[start.name] = start;
 
     // Modules whose imports haven't been followed yet.
-    Module[] unscanned = [program.main];
+    Module*[] unscanned = [start];
     auto preludePath = findModule(["prelude"], importPaths);
-    if (preludePath !is null)
+    if (preludePath !is null && "prelude" !in program.modules)
     {
-        program.modules["prelude"] = parseModuleFile(preludePath, "prelude", program.ids, context);
-        unscanned ~= *program.modules["prelude"];
+        program.modules["prelude"] = parseModuleFile(preludePath, ["prelude"], program.ids, context);
+        unscanned ~= program.modules["prelude"];
     }
 
     while (unscanned.length > 0)
@@ -44,8 +66,15 @@ Program load(string source, string file, string[] importPaths, SourceContext con
             auto path = importNode.kind.get!ImportStmt.path;
             auto name = path.join(".");
             // Already loaded, or being loaded further up an import cycle.
-            if (name in program.modules)
+            if (auto loaded = name in program.modules)
             {
+                // Only the starting file can be in the map without a `module` line.
+                if ((*loaded).declaration is null)
+                {
+                    context.collector.reportError(DiagnosticCode.MissingModuleDeclaration, importNode.span,
+                        format("'%s' has no module declaration, so it can't be imported\nAdd `module %s` as the first line of %s",
+                            name, name, (*loaded).span.file));
+                }
                 continue;
             }
             auto modulePath = findModule(path, importPaths);
@@ -59,8 +88,8 @@ Program load(string source, string file, string[] importPaths, SourceContext con
                         importPaths.join("\n")));
                 continue;
             }
-            program.modules[name] = parseModuleFile(modulePath, name, program.ids, context);
-            unscanned ~= *program.modules[name];
+            program.modules[name] = parseModuleFile(modulePath, path, program.ids, context);
+            unscanned ~= program.modules[name];
         }
     }
 
@@ -80,7 +109,7 @@ private string findModule(string[] chain, string[] importPaths)
 {
     foreach (importPath; importPaths)
     {
-        auto path = buildPath(importPath, chain.join("/") ~ ".ag");
+        auto path = buildPath(importPath ~ chain) ~ ".ag";
         if (exists(path))
         {
             return path;
@@ -89,15 +118,51 @@ private string findModule(string[] chain, string[] importPaths)
     return null;
 }
 
-/// Reads and parses the module at `path`. The text is recorded in `context.sources` before
-/// parsing, so a parse error can be reported against it.
-private Module* parseModuleFile(string path, string name, NodeIds ids, SourceContext context)
+/// Reads and parses the module at `path`, which was found by looking up the module `chain`.
+/// The text is recorded in `context.sources` before parsing, so a parse error can be reported
+/// against it. A missing or mismatched `module` line is reported, and the module is still loaded.
+private Module* parseModuleFile(string path, string[] chain, NodeIds ids, SourceContext context)
 {
+    auto name = chain.join(".");
     auto text = readText(path);
     context.sources.add(path, text);
     auto loaded = new Module;
     *loaded = parse(text, name, ids, path);
+    if (loaded.declaration is null)
+    {
+        context.collector.reportError(DiagnosticCode.MissingModuleDeclaration, Span(path, 0, 0),
+            format("Imported as '%s' but has no module declaration\nAdd `module %s` as its first line",
+                name, name));
+    }
+    else if (loaded.declaration.path != chain)
+    {
+        context.collector.reportError(DiagnosticCode.ModuleDeclarationMismatch, loaded.declaration.span,
+            format("Module '%s' must be in a file at %s.ag, but it's imported as '%s'",
+                loaded.declaration.path.join("."), loaded.declaration.path.join("/"), name));
+    }
     return loaded;
+}
+
+/// The directory that `file` is in once the directories and file name that `chain` names are
+/// taken off the end, e.g. "lib" for "lib/std/math.ag" and ["std", "math"]. Null if `file`
+/// doesn't end in `chain`'s path.
+private string rootOf(string file, const string[] chain)
+{
+    import std.algorithm : equal;
+    import std.array : array;
+    import std.path : buildPath, extension, pathSplitter;
+
+    if (extension(file) != ".ag")
+    {
+        return null;
+    }
+    auto parts = pathSplitter(buildNormalizedPath(file.stripExtension)).array;
+    if (parts.length < chain.length || !parts[$ - chain.length .. $].equal(chain))
+    {
+        return null;
+    }
+    auto rest = parts[0 .. $ - chain.length];
+    return rest.length == 0 ? "." : buildPath(rest);
 }
 
 version (unittest)
@@ -133,19 +198,19 @@ version (unittest)
 unittest
 {
     auto directory = makeModuleDirectory("transitive",
-        ["a.ag": "import b", "b.ag": "def b(): Int => 1"]);
+        ["a.ag": "module a\nimport b", "b.ag": "module b\ndef b(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
     auto program = load("import a", "main.ag", [directory], new SourceContext);
     assert("a" in program.modules);
     assert("b" in program.modules);
-    program.modules.length.should.equal(2);
+    program.modules.length.should.equal(3);
 }
 
 @("load maps a dotted import to a directory")
 unittest
 {
-    auto directory = makeModuleDirectory("dotted", ["a/b.ag": "def b(): Int => 1"]);
+    auto directory = makeModuleDirectory("dotted", ["a/b.ag": "module a.b\ndef b(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
     auto program = load("import a.b", "main.ag", [directory], new SourceContext);
@@ -157,17 +222,17 @@ unittest
 unittest
 {
     auto directory = makeModuleDirectory("cycle",
-        ["a.ag": "import b", "b.ag": "import a"]);
+        ["a.ag": "module a\nimport b", "b.ag": "module b\nimport a"]);
     scope (exit) rmdirRecurse(directory);
 
     auto program = load("import a", "main.ag", [directory], new SourceContext);
-    program.modules.length.should.equal(2);
+    program.modules.length.should.equal(3);
 }
 
 @("load reports an import that isn't on any import path and keeps going")
 unittest
 {
-    auto directory = makeModuleDirectory("missing", ["a.ag": "def a(): Int => 1"]);
+    auto directory = makeModuleDirectory("missing", ["a.ag": "module a\ndef a(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
     auto source = "def x(): Int => 1
@@ -179,7 +244,7 @@ import a";
     auto errors = context.collector.errors.array;
     errors.length.should.equal(1);
     errors[0].code.should.equal(DiagnosticCode.ModuleNotFound);
-    errors[0].message.should.equal("Module 'nope.ag' not found");
+    errors[0].message.should.contain("Module 'nope.ag' not found");
     errors[0].span.file.should.equal("main.ag");
     errors[0].span.start.should.equal(source.indexOf("import nope"));
     assert("a" in program.modules);
@@ -188,15 +253,18 @@ import a";
 @("load reports every missing import")
 unittest
 {
-    auto directory = makeModuleDirectory("missing-several", ["a.ag": "import gone"]);
+    auto directory = makeModuleDirectory("missing-several", ["a.ag": "module a\nimport gone"]);
     scope (exit) rmdirRecurse(directory);
 
     auto context = new SourceContext;
     load("import nope
 import a", "main.ag", [directory], context);
 
-    context.collector.errors.map!(d => d.message.idup).array.sort.array.should.equal(
-        ["Module 'gone.ag' not found", "Module 'nope.ag' not found"]);
+    context.collector.errors.length.should.equal(2);
+    foreach (diagnostic; context.collector.errors)
+    {
+        diagnostic.code.should.equal(DiagnosticCode.ModuleNotFound);
+    }
 }
 
 @("load gives every node in the program its own ID")
@@ -205,12 +273,12 @@ unittest
     import std.array : array;
 
     auto directory = makeModuleDirectory("ids",
-        ["prelude.ag": "def p(): Int => 1", "a.ag": "def a(): Int => 2"]);
+        ["prelude.ag": "module prelude\ndef p(): Int => 1", "a.ag": "module a\ndef a(): Int => 2"]);
     scope (exit) rmdirRecurse(directory);
 
     auto program = load("import a
 def main(): Unit => ()", "main.ag", [directory], new SourceContext);
-    auto modules = [program.main] ~ program.modules.byValue.map!(m => *m).array;
+    auto modules = program.modules.byValue.map!(m => *m).array;
     modules.length.should.equal(3);
     assert(idProblems(modules) == []);
 }
@@ -224,7 +292,7 @@ unittest
 @("load includes the prelude when an import path has one")
 unittest
 {
-    auto directory = makeModuleDirectory("prelude", ["prelude.ag": "def p(): Int => 1"]);
+    auto directory = makeModuleDirectory("prelude", ["prelude.ag": "module prelude\ndef p(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
     auto program = load("def x(): Int => 1", "main.ag", [directory], new SourceContext);
@@ -234,18 +302,17 @@ unittest
 @("load works without a prelude")
 unittest
 {
-    auto directory = makeModuleDirectory("no-prelude", ["a.ag": "def a(): Int => 1"]);
+    auto directory = makeModuleDirectory("no-prelude", ["a.ag": "module a\ndef a(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
     auto program = load("def x(): Int => 1", "main.ag", [directory], new SourceContext);
-    assert("prelude" !in program.modules);
-    program.modules.length.should.equal(0);
+    program.modules.keys.should.equal(["main"]);
 }
 
 @("load records an imported module's text and throws its parse error")
 unittest
 {
-    auto directory = makeModuleDirectory("parse-error", ["bad.ag": "val = 1"]);
+    auto directory = makeModuleDirectory("parse-error", ["bad.ag": "module bad\nval = 1"]);
     scope (exit) rmdirRecurse(directory);
 
     auto context = new SourceContext;
@@ -260,4 +327,118 @@ unittest
         e.diagnostic.span.file.should.equal(badPath);
         context.sources.has(badPath).should.equal(true);
     }
+}
+
+@("load reports an imported module without a module line, at its start, and still loads it")
+unittest
+{
+    auto directory = makeModuleDirectory("undeclared", ["a/b.ag": "def f(): Int => 1"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto context = new SourceContext;
+    auto program = load("import a.b", "main.ag", [directory], context);
+
+    auto errors = context.collector.errors.array;
+    errors.length.should.equal(1);
+    errors[0].code.should.equal(DiagnosticCode.MissingModuleDeclaration);
+    errors[0].message.should.contain("`module a.b`");
+    errors[0].span.should.equal(Span(buildPath(directory, "a", "b.ag"), 0, 0));
+    assert("a.b" in program.modules);
+}
+
+@("load reports an imported module whose module line doesn't match its import, at the line")
+unittest
+{
+    auto source = "// The b module\nmodule a.c\ndef f(): Int => 1";
+    auto directory = makeModuleDirectory("mismatched", ["a/b.ag": source]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto context = new SourceContext;
+    load("import a.b", "main.ag", [directory], context);
+
+    auto errors = context.collector.errors.array;
+    errors.length.should.equal(1);
+    errors[0].code.should.equal(DiagnosticCode.ModuleDeclarationMismatch);
+    errors[0].span.file.should.equal(buildPath(directory, "a", "b.ag"));
+    errors[0].span.start.should.equal(source.indexOf("module a.c"));
+}
+
+@("load names a declared entry module by its module line, not its file name")
+unittest
+{
+    auto directory = makeModuleDirectory("entry-name", ["app/tool.ag": ""]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto context = new SourceContext;
+    auto program = load("module app.tool", buildPath(directory, "app", "tool.ag"), [], context);
+    context.collector.diagnostics.length.should.equal(0);
+    assert("app.tool" in program.modules);
+    program.modules["app.tool"].name.should.equal("app.tool");
+}
+
+@("load names an undeclared entry module by its file name")
+unittest
+{
+    auto program = load("def main(): Unit => ()", "script.ag", [], new SourceContext);
+    assert("script" in program.modules);
+}
+
+@("load resolves a declared entry module's imports from the root its module line implies")
+unittest
+{
+    // Running std/math.ag directly: std.common is next to it, though no import path says so.
+    auto directory = makeModuleDirectory("entry-root",
+        ["std/math.ag": "", "std/common.ag": "module std.common\ndef c(): Int => 1"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto context = new SourceContext;
+    auto program = load("module std.math\nimport std.common", buildPath(directory, "std", "math.ag"),
+        [], context);
+    context.collector.diagnostics.length.should.equal(0);
+    assert("std.common" in program.modules);
+}
+
+@("load reports a declared entry module whose module line doesn't match its path")
+unittest
+{
+    auto source = "module std.maths";
+    auto context = new SourceContext;
+    load(source, buildPath("lib", "std", "math.ag"), [], context);
+
+    auto errors = context.collector.errors.array;
+    errors.length.should.equal(1);
+    errors[0].code.should.equal(DiagnosticCode.ModuleDeclarationMismatch);
+    errors[0].message.should.contain("std/maths.ag");
+}
+
+@("load gives an import of the declared starting module the module already loaded")
+unittest
+{
+    auto directory = makeModuleDirectory("entry-imported",
+        ["app/main.ag": "", "app/helper.ag": "module app.helper\nimport app.main"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto context = new SourceContext;
+    auto program = load("module app.main\nimport app.helper", buildPath(directory, "app", "main.ag"),
+        [], context);
+
+    context.collector.diagnostics.length.should.equal(0);
+    program.modules.keys.sort.array.should.equal(["app.helper", "app.main"]);
+}
+
+@("load reports an import of an undeclared starting module, at the import")
+unittest
+{
+    auto directory = makeModuleDirectory("undeclared-entry-imported",
+        ["helper.ag": "module helper\nimport script"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto context = new SourceContext;
+    load("import helper", buildPath(directory, "script.ag"), [directory], context);
+
+    auto errors = context.collector.errors.array;
+    errors.length.should.equal(1);
+    errors[0].code.should.equal(DiagnosticCode.MissingModuleDeclaration);
+    errors[0].span.file.should.equal(buildPath(directory, "helper.ag"));
+    errors[0].message.should.contain("`module script`");
 }

@@ -15,6 +15,15 @@ struct Module
     string name;
     Span span;
     Decl[] declarations;
+    /// null when the file has no `module` line, which only a file that's never imported may omit.
+    ModuleDeclaration* declaration;
+}
+
+/// `module a.b`, the first line of a file. `path` must match the file's path under its root.
+struct ModuleDeclaration
+{
+    string[] path;
+    Span span;
 }
 
 /// A top-level declaration. Modules hold only these; statements live in function bodies.
@@ -318,7 +327,20 @@ string printModule(const Module m)
     import std.format : format;
     import std.algorithm : map;
     import std.array : join;
-    return m.declarations.map!(printDecl).join("\n");
+    auto declarations = m.declarations.map!(printDecl).join("\n");
+    if (m.declaration is null)
+    {
+        return declarations;
+    }
+    auto header = printModuleDeclaration(*m.declaration);
+    return declarations.length == 0 ? header : header ~ "\n" ~ declarations;
+}
+
+string printModuleDeclaration(const ModuleDeclaration d)
+{
+    import std.array : join;
+
+    return "(module " ~ d.path.join(".") ~ ")";
 }
 
 string printDecl(const Decl d)

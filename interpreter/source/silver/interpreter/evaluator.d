@@ -35,7 +35,6 @@ class Evaluator
         this.useStdOut = useStdOut;
     }
 
-    private Environment globalEnvironment;
     /// Names every module can see without importing them, loaded from prelude.ag.
     /// Every module's ImportScope searches it last.
     private Environment prelude;
@@ -43,11 +42,6 @@ class Evaluator
     private ModuleValue[string] modules;
     /// Implementations for `native def`s, by function name.
     private NativeFunction[string] nativeBindings;
-
-    const(Variant[string]) globals() const
-    {
-        return globalEnvironment.variables;
-    }
 
     void run()
     {
@@ -59,25 +53,36 @@ class Evaluator
         {
             execute(*preludeModule, prelude);
         }
-        globalEnvironment = new Environment(new ImportScope(prelude));
-        execute(program.main, globalEnvironment);
         callMain();
     }
 
-    /// Runs the entry module's `main`, which the module's declarations must have defined.
+    /// Runs the module that defines `main`, which runs everything it imports, then calls `main`.
+    /// Sema reports a program without exactly one `main`; this repeats the check for programs
+    /// that skip sema, like the interpreter's own tests.
     private void callMain()
     {
-        auto entry = "main" in globalEnvironment.variables;
-        if (entry is null || !entry.convertsTo!Function)
+        import std.algorithm : map;
+        import std.array : join;
+
+        auto mains = mainFunctions(program);
+        if (mains.length == 0)
         {
-            throw runtimeError(program.main.span, new CodedException(DiagnosticCode.MissingMain, "the entry module must define `def main(): Unit`"));
+            throw runtimeError(Span.init, new CodedException(DiagnosticCode.MissingMain,
+                "the program must define `def main(): Unit` in one of its modules"));
         }
+        if (mains.length > 1)
+        {
+            throw runtimeError(mains[1].nameSpan, new CodedException(DiagnosticCode.MultipleMains,
+                "`main` is defined in more than one module: " ~ mains.map!(m => m.moduleName).join(", ")));
+        }
+        auto environment = moduleValue(mains[0].moduleName).environment;
+        auto entry = environment.variables["main"];
         auto main = entry.get!Function;
         if (main.declaration.params.length > 0)
         {
             throw runtimeError(main.declaration.nameSpan, new CodedException(DiagnosticCode.MainHasParameters, "`main` must take no parameters"));
         }
-        call(*entry, [], globalEnvironment);
+        call(entry, [], environment);
     }
 
     private void execute(const Module ast, Environment variables)
