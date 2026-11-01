@@ -51,7 +51,12 @@ Program load(string source, string file, string[] importPaths, SourceContext con
             auto modulePath = findModule(path, importPaths);
             if (modulePath is null)
             {
-                context.collector.reportError(DiagnosticCode.ModuleNotFound, importNode.span, format("Module '%s.ag' not found", path.join("/")));
+                context.collector.reportError(
+                    DiagnosticCode.ModuleNotFound,
+                    importNode.span,
+                    format("Module '%s.ag' not found\nPaths searched: %s",
+                        path.join("/"),
+                        importPaths.join("\n")));
                 continue;
             }
             program.modules[name] = parseModuleFile(modulePath, name, program.ids, context);

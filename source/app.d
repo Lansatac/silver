@@ -2,6 +2,7 @@ import std.stdio;
 import std.getopt;
 import std.file;
 import std.path;
+import std.range;
 
 import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, SourceContext;
 import silver.interpreter.evaluator : Evaluator;
@@ -9,13 +10,13 @@ import silver.loader : load, standardLibraryPath;
 import silver.sema : analyze;
 
 /// Interprets a string representing silver code.
-int interpret(string code, string filename = "<input>")
+int interpret(string code, string filename = "<input>", string[] importPaths)
 {
     auto context = new SourceContext();
     Program program;
     try
     {
-        program = load(code, filename, [standardLibraryPath()], context);
+        program = load(code, filename, importPaths, context);
     }
     catch (DiagnosticException e)
     {
@@ -59,8 +60,11 @@ void printDiagnostic(const Diagnostic diagnostic, SourceContext context)
 ///Application entry point
 int main(string[] args)
 {
+    string[] importPaths;
 	auto arguments = getopt(
-    args);
+    args,
+    "importPath|I", "Add a path to search for imported modules", &importPaths
+    );
 	if (arguments.helpWanted || args.length != 2)
 	{
 		defaultGetoptPrinter("The Silver interpreter. Usage: silver [OPTION]... <file>", arguments.options);
@@ -74,5 +78,7 @@ int main(string[] args)
 		return 1;
 	}
 
-	return interpret(programFile.readText, programFile);
+    auto programDir = programFile.dirName;
+
+	return interpret(programFile.readText, programFile, importPaths.chain([standardLibraryPath(), programDir]).array);
 }
