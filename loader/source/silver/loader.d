@@ -260,7 +260,7 @@ unittest
     load("import nope
 import a", "main.ag", [directory], context);
 
-    context.collector.errors.length.should.equal(2);
+    context.collector.errors.array.length.should.equal(2);
     foreach (diagnostic; context.collector.errors)
     {
         diagnostic.code.should.equal(DiagnosticCode.ModuleNotFound);
