@@ -32,6 +32,27 @@ version (unittest)
         return evaluator.output;
     }
 
+    /// Runs `source` with `files` (path to text) as modules on an import path,
+    /// ahead of the standard library.
+    string runWithModules(string source, string[string] files)
+    {
+        import std.file : mkdirRecurse, rmdirRecurse, tempDir, write;
+        import std.uuid : randomUUID;
+
+        // Unique per call because tests run in parallel.
+        auto directory = buildPath(tempDir(), "silver-interpreter-" ~ randomUUID().toString);
+        scope (exit) rmdirRecurse(directory);
+        foreach (fileName, text; files)
+        {
+            auto path = buildPath(directory, fileName);
+            mkdirRecurse(dirName(path));
+            write(path, text);
+        }
+        auto evaluator = new Evaluator(loadProgram(source, "test", [directory, standardLibraryPath()]));
+        evaluator.run();
+        return evaluator.output;
+    }
+
     /// Runs `body` as the body of the entry module's `main`.
     string runMain(string body)
     {
@@ -340,4 +361,141 @@ unittest
      print(f())
 }
 def f() : Int => 1").should.equal("1");
+}
+
+@("A dotted import's members are reachable by their full path")
+unittest
+{
+    runWithModules("import a.b
+def main(): Unit => printl(a.b.f())", ["a/b.ag": "def f(): Int => 1"]).should.equal("1
+");
+}
+
+@("An import's members are reachable unqualified")
+unittest
+{
+    runWithModules("import a.b
+def main(): Unit => printl(f())", ["a/b.ag": "def f(): Int => 1"]).should.equal("1
+");
+}
+
+@("The longest imported prefix of a path is the module")
+unittest
+{
+    runWithModules("import a
+import a.b
+def main(): Unit => printl(a.b.f())",
+        ["a.ag": "def g(): Int => 1", "a/b.ag": "def f(): Int => 2"]).should.equal("2
+");
+}
+
+@("A module's own definition beats an imported one")
+unittest
+{
+    runWithModules("import a
+def f(): Int => 2
+def main(): Unit => printl(f())", ["a.ag": "def f(): Int => 1"]).should.equal("2
+");
+}
+
+@("A local variable hides a module path")
+unittest
+{
+    runWithModules("import a
+def main(): Unit {
+    val a = 3
+    printl(a.f())
+}", ["a.ag": "def f(): Int => 1"]).should.throwException!RuntimeError.withMessage(
+        "3 has no member f");
+}
+
+@("An import shadows the prelude")
+unittest
+{
+    runWithModules("import a
+def main(): Unit => print(1)", ["a.ag": "def print(value: Int): Unit => printl(value + 1)"])
+        .should.equal("2
+");
+}
+
+@("A name defined by two imports is ambiguous where it's used")
+unittest
+{
+    runWithModules("import a
+import b
+def main(): Unit => printl(f())", ["a.ag": "def f(): Int => 1", "b.ag": "def f(): Int => 2"])
+        .should.throwException!RuntimeError.withMessage("'f' is ambiguous: it's defined in a, b");
+}
+
+@("Importing two modules that define the same name is fine if it's only used qualified")
+unittest
+{
+    runWithModules("import a
+import b
+def main(): Unit => printl(a.f() + b.f())", ["a.ag": "def f(): Int => 1", "b.ag": "def f(): Int => 2"])
+        .should.equal("3
+");
+}
+
+@("Imports aren't visible to the importing module's importers")
+unittest
+{
+    auto files = ["a.ag": "import b
+def g(): Int => f()", "b.ag": "def f(): Int => 1"];
+    runWithModules("import a
+def main(): Unit => printl(g())", files).should.equal("1
+");
+    runWithModules("import a
+def main(): Unit => printl(f())", files).should.throwException!RuntimeError.withMessage(
+        "Variable 'f' not found");
+    runWithModules("import a
+def main(): Unit => printl(b.f())", files).should.throwException!RuntimeError.withMessage(
+        "Variable 'b' not found");
+}
+
+@("Modules in an import cycle can call each other")
+unittest
+{
+    runWithModules("import a
+def main(): Unit => printl(a.f(3))", [
+        "a.ag": "import b
+def f(n: Int): Int => if n == 0 => 0 else b.g(n - 1) + 1",
+        "b.ag": "import a
+def g(n: Int): Int => a.f(n)",
+    ]).should.equal("3
+");
+}
+
+@("A module path is not a value")
+unittest
+{
+    auto files = ["a/b.ag": "def f(): Int => 1"];
+    runWithModules("import a.b
+def main(): Unit => printl(a.b)", files).should.throwException!RuntimeError.withMessage(
+        "Module path 'a.b' is not a value");
+    runWithModules("import a.b
+def main(): Unit => printl(a)", files).should.throwException!RuntimeError.withMessage(
+        "Module path 'a' is not a value");
+}
+
+@("A path through a module reports the missing part")
+unittest
+{
+    auto files = ["a/b.ag": "def f(): Int => 1"];
+    runWithModules("import a.b
+def main(): Unit => printl(a.c.f())", files).should.throwException!RuntimeError.withMessage(
+        "Module path 'a' has no member 'c'");
+    runWithModules("import a.b
+def main(): Unit => printl(a.b.g())", files).should.throwException!RuntimeError.withMessage(
+        "Module a.b has no member g");
+}
+
+@("An imported name can't be assigned")
+unittest
+{
+    runWithModules("import a
+def main(): Unit {
+    f = 1
+}", ["a.ag": "def f(): Int => 1"]).should.throwException!RuntimeError.withMessage(
+        "Cannot assign to imported 'f'");
 }

@@ -37,7 +37,7 @@ class Function
     }
 }
 
-/// An imported module, e.g. `math` after `import math`.
+/// A loaded module. Not a Silver value: `std.math` is resolved by name, never evaluated.
 class ModuleValue
 {
     string name;

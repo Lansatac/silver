@@ -1,8 +1,8 @@
-import math
+import std.math
 
 def main(): Unit {
-    printl(math.pow(2, 2))
-    printl(math.pow(2, 3))
-    printl(math.pow(2, 10))
-    printl(math.factorial(5))
+    printl(std.math.pow(2, 2))
+    printl(std.math.pow(2, 3))
+    printl(std.math.pow(2, 10))
+    printl(std.math.factorial(5))
 }

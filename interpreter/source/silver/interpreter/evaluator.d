@@ -3,7 +3,7 @@ module silver.interpreter.evaluator;
 import std.sumtype;
 import std.variant : Variant;
 import silver.ast;
-import silver.interpreter.environment : Environment;
+import silver.interpreter.environment : Environment, ImportScope;
 import silver.interpreter.values;
 
 class RuntimeError : DiagnosticException
@@ -35,9 +35,11 @@ class Evaluator
     }
 
     private Environment globalEnvironment;
-    /// Names every module can see without importing them, loaded from
-    /// prelude.ag. Module environments are its children, so they can shadow it.
+    /// Names every module can see without importing them, loaded from prelude.ag.
+    /// Every module's ImportScope searches it last.
     private Environment prelude;
+    /// Every module run so far, by dotted name, so each runs once however often it's imported.
+    private ModuleValue[string] modules;
     /// Implementations for `native def`s, by function name.
     private NativeFunction[string] nativeBindings;
 
@@ -49,13 +51,14 @@ class Evaluator
     void run()
     {
         bindNatives();
-        prelude = new Environment();
+        prelude = new Environment(new ImportScope(null));
+        modules["prelude"] = new ModuleValue("prelude", prelude);
         auto preludeModule = program.modules.get("prelude", null);
         if (preludeModule !is null)
         {
             execute(*preludeModule, prelude);
         }
-        globalEnvironment = new Environment(prelude);
+        globalEnvironment = new Environment(new ImportScope(prelude));
         execute(program.main, globalEnvironment);
         callMain();
     }
@@ -188,22 +191,35 @@ class Evaluator
         variables.defineVariable(ast.name, Variant(new Function(ast, variables, *binding)));
     }
 
-    /// Executes the imported module, which the loader has already parsed, into a
-    /// fresh environment, and binds it to the import's dotted name.
+    /// Adds the module to the importing module's ImportScope. It isn't bound as a variable;
+    /// identifiers and member accesses find it there.
     private void execute(const ImportStmt ast, Environment variables)
     {
         import std.array : join;
-        import std.format : format;
 
         auto name = ast.path.join(".");
+        ImportScope.of(variables).modules[name] = moduleValue(name);
+    }
+
+    /// The module `name`, running it first if this is its first import.
+    private ModuleValue moduleValue(string name)
+    {
+        import std.format : format;
+
+        if (auto existing = name in modules)
+        {
+            return *existing;
+        }
         auto loaded = program.modules.get(name, null);
         if (loaded is null)
         {
             throw new Exception("Module %s was not loaded".format(name));
         }
-        auto moduleEnv = new Environment(prelude);
-        execute(*loaded, moduleEnv);
-        variables.defineVariable(name, Variant(new ModuleValue(name, moduleEnv)));
+        auto value = new ModuleValue(name, new Environment(new ImportScope(prelude)));
+        // Recorded before running, so an import cycle gets this module back instead of recursing.
+        modules[name] = value;
+        execute(*loaded, value.environment);
+        return value;
     }
 
     private void execute(const ExprStmt ast, Environment variables)
@@ -260,7 +276,11 @@ class Evaluator
 
     private Variant evaluate(const Identifier ast, Environment variables)
     {
-        return variables.resolveVariable(ast.name);
+        if (auto value = variables.find(ast.name))
+        {
+            return *value;
+        }
+        return resolveModulePath([ast.name], variables);
     }
 
     private Variant evaluate(const UnaryExpr ast, Environment variables)
@@ -362,14 +382,70 @@ class Evaluator
 
     private Variant evaluate(const MemberAccess ast, Environment variables)
     {
+        // A chain like `std.math.pow` whose first name isn't a variable is a module path.
+        // Variables win, so a local `std` hides every module under std.
+        auto base = dottedPath(*ast.object);
+        if (base !is null && variables.find(base[0]) is null)
+        {
+            return resolveModulePath(base ~ ast.member, variables);
+        }
+        return member(evaluate(*ast.object, variables), ast.member);
+    }
+
+    private static Variant member(Variant object, string name)
+    {
         import std.format : format;
 
-        auto object = evaluate(*ast.object, variables);
-        if (object.convertsTo!ModuleValue)
+        throw new Exception("%s has no member %s".format(object, name));
+    }
+
+    /// `a.b.c` as ["a", "b", "c"], or null if the chain doesn't start with an identifier.
+    private static string[] dottedPath(const Expr expr)
+    {
+        return expr.kind.match!(
+            (const Identifier i) { string[] path = [i.name]; return path; },
+            (const MemberAccess m) {
+                auto base = dottedPath(*m.object);
+                return base is null ? null : base ~ m.member;
+            },
+            (_) => cast(string[]) null);
+    }
+
+    /// Looks `path` up as an imported module's member: the longest prefix that's an imported
+    /// module, then members within it. A path that names only a module, or part of one, is an error.
+    private Variant resolveModulePath(string[] path, Environment variables)
+    {
+        import std.algorithm : any, startsWith;
+        import std.array : join;
+        import std.format : format;
+
+        auto imports = ImportScope.of(variables);
+        foreach_reverse (length; 1 .. path.length)
         {
-            return object.get!ModuleValue.member(ast.member);
+            if (auto imported = path[0 .. length].join(".") in imports.modules)
+            {
+                auto value = imported.member(path[length]);
+                foreach (name; path[length + 1 .. $])
+                {
+                    value = member(value, name);
+                }
+                return value;
+            }
         }
-        throw new Exception("%s has no member %s".format(object, ast.member));
+
+        foreach_reverse (length; 1 .. path.length + 1)
+        {
+            auto prefix = path[0 .. length].join(".");
+            if (imports.modules.byKey.any!(m => m == prefix || m.startsWith(prefix ~ ".")))
+            {
+                if (length == path.length)
+                {
+                    throw new Exception("Module path '%s' is not a value".format(prefix));
+                }
+                throw new Exception("Module path '%s' has no member '%s'".format(prefix, path[length]));
+            }
+        }
+        throw new Exception("Variable '%s' not found".format(path[0]));
     }
 
     private Variant evaluate(const WhileExpr ast, Environment variables)
