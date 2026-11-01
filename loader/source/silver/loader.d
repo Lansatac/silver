@@ -51,7 +51,7 @@ Program load(string source, string file, string[] importPaths, SourceContext con
             auto modulePath = findModule(path, importPaths);
             if (modulePath is null)
             {
-                context.collector.reportError(importNode.span, format("Module '%s.ag' not found", path.join("/")));
+                context.collector.reportError(DiagnosticCode.ModuleNotFound, importNode.span, format("Module '%s.ag' not found", path.join("/")));
                 continue;
             }
             program.modules[name] = parseModuleFile(modulePath, name, program.ids, context);
@@ -173,6 +173,7 @@ import a";
 
     auto errors = context.collector.errors.array;
     errors.length.should.equal(1);
+    errors[0].code.should.equal(DiagnosticCode.ModuleNotFound);
     errors[0].message.should.equal("Module 'nope.ag' not found");
     errors[0].span.file.should.equal("main.ag");
     errors[0].span.start.should.equal(source.indexOf("import nope"));

@@ -4,6 +4,7 @@ import std.sumtype;
 import std.variant : Variant;
 import silver.ast;
 import silver.interpreter.environment : Environment, ImportScope;
+import silver.interpreter.errors : CodedException;
 import silver.interpreter.values;
 
 class RuntimeError : DiagnosticException
@@ -69,12 +70,12 @@ class Evaluator
         auto entry = "main" in globalEnvironment.variables;
         if (entry is null || !entry.convertsTo!Function)
         {
-            throw runtimeError(program.main.span, new Exception("the entry module must define `def main(): Unit`"));
+            throw runtimeError(program.main.span, new CodedException(DiagnosticCode.MissingMain, "the entry module must define `def main(): Unit`"));
         }
         auto main = entry.get!Function;
         if (main.declaration.params.length > 0)
         {
-            throw runtimeError(main.declaration.nameSpan, new Exception("`main` must take no parameters"));
+            throw runtimeError(main.declaration.nameSpan, new CodedException(DiagnosticCode.MainHasParameters, "`main` must take no parameters"));
         }
         call(*entry, [], globalEnvironment);
     }
@@ -140,7 +141,7 @@ class Evaluator
         // `const Identifier` avoids has!/get! failing on the qualifier.
         auto name = ast.target.kind.match!(
             (const Identifier i) => i.name,
-            (_) => throw new Exception("PH: Can only assign to a variable"));
+            (_) => throw new CodedException(DiagnosticCode.InvalidAssignmentTarget, "PH: Can only assign to a variable"));
         auto value = evaluate(ast.value, variables);
         variables.setVariable(name, value);
     }
@@ -186,7 +187,7 @@ class Evaluator
         {
             import std.format : format;
 
-            throw new Exception("No native binding for %s".format(ast.name));
+            throw new CodedException(DiagnosticCode.MissingNativeBinding, "No native binding for %s".format(ast.name));
         }
         variables.defineVariable(ast.name, Variant(new Function(ast, variables, *binding)));
     }
@@ -213,7 +214,7 @@ class Evaluator
         auto loaded = program.modules.get(name, null);
         if (loaded is null)
         {
-            throw new Exception("Module %s was not loaded".format(name));
+            throw new CodedException(DiagnosticCode.InternalError, "Module %s was not loaded".format(name));
         }
         auto value = new ModuleValue(name, new Environment(new ImportScope(prelude)));
         // Recorded before running, so an import cycle gets this module back instead of recursing.
@@ -243,9 +244,13 @@ class Evaluator
         }
     }
 
+    /// An exception without a code, e.g. from a failed Variant operation, gets
+    /// DiagnosticCode.RuntimeError.
     private RuntimeError runtimeError(Span span, Exception error)
     {
-        return new RuntimeError(Diagnostic(span, error.msg, Severity.Error));
+        auto coded = cast(CodedException) error;
+        auto code = coded is null ? DiagnosticCode.RuntimeError : coded.code;
+        return new RuntimeError(Diagnostic(code, span, error.msg, Severity.Error));
     }
 
     /// Wraps a value in a Variant with type qualifiers stripped.
@@ -349,12 +354,12 @@ class Evaluator
 
         if (!callee.convertsTo!Function)
         {
-            throw new Exception("%s is not a function".format(callee));
+            throw new CodedException(DiagnosticCode.NotCallable, "%s is not a function".format(callee));
         }
         auto fn = callee.get!Function;
         if (args.length != fn.declaration.params.length)
         {
-            throw new Exception("%s expects %s arguments, got %s".format(
+            throw new CodedException(DiagnosticCode.WrongArgumentCount, "%s expects %s arguments, got %s".format(
                     fn.declaration.name, fn.declaration.params.length, args.length));
         }
 
@@ -396,7 +401,7 @@ class Evaluator
     {
         import std.format : format;
 
-        throw new Exception("%s has no member %s".format(object, name));
+        throw new CodedException(DiagnosticCode.UnknownMember, "%s has no member %s".format(object, name));
     }
 
     /// `a.b.c` as ["a", "b", "c"], or null if the chain doesn't start with an identifier.
@@ -440,12 +445,12 @@ class Evaluator
             {
                 if (length == path.length)
                 {
-                    throw new Exception("Module path '%s' is not a value".format(prefix));
+                    throw new CodedException(DiagnosticCode.ModuleIsNotAValue, "Module path '%s' is not a value".format(prefix));
                 }
-                throw new Exception("Module path '%s' has no member '%s'".format(prefix, path[length]));
+                throw new CodedException(DiagnosticCode.UnknownModuleMember, "Module path '%s' has no member '%s'".format(prefix, path[length]));
             }
         }
-        throw new Exception("Variable '%s' not found".format(path[0]));
+        throw new CodedException(DiagnosticCode.UnknownName, "Variable '%s' not found".format(path[0]));
     }
 
     private Variant evaluate(const WhileExpr ast, Environment variables)
@@ -475,7 +480,7 @@ class Evaluator
         auto value = evaluate(condition, variables);
         if (!value.convertsTo!bool)
         {
-            throw new Exception(construct ~ " condition must be a boolean");
+            throw new CodedException(DiagnosticCode.ConditionNotBool, construct ~ " condition must be a boolean");
         }
         return value.get!bool;
     }
@@ -531,7 +536,7 @@ class Evaluator
         case BinaryOp.GreaterEqual:
             return Variant(lhs >= rhs);
         case BinaryOp.Coalesce:
-            throw new Exception("Coalesce operator not implemented");
+            throw new CodedException(DiagnosticCode.InternalError, "Coalesce operator not implemented");
         }
     }
 
@@ -554,7 +559,7 @@ class Evaluator
             {
                 import std.conv : to;
 
-                throw new Exception(
+                throw new CodedException(DiagnosticCode.InvalidOperand,
                     "Unsupported unary operator " ~ operator.to!string ~ " for type " ~ value
                         .type.to!string);
             }

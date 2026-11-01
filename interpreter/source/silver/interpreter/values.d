@@ -1,8 +1,9 @@
 module silver.interpreter.values;
 
 import std.variant : Variant;
-import silver.ast : FunctionDecl;
+import silver.ast : DiagnosticCode, FunctionDecl;
 import silver.interpreter.environment : Environment;
+import silver.interpreter.errors : CodedException;
 
 /// The runtime value of `()`, e.g. a block that doesn't end in an expression.
 struct Unit
@@ -59,7 +60,7 @@ class ModuleValue
         {
             return *value;
         }
-        throw new Exception("Module %s has no member %s".format(name, memberName));
+        throw new CodedException(DiagnosticCode.UnknownModuleMember, "Module %s has no member %s".format(name, memberName));
     }
 
     override string toString() const

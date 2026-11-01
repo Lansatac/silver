@@ -7,7 +7,7 @@ version (unittest) import fluent.asserts;
 
 version (unittest)
 {
-    import silver.ast : formatDiagnostic, Program, SourceContext;
+    import silver.ast : DiagnosticCode, formatDiagnostic, Program, SourceContext;
     import silver.loader : load, standardLibraryPath;
 
     /// Loads `source` as the module `file`, throwing on a parse error and
@@ -297,6 +297,7 @@ unittest
     {
         e.diagnostic.span.file.should.equal("test.ag");
         context.sources.locate(e.diagnostic.span).line.should.equal(3);
+        e.diagnostic.code.should.equal(DiagnosticCode.AssignToImmutable);
         e.msg.should.equal("Cannot assign to val 'a'. Declare as 'mutable val' to reassign it.");
     }
 }

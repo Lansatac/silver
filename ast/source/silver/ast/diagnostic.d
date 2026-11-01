@@ -1,5 +1,6 @@
 module silver.ast.diagnostic;
 
+import silver.ast.errors : DiagnosticCode;
 import silver.ast.span;
 
 enum Severity
@@ -12,12 +13,14 @@ enum Severity
 /// A message about a range of Silver source, shared by parse and runtime errors.
 struct Diagnostic
 {
+    DiagnosticCode code;
     Span span;
     string message;
     Severity severity;
 
-    this(Span span, string message, Severity severity)
+    this(DiagnosticCode code, Span span, string message, Severity severity = Severity.Error)
     {
+        this.code = code;
         this.span = span;
         this.message = message;
         this.severity = severity;
@@ -47,14 +50,19 @@ class Collector
         return _diagnostics;
     }
 
-    void reportError(Span span, string message)
+    void report(Diagnostic diagnostic)
     {
-        _diagnostics ~= Diagnostic(span, message, Severity.Error);
+        _diagnostics ~= diagnostic;
     }
 
-    void reportWarning(Span span, string message)
+    void reportError(DiagnosticCode code, Span span, string message)
     {
-        _diagnostics ~= Diagnostic(span, message, Severity.Warning);
+        report(Diagnostic(code, span, message, Severity.Error));
+    }
+
+    void reportWarning(DiagnosticCode code, Span span, string message)
+    {
+        report(Diagnostic(code, span, message, Severity.Warning));
     }
 
     auto errors() const
@@ -93,9 +101,9 @@ unittest
 unittest
 {
     auto collector = new Collector;
-    collector.reportError(Span("a.ag", 4, 5), "boom");
+    collector.reportError(DiagnosticCode.UnknownName, Span("a.ag", 4, 5), "boom");
 
-    assert(collector.diagnostics == [Diagnostic(Span("a.ag", 4, 5), "boom", Severity.Error)]);
+    assert(collector.diagnostics == [Diagnostic(DiagnosticCode.UnknownName, Span("a.ag", 4, 5), "boom", Severity.Error)]);
     assert(collector.hasErrors);
     assert(!collector.hasWarnings);
 }
@@ -104,9 +112,9 @@ unittest
 unittest
 {
     auto collector = new Collector;
-    collector.reportWarning(Span("a.ag", 0, 1), "unused");
+    collector.reportWarning(DiagnosticCode.UnknownName, Span("a.ag", 0, 1), "unused");
 
-    assert(collector.diagnostics == [Diagnostic(Span("a.ag", 0, 1), "unused", Severity.Warning)]);
+    assert(collector.diagnostics == [Diagnostic(DiagnosticCode.UnknownName, Span("a.ag", 0, 1), "unused", Severity.Warning)]);
     assert(collector.hasWarnings);
     assert(!collector.hasErrors);
 }
@@ -117,10 +125,10 @@ unittest
     import std.algorithm : equal, map;
 
     auto collector = new Collector;
-    collector.reportError(Span("a.ag", 0, 1), "first error");
-    collector.reportWarning(Span("a.ag", 2, 3), "first warning");
-    collector.reportError(Span("b.ag", 0, 1), "second error");
-    collector.reportWarning(Span("b.ag", 2, 3), "second warning");
+    collector.reportError(DiagnosticCode.UnknownName, Span("a.ag", 0, 1), "first error");
+    collector.reportWarning(DiagnosticCode.UnknownName, Span("a.ag", 2, 3), "first warning");
+    collector.reportError(DiagnosticCode.UnknownName, Span("b.ag", 0, 1), "second error");
+    collector.reportWarning(DiagnosticCode.UnknownName, Span("b.ag", 2, 3), "second warning");
 
     assert(collector.diagnostics.map!(d => d.message)
             .equal(["first error", "first warning", "second error", "second warning"]));

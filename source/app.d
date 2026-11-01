@@ -19,7 +19,7 @@ int interpret(string code, string filename = "<input>")
     }
     catch (DiagnosticException e)
     {
-        context.collector.reportError(e.diagnostic.span, e.diagnostic.message);
+        context.collector.report(e.diagnostic);
     }
 
     if (!context.collector.hasErrors)

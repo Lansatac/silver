@@ -2,6 +2,8 @@ module silver.interpreter.environment;
 
 import std.format : format;
 import std.variant : Variant;
+import silver.ast : DiagnosticCode;
+import silver.interpreter.errors : CodedException;
 import silver.interpreter.values : ModuleValue;
 
 /// One scope's variables, chained to the scope it's nested in.
@@ -21,7 +23,7 @@ class Environment
     {
         if (name in variables)
         {
-            throw new Exception("Duplicate declaration of variable %s".format(name));
+            throw new CodedException(DiagnosticCode.DuplicateDeclaration, "Duplicate declaration of variable %s".format(name));
         }
         variables[name] = value;
         if (!mutable)
@@ -36,7 +38,7 @@ class Environment
         {
             if (name in immutables)
             {
-                throw new Exception("Cannot assign to val '%s'. Declare as 'mutable val' to reassign it.".format(name));
+                throw new CodedException(DiagnosticCode.AssignToImmutable, "Cannot assign to val '%s'. Declare as 'mutable val' to reassign it.".format(name));
             }
             variables[name] = value;
         }
@@ -46,7 +48,7 @@ class Environment
         }
         else
         {
-            throw new Exception("Variable '%s' not found".format(name));
+            throw new CodedException(DiagnosticCode.UnknownName, "Variable '%s' not found".format(name));
         }
     }
 
@@ -56,7 +58,7 @@ class Environment
         {
             return *value;
         }
-        throw new Exception("Variable '%s' not found".format(name));
+        throw new CodedException(DiagnosticCode.UnknownName, "Variable '%s' not found".format(name));
     }
 
     /// The variable `name` in this scope or an enclosing one, or null.
@@ -103,7 +105,7 @@ class ImportScope : Environment
         }
         if (owners.length > 1)
         {
-            throw new Exception("'%s' is ambiguous: it's defined in %s".format(name, owners.sort.join(", ")));
+            throw new CodedException(DiagnosticCode.AmbiguousName, "'%s' is ambiguous: it's defined in %s".format(name, owners.sort.join(", ")));
         }
         if (found is null && prelude !is null)
         {
@@ -116,9 +118,9 @@ class ImportScope : Environment
     {
         if (find(name) !is null)
         {
-            throw new Exception("Cannot assign to imported '%s'".format(name));
+            throw new CodedException(DiagnosticCode.InvalidAssignmentTarget, "Cannot assign to imported '%s'".format(name));
         }
-        throw new Exception("Variable '%s' not found".format(name));
+        throw new CodedException(DiagnosticCode.UnknownName, "Variable '%s' not found".format(name));
     }
 
     /// The import scope that `environment`'s lookups end in.
