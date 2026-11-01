@@ -1,7 +1,7 @@
 module silver.ast.program;
 
 import silver.ast.diagnostic : SourceMap;
-import silver.ast.nodes : Module;
+import silver.ast.nodes : Module, NodeIds;
 
 /// Every module a program needs, parsed: the entry module, plus the prelude and
 /// every module imported (transitively), by dotted name, e.g. "math" or "a.b".
@@ -13,4 +13,6 @@ struct Program
     /// fails to link (a missing `__equals!(Expr, Expr)` instance).
     Module*[string] modules;
     SourceMap sources;
+    /// Where every node in the program got its ID, for passes that create nodes later.
+    NodeIds ids;
 }

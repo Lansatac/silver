@@ -3,7 +3,7 @@ module silver.syntax.parse_tests.helpers;
 version (unittest):
 
 import fluent.asserts;
-import silver.ast : BlockExpr, FunctionDecl, Module, printDecl, printExpr, printStmt;
+import silver.ast : BlockExpr, FunctionDecl, Module, NodeIds, printDecl, printExpr, printStmt;
 import silver.syntax.parse : parse, ParseException;
 import silver.syntax.cases.core;
 
@@ -41,7 +41,7 @@ void checkAst(Case c)
     case Outcome.rejects:
         try
         {
-            parse(moduleSource(c), "test", "test");
+            parse(moduleSource(c), "test", new NodeIds, "test");
         }
         catch (ParseException)
         {
@@ -56,7 +56,7 @@ private Module parseCase(Case c)
 {
     try
     {
-        return parse(moduleSource(c), "test", "test");
+        return parse(moduleSource(c), "test", new NodeIds, "test");
     }
     catch (ParseException e)
     {

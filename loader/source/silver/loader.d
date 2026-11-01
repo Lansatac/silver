@@ -19,14 +19,15 @@ Program load(string source, string file, string[] importPaths, SourceContext con
     context.sources.add(file, source);
     Program program;
     program.sources = context.sources;
-    program.main = parse(source, baseName(file).stripExtension, file);
+    program.ids = new NodeIds;
+    program.main = parse(source, baseName(file).stripExtension, program.ids, file);
 
     // Modules whose imports haven't been followed yet.
     Module[] unscanned = [program.main];
     auto preludePath = findModule(["prelude"], importPaths);
     if (preludePath !is null)
     {
-        program.modules["prelude"] = parseModuleFile(preludePath, "prelude", context);
+        program.modules["prelude"] = parseModuleFile(preludePath, "prelude", program.ids, context);
         unscanned ~= *program.modules["prelude"];
     }
 
@@ -53,7 +54,7 @@ Program load(string source, string file, string[] importPaths, SourceContext con
                 context.collector.reportError(importNode.span, format("Module '%s.ag' not found", path.join("/")));
                 continue;
             }
-            program.modules[name] = parseModuleFile(modulePath, name, context);
+            program.modules[name] = parseModuleFile(modulePath, name, program.ids, context);
             unscanned ~= *program.modules[name];
         }
     }
@@ -85,12 +86,12 @@ private string findModule(string[] chain, string[] importPaths)
 
 /// Reads and parses the module at `path`. The text is recorded in `context.sources` before
 /// parsing, so a parse error can be reported against it.
-private Module* parseModuleFile(string path, string name, SourceContext context)
+private Module* parseModuleFile(string path, string name, NodeIds ids, SourceContext context)
 {
     auto text = readText(path);
     context.sources.add(path, text);
     auto loaded = new Module;
-    *loaded = parse(text, name, path);
+    *loaded = parse(text, name, ids, path);
     return loaded;
 }
 
@@ -190,6 +191,22 @@ import a", "main.ag", [directory], context);
 
     context.collector.errors.map!(d => d.message.idup).array.sort.array.should.equal(
         ["Module 'gone.ag' not found", "Module 'nope.ag' not found"]);
+}
+
+@("load gives every node in the program its own ID")
+unittest
+{
+    import std.array : array;
+
+    auto directory = makeModuleDirectory("ids",
+        ["prelude.ag": "def p(): Int => 1", "a.ag": "def a(): Int => 2"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto program = load("import a
+def main(): Unit => ()", "main.ag", [directory], new SourceContext);
+    auto modules = [program.main] ~ program.modules.byValue.map!(m => *m).array;
+    modules.length.should.equal(3);
+    assert(idProblems(modules) == []);
 }
 
 @("standardLibraryPath holds prelude.ag")

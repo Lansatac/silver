@@ -4,8 +4,14 @@ import std.sumtype;
 
 import silver.ast.span;
 
+import silver.ast.id;
+
+/// The node kinds that get IDs. One NodeIds is shared by every module in a Program.
+alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt);
+
 struct Module
 {
+    Id!Module id;
     string name;
     Span span;
     Decl[] declarations;
@@ -24,6 +30,7 @@ alias DeclKind = SumType!(ImportStmt, FunctionDecl);
 /// like any other; the checker's resolved types are a separate representation.
 struct TypeExpr
 {
+    Id!TypeExpr id;
     Span span;
     TypeExprKind kind;
 }
@@ -86,6 +93,8 @@ private string printOptionInner(const TypeExpr inner)
 
 struct Expr
 {
+    Id!Expr id;
+
     Span span;
     ExprKind kind;
 }
@@ -225,11 +234,12 @@ unittest
 {
     // a + b * 2
     Span span;
-    auto a = new Expr(span, ExprKind(Identifier("a")));
-    auto b = new Expr(span, ExprKind(Identifier("b")));
-    auto two = new Expr(span, ExprKind(IntLiteral(2)));
-    auto product = new Expr(span, ExprKind(BinaryExpr(BinaryOp.Multiply, b, two)));
-    auto sum = Expr(span, ExprKind(BinaryExpr(BinaryOp.Add, a, product)));
+    auto ids = new NodeIds;
+    auto a = new Expr(ids.next!Expr, span, ExprKind(Identifier("a")));
+    auto b = new Expr(ids.next!Expr, span, ExprKind(Identifier("b")));
+    auto two = new Expr(ids.next!Expr, span, ExprKind(IntLiteral(2)));
+    auto product = new Expr(ids.next!Expr, span, ExprKind(BinaryExpr(BinaryOp.Multiply, b, two)));
+    auto sum = Expr(ids.next!Expr, span, ExprKind(BinaryExpr(BinaryOp.Add, a, product)));
 
     assert(printExpr(sum) == "(Add a (Multiply b 2))");
 }
@@ -244,6 +254,7 @@ alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, FunctionDecl, ReturnStm
 
 struct VarDecl
 {
+    Id!VarDecl id;
     string name;
     Span nameSpan;
     Expr value;
@@ -268,12 +279,14 @@ struct ExprStmt
 /// `import a.b`; `path` is the dotted name split into parts, e.g. ["a", "b"].
 struct ImportStmt
 {
+    Id!ImportStmt id;
     string[] path;
 }
 
 /// `name: Type` in a function declaration.
 struct Param
 {
+    Id!Param id;
     string name;
     Span nameSpan;
     TypeExpr type;
@@ -284,6 +297,7 @@ struct Param
 /// `native def name(params): Type` has no body; the runtime binds it by name.
 struct FunctionDecl
 {
+    Id!FunctionDecl id;
     string name;
     Span nameSpan;
     Param[] params;
@@ -361,8 +375,9 @@ private string printSignature(const FunctionDecl f)
 unittest
 {
     Span span;
-    auto one = Expr(span, ExprKind(IntLiteral(1)));
-    auto decl = Stmt(span, StmtKind(VarDecl("x", span, one, null, false)));
+    auto ids = new NodeIds;
+    auto one = Expr(ids.next!Expr, span, ExprKind(IntLiteral(1)));
+    auto decl = Stmt(span, StmtKind(VarDecl(ids.next!VarDecl, "x", span, one, null, false)));
 
     assert(printStmt(decl) == "(val x 1)");
 }
