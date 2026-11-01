@@ -10,6 +10,7 @@ version (unittest)
     import silver.ast : formatDiagnostic, SourceContext;
     import silver.interpreter.evaluator : Evaluator;
     import silver.loader : load, standardLibraryPath;
+    import silver.sema : analyze;
 }
 
 @("Conformance programs match their expected output")
@@ -31,7 +32,11 @@ unittest
 
         auto source = readText(sourcePath);
         auto program = load(source, sourcePath, [standardLibraryDirectory], context);
-        assert(!context.collector.hasErrors, "Loading " ~ sourcePath ~ " reported errors:
+        if (!context.collector.hasErrors)
+        {
+            analyze(program, context.collector);
+        }
+        assert(!context.collector.hasErrors, "Loading or analyzing " ~ sourcePath ~ " reported errors:
 "
                 ~ context.collector.errors.map!(d => formatDiagnostic(d, context.sources)).join("
 "));

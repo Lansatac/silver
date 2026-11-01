@@ -1,20 +1,22 @@
 {
 	"authors": [
-		"Jason"
+		"Jason Yegge"
 	],
 	"subPackages": [
 		"./ast/",
 		"./syntax/",
 		"./loader/",
+		"./sema/",
 		"./interpreter/",
 		"./conformance/"
 	],
 	"license": "proprietary",
-	"copyright": "Copyright © 2020, Jason",
+	"copyright": "Copyright © 2026, Jason Yegge",
 	"name": "silver",
 	"description": "A simple experimental programming language.",
 	"dependencies": {
 		"silver:interpreter": "*",
+		"silver:sema": "*",
 		"silver:loader": "*"
 	},
 	"targetType": "executable"

@@ -3,7 +3,8 @@
 	"targetType": "library",
 	"dependencies": {
 		"silver:interpreter": "*",
-		"silver:loader": "*"
+		"silver:loader": "*",
+		"silver:sema": "*"
 	},
 	"configurations": [
 		{ "name": "library" },

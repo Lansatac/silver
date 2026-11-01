@@ -6,6 +6,7 @@ import std.path;
 import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, SourceContext;
 import silver.interpreter.evaluator : Evaluator;
 import silver.loader : load, standardLibraryPath;
+import silver.sema : analyze;
 
 /// Interprets a string representing silver code.
 int interpret(string code, string filename = "<input>")
@@ -19,6 +20,11 @@ int interpret(string code, string filename = "<input>")
     catch (DiagnosticException e)
     {
         context.collector.reportError(e.diagnostic.span, e.diagnostic.message);
+    }
+
+    if (!context.collector.hasErrors)
+    {
+        analyze(program, context.collector);
     }
 
     foreach (diagnostic; context.collector.diagnostics)

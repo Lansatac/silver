@@ -1,0 +1,20 @@
+{
+	"name": "sema",
+	"description": "Silver's semantic analysis: name resolution and type checking.",
+	"targetType": "library",
+	"dependencies": {
+		"silver:ast": "*"
+	},
+	"configurations": [
+		{ "name": "library" },
+		{
+			"name": "unittest",
+			"dependencies": {
+				"silly": "~>1.2.0-dev.2",
+				"fluent-asserts": "~>2.1",
+				"silver:loader": "*"
+			},
+			"libs-windows": ["psapi"]
+		}
+	]
+}
