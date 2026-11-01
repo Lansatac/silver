@@ -5,18 +5,13 @@ def g(): Int => if true {
 } else 0
 
 def main(): Unit {
-    // Each block gets its own scope
-
-    val t = 0
+    // Each block gets its own scope, so a sibling block may declare the same name again
     val a = if true {
         val t = 1
         t
     } else 0
     printl(a)
-    // The block's `t` shadowed the outer one and did not leak
-    printl(t)
 
-    // A second block may declare the same name again
     val b = if true {
         val t = 2
         t

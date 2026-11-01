@@ -80,7 +80,7 @@ class Evaluator
         auto main = entry.get!Function;
         if (main.declaration.params.length > 0)
         {
-            throw runtimeError(main.declaration.nameSpan, new CodedException(DiagnosticCode.MainHasParameters, "`main` must take no parameters"));
+            throw runtimeError(main.declaration.nameSpan, new CodedException(DiagnosticCode.MainInvalidDefinition, "`main` must take no parameters"));
         }
         call(entry, [], environment);
     }

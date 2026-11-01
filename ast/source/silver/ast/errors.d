@@ -24,6 +24,7 @@ enum DiagnosticCode : string
     AssignToImmutable = "S0010",
     InvalidAssignmentTarget = "S0011",
     MultipleMains = "S0012",
+    ShadowedDeclaration = "S0013",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",
