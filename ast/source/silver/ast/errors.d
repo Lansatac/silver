@@ -20,7 +20,7 @@ enum DiagnosticCode : string
     UnknownType = "S0006",
     DuplicateParameter = "S0007",
     MissingMain = "S0008",
-    MainHasParameters = "S0009",
+    MainInvalidDefinition = "S0009",
     AssignToImmutable = "S0010",
     InvalidAssignmentTarget = "S0011",
     MultipleMains = "S0012",

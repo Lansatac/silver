@@ -23,6 +23,42 @@ void checkEntryPoint(const ref Program program, Collector collector)
                 "`main` is defined in more than one module: " ~ owners);
         }
     }
+    if(mains.length == 1)
+    {
+        checkEntryPointShape(program, collector, mains[0]);
+    }
+}
+
+//assumes main is already validated
+void checkEntryPointShape(const ref Program program, Collector collector, const MainFunction main)
+{
+    import std.algorithm : find;
+    import std.array : array;
+    import std.sumtype : match;
+    import std.range : empty;
+
+    auto mainModule = program.modules[main.moduleName];
+    foreach (decl; mainModule.declarations)
+    {
+        decl.kind.match!(
+            (const FunctionDecl f) {
+                if (f.name == "main")
+                {
+                    if (!f.params.empty)
+                    {
+                        collector.reportError(DiagnosticCode.MainInvalidDefinition, f.nameSpan,
+                            "`main` must not have parameters");
+                    }
+                    // else if (!f.returnType.isUnit)
+                    // {
+                    //     collector.reportError(DiagnosticCode.MainInvalidDefinition, f.nameSpan,
+                    //         "`main` must return `Unit`");
+                    // }
+                }
+            },
+            (_) {},
+        );
+    }
 }
 
 version (unittest)
@@ -96,4 +132,16 @@ unittest
     auto errors = entryPointErrors(["app": "def run(): Unit {\n    def main(): Unit => ()\n}"]);
     errors.length.should.equal(1);
     errors[0].code.should.equal(DiagnosticCode.MissingMain);
+}
+
+@("analyze reports an invlaid main function definition")
+unittest
+{
+    // auto returnErrors = entryPointErrors(["app": "def main(): Int {}"]);
+    // returnErrors.length.should.equal(1);
+    // returnErrors[0].code.should.equal(DiagnosticCode.MainInvalidDefinition);
+
+    auto parameterErrors = entryPointErrors(["app": "def main(a: Int): Unit {}"]);
+    parameterErrors.length.should.equal(1);
+    parameterErrors[0].code.should.equal(DiagnosticCode.MainInvalidDefinition);
 }
