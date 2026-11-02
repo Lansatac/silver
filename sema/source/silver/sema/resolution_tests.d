@@ -11,6 +11,7 @@ import std.sumtype : match;
 import silver.ast;
 import silver.loader : load, standardLibraryPath;
 import silver.sema.analysis;
+import silver.sema.resolve;
 
 /// A program loaded with the real stdlib and analyzed, with every module indexed.
 struct Analyzed
@@ -398,7 +399,8 @@ unittest
 }");
     a.shouldResolve("x", 2, 1);
     a.shouldNotResolve(At("size", 1));
-    a.shouldHaveNoDiagnostics();
+    // Reported by the type checker, not name resolution: Int has no members.
+    a.shouldReport(DiagnosticCode.UnknownMember, At("x", 2));
 }
 
 @("name resolution reports an unknown name")
@@ -617,7 +619,7 @@ unittest
 unittest
 {
     auto a = analyzed("import std.math
-def twice(x: Int): Int => x * 2
+def twice(x: Float): Float => x * 2
 def main(): Unit {
     printl(twice(std.math.pow(2, 3)))
 }");

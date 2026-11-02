@@ -144,28 +144,28 @@ struct Identifier
 
 enum BinaryOp
 {
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    Modulo,
-    Power,
-    Equal,
-    NotEqual,
-    And,
-    Or,
-    Less,
-    LessEqual,
-    Greater,
-    GreaterEqual,
-    Coalesce,
+    Add = "+",
+    Subtract = "-",
+    Multiply = "*",
+    Divide = "/",
+    Modulo = "%",
+    Power = "**",
+    Equal = "==",
+    NotEqual = "!=",
+    And = "&&",
+    Or = "||",
+    Less = "<",
+    LessEqual = "<=",
+    Greater = ">",
+    GreaterEqual = ">=",
+    Coalesce = "??",
 }
 
 enum UnaryOp
 {
-    Plus,
-    Minus,
-    Not,
+    Plus = "+",
+    Minus = "-",
+    Not = "!",
 }
 
 struct UnaryExpr

@@ -2,13 +2,15 @@
 /// and records which function each direct call invokes.
 module silver.sema.resolve;
 
-import silver.ast;
-import silver.sema.analysis : SymbolId;
 
-import std.algorithm : any, canFind, sort, startsWith;
-import std.array : join;
-import std.string : format;
-import std.sumtype : match;
+import std.algorithm;
+import std.array;
+import std.string;
+import std.sumtype;
+
+import silver.ast;
+
+alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module);
 
 /// What name resolution produced.
 package struct Resolution
@@ -108,14 +110,14 @@ private final class NameResolver
     Resolution resolveProgram(const Program program)
     {
         // Sorted so diagnostics come out in the same order every run.
-        auto names = program.modules.keys.sort;
-        foreach (name; names)
+        auto modules = program.sortedModules;
+        foreach (mod; modules)
         {
-            declareModule(name, *program.modules[name], (preludeName in program.modules) !is null);
+            declareModule(mod.name, mod, (preludeName in program.modules) !is null);
         }
-        foreach (name; names)
+        foreach (mod; modules)
         {
-            resolveModule(name, *program.modules[name]);
+            resolveModule(mod.name, mod);
         }
         return Resolution(_resolutions, _callees);
     }

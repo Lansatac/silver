@@ -18,6 +18,14 @@ struct Program
     NodeIds ids;
 }
 
+auto sortedModules(const ref Program program)
+{
+    import std.array;
+    import std.algorithm;
+    import std.range;
+    return program.modules.byKey.array.sort!((a, b) => a < b).map!(k => *program.modules[k]);
+}
+
 /// A top-level `def main` somewhere in a program.
 struct MainFunction
 {

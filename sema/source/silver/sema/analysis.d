@@ -1,19 +1,20 @@
 module silver.sema.analysis;
 
 import silver.ast;
+import silver.sema.check;
+import silver.sema.resolve;
 
 import std.sumtype : SumType;
-
-alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module);
 
 version (unittest) import fluent.asserts;
 
 /// Everything sema learned about a Program.
 final class Analysis
 {
-    this(SymbolId[Id!Expr] resolutions, Id!FunctionDecl[Id!Expr] callees)
+    this(SymbolId[Id!Expr] resolutions, Typing typing, Id!FunctionDecl[Id!Expr] callees)
     {
         _resolutions = resolutions;
+        _typing = typing;
         _callees = callees;
     }
 
@@ -21,6 +22,12 @@ final class Analysis
     const(SymbolId[Id!Expr]) resolutions() const
     {
         return _resolutions;
+    }
+
+    private Typing _typing;
+    const(Typing) typing() const
+    {
+        return _typing;
     }
 
     private Id!FunctionDecl[Id!Expr] _callees;
@@ -41,7 +48,8 @@ Analysis analyze(const ref Program program, Collector collector)
 
     checkEntryPoint(program, collector);
     auto resolution = resolveNames(program, collector);
-    return new Analysis(resolution.resolutions, resolution.callees);
+    auto typing = checkTypes(program, resolution, collector);
+    return new Analysis(resolution.resolutions, typing, resolution.callees);
 }
 
 version (unittest)

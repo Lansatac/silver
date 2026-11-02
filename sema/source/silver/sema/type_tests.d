@@ -50,7 +50,7 @@ unittest
     shape(table, table.never).should.equal("Never");
     shape(table, table.unit).should.equal("Unit");
     shape(table, table.bool_).should.equal("Bool");
-    shape(table, table.int_).should.equal("Integer");
+    shape(table, table.int_).should.equal("Int");
     shape(table, table.float_).should.equal("Float");
     shape(table, table.string_).should.equal("String");
     shape(table, table.any).should.equal("Any");

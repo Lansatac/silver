@@ -16,7 +16,7 @@ final class TypeTable
         never = registerTypeData(TypeData(Primitive(Primitive.Kind.Never)));
         unit = registerTypeData(TypeData(Primitive(Primitive.Kind.Unit)));
         bool_ = registerTypeData(TypeData(Primitive(Primitive.Kind.Bool)));
-        int_ = registerTypeData(TypeData(Primitive(Primitive.Kind.Integer)));
+        int_ = registerTypeData(TypeData(Primitive(Primitive.Kind.Int)));
         float_ = registerTypeData(TypeData(Primitive(Primitive.Kind.Float)));
         string_ = registerTypeData(TypeData(Primitive(Primitive.Kind.String)));
         any = registerTypeData(TypeData(Primitive(Primitive.Kind.Any)));
@@ -51,6 +51,18 @@ final class TypeTable
         return _types[t.index];
     }
 
+    string describe(Type t) const
+    {
+        import std.conv : text;
+        import std.array : join;
+        import std.algorithm : map;
+        return _types[t.index].match!(
+            (const Primitive p) => p.kind.text,
+            (const OptionData o) => describe(o.inner) ~ "?",
+            (const FunctionData f) => "(" ~ f.params.map!(p => describe(p)).join(", ") ~ ") -> " ~ describe(f.ret),
+            (const ErrorType e) => "Error",
+        );
+    }
 }
 
 struct Primitive
@@ -60,7 +72,7 @@ struct Primitive
         Never,
         Unit,
         Bool,
-        Integer,
+        Int,
         Float,
         String,
         Any

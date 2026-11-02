@@ -1,7 +1,7 @@
 module std.math
 
 def pow(base: Float, exponent: Float): Float {
-    mutable val result = 1
+    mutable val result = 1.0
     if !(exponent == 0) {
         result = base * pow(base, exponent - 1)
     }
