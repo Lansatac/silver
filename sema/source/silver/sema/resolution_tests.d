@@ -439,6 +439,18 @@ unittest
     a.shouldHaveNoDiagnostics();
 }
 
+@("name resolution reports a function declared twice in a module, at the second name")
+unittest
+{
+    auto a = analyzed("def twice(): Int => 1
+def twice(): Int => 2
+def main(): Unit => ()");
+    a.shouldReport(DiagnosticCode.DuplicateDeclaration, At("twice", 2));
+    import std.algorithm : canFind;
+
+    assert(a.collector.diagnostics[0].message.canFind("'twice'"));
+}
+
 @("name resolution reports a local declared twice in one block")
 unittest
 {
