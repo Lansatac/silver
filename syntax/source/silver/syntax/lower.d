@@ -337,7 +337,7 @@ private final class Lowering
     /// Applies one postfix operation (a call or member access) to `lhs`.
     private Expr convertPostfixOp(Expr lhs, ParseTree op)
     {
-        auto span = Span(file, lhs.span.start, op.end);
+        auto span = Span(file, lhs.span.start, spanOf(op, file).end);
         switch (op.name)
         {
         case "Silver.CallArgs":
@@ -489,5 +489,109 @@ void validateNodeIs(ParseTree tree, string type)
 
 private Span spanOf(ParseTree cst, string file)
 {
-    return Span(file, cst.begin, cst.end);
+    return Span(file, cst.begin, contentEnd(cst.input, cst.begin, cst.end));
+}
+
+/// Pegged's `<` rules count the spacing after their last element as part of the match,
+/// so this finds the end of the last token in `input[begin .. end]` instead.
+private size_t contentEnd(string input, size_t begin, size_t end)
+{
+    import std.algorithm.searching : startsWith;
+
+    size_t last = begin;
+    size_t i = begin;
+    while (i < end)
+    {
+        auto rest = input[i .. end];
+        if (rest[0] == ' ' || rest[0] == '\t' || rest[0] == '\n' || rest[0] == '\r')
+        {
+            i++;
+        }
+        else if (rest.startsWith("//"))
+        {
+            while (i < end && input[i] != '\n' && input[i] != '\r')
+                i++;
+        }
+        else if (rest.startsWith("/*"))
+        {
+            i = blockCommentEnd(input, i, end);
+        }
+        else if (rest[0] == '"')
+        {
+            // Skipped whole, so a `//` inside a string isn't taken for a comment.
+            i++;
+            while (i < end && input[i] != '"')
+                i += input[i] == '\\' ? 2 : 1;
+            i = i < end ? i + 1 : end;
+            last = i;
+        }
+        else
+        {
+            last = ++i;
+        }
+    }
+    return last;
+}
+
+private size_t blockCommentEnd(string input, size_t i, size_t end)
+{
+    import std.algorithm.searching : startsWith;
+
+    size_t depth = 0;
+    while (i < end)
+    {
+        if (input[i .. end].startsWith("/*"))
+        {
+            depth++;
+            i += 2;
+        }
+        else if (input[i .. end].startsWith("*/"))
+        {
+            i += 2;
+            if (--depth == 0)
+                return i;
+        }
+        else
+        {
+            i++;
+        }
+    }
+    return end;
+}
+@("contentEnd stops before trailing spacing")
+unittest
+{
+    size_t endOf(string s) => contentEnd(s, 0, s.length);
+
+    assert(endOf("x") == 1);
+    assert(endOf("x  \t") == 1);
+    assert(endOf("x // note") == 1);
+    assert(endOf("x /* a /* nested */ b */ ") == 1);
+    assert(endOf("a /* c */ b ") == 11);
+    assert(endOf(`"a // b" `) == 8);
+    assert(endOf(`"a \" b" `) == 8);
+    assert(endOf("{\n  x\n}\n") == 7);
+}
+
+@("node spans exclude the spacing after them")
+unittest
+{
+    import std.sumtype : match;
+    import silver.syntax.parse : parse;
+
+    auto source = "def f(): Int => if c /* why */ { 1 } // one\n else { 2 }";
+    auto m = parse(source, "test", new NodeIds);
+    auto body = m.declarations[0].kind.match!(
+        (const FunctionDecl f) => f.body,
+        _ => null,
+    );
+    auto ifExpr = (*body).kind.match!(
+        (const IfExpr i) => i,
+        _ => IfExpr.init,
+    );
+    string text(Span s) => source[s.start .. s.end];
+
+    assert(text(ifExpr.condition.span) == "c");
+    assert(text(ifExpr.trueBody.span) == "{ 1 }");
+    assert(text((*body).span) == "if c /* why */ { 1 } // one\n else { 2 }");
 }

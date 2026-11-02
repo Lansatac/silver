@@ -72,7 +72,7 @@ struct At
 }
 
 /// Asserts that the use at `use` resolves to the declaration at `declaration`.
-void shouldResolve(const ref Analyzed a, At use, At declaration,
+void shouldResolve(const Analyzed a, At use, At declaration,
     string file = __FILE__, size_t line = __LINE__)
 {
     auto expected = declaration.offsetIn(a) in a.names[declaration.moduleName].declarations;
@@ -84,20 +84,20 @@ void shouldResolve(const ref Analyzed a, At use, At declaration,
 }
 
 /// Shorthand for a use and a declaration of `name` in the entry module.
-void shouldResolve(const ref Analyzed a, string name, size_t useNth, size_t declarationNth,
+void shouldResolve(const Analyzed a, string name, size_t useNth, size_t declarationNth,
     string file = __FILE__, size_t line = __LINE__)
 {
     a.shouldResolve(At(name, useNth), At(name, declarationNth), file, line);
 }
 
 /// Asserts that the use at `use` is a module path that resolves to module `moduleName`.
-void shouldResolveToModule(const ref Analyzed a, At use, string moduleName,
+void shouldResolveToModule(const Analyzed a, At use, string moduleName,
     string file = __FILE__, size_t line = __LINE__)
 {
     a.shouldResolveTo(use, SymbolId(a.moduleIds[moduleName]), file, line);
 }
 
-private void shouldResolveTo(const ref Analyzed a, At use, SymbolId expected, string file, size_t line)
+private void shouldResolveTo(const Analyzed a, At use, SymbolId expected, string file, size_t line)
 {
     auto useId = use.offsetIn(a) in a.names[use.moduleName].uses;
     if (useId is null)
@@ -117,7 +117,7 @@ private void shouldResolveTo(const ref Analyzed a, At use, SymbolId expected, st
 
 /// Asserts that the call whose callee name is at `call` directly invokes the function
 /// declared at `declaration`.
-void shouldCall(const ref Analyzed a, At call, At declaration,
+void shouldCall(const Analyzed a, At call, At declaration,
     string file = __FILE__, size_t line = __LINE__)
 {
     auto expected = declaration.offsetIn(a) in a.names[declaration.moduleName].declarations;
@@ -142,7 +142,7 @@ void shouldCall(const ref Analyzed a, At call, At declaration,
 }
 
 /// Asserts that the call whose callee name is at `call` has no static callee.
-void shouldHaveNoCallee(const ref Analyzed a, At call, string file = __FILE__, size_t line = __LINE__)
+void shouldHaveNoCallee(const Analyzed a, At call, string file = __FILE__, size_t line = __LINE__)
 {
     auto callId = call.offsetIn(a) in a.names[call.moduleName].calls;
     if (callId is null)
@@ -156,7 +156,7 @@ void shouldHaveNoCallee(const ref Analyzed a, At call, string file = __FILE__, s
 }
 
 /// Asserts that `use` was left unresolved, e.g. a member of a value.
-void shouldNotResolve(const ref Analyzed a, At use, string file = __FILE__, size_t line = __LINE__)
+void shouldNotResolve(const Analyzed a, At use, string file = __FILE__, size_t line = __LINE__)
 {
     auto useId = use.offsetIn(a) in a.names[use.moduleName].uses;
     if (useId is null)
@@ -169,7 +169,7 @@ void shouldNotResolve(const ref Analyzed a, At use, string file = __FILE__, size
     }
 }
 
-void shouldHaveNoDiagnostics(const ref Analyzed a, string file = __FILE__, size_t line = __LINE__)
+void shouldHaveNoDiagnostics(const Analyzed a, string file = __FILE__, size_t line = __LINE__)
 {
     if (a.collector.diagnostics.length > 0)
     {
@@ -178,7 +178,7 @@ void shouldHaveNoDiagnostics(const ref Analyzed a, string file = __FILE__, size_
 }
 
 /// Asserts that the only diagnostic is `code`, starting at `where`.
-void shouldReport(const ref Analyzed a, DiagnosticCode code, At where,
+void shouldReport(const Analyzed a, DiagnosticCode code, At where,
     string file = __FILE__, size_t line = __LINE__)
 {
     auto diagnostics = a.collector.diagnostics;
@@ -190,7 +190,7 @@ void shouldReport(const ref Analyzed a, DiagnosticCode code, At where,
     }
 }
 
-private string describeDiagnostics(const ref Analyzed a)
+private string describeDiagnostics(const Analyzed a)
 {
     import std.algorithm : map;
     import std.array : join;
@@ -200,7 +200,7 @@ private string describeDiagnostics(const ref Analyzed a)
         .join("\n");
 }
 
-private size_t offsetIn(const At at, const ref Analyzed a)
+private size_t offsetIn(const At at, const Analyzed a)
 {
     return occurrence(a.sources[at.moduleName], at.word, at.nth);
 }
@@ -241,6 +241,8 @@ struct NameIndex
     SymbolId[size_t] declarations;
     /// Call expressions, by where their callee's name starts.
     Id!Expr[size_t] calls;
+    /// Every expression, by its exact [start, end) span. When two share a span, the outer one.
+    Id!Expr[size_t[2]] exprs;
 }
 
 NameIndex indexNames(const Module m)
@@ -294,6 +296,11 @@ private final class Indexer
 
     void visit(const Expr e)
     {
+        size_t[2] span = [e.span.start, e.span.end];
+        if (span !in index.exprs)
+        {
+            index.exprs[span] = e.id;
+        }
         e.kind.match!(
             (const Identifier _) { index.uses[e.span.start] = e.id; },
             (const UnaryExpr u) => visit(u.operand),
