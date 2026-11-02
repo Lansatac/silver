@@ -10,7 +10,7 @@ import silver.syntax.cases;
 // uninitializedDeclarations.
 mixin AstCases!(
     layout, comments,
-    literals,
+    literals, stringLiterals,
     operators, precedence, associativity,
     postfix,
     ifs, blocks, loops,

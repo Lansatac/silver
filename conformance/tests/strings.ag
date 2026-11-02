@@ -1,0 +1,12 @@
+def greet(name: String): String => name
+
+def main(): Unit {
+    printl("Hello, world!")
+    printl("tab:\there")
+    printl("quote: \"silver\"")
+    printl("backslash: \\")
+    printl("")
+    printl(greet("Silver") == "Silver")
+    print("no newline, ")
+    printl("then one")
+}

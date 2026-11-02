@@ -91,6 +91,7 @@ Silver:
 
     Literal              <  BooleanLiteral
                           / NumberLiteral
+                          / StringLiteral
 
     UnitLiteral          < '(' ')'
 
@@ -113,6 +114,12 @@ Silver:
 
 
     BooleanLiteral      <- TRUE / FALSE
+
+    # Single line only. Unknown escapes are rejected, so `\(` or `\{` stays free for interpolation.
+    StringLiteral       <- doublequote StringPart* doublequote
+    StringPart          <- StringText / EscapeSequence
+    StringText          <~ (!doublequote !backslash !eol .)+
+    EscapeSequence      <~ backslash (doublequote / backslash / [nrt0])
 
     NumberLiteral       <-  ScientificLiteral
                           / HexaLiteral

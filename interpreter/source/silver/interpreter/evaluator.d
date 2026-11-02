@@ -284,6 +284,11 @@ class Evaluator
         return makeValue(ast.value);
     }
 
+    private Variant evaluate(const StringLiteral ast, Environment variables)
+    {
+        return makeValue(ast.value);
+    }
+
     private Variant evaluate(const Identifier ast, Environment variables)
     {
         if (auto value = variables.find(ast.name))

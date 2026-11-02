@@ -314,6 +314,7 @@ final class Analyzer
             (const BoolLiteral _) {},
             (const IntLiteral _) {},
             (const FloatLiteral _) {},
+            (const StringLiteral _) {},
             (const UnitLiteral _) {},
         );
     }

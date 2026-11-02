@@ -13,6 +13,25 @@ immutable Case[] literals = [
     parsesAs("f(())", "(call f ())"),
 ];
 
+immutable Case[] stringLiterals = [
+    parsesAs(`a = "hello"`, `(assign a "hello")`),
+    parsesAs(`a = ""`, `(assign a "")`),
+    parsesAs(`a = "  two  spaces  "`, `(assign a "  two  spaces  ")`),
+    parsesAs(`a = "a\nb\tc\rd\0e"`, `(assign a "a\nb\tc\rd\0e")`),
+    parsesAs(`a = "say \"hi\""`, `(assign a "say \"hi\"")`),
+    parsesAs(`a = "back\\slash"`, `(assign a "back\\slash")`),
+    parsesAs(`a = "// not a comment"`, `(assign a "// not a comment")`),
+    parsesAs(`a = "/* nor this */"`, `(assign a "/* nor this */")`),
+    parsesAs(`a = "{braces} and $dollars"`, `(assign a "{braces} and $dollars")`),
+    parsesAs(`a = "héllo ☃"`, `(assign a "héllo ☃")`),
+    parsesAs(`f("a", "b")`, `(call f "a" "b")`),
+    parsesAs(`a = "x" == "y"`, `(assign a (Equal "x" "y"))`),
+    rejects(`a = "unterminated`),
+    rejects(`a = "unknown \q escape"`),
+    rejects(`a = "\(reserved)"`),
+    rejects("a = \"two\nlines\""),
+];
+
 /// Grammar only: `lower` passes the `0x`/`0b` prefix to `to!long`.
 immutable Case[] radixLiterals = [
     accepts("a = 0x1F"),

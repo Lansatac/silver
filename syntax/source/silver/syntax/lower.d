@@ -259,6 +259,8 @@ private final class Lowering
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(FloatLiteral(cst.matches[0].to!double)));
         case "Silver.Identifier":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(Identifier(cst.matches[0])));
+        case "Silver.StringLiteral":
+            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(StringLiteral(stringValue(cst))));
         case "Silver.ScientificLiteral":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(FloatLiteral(cst.matches[0].to!double)));
         case "Silver.HexaLiteral":
@@ -269,6 +271,47 @@ private final class Lowering
             break;
         }
         throw new Exception("lower: expression '%s' not supported yet".format(cst.name));
+    }
+
+    /// The text of a StringLiteral, with escapes decoded.
+    private static string stringValue(ParseTree cst)
+    {
+        string value;
+        foreach (part; cst.children)
+        {
+            part.validateNodeIs("Silver.StringPart");
+            auto piece = part[0];
+            switch (piece.name)
+            {
+            case "Silver.StringText":
+                value ~= piece.matches[0];
+                break;
+            case "Silver.EscapeSequence":
+                value ~= decodeEscape(piece.matches[0]);
+                break;
+            default:
+                throw new Exception("Unexpected '%s' in string literal".format(piece.name));
+            }
+        }
+        return value;
+    }
+
+    private static char decodeEscape(string escape)
+    {
+        switch (escape[1])
+        {
+        case 'n':
+            return '\n';
+        case 'r':
+            return '\r';
+        case 't':
+            return '\t';
+        case '0':
+            return '\0';
+        default:
+            // `\"` and `\\` stand for the character itself.
+            return escape[1];
+        }
     }
 
     // WhileExpression      < :WHILE Expression Block

@@ -7,7 +7,7 @@ import silver.syntax.cases;
 
 mixin GrammarCases!(
     layout, comments,
-    literals, radixLiterals, constructors, collectionLiterals,
+    literals, stringLiterals, radixLiterals, constructors, collectionLiterals,
     operators, precedence, associativity,
     postfix, indexing, optionalChaining,
     ifs, blocks, loops,

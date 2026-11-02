@@ -108,7 +108,7 @@ struct Expr
     ExprKind kind;
 }
 
-alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, Identifier, UnaryExpr, BinaryExpr,
+alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, Identifier, UnaryExpr, BinaryExpr,
     CallExpr, MemberAccess, WhileExpr, IfExpr, BlockExpr, UnitLiteral);
 
 /// `()`, the only value of type Unit.
@@ -129,6 +129,12 @@ struct IntLiteral
 struct FloatLiteral
 {
     double value;
+}
+
+/// `"..."`, with escapes already decoded.
+struct StringLiteral
+{
+    string value;
 }
 
 struct Identifier
@@ -223,6 +229,8 @@ string printExpr(const Expr e)
         (const BoolLiteral b) => b.value.to!string,
         (const IntLiteral l) => l.value.to!string,
         (const FloatLiteral f) => f.value.to!string,
+        // %(%s%) writes a one-element array's string quoted and escaped.
+        (const StringLiteral s) => format("%(%s%)", [s.value]),
         (const Identifier i) => i.name,
         (const BinaryExpr b) => format("(%s %s %s)", b.op, printExpr(*b.left), printExpr(*b.right)),
         (const UnaryExpr u) => format("(%s %s)", u.op, printExpr(*u.operand)),

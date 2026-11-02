@@ -518,3 +518,27 @@ unittest
         .should.throwException!RuntimeError.withMessage(
             "`main` is defined in more than one module: a, test");
 }
+
+@("A string literal prints without quotes, with escapes decoded")
+unittest
+{
+    evaluateExpression(`"hello"`).should.equal("hello");
+    evaluateExpression(`"a\tb\n\"c\" \\"`).should.equal("a\tb\n\"c\" \\");
+    evaluateExpression(`""`).should.equal("");
+}
+
+@("Strings compare by value")
+unittest
+{
+    runMain(`val a = "silver"
+    printl(a == "silver")
+    printl(a != "gold")`).should.equal("true\ntrue\n");
+}
+
+@("Strings can be passed to and returned from functions")
+unittest
+{
+    runProgram(`def greeting(): String => "hi"
+def echo(s: String): String => s
+def main(): Unit => print(echo(greeting()))`).should.equal("hi");
+}
