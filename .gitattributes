@@ -1,0 +1,3 @@
+# Read inside the Linux dev container from a Windows checkout, where CRLF breaks them.
+*.sh text eol=lf
+Dockerfile text eol=lf

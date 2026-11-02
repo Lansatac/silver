@@ -1,0 +1,20 @@
+{
+  "name": "Silver Development",
+  "build": { "dockerfile": "Dockerfile" },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/code,type=bind",
+  "workspaceFolder": "/code",
+  "mounts": [
+    // Keeps ~/.dub (fetched packages) and shell history across container rebuilds.
+    "source=silver-dev-home,target=/home/dev,type=volume"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "webfreak.code-d",
+        "vadimcn.vscode-lldb",
+        "anthropic.claude-code"
+      ]
+    }
+  },
+  "remoteUser": "dev"
+}
