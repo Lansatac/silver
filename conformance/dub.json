@@ -4,7 +4,8 @@
 	"dependencies": {
 		"silver:interpreter": "*",
 		"silver:loader": "*",
-		"silver:sema": "*"
+		"silver:sema": "*",
+		"silver:codegen": "*"
 	},
 	"configurations": [
 		{ "name": "library" },

@@ -1,0 +1,21 @@
+{
+	"name": "codegen",
+	"description": "Silver's LLVM backend: textual IR generation and linking with clang.",
+	"targetType": "library",
+	"dependencies": {
+		"silver:ast": "*",
+		"silver:sema": "*"
+	},
+	"configurations": [
+		{ "name": "library" },
+		{
+			"name": "unittest",
+			"dependencies": {
+				"silly": "~>1.2.0-dev.2",
+				"fluent-asserts": "~>2.1",
+				"silver:loader": "*"
+			},
+			"libs-windows": ["psapi"]
+		}
+	]
+}
