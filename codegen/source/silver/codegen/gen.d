@@ -14,7 +14,9 @@ import std.regex;
 
 /// The code for one expression and the operand holding its value. Fragments are values:
 /// an expression's fragment is built from its children's, and the parent decides where
-/// each one goes. Evaluation order is the order they're sequenced with `then`.
+/// each one goes. Evaluation order is the order they're sequenced with `then`. A fragment
+/// starts in whatever block the parent places it in and ends in `endBlock`; what happens in
+/// between is its own business.
 struct Fragment
 {
     /// Hoisted to the top of the entry block, where mem2reg can promote them.
@@ -24,6 +26,9 @@ struct Fragment
     /// A temp (`%.t3`), a constant (`42`) or a global (`@.str.0`). Null for a Unit-typed
     /// expression, which has no value.
     string value;
+    /// The block control is in after `code` runs, or null when the code opened no block
+    /// and so ends in the one it started in.
+    string endBlock;
 
     static Fragment constant(string operand)
     {
@@ -37,19 +42,52 @@ struct Fragment
 
     static Fragment undef()
     {
-        return Fragment(null, null, "undef");
+        return constant("undef");
+    }
+
+    /// Starts block `name`: everything sequenced after this is in it.
+    static Fragment label(string name)
+    {
+        return Fragment(null, [name ~ ":"], null, name);
+    }
+
+    /// Ends the current block by jumping to `target`.
+    static Fragment jump(string target)
+    {
+        return instruction("br label %" ~ target);
+    }
+
+    /// Ends the current block by branching on the `i1` operand `condition`.
+    static Fragment branch(string condition, string ifTrue, string ifFalse)
+    {
+        return instruction("br i1 %s, label %%%s, label %%%s".format(condition, ifTrue, ifFalse));
+    }
+
+    /// `result`, which is `type`, is `value` when control came from `block`, for each pair in
+    /// `incoming`. Must be the first instruction of its block.
+    static Fragment phi(string result, string type, string[2][] incoming)
+    {
+        auto cases = incoming.map!(pair => "[ %s, %%%s ]".format(pair[0], pair[1])).join(", ");
+        return instruction("%s = phi %s %s".format(result, type, cases), result);
+    }
+
+    /// Every fragment in order, with the last one's value.
+    static Fragment sequence(Fragment[] fragments)
+    {
+        return fragments.fold!((sequenced, next) => sequenced.then(next))(Fragment.init);
     }
 
     /// This fragment followed by `next`, with `next`'s value.
     Fragment then(Fragment next)
     {
-        return Fragment(allocas ~ next.allocas, code ~ next.code, next.value);
+        return Fragment(allocas ~ next.allocas, code ~ next.code, next.value,
+            next.endBlock !is null ? next.endBlock : endBlock);
     }
 
     /// The same code, with no value (a statement) or another one.
     Fragment withValue(string newValue)
     {
-        return Fragment(allocas, code, newValue);
+        return Fragment(allocas, code, newValue, endBlock);
     }
 }
 
@@ -62,6 +100,12 @@ final class FunctionState
 
     private int _nextTemp;
     private int[string] _slotNameCounts;
+    private int _nextLabel;
+
+    string newLabel(string hint)
+    {
+        return "%s.%s".format(hint, _nextLabel++);
+    }
 
     /// A fresh SSA name. Silver identifiers can't contain `.`, so these never clash with user names.
     string newTemp()
@@ -193,13 +237,16 @@ final class Generator
     {
         return expr.kind.match!(
             (const BoolLiteral literal) => Fragment.constant(literal.value ? "true" : "false"),
-            (const IntLiteral literal) => Fragment.constant(literal.value.to!string),
+            (const IntLiteral literal) => 
+                _analysis.typeOf(expr.id) == _analysis.types.float_
+                    ? Fragment.constant(floatConstant(literal.value))
+                    : Fragment.constant(literal.value.to!string),
             (const FloatLiteral literal) => Fragment.constant(floatConstant(literal.value)),
             (const StringLiteral literal) => unsupported(expr.span, "String literals"),
             (const UnitLiteral literal) => Fragment.init,
             (const Identifier _) => emitIdentifier(expr),
             (const UnaryExpr unary) => unsupported(expr.span, "unary operators"),
-            (const BinaryExpr binary) => unsupported(expr.span, "binary operators"),
+            (const BinaryExpr binary) => emitBinaryExpr(binary, expr),
             (const CallExpr call) => emitFunctionCall(call, expr),
             (const MemberAccess access) => unsupported(expr.span, "member access"),
             (const WhileExpr while_) => unsupported(expr.span, "`while`"),
@@ -242,6 +289,94 @@ final class Generator
         return fragment;
     }
 
+    Fragment emitBinaryExpr(const BinaryExpr binary, const Expr expr)
+    {
+        auto lhs = emitExpr(*binary.left);
+        auto rhs = emitExpr(*binary.right);
+        auto type = _analysis.typeOf(binary.left.id);
+        auto llType = llvmType(type);
+        switch(binary.op)
+        {
+            case BinaryOp.And:
+                return emitConditional(lhs, "i1",
+                    rhs, Fragment.constant("false"), "and");
+            case BinaryOp.Or:
+                return emitConditional(lhs, "i1",
+                    Fragment.constant("true"), rhs, "or");
+            default:
+                auto llOp = llBinaryOp(binary.op, type);
+                if (llOp is null) return unsupported(expr.span, "`" ~ binary.op ~ "`");
+
+                auto result = _function.newTemp();
+                return 
+                        lhs
+                    .then(rhs)
+                    .then(Fragment.instruction(
+                        "%s = %s %s %s, %s".format(result, llOp, llType, lhs.value, rhs.value),
+                        result));
+        }
+    }
+
+    Fragment emitConditional(Fragment condition, string resultType,
+        Fragment thenFragment, Fragment elseFragment, string labelHint)
+    {
+        auto trueLabel = _function.newLabel(labelHint ~ ".then");
+        auto elseLabel = _function.newLabel(labelHint ~ ".else");
+        auto joinLabel = _function.newLabel(labelHint ~ ".join");
+        auto result = _function.newTemp();
+
+        auto thenBlock = Fragment.label(trueLabel)
+            .then(thenFragment)
+            .then(Fragment.jump(joinLabel));
+
+        auto elseBlock = Fragment.label(elseLabel)
+            .then(elseFragment)
+            .then(Fragment.jump(joinLabel));
+
+        return condition
+            .then(Fragment.instruction(
+                "br i1 %s, label %%%s, label %%%s".format(condition.value, trueLabel, elseLabel), resultType))
+            .then(thenBlock)
+            .then(elseBlock)
+            .then(Fragment.label(joinLabel).then(
+                Fragment.phi(result, resultType, [
+                    [thenFragment.value, thenBlock.endBlock],
+                    [elseFragment.value, elseBlock.endBlock]])));
+    }
+
+    /// The LLVM opcode, with its predicate for comparisons, for `op` on two operands of
+    /// `operandType`. Null when there is no single instruction: `&&`/`||` short-circuit, `^`
+    /// and `??` take several, and String comparison can't be a pointer compare.
+    string llBinaryOp(BinaryOp op, Type operandType)
+    {
+        auto kind = _analysis.types[operandType].match!(
+            (const Primitive p) => p.kind,
+            (_) => Primitive.Kind.Any);
+        if (kind == Primitive.Kind.String) return null;
+        auto isFloat = kind == Primitive.Kind.Float;
+
+        // `!=` is unordered so that comparing with NaN is true, as IEEE says it is.
+        final switch (op)
+        {
+            case BinaryOp.Add: return isFloat ? "fadd" : "add";
+            case BinaryOp.Subtract: return isFloat ? "fsub" : "sub";
+            case BinaryOp.Multiply: return isFloat ? "fmul" : "mul";
+            case BinaryOp.Divide: return isFloat ? "fdiv" : "sdiv";
+            case BinaryOp.Modulo: return isFloat ? "frem" : "srem";
+            case BinaryOp.Equal: return isFloat ? "fcmp oeq" : "icmp eq";
+            case BinaryOp.NotEqual: return isFloat ? "fcmp une" : "icmp ne";
+            case BinaryOp.Less: return isFloat ? "fcmp olt" : "icmp slt";
+            case BinaryOp.LessEqual: return isFloat ? "fcmp ole" : "icmp sle";
+            case BinaryOp.Greater: return isFloat ? "fcmp ogt" : "icmp sgt";
+            case BinaryOp.GreaterEqual: return isFloat ? "fcmp oge" : "icmp sge";
+            case BinaryOp.And:
+            case BinaryOp.Or:
+            case BinaryOp.Power:
+            case BinaryOp.Coalesce:
+                return null;
+        }
+    }
+
     Fragment emitFunctionCall(const CallExpr call, const Expr expr)
     {
         auto callee = _analysis.calleeOf(expr.id);
@@ -249,7 +384,7 @@ final class Generator
         auto function_ = _functions[*callee];
 
         auto args = call.args.map!(arg => emitExpr(arg)).array;
-        auto evaluated = args.fold!((sequence, arg) => sequence.then(arg))(Fragment.init);
+        auto evaluated = Fragment.sequence(args);
         auto operands = args.map!(arg => arg.value).array;
 
         if (function_.native)
@@ -334,8 +469,7 @@ final class Generator
 
     Fragment emitBlock(const BlockExpr block)
     {
-        auto statements = block.statements.map!(statement => emitStatement(statement))
-            .fold!((sequence, statement) => sequence.then(statement))(Fragment.init);
+        auto statements = Fragment.sequence(block.statements.map!(statement => emitStatement(statement)).array);
         return block.value is null ? statements : statements.then(emitExpr(*block.value));
     }
 

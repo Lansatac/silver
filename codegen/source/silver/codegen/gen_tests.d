@@ -185,3 +185,145 @@ unittest
     if (!compileAndRun(source, run)) return;
     run.output.should.equal("7\n");
 }
+
+// Next step: binary operators. The operand type picks the instruction (`add` on i64, `fadd`
+// on double; sema guarantees both sides agree), both operands are evaluated left to right
+// before it, and `sdiv`/`srem` truncate toward zero with the dividend's sign, as the
+// interpreter does. Until `emitExpr` handles `BinaryExpr`, this fails with "doesn't support
+// binary operators yet".
+@("codegen lowers Int arithmetic and comparison to the signed integer instructions")
+unittest
+{
+    auto source = "def main(): Unit {\n    val a = 0 - 7\n    val b = 2\n"
+        ~ "    printl(a / b)\n    printl(a % b)\n    printl(a * b + 1)\n"
+        ~ "    printl(a < b)\n    printl(a == b)\n}";
+    auto ir = generateSource(source);
+
+    // The left operand is evaluated before the right one.
+    ir.should.contain("%.t1 = load i64, ptr %a.addr");
+    ir.should.contain("%.t2 = load i64, ptr %b.addr");
+    ir.should.contain("sdiv i64 %.t1, %.t2");
+    ir.should.contain("srem i64 ");
+    ir.should.contain("mul i64 ");
+    ir.should.contain("add i64 ");
+    ir.should.contain("icmp slt i64 ");
+    ir.should.contain("icmp eq i64 ");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("-3\n-1\n-13\ntrue\nfalse\n");
+}
+
+// Float operands use the floating-point instructions, and an Int literal that sema adapted
+// to Float (`x / 4`) has to be emitted as a double constant, not as `4`.
+@("codegen lowers Float arithmetic and comparison to the floating-point instructions")
+unittest
+{
+    auto source = "def main(): Unit {\n    val x = 10.0\n"
+        ~ "    printl(x / 4)\n    printl(x * 1.5 - 1.0)\n    printl(x > 4.0)\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("fdiv double %.t0, 0x4010000000000000");
+    ir.should.contain("fmul double ");
+    ir.should.contain("fsub double ");
+    ir.should.contain("fcmp ogt double ");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("2.5\n14\ntrue\n");
+}
+
+// Next step: `&&` and `||`. They short-circuit, so the right operand only runs when the left
+// one doesn't decide the result; eager `and i1`/`or i1` would evaluate both. That means a
+// conditional branch, the right operand in its own block, and a `phi` at the join that picks
+// the left's value or the right's by which block it came from. The predecessor label is the
+// block that actually branches to the join, which for a nested `||` inside `&&` is the inner
+// join, not the block the right operand started in.
+@("codegen short-circuits && and ||, evaluating the right operand only when it can matter")
+unittest
+{
+    auto source = "def say(b: Bool): Bool {\n    printl(b)\n    b\n}\n"
+        ~ "def main(): Unit {\n"
+        ~ "    printl(false && say(true))\n"
+        ~ "    printl(true || say(false))\n"
+        ~ "    printl(true && say(false))\n"
+        ~ "    printl(false || say(true))\n"
+        ~ "    printl(false || (true && say(true)))\n"
+        ~ "}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("br i1 ");
+    ir.should.contain("phi i1 ");
+    ir.should.not.contain(" = and i1 ");
+    ir.should.not.contain(" = or i1 ");
+    // The first right operand is only reached through a branch.
+    ir.indexOf("br i1 ").should.be.lessThan(ir.indexOf("call i1 @\"main.say\""));
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("false\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue\n");
+}
+
+// Next step: unary operators. `-` on an Int is `sub i64 0, x`; on a Float it is `fneg`, not
+// `fsub -0.0, x`, which differs on signed zero. `!` is `xor i1 x, true`. A signed literal
+// beside a Float was adapted along with its sign, so `-2` there is a Float too. Until
+// `emitExpr` handles `UnaryExpr`, this fails with "doesn't support unary operators yet".
+@("codegen negates Ints with sub, Floats with fneg, and Bools with xor")
+unittest
+{
+    auto source = "def main(): Unit {\n    val a = 7\n    val x = 2.5\n"
+        ~ "    printl(-a)\n    printl(-x)\n    printl(!(a == 7))\n    printl(-(-a))\n    printl(x * -2)\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("sub i64 0, ");
+    ir.should.contain("fneg double ");
+    ir.should.contain("xor i1 ");
+    ir.should.not.contain("fsub double");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("-7\n-2.5\nfalse\n7\n-5\n");
+}
+
+// Next step: assignment. A `mutable val` already has a slot, so assigning is a store to it,
+// and every read is still a fresh load, so the store is seen by later uses. Until
+// `emitStatement` handles `AssignStmt`, this fails with "doesn't support assignment yet".
+@("codegen assigns a mutable local by storing to its slot")
+unittest
+{
+    auto source = "def main(): Unit {\n    mutable val total = 0\n"
+        ~ "    total = total + 2\n    total = total * 5\n    printl(total)\n"
+        ~ "    mutable val flag = false\n    flag = true\n    printl(flag)\n}";
+    auto ir = generateSource(source);
+
+    // One store for the declaration and one per assignment; one load per use.
+    ir.count("store i64 ").should.equal(3);
+    ir.count("load i64, ptr %total.addr").should.equal(3);
+    ir.should.contain("store i1 true, ptr %flag.addr");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("10\ntrue\n");
+}
+
+// Next step: `if` with a value. It is `emitConditional` with the arms' type, and `else if`
+// is just an `if` in the else arm, so the join of the inner one is what the outer phi sees.
+// A block arm can have statements before its value. Until `emitExpr` handles `IfExpr`,
+// this fails with "doesn't support `if` yet".
+@("codegen lowers an if expression to a branch and a phi, chaining else-ifs")
+unittest
+{
+    auto source = "def sign(n: Int): Int => if n < 0 => 0 - 1 else if n == 0 => 0 else 1\n"
+        ~ "def main(): Unit {\n"
+        ~ "    printl(sign(0 - 5))\n    printl(sign(0))\n    printl(sign(9))\n"
+        ~ "    val label = if sign(3) == 1 {\n        printl(true)\n        10\n    } else {\n        20\n    }\n"
+        ~ "    printl(label)\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("phi i64 ");
+    ir.count("br i1 ").should.equal(3);
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("-1\n0\n1\ntrue\n10\n");
+}
