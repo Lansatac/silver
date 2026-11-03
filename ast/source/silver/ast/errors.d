@@ -36,6 +36,7 @@ enum DiagnosticCode : string
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",
     MissingNativeBinding = "R0002",
+    DivisionByZero = "R0003",
 
     /// Something the implementation doesn't handle yet, or a broken invariant.
     InternalError = "I0001",

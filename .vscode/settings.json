@@ -1,0 +1,4 @@
+{
+	// Subpackages can't resolve their silver:* deps standalone; the root instance covers them all.
+	"d.scanAllFolders": false
+}

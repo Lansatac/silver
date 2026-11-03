@@ -542,3 +542,28 @@ unittest
 def echo(s: String): String => s
 def main(): Unit => print(echo(greeting()))`).should.equal("hi");
 }
+
+@("Integer arithmetic is signed")
+unittest
+{
+    evaluateExpression("-7 / 2").should.equal("-3");
+    evaluateExpression("-7 % 2").should.equal("-1");
+    evaluateExpression("7 / -2").should.equal("-3");
+    evaluateExpression("-2 * 3").should.equal("-6");
+    evaluateExpression("(-2) ^ 3").should.equal("-8");
+    evaluateExpression("-1 < 1").should.equal("true");
+}
+
+@("Integer division by zero is a runtime error")
+unittest
+{
+    try
+    {
+        runMain("printl(1 / 0)");
+        assert(false, "Expected division by zero to fail");
+    }
+    catch (RuntimeError e)
+    {
+        e.diagnostic.code.should.equal(DiagnosticCode.DivisionByZero);
+    }
+}

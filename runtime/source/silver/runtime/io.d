@@ -1,0 +1,50 @@
+/// The prelude's `print`, `printl` and `read`. `print` and `printl` take `Any`, so there's one
+/// function per argument type, named `silver_<native>_<type>`. Values are formatted with
+/// `to!string`, as the interpreter does, so both backends print the same thing.
+module silver.runtime.io;
+
+import std.conv : to;
+import std.stdio : readln, stdout;
+import std.string : fromStringz, toStringz;
+
+import silver.runtime.panic : panic;
+
+extern (C) nothrow:
+
+void silver_print_int(long value) { output(value.to!string, false); }
+void silver_print_float(double value) { output(value.to!string, false); }
+void silver_print_bool(bool value) { output(value.to!string, false); }
+void silver_print_string(const(char)* value) { output(value.fromStringz, false); }
+void silver_print_unit() { output("()", false); }
+
+void silver_printl_int(long value) { output(value.to!string, true); }
+void silver_printl_float(double value) { output(value.to!string, true); }
+void silver_printl_bool(bool value) { output(value.to!string, true); }
+void silver_printl_string(const(char)* value) { output(value.fromStringz, true); }
+void silver_printl_unit() { output("()", true); }
+
+/// A line from stdin including its newline, or "" at end of input.
+const(char)* silver_read()
+{
+    try
+    {
+        return readln().toStringz;
+    }
+    catch (Exception e)
+    {
+        panic("couldn't read input: " ~ e.msg);
+    }
+}
+
+private void output(lazy const(char)[] text, bool newline)
+{
+    try
+    {
+        stdout.write(text);
+        if (newline) stdout.write('\n');
+    }
+    catch (Exception e)
+    {
+        panic("couldn't write output: " ~ e.msg);
+    }
+}

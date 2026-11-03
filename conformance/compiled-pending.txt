@@ -1,0 +1,13 @@
+# Conformance tests the LLVM backend doesn't pass yet, one name per line. Remove a name once it passes.
+if-basic
+if-blocks
+if-precedence
+if-return
+if-scope
+if-separators
+if-unit
+import-std
+smoke
+strings
+arithmetic
+unit

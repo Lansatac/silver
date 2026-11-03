@@ -514,29 +514,61 @@ class Evaluator
         return Variant(Unit());
     }
 
+    /// Numbers are unwrapped first: Variant's own operators compute two longs as ulong.
+    /// Sema only lets Int and Float meet when an integer literal adapted to Float, which
+    /// the interpreter evaluates as a long anyway, so a mixed pair is Float arithmetic.
     private Variant operate(BinaryOp operator, Variant lhs, Variant rhs)
     {
-        final switch (operator)
+        if (lhs.peek!double || rhs.peek!double)
         {
-        case BinaryOp.Add:
-            return lhs + rhs;
-        case BinaryOp.Subtract:
-            return lhs - rhs;
-        case BinaryOp.Multiply:
-            return lhs * rhs;
-        case BinaryOp.Divide:
-            return lhs / rhs;
-        case BinaryOp.Modulo:
-            return lhs % rhs;
-        case BinaryOp.Power:
-            return lhs ^^ rhs;
+            return operate(operator, lhs.get!double, rhs.get!double);
+        }
+        if (auto left = lhs.peek!long)
+        {
+            return operate(operator, *left, rhs.get!long);
+        }
+        switch (operator)
+        {
         case BinaryOp.Equal:
             return Variant(lhs == rhs);
         case BinaryOp.NotEqual:
             return Variant(lhs != rhs);
-        case BinaryOp.And:
-        case BinaryOp.Or:
-            assert(0, "and/or short-circuit in evaluate(BinaryExpr)");
+        default:
+            import std.format : format;
+
+            throw new CodedException(DiagnosticCode.InvalidOperand,
+                "Unsupported operator %s for type %s".format(operator, lhs.type));
+        }
+    }
+
+    private Variant operate(T)(BinaryOp operator, T lhs, T rhs)
+    {
+        import std.traits : isIntegral;
+
+        final switch (operator)
+        {
+        case BinaryOp.Add:
+            return Variant(lhs + rhs);
+        case BinaryOp.Subtract:
+            return Variant(lhs - rhs);
+        case BinaryOp.Multiply:
+            return Variant(lhs * rhs);
+        case BinaryOp.Divide:
+        case BinaryOp.Modulo:
+            static if (isIntegral!T)
+            {
+                if (rhs == 0)
+                {
+                    throw new CodedException(DiagnosticCode.DivisionByZero, "Division by zero");
+                }
+            }
+            return Variant(operator == BinaryOp.Divide ? lhs / rhs : lhs % rhs);
+        case BinaryOp.Power:
+            return Variant(lhs ^^ rhs);
+        case BinaryOp.Equal:
+            return Variant(lhs == rhs);
+        case BinaryOp.NotEqual:
+            return Variant(lhs != rhs);
         case BinaryOp.Less:
             return Variant(lhs < rhs);
         case BinaryOp.LessEqual:
@@ -545,6 +577,9 @@ class Evaluator
             return Variant(lhs > rhs);
         case BinaryOp.GreaterEqual:
             return Variant(lhs >= rhs);
+        case BinaryOp.And:
+        case BinaryOp.Or:
+            assert(0, "and/or short-circuit in evaluate(BinaryExpr)");
         case BinaryOp.Coalesce:
             throw new CodedException(DiagnosticCode.InternalError, "Coalesce operator not implemented");
         }

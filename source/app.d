@@ -5,7 +5,7 @@ import std.path;
 import std.range;
 
 import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, SourceContext;
-import silver.codegen : executablePath, findClang, generate, linkExecutable;
+import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Toolchain;
 import silver.interpreter.evaluator : Evaluator;
 import silver.loader : load, standardLibraryPath;
 import silver.sema : analyze, Analysis;
@@ -88,10 +88,10 @@ bool compileToExecutable(string programFile, string[] importPaths, string output
     {
         return false;
     }
-    auto clang = findClang();
-    if (clang is null)
+    Toolchain toolchain;
+    if (auto missing = findToolchain(toolchain))
     {
-        stderr.writeln("clang wasn't found. Install LLVM, or set SILVER_CLANG to clang's path.");
+        stderr.writeln(missing);
         return false;
     }
 
@@ -99,10 +99,10 @@ bool compileToExecutable(string programFile, string[] importPaths, string output
     std.file.write(irPath, ir);
     scope (exit) remove(irPath);
 
-    auto linked = linkExecutable(clang, irPath, outputPath);
+    auto linked = linkExecutable(toolchain, irPath, outputPath);
     if (!linked.succeeded)
     {
-        stderr.writeln("clang failed:\n", linked.output);
+        stderr.writeln("Linking failed:\n", linked.output);
         return false;
     }
     return true;

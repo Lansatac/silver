@@ -22,3 +22,6 @@ docs/
 
 # `silver build --emit-llvm` output.
 *.ll
+
+# The compiled runtime library, rebuilt when its sources change.
+runtime/build/

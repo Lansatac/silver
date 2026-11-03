@@ -1,0 +1,17 @@
+// () is an ordinary value: it can be bound, passed, returned and printed
+def nothing(): Unit {}
+def side(): Unit => printl(1)
+
+def main(): Unit {
+    val u = ()
+    printl(u)
+    printl(())
+    printl(nothing())
+    printl(side())
+
+    // An if without an else, and a block that ends in a statement, are ()
+    val v = if false { 1 }
+    printl(v)
+    val w = { val x = 1 }
+    printl(w)
+}

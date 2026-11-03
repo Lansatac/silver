@@ -11,7 +11,7 @@ version (unittest)
     import std.stdio : writeln;
     import std.string : lineSplitter, replace, startsWith, strip;
     import silver.ast : formatDiagnostic, Program, SourceContext;
-    import silver.codegen : executablePath, findClang, generate, linkExecutable;
+    import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Toolchain;
     import silver.interpreter.evaluator : Evaluator;
     import silver.loader : load, standardLibraryPath;
     import silver.sema : analyze, Analysis;
@@ -79,9 +79,9 @@ version (unittest)
             .array;
     }
 
-    /// Compiles `c` with clang in `workDirectory`, runs it, and returns why its output
-    /// didn't match, or null if it did.
-    string runCompiled(Case c, string clang, string workDirectory)
+    /// Compiles `c` in `workDirectory`, runs it, and returns why its output didn't match,
+    /// or null if it did.
+    string runCompiled(Case c, const Toolchain toolchain, string workDirectory)
     {
         auto context = new SourceContext();
         Program program;
@@ -96,9 +96,10 @@ version (unittest)
         {
             ir = generate(program, analysis, context.collector);
         }
-        catch (Exception e)
+        // Throwable, so a failed assertion in codegen counts against its case alone.
+        catch (Throwable e)
         {
-            return "codegen threw: " ~ e.msg;
+            return "codegen threw: " ~ e.msg ~ " (" ~ e.file ~ ":" ~ e.line.to!string ~ ")";
         }
         if (context.collector.hasErrors)
         {
@@ -109,10 +110,10 @@ version (unittest)
         auto irPath = buildPath(workDirectory, c.name ~ ".ll");
         auto exePath = executablePath(buildPath(workDirectory, c.name));
         write(irPath, ir);
-        auto linked = linkExecutable(clang, irPath, exePath);
+        auto linked = linkExecutable(toolchain, irPath, exePath);
         if (!linked.succeeded)
         {
-            return "clang failed (IR kept at " ~ irPath ~ "):\n" ~ linked.output;
+            return "linking failed (IR kept at " ~ irPath ~ "):\n" ~ linked.output;
         }
 
         auto run = execute([exePath]);
@@ -120,39 +121,67 @@ version (unittest)
         {
             return "the program exited with status " ~ run.status.to!string ~ ":\n" ~ run.output;
         }
-        auto output = run.output.normalizeNewlines;
-        if (output != c.expected)
+        return compareOutput(c, run.output.normalizeNewlines);
+    }
+
+    /// Interprets `c` and returns why its output didn't match, or null if it did.
+    string runInterpreted(Case c)
+    {
+        import silver.ast : DiagnosticException;
+
+        auto context = new SourceContext();
+        Program program;
+        Analysis analysis;
+        if (auto failure = loadAndAnalyze(c, context, program, analysis))
         {
-            return "output differs.\n--- expected\n" ~ c.expected ~ "\n--- actual\n" ~ output;
+            return failure;
         }
-        return null;
+
+        auto evaluator = new Evaluator(program);
+        try
+        {
+            evaluator.run();
+        }
+        catch (DiagnosticException e)
+        {
+            return "the program failed at runtime: " ~ formatDiagnostic(e.diagnostic, context.sources)
+                ~ "\n--- output so far\n" ~ evaluator.output;
+        }
+        return compareOutput(c, evaluator.output);
+    }
+
+    /// Why `actual` isn't `c`'s expected output, or null if it is.
+    string compareOutput(Case c, string actual)
+    {
+        if (actual == c.expected)
+        {
+            return null;
+        }
+        return "output differs.\n--- expected\n" ~ c.expected ~ "\n--- actual\n" ~ actual;
     }
 }
 
 @("Interpreted conformance programs match their expected output")
 unittest
 {
+    string[] failures;
     foreach (c; cases)
     {
-        auto context = new SourceContext();
-        Program program;
-        Analysis analysis;
-        auto failure = loadAndAnalyze(c, context, program, analysis);
-        assert(failure is null, c.sourcePath ~ ": " ~ failure);
-
-        auto evaluator = new Evaluator(program);
-        evaluator.run();
-        assert(evaluator.output == c.expected, "Conformance output did not match for " ~ c.sourcePath);
+        if (auto failure = runInterpreted(c))
+        {
+            failures ~= c.name ~ ": " ~ failure;
+        }
     }
+    assert(failures.length == 0, "Interpreted conformance failures:\n\n" ~ failures.join("\n\n"));
 }
 
 @("Compiled conformance programs match their expected output")
 unittest
 {
-    auto clang = findClang();
-    if (clang is null)
+    Toolchain toolchain;
+    if (auto missing = findToolchain(toolchain))
     {
-        writeln("    note: clang wasn't found, so compiled conformance was skipped");
+        writeln("    note: ", missing, " Compiled conformance was skipped.");
         return;
     }
 
@@ -164,7 +193,7 @@ unittest
     string[] unexpectedPasses;
     foreach (c; cases)
     {
-        auto failure = runCompiled(c, clang, workDirectory);
+        auto failure = runCompiled(c, toolchain, workDirectory);
         if (failure is null && pending.canFind(c.name))
         {
             unexpectedPasses ~= c.name;

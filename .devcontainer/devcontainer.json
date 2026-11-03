@@ -9,6 +9,17 @@
   ],
   "customizations": {
     "vscode": {
+      // Remote settings override the synced Windows user settings, whose D paths are Windows paths.
+      "settings": {
+        "d.stdlibPath": [
+          "/opt/dlang/dmd-2.113.0/src/druntime/import",
+          "/opt/dlang/dmd-2.113.0/src/phobos"
+        ],
+        "d.dmdPath": "/usr/local/bin/dmd",
+        "d.dubPath": "/usr/local/bin/dub",
+        "d.dubCompiler": "dmd",
+        "d.dubArchType": ""
+      },
       "extensions": [
         "webfreak.code-d",
         "vadimcn.vscode-lldb",
