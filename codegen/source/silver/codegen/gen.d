@@ -10,6 +10,7 @@ import std.string;
 import silver.ast;
 import silver.codegen.runtime_bindings;
 import silver.sema;
+import std.regex;
 
 /// The code for one expression and the operand holding its value. Fragments are values:
 /// an expression's fragment is built from its children's, and the parent decides where
@@ -32,6 +33,11 @@ struct Fragment
     static Fragment instruction(string text, string value = null)
     {
         return Fragment(null, ["  " ~ text], value);
+    }
+
+    static Fragment undef()
+    {
+        return Fragment(null, null, "undef");
     }
 
     /// This fragment followed by `next`, with `next`'s value.
@@ -191,7 +197,7 @@ final class Generator
             (const FloatLiteral literal) => Fragment.constant(floatConstant(literal.value)),
             (const StringLiteral literal) => unsupported(expr.span, "String literals"),
             (const UnitLiteral literal) => Fragment.init,
-            (const Identifier identifier) => unsupported(expr.span, "names"),
+            (const Identifier _) => emitIdentifier(expr),
             (const UnaryExpr unary) => unsupported(expr.span, "unary operators"),
             (const BinaryExpr binary) => unsupported(expr.span, "binary operators"),
             (const CallExpr call) => emitFunctionCall(call, expr),
@@ -206,6 +212,34 @@ final class Generator
     static string floatConstant(double value)
     {
         return "0x%016X".format(*cast(ulong*) &value);
+    }
+
+    Fragment emitIdentifier(const Expr expr)
+    {
+        auto resolved = _analysis.resolutionOf(expr.id);
+        if(resolved == null)
+        {
+            _collector.reportError(DiagnosticCode.InternalError, expr.span, "couldn't resolve expr");
+            return Fragment.undef();
+        }
+        auto fragment = (*resolved).match!(
+            (const Id!FunctionDecl decl) {
+                auto name = mangledNames[decl];
+                return Fragment.constant("@\"%s\"".format(name));
+            },
+            (const Id!Param param) => Fragment.constant(_function.params[param]),
+            (const Id!VarDecl decl) {
+                auto type = llvmType(_analysis.typeOf(decl));
+                auto temp = _function.newTemp;
+                return Fragment.instruction("%s = load %s, ptr %s".format(temp, type, _function.slots[decl]), temp);
+                },
+            (const Id!Module module_) {
+                 _collector.reportError(DiagnosticCode.InternalError, expr.span, "trying to emit a module");
+                return Fragment.undef();
+            }
+        );
+
+        return fragment;
     }
 
     Fragment emitFunctionCall(const CallExpr call, const Expr expr)
