@@ -21,13 +21,11 @@ void shouldHaveType(const Analyzed a, string text, size_t nth, string expected,
     {
         throw new AssertError(format("No expression spans exactly `%s` #%s", text, nth), file, line);
     }
-    auto typing = a.analysis.typing;
-    auto type = *id in typing.exprTypes;
-    if (type is null)
+    if (!a.analysis.hasType(*id))
     {
         throw new AssertError(format("`%s` #%s has no type", text, nth), file, line);
     }
-    auto actual = typing.types.describe(*type);
+    auto actual = a.analysis.types.describe(a.analysis.typeOf(*id));
     if (actual != expected)
     {
         throw new AssertError(format("`%s` #%s has type %s, expected %s", text, nth, actual, expected), file, line);
@@ -51,13 +49,11 @@ void shouldDeclareType(const Analyzed a, At declaration, string expected,
     {
         throw new AssertError(format("%s isn't a declaration", declaration), file, line);
     }
-    auto typing = a.analysis.typing;
-    auto type = *symbol in typing.symbolTypes;
-    if (type is null)
+    if (!a.analysis.hasType(*symbol))
     {
         throw new AssertError(format("%s has no type", declaration), file, line);
     }
-    auto actual = typing.types.describe(*type);
+    auto actual = a.analysis.types.describe(a.analysis.typeOf(*symbol));
     if (actual != expected)
     {
         throw new AssertError(format("%s has type %s, expected %s", declaration, actual, expected), file, line);
@@ -68,10 +64,9 @@ void shouldDeclareType(const Analyzed a, At declaration, string expected,
 void shouldTypeEveryExpression(const Analyzed a, string moduleName = "main",
     string file = __FILE__, size_t line = __LINE__)
 {
-    auto typing = a.analysis.typing;
     foreach (span, id; a.names[moduleName].exprs)
     {
-        if (id !in typing.exprTypes)
+        if (!a.analysis.hasType(id))
         {
             throw new AssertError(format("`%s` has no type", a.sources[moduleName][span[0] .. span[1]]), file, line);
         }

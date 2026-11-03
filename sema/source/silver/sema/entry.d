@@ -3,7 +3,8 @@ module silver.sema.entry;
 import silver.ast;
 
 /// Reports a program that doesn't have exactly one top-level `main` across all its modules.
-void checkEntryPoint(const ref Program program, Collector collector)
+/// Returns that `main`, or an invalid ID if there isn't exactly one.
+Id!FunctionDecl checkEntryPoint(const ref Program program, Collector collector)
 {
     import std.algorithm : map;
     import std.array : join;
@@ -26,7 +27,9 @@ void checkEntryPoint(const ref Program program, Collector collector)
     if(mains.length == 1)
     {
         checkEntryPointShape(program, collector, mains[0]);
+        return mains[0].id;
     }
+    return Id!FunctionDecl.init;
 }
 
 //assumes main is already validated
@@ -103,6 +106,28 @@ unittest
 {
     entryPointErrors(["script": "import app", "app": "module app\ndef main(): Unit => ()"])
         .length.should.equal(0);
+}
+
+@("checkEntryPoint returns the one main's ID")
+unittest
+{
+    import std.sumtype : match;
+
+    auto program = programOf(["app": "def helper(): Unit => ()\ndef main(): Unit => ()"]);
+    auto main = program.modules["app"].declarations[1].kind.match!(
+        (const FunctionDecl f) => f.id,
+        _ => Id!FunctionDecl.init,
+    );
+    checkEntryPoint(program, new Collector).should.equal(main);
+}
+
+@("checkEntryPoint returns an invalid ID unless there's exactly one main")
+unittest
+{
+    auto none = programOf(["app": "def f(): Unit => ()"]);
+    checkEntryPoint(none, new Collector).isValid.should.equal(false);
+    auto two = programOf(["a": "def main(): Unit => ()", "b": "def main(): Unit => ()"]);
+    checkEntryPoint(two, new Collector).isValid.should.equal(false);
 }
 
 @("checkEntryPoint reports a program without main, with no location")

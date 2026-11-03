@@ -3,40 +3,101 @@ module silver.sema.analysis;
 import silver.ast;
 import silver.sema.check;
 import silver.sema.resolve;
+import silver.sema.type;
 
-import std.sumtype : SumType;
+import std.sumtype : match;
 
 version (unittest) import fluent.asserts;
 
-/// Everything sema learned about a Program.
+/// Everything sema learned about a Program, queried by node ID.
 final class Analysis
 {
-    this(SymbolId[Id!Expr] resolutions, Typing typing, Id!FunctionDecl[Id!Expr] callees)
+    package this(Resolution resolution, Typing typing, Id!FunctionDecl entryPoint)
     {
-        _resolutions = resolutions;
+        _resolution = resolution;
         _typing = typing;
-        _callees = callees;
+        _entryPoint = entryPoint;
     }
 
-    private SymbolId[Id!Expr] _resolutions;
-    const(SymbolId[Id!Expr]) resolutions() const
-    {
-        return _resolutions;
-    }
-
+    private Resolution _resolution;
     private Typing _typing;
-    const(Typing) typing() const
+    private Id!FunctionDecl _entryPoint;
+
+    /// The program's `main`, or null if it has none (as a library won't).
+    const(Id!FunctionDecl)* entryPoint() const
     {
-        return _typing;
+        return _entryPoint.isValid ? &_entryPoint : null;
     }
 
-    private Id!FunctionDecl[Id!Expr] _callees;
-    /// The function each direct call invokes, keyed by the call expression. Calls through a
-    /// value (e.g. a function-typed param) have no entry. Kept apart from `resolutions` so
-    /// that overloading, if added, only changes who picks the entry: the type checker.
-    const(Id!FunctionDecl[Id!Expr]) callees() const
+    /// The table every `Type` returned here belongs to.
+    const(TypeTable) types() const
     {
-        return _callees;
+        return _typing.types;
+    }
+
+    /// The checked type of an expression, function, param or local. After an analysis with
+    /// no errors every one of these has a type, so a missing entry is a sema bug; it comes
+    /// back as `types.error`, which consumers already treat as an internal error.
+    Type typeOf(Id!Expr expr) const
+    {
+        return _typing.exprTypes.get(expr, _typing.types.error);
+    }
+
+    /// ditto
+    Type typeOf(Id!FunctionDecl func) const
+    {
+        return typeOf(SymbolId(func));
+    }
+
+    /// ditto
+    Type typeOf(Id!Param param) const
+    {
+        return typeOf(SymbolId(param));
+    }
+
+    /// ditto
+    Type typeOf(Id!VarDecl var) const
+    {
+        return typeOf(SymbolId(var));
+    }
+
+    package Type typeOf(SymbolId symbol) const
+    {
+        return _typing.symbolTypes.get(symbol, _typing.types.error);
+    }
+
+    package bool hasType(Id!Expr expr) const
+    {
+        return (expr in _typing.exprTypes) !is null;
+    }
+
+    package bool hasType(SymbolId symbol) const
+    {
+        return (symbol in _typing.symbolTypes) !is null;
+    }
+
+    /// The declared parameter and return types of `func`.
+    FunctionData signatureOf(Id!FunctionDecl func) const
+    {
+        return _typing.types[typeOf(func)].match!(
+            (const FunctionData data) => data,
+            (_) => assert(0, "A function's type should always be a function type"),
+        );
+    }
+
+    /// The declaration a name or module-rooted member chain refers to, or null if it was
+    /// left unresolved (e.g. `x.f` on a value, which types decide).
+    const(SymbolId)* resolutionOf(Id!Expr use) const
+    {
+        return use in _resolution.resolutions;
+    }
+
+    /// The function a call invokes directly, or null for a call through a value (e.g. a
+    /// function-typed param). Kept apart from `resolutionOf` so that overloading, if added,
+    /// only changes who picks the entry: the type checker.
+    const(Id!FunctionDecl)* calleeOf(Id!Expr call) const
+    {
+        return call in _resolution.callees;
     }
 }
 
@@ -46,10 +107,10 @@ Analysis analyze(const ref Program program, Collector collector)
     import silver.sema.entry : checkEntryPoint;
     import silver.sema.resolve : resolveNames;
 
-    checkEntryPoint(program, collector);
+    auto entryPoint = checkEntryPoint(program, collector);
     auto resolution = resolveNames(program, collector);
     auto typing = checkTypes(program, resolution, collector);
-    return new Analysis(resolution.resolutions, typing, resolution.callees);
+    return new Analysis(resolution, typing, entryPoint);
 }
 
 version (unittest)

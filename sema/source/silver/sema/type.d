@@ -6,7 +6,7 @@ struct Type { private uint index; }
 
 final class TypeTable
 {
-    int nextIndex = 1;
+    private int nextIndex = 1;
 
     Type error, never, unit, bool_, int_, float_, string_, any;
 
@@ -22,8 +22,8 @@ final class TypeTable
         any = registerTypeData(TypeData(Primitive(Primitive.Kind.Any)));
     }
 
-    TypeData[int] _types;
-    Type[TypeData] _interned;
+    private TypeData[int] _types;
+    private Type[TypeData] _interned;
 
 
     private Type registerTypeData(TypeData data)

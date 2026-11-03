@@ -104,7 +104,7 @@ private void shouldResolveTo(const Analyzed a, At use, SymbolId expected, string
     {
         throw new AssertError(format("%s isn't an identifier or member name", use), file, line);
     }
-    auto actual = *useId in a.analysis.resolutions;
+    auto actual = a.analysis.resolutionOf(*useId);
     if (actual is null)
     {
         throw new AssertError(format("%s isn't resolved", use), file, line);
@@ -130,7 +130,7 @@ void shouldCall(const Analyzed a, At call, At declaration,
     {
         throw new AssertError(format("%s isn't the callee of a call", call), file, line);
     }
-    auto actual = *callId in a.analysis.callees;
+    auto actual = a.analysis.calleeOf(*callId);
     if (actual is null)
     {
         throw new AssertError(format("%s has no callee", call), file, line);
@@ -149,7 +149,7 @@ void shouldHaveNoCallee(const Analyzed a, At call, string file = __FILE__, size_
     {
         throw new AssertError(format("%s isn't the callee of a call", call), file, line);
     }
-    if (auto actual = *callId in a.analysis.callees)
+    if (auto actual = a.analysis.calleeOf(*callId))
     {
         throw new AssertError(format("%s calls %s, expected no callee", call, *actual), file, line);
     }
@@ -163,7 +163,7 @@ void shouldNotResolve(const Analyzed a, At use, string file = __FILE__, size_t l
     {
         throw new AssertError(format("%s isn't an identifier or member name", use), file, line);
     }
-    if (auto actual = *useId in a.analysis.resolutions)
+    if (auto actual = a.analysis.resolutionOf(*useId))
     {
         throw new AssertError(format("%s resolves to %s, expected nothing", use, *actual), file, line);
     }

@@ -1,6 +1,7 @@
 module silver.ast.program;
 
 import silver.ast.diagnostic : SourceMap;
+import silver.ast.id : Id;
 import silver.ast.nodes : FunctionDecl, Module, NodeIds;
 import silver.ast.span : Span;
 
@@ -29,6 +30,7 @@ auto sortedModules(const ref Program program)
 /// A top-level `def main` somewhere in a program.
 struct MainFunction
 {
+    Id!FunctionDecl id;
     string moduleName;
     Span nameSpan;
 }
@@ -48,7 +50,7 @@ MainFunction[] mainFunctions(const ref Program program)
                 (const FunctionDecl f) {
                     if (f.name == "main")
                     {
-                        found ~= MainFunction(name, f.nameSpan);
+                        found ~= MainFunction(f.id, name, f.nameSpan);
                     }
                 },
                 (_) {},
