@@ -245,7 +245,7 @@ final class Generator
             (const StringLiteral literal) => unsupported(expr.span, "String literals"),
             (const UnitLiteral literal) => Fragment.init,
             (const Identifier _) => emitIdentifier(expr),
-            (const UnaryExpr unary) => unsupported(expr.span, "unary operators"),
+            (const UnaryExpr unary) => emitUnary(expr, unary),
             (const BinaryExpr binary) => emitBinaryExpr(binary, expr),
             (const CallExpr call) => emitFunctionCall(call, expr),
             (const MemberAccess access) => unsupported(expr.span, "member access"),
@@ -350,6 +350,22 @@ final class Generator
                 Fragment.phi(result, resultType, [
                     [thenFragment.value, thenBlock.endBlock],
                     [elseFragment.value, elseBlock.endBlock]])));
+    }
+
+    Fragment emitUnary(const Expr expr, const UnaryExpr unary)
+    {
+        auto operand = emitExpr(*unary.operand);
+        if (unary.op == UnaryOp.Plus) return operand;
+
+        auto isFloat = _analysis.typeOf(unary.operand.id) == _analysis.types.float_;
+        auto result = _function.newTemp();
+        // `fneg` rather than `fsub -0.0, x`, which gets -0.0 wrong.
+        auto text = unary.op == UnaryOp.Not
+            ? "%s = xor i1 %s, true".format(result, operand.value)
+            : isFloat
+                ? "%s = fneg double %s".format(result, operand.value)
+                : "%s = sub i64 0, %s".format(result, operand.value);
+        return operand.then(Fragment.instruction(text, result));
     }
 
     /// The LLVM opcode, with its predicate for comparisons, for `op` on two operands of
