@@ -20,6 +20,14 @@ package struct Typing
     Type[SymbolId] symbolTypes;
 }
 
+/// Where the checker is inside a function body. Passed by value, so a nested body (a lambda)
+/// gets its own copy and the enclosing one is untouched when it returns.
+private struct BodyContext
+{
+    /// What `return` checks against: the innermost enclosing function's return type.
+    Type returnType;
+}
+
 private final class TypeChecker
 {
     this(const(SymbolId[Id!Expr]) resolutions, Collector collector)
@@ -34,8 +42,6 @@ private final class TypeChecker
     private const(SymbolId[Id!Expr]) _resolutions;
     private Type[Id!Expr] _exprTypes;
     private Type[SymbolId] _symbolTypes;
-    /// The declared return type of the function whose body is being checked.
-    private Type _returnType;
 
     Typing checkProgram(const Program program)
     {
@@ -114,49 +120,56 @@ private final class TypeChecker
 
     private void checkFunction(const FunctionDecl func)
     {
-        _returnType = _types[_symbolTypes[SymbolId(func.id)]].match!(
+        auto returnType = _types[_symbolTypes[SymbolId(func.id)]].match!(
             (const FunctionData fd)=>fd.ret,
             (_)=>_types.error
             );
         if (func.body !is null)
         {
-            check(*func.body, _returnType);
+            checkBody(*func.body, returnType);
         }
     }
 
-    private void checkStmt(const Stmt stmt)
+    /// Checks a function or lambda body in a fresh context, against its return type.
+    private void checkBody(const Expr body, Type returnType)
+    {
+        auto ctx = BodyContext(returnType);
+        check(body, returnType, ctx);
+    }
+
+    private void checkStmt(const Stmt stmt, BodyContext ctx)
     {
         //VarDecl, AssignStmt, ExprStmt, FunctionDecl, ReturnStmt
         stmt.kind.match!(
             (const VarDecl var) {
                 if (var.type is null)
                 {
-                    _symbolTypes[SymbolId(var.id)] = synthesize(var.value);
+                    _symbolTypes[SymbolId(var.id)] = synthesize(var.value, ctx);
                 }
                 else
                 {
                     auto type = resolveType(*var.type);
-                    check(var.value, type);
+                    check(var.value, type, ctx);
                     _symbolTypes[SymbolId(var.id)] = type;
                 }
             },
             (const AssignStmt assign) {
-                auto lhsType = synthesize(assign.target);
-                auto rhsType = synthesize(assign.value);
+                auto lhsType = synthesize(assign.target, ctx);
+                auto rhsType = synthesize(assign.value, ctx);
                 requireAssignable(rhsType, lhsType, assign.value.span);
             },
             (const ExprStmt expr) {
-                synthesize(expr.expr);
+                synthesize(expr.expr, ctx);
             },
             // Name resolution reports nested functions as unsupported.
             (const FunctionDecl _) {},
             (const ReturnStmt ret) {
-                check(ret.value, _returnType);
+                check(ret.value, ctx.returnType, ctx);
             },
         );
     }
 
-    private Type synthesize(const Expr expr)
+    private Type synthesize(const Expr expr, BodyContext ctx)
     {
         // "what type is this?"
         
@@ -165,13 +178,13 @@ private final class TypeChecker
             (const IntLiteral _) => _types.int_,
             (const FloatLiteral _) => _types.float_,
             (const StringLiteral _) => _types.string_,
-            (const UnaryExpr unary) => synthesizeUnary(unary, expr.span),
-            (const BinaryExpr binary) => synthesizeBinary(binary, expr.span),
-            (const CallExpr call) => synthesizeCall(call, expr.span),
-            (const MemberAccess member) => synthesizeMemberAccess(expr, member),
-            (const WhileExpr while_) => synthesizeWhile(while_, expr.span),
-            (const IfExpr if_) => synthesizeIf(if_, expr.span),
-            (const BlockExpr block) => synthesizeBlock(block, expr.span),
+            (const UnaryExpr unary) => synthesizeUnary(unary, expr.span, ctx),
+            (const BinaryExpr binary) => synthesizeBinary(binary, expr.span, ctx),
+            (const CallExpr call) => synthesizeCall(call, expr.span, ctx),
+            (const MemberAccess member) => synthesizeMemberAccess(expr, member, ctx),
+            (const WhileExpr while_) => synthesizeWhile(while_, expr.span, ctx),
+            (const IfExpr if_) => synthesizeIf(if_, expr.span, ctx),
+            (const BlockExpr block) => synthesizeBlock(block, expr.span, ctx),
             (const UnitLiteral _) => _types.unit,
             (const Identifier _) => synthesizeIdentifier(expr),
         );
@@ -184,9 +197,9 @@ private final class TypeChecker
         return t == _types.int_ || t == _types.float_;
     }
 
-    private Type synthesizeUnary(const UnaryExpr unary, Span span)
+    private Type synthesizeUnary(const UnaryExpr unary, Span span, BodyContext ctx)
     {
-        auto operandType = synthesize(*unary.operand);
+        auto operandType = synthesize(*unary.operand, ctx);
         final switch (unary.op)
         {
             case UnaryOp.Minus:
@@ -205,10 +218,10 @@ private final class TypeChecker
         }
     }
 
-    private Type synthesizeBinary(const BinaryExpr binary, Span span)
+    private Type synthesizeBinary(const BinaryExpr binary, Span span, BodyContext ctx)
     {
-        auto leftType = synthesize(*binary.left);
-        auto rightType = synthesize(*binary.right);
+        auto leftType = synthesize(*binary.left, ctx);
+        auto rightType = synthesize(*binary.right, ctx);
         if (leftType == _types.error || rightType == _types.error) return _types.error;
         // An integer literal beside a Float is a Float, so `x * 2` and `x == 0` work.
         if (leftType == _types.float_ && isIntLiteral(*binary.right))
@@ -286,16 +299,16 @@ private final class TypeChecker
         }
     }
 
-    private Type synthesizeCall(const CallExpr call, Span span)
+    private Type synthesizeCall(const CallExpr call, Span span, BodyContext ctx)
     {
-        auto calleeType = synthesize(*call.callee);
+        auto calleeType = synthesize(*call.callee, ctx);
         // Each argument is checked against its parameter when there is one, and synthesized
         // otherwise, so even a wrong call gives every argument a type and its own errors.
         void synthesizeArgs()
         {
             foreach (arg; call.args)
             {
-                synthesize(arg);
+                synthesize(arg, ctx);
             }
         }
         if (calleeType == _types.error)
@@ -314,7 +327,7 @@ private final class TypeChecker
                 }
                 foreach (i, arg; call.args)
                 {
-                    check(arg, funcData.params[i]);
+                    check(arg, funcData.params[i], ctx);
                 }
                 return funcData.ret;
             },
@@ -327,7 +340,7 @@ private final class TypeChecker
         );
     }
 
-    private Type synthesizeMemberAccess(const Expr expr, const MemberAccess member)
+    private Type synthesizeMemberAccess(const Expr expr, const MemberAccess member, BodyContext ctx)
     {
         // `std.math.pow`: resolution already found the declaration.
         if (auto symbol = expr.id in _resolutions)
@@ -338,7 +351,7 @@ private final class TypeChecker
         if (isModulePath(*member.object)) return _types.error;
 
         // A member of a value. There are no struct types yet, so every member is unknown.
-        auto objectType = synthesize(*member.object);
+        auto objectType = synthesize(*member.object, ctx);
         if (objectType == _types.error) return _types.error;
         _collector.reportError(DiagnosticCode.UnknownMember, expr.span,
             "Type `%s` has no member named `%s`".format(_types.describe(objectType), member.member));
@@ -374,22 +387,22 @@ private final class TypeChecker
         return _types.error;
     }
 
-    private Type synthesizeWhile(const WhileExpr while_, Span span)
+    private Type synthesizeWhile(const WhileExpr while_, Span span, BodyContext ctx)
     {
-        auto condType = synthesize(*while_.condition);
+        auto condType = synthesize(*while_.condition, ctx);
         requireAssignable(condType, _types.bool_, while_.condition.span);
-        check(*while_.body, _types.unit);
+        check(*while_.body, _types.unit, ctx);
         return _types.unit;
     }
 
-    private Type synthesizeIf(const IfExpr if_, Span span)
+    private Type synthesizeIf(const IfExpr if_, Span span, BodyContext ctx)
     {
-        auto condType = synthesize(*if_.condition);
+        auto condType = synthesize(*if_.condition, ctx);
         requireAssignable(condType, _types.bool_, if_.condition.span);
-        auto thenType = synthesize(*if_.trueBody);
+        auto thenType = synthesize(*if_.trueBody, ctx);
         if (if_.falseBody !is null)
         {
-            auto elseType = synthesize(*if_.falseBody);
+            auto elseType = synthesize(*if_.falseBody, ctx);
             return join(thenType, elseType, span);
         }
 
@@ -410,15 +423,15 @@ private final class TypeChecker
         return _types.error;
     }
 
-    private Type synthesizeBlock(const BlockExpr block, Span span)
+    private Type synthesizeBlock(const BlockExpr block, Span span, BodyContext ctx)
     {
         foreach (stmt; block.statements)
         {
-            checkStmt(stmt);
+            checkStmt(stmt, ctx);
         }
         if (block.value !is null)
         {
-            return synthesize(*block.value);
+            return synthesize(*block.value, ctx);
         }
         if (block.statements.length > 0 && alwaysExits(block.statements[$ - 1]))
         {
@@ -447,9 +460,9 @@ private final class TypeChecker
         return _types.error;
     }
 
-    private Type check(const Expr expr, Type expected)
+    private Type check(const Expr expr, Type expected, BodyContext ctx)
     {
-        auto type = synthesize(expr);
+        auto type = synthesize(expr, ctx);
         if (expected == _types.float_ && isIntLiteral(expr))
         {
             return adaptToFloat(expr);

@@ -30,9 +30,25 @@ package final class Scope
 {
     private SymbolId[string] _scopeTable;
     private Scope _parent;
-    this(Scope parent = null)
+    /// The modules visible from here: the enclosing module's imports, plus the prelude.
+    private const(string)[] _visibleModules;
+
+    /// A module's top-level scope.
+    this(const(string)[] visibleModules)
+    {
+        _visibleModules = visibleModules;
+    }
+
+    /// A function, lambda, or block scope inside `parent`, seeing the same modules.
+    this(Scope parent)
     {
         _parent = parent;
+        _visibleModules = parent._visibleModules;
+    }
+
+    const(string)[] visibleModules() const
+    {
+        return _visibleModules;
     }
 
     const(SymbolId)* resolveLocal(string name) const
@@ -97,10 +113,6 @@ private final class NameResolver
     /// Each module's own top-level declarations, by module name.
     private Scope[string] _moduleScopes;
     private Id!Module[string] _moduleIds;
-    /// The modules each module can see: its imports, plus the prelude.
-    private string[][string] _visibleModules;
-    /// The module whose function bodies are being resolved.
-    private string _currentModule;
 
     this(Collector collector)
     {
@@ -124,8 +136,22 @@ private final class NameResolver
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
     {
-        auto moduleScope = new Scope();
         string[] visible = hasPrelude && name != preludeName ? [preludeName] : [];
+        foreach (decl; mod.declarations)
+        {
+            decl.kind.match!(
+                (const FunctionDecl _) {},
+                (const ImportStmt importStmt) {
+                    auto imported = importStmt.path.join(".");
+                    if (!visible.canFind(imported))
+                    {
+                        visible ~= imported;
+                    }
+                },
+            );
+        }
+
+        auto moduleScope = new Scope(visible);
         foreach (decl; mod.declarations)
         {
             decl.kind.match!(
@@ -140,18 +166,11 @@ private final class NameResolver
                         moduleScope.declare(func.name, SymbolId(func.id));
                     }
                 },
-                (const ImportStmt importStmt) {
-                    auto imported = importStmt.path.join(".");
-                    if (!visible.canFind(imported))
-                    {
-                        visible ~= imported;
-                    }
-                },
+                (const ImportStmt _) {},
             );
         }
         _moduleScopes[name] = moduleScope;
         _moduleIds[name] = mod.id;
-        _visibleModules[name] = visible;
 
         foreach (decl; mod.declarations)
         {
@@ -164,28 +183,30 @@ private final class NameResolver
 
     private void resolveModule(string name, const Module mod)
     {
-        _currentModule = name;
         foreach (decl; mod.declarations)
         {
             decl.kind.match!(
-                (const FunctionDecl func) => resolveFunction(func, _moduleScopes[name]),
+                (const FunctionDecl func) {
+                    if (func.body !is null)
+                    {
+                        resolveBody(func.params, *func.body, _moduleScopes[name]);
+                    }
+                },
                 (const ImportStmt _) {},
             );
         }
     }
 
-    private void resolveFunction(const FunctionDecl func, Scope moduleScope)
+    /// Resolves a function or lambda body in a new scope holding its params, inside `enclosing`.
+    private void resolveBody(const Param[] params, const Expr body, Scope enclosing)
     {
-        auto functionScope = new Scope(moduleScope);
-        foreach (param; func.params)
+        auto functionScope = new Scope(enclosing);
+        foreach (param; params)
         {
             declareLocal(param.name, param.nameSpan, SymbolId(param.id), functionScope,
                 DiagnosticCode.DuplicateParameter, "'%s' is already a parameter of this function");
         }
-        if (func.body !is null)
-        {
-            resolveExpr(*func.body, functionScope);
-        }
+        resolveExpr(body, functionScope);
     }
 
     /// Declares a param or local, reporting it if it clashes with anything visible from `current`
@@ -210,7 +231,7 @@ private final class NameResolver
         }
         else
         {
-            reportModuleRootClash(name, span, _visibleModules[_currentModule]);
+            reportModuleRootClash(name, span, current.visibleModules);
         }
         // Declared even after a clash, so later uses resolve to what the user meant here.
         current.declare(name, symbol);
@@ -342,7 +363,7 @@ private final class NameResolver
 
         const(SymbolId)[] found;
         string[] owners;
-        foreach (m; visibleModules)
+        foreach (m; scopeTable.visibleModules)
         {
             if (auto symbol = _moduleScopes[m].resolveLocal(name))
             {
@@ -363,7 +384,7 @@ private final class NameResolver
             return Path(Path.Kind.Error);
         }
 
-        if (auto path = modulePath(expr, name))
+        if (auto path = modulePath(expr, name, scopeTable))
         {
             return *path;
         }
@@ -382,9 +403,9 @@ private final class NameResolver
             return object;
         case Path.Kind.Module:
             auto nested = object.name ~ "." ~ access.member;
-            if (visibleModules.canFind(nested))
+            if (scopeTable.visibleModules.canFind(nested))
             {
-                return *modulePath(expr, nested);
+                return *modulePath(expr, nested, scopeTable);
             }
             if (auto symbol = _moduleScopes[object.name].resolveLocal(access.member))
             {
@@ -396,7 +417,7 @@ private final class NameResolver
             return Path(Path.Kind.Error);
         case Path.Kind.Package:
             auto name = object.name ~ "." ~ access.member;
-            if (auto path = modulePath(expr, name))
+            if (auto path = modulePath(expr, name, scopeTable))
             {
                 return *path;
             }
@@ -407,22 +428,17 @@ private final class NameResolver
     }
 
     /// `name` as a visible module (recording the resolution) or a prefix of one, else null.
-    private Path* modulePath(const Expr expr, string name)
+    private Path* modulePath(const Expr expr, string name, const Scope scopeTable)
     {
-        if (visibleModules.canFind(name))
+        if (scopeTable.visibleModules.canFind(name))
         {
             _resolutions[expr.id] = SymbolId(_moduleIds[name]);
             return new Path(Path.Kind.Module, name);
         }
-        if (visibleModules.any!(m => m.startsWith(name ~ ".")))
+        if (scopeTable.visibleModules.any!(m => m.startsWith(name ~ ".")))
         {
             return new Path(Path.Kind.Package, name);
         }
         return null;
-    }
-
-    private const(string)[] visibleModules()
-    {
-        return _visibleModules[_currentModule];
     }
 }
