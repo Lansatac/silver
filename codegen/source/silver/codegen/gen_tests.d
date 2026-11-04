@@ -89,7 +89,7 @@ bool compileAndRun(string source, out Run run, string file = __FILE__, size_t li
 
     auto result = execute([exePath]);
     run = Run(result.status, result.output.replace("\r\n", "\n"));
-    rmdirRecurse(directory);
+    //rmdirRecurse(directory);
     return true;
 }
 
@@ -326,4 +326,23 @@ unittest
     Run run;
     if (!compileAndRun(source, run)) return;
     run.output.should.equal("-1\n0\n1\ntrue\n10\n");
+}
+
+@("codegen emits string literals as NUL-terminated globals, escaping what c\"...\" can't hold")
+unittest
+{
+    import silver.codegen.gen : Generator;
+
+    Generator.llvmStringBytes("plain").should.equal("plain");
+    Generator.llvmStringBytes("a\"b\\c\n").should.equal(`a\22b\5Cc\0A`);
+    Generator.llvmStringBytes("é").should.equal(`\C3\A9`);
+
+    auto source = "def main(): Unit {\n    printl(" ~ `"café \"ok\""` ~ ")\n}";
+    auto ir = generateSource(source);
+    ir.should.contain(`@.str.0 = private unnamed_addr constant [11 x i8] c"caf\C3\A9 \22ok\22\00"`);
+    ir.should.contain("call void @silver_printl_string(ptr @.str.0)");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("café \"ok\"\n");
 }

@@ -1,9 +1,1 @@
 # Conformance tests the LLVM backend doesn't pass yet, one name per line. Remove a name once it passes.
-if-return
-if-scope
-if-unit
-import-std
-smoke
-strings
-arithmetic
-unit

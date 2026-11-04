@@ -98,6 +98,9 @@ final class FunctionState
     /// Each local's stack slot.
     string[Id!VarDecl] slots;
 
+    /// The function's LLVM return type, `void` for Unit and Never.
+    string returnType;
+
     private int _nextTemp;
     private int[string] _slotNameCounts;
     private int _nextLabel;
@@ -134,6 +137,8 @@ final class Generator
     /// Runtime functions the program calls, in first-use order. Each gets one `declare`.
     private string[] _usedRuntime;
     private bool[string] _runtimeSeen;
+    /// One private global per string literal.
+    private string[] _strings;
 
     this(const Analysis analysis, Collector collector)
     {
@@ -150,8 +155,8 @@ final class Generator
             modules ~= emitModule(module_);
         }
 
-        // After the modules, so every runtime call has been seen.
-        return emitDeclares() ~ modules.join("\n") ~ "\n" ~ emitLLMain();
+        // After the modules, so every runtime call and string literal has been seen.
+        return emitDeclares() ~ _strings.map!(s => s ~ "\n").join ~ modules.join("\n") ~ "\n" ~ emitLLMain();
     }
 
     void collectFunctions(const ref Program program)
@@ -207,17 +212,24 @@ final class Generator
         _function = new FunctionState;
         auto signature = _analysis.signatureOf(function_.id);
         auto returnType = llvmReturnType(signature.ret);
+        _function.returnType = returnType;
         auto mangledName = mangledNames[function_.id];
         auto params = emitParams(function_.params);
 
         auto body = emitExpr(*function_.body);
-        auto ret = returnType == "void" || body.value is null
-            ? "  ret void"
-            : "  ret %s %s".format(returnType, body.value);
-        auto lines = body.allocas ~ body.code ~ ret;
+        auto lines = body.allocas ~ body.code ~ ("  " ~ returnInstruction(body.value));
 
         return "define %s @\"%s\"(%s) {\nentry:\n%s}\n".format(returnType, mangledName, params,
             lines.map!(line => line ~ "\n").join);
+    }
+
+    /// `ret` for `value` from the current function. No value in a non-void function means
+    /// control never gets here (the body ended in a `return`), so the operand is never read.
+    string returnInstruction(string value)
+    {
+        auto type = _function.returnType;
+        if (type == "void") return "ret void";
+        return "ret %s %s".format(type, value is null ? "undef" : value);
     }
 
     string emitParams(const(Param[]) params)
@@ -225,6 +237,12 @@ final class Generator
         string[] generated;
         foreach (param; params)
         {
+            // A Unit param has no operand, so it isn't in the signature.
+            if (_analysis.typeOf(param.id) == _analysis.types.unit)
+            {
+                _function.params[param.id] = null;
+                continue;
+            }
             // Params are immutable, so they're used directly as SSA values with no stack slot.
             auto name = "%" ~ param.name;
             _function.params[param.id] = name;
@@ -242,7 +260,7 @@ final class Generator
                     ? Fragment.constant(floatConstant(literal.value))
                     : Fragment.constant(literal.value.to!string),
             (const FloatLiteral literal) => Fragment.constant(floatConstant(literal.value)),
-            (const StringLiteral literal) => unsupported(expr.span, "String literals"),
+            (const StringLiteral literal) => emitStringLiteral(literal.value),
             (const UnitLiteral literal) => Fragment.init,
             (const Identifier _) => emitIdentifier(expr),
             (const UnaryExpr unary) => emitUnary(expr, unary),
@@ -261,6 +279,27 @@ final class Generator
         return "0x%016X".format(*cast(ulong*) &value);
     }
 
+    /// A NUL-terminated private global; the operand is its address.
+    Fragment emitStringLiteral(string text)
+    {
+        auto name = "@.str.%s".format(_strings.length);
+        _strings ~= "%s = private unnamed_addr constant [%s x i8] c\"%s\\00\"".format(
+            name, text.length + 1, llvmStringBytes(text));
+        return Fragment.constant(name);
+    }
+
+    /// The body of an LLVM `c"..."`: printable ASCII as is, every other byte as `\XX`.
+    static string llvmStringBytes(string text)
+    {
+        string result;
+        foreach (ubyte b; cast(const(ubyte)[]) text)
+        {
+            auto plain = b >= 0x20 && b < 0x7F && b != '"' && b != '\\';
+            result ~= plain ? "" ~ cast(char) b : "\\%02X".format(b);
+        }
+        return result;
+    }
+
     Fragment emitIdentifier(const Expr expr)
     {
         auto resolved = _analysis.resolutionOf(expr.id);
@@ -276,6 +315,7 @@ final class Generator
             },
             (const Id!Param param) => Fragment.constant(_function.params[param]),
             (const Id!VarDecl decl) {
+                if (_analysis.typeOf(decl) == _analysis.types.unit) return Fragment.init;
                 auto type = llvmType(_analysis.typeOf(decl));
                 auto temp = _function.newTemp;
                 return Fragment.instruction("%s = load %s, ptr %s".format(temp, type, _function.slots[decl]), temp);
@@ -294,7 +334,6 @@ final class Generator
         auto lhs = emitExpr(*binary.left);
         auto rhs = emitExpr(*binary.right);
         auto type = _analysis.typeOf(binary.left.id);
-        auto llType = llvmType(type);
         switch(binary.op)
         {
             case BinaryOp.And:
@@ -303,10 +342,20 @@ final class Generator
             case BinaryOp.Or:
                 return emitConditional(lhs, "i1",
                     Fragment.constant("true"), rhs, "or");
+            case BinaryOp.Power:
+            {
+                auto name = type == _analysis.types.float_ ? "silver_pow_float" : "silver_pow_int";
+                return lhs.then(rhs).then(callRuntime(name, [lhs.value, rhs.value]));
+            }
+            case BinaryOp.Equal:
+            case BinaryOp.NotEqual:
+                if (type == _analysis.types.string_) return emitStringComparison(binary.op, lhs, rhs);
+                goto default;
             default:
                 auto llOp = llBinaryOp(binary.op, type);
                 if (llOp is null) return unsupported(expr.span, "`" ~ binary.op ~ "`");
 
+                auto llType = llvmType(type);
                 auto result = _function.newTemp();
                 return 
                         lhs
@@ -318,38 +367,53 @@ final class Generator
     }
 
     Fragment emitIfExpr(const Expr expr, const IfExpr if_)
-    {   
-        return emitConditional(emitExpr(*if_.condition), llvmType(_analysis.typeOf(expr.id)),
+    {
+        auto type = _analysis.typeOf(expr.id);
+        auto hasValue = type != _analysis.types.unit && type != _analysis.types.never;
+        return emitConditional(emitExpr(*if_.condition), hasValue ? llvmType(type) : null,
             emitExpr(*if_.trueBody),
-            emitExpr(*if_.falseBody),
+            if_.falseBody is null ? Fragment.init : emitExpr(*if_.falseBody),
             "if");
     }
 
+    /// `condition ? thenArm : elseArm`, evaluating only the arm taken. A null `resultType`
+    /// means the arms have no value, so there's no phi.
     Fragment emitConditional(Fragment condition, string resultType,
-        Fragment thenFragment, Fragment elseFragment, string labelHint)
+        Fragment thenArm, Fragment elseArm, string labelHint)
     {
-        auto trueLabel = _function.newLabel(labelHint ~ ".then");
+        auto thenLabel = _function.newLabel(labelHint ~ ".then");
         auto elseLabel = _function.newLabel(labelHint ~ ".else");
         auto joinLabel = _function.newLabel(labelHint ~ ".join");
-        auto result = _function.newTemp();
 
-        auto thenBlock = Fragment.label(trueLabel)
-            .then(thenFragment)
+        auto thenBlock = Fragment.label(thenLabel)
+            .then(thenArm)
             .then(Fragment.jump(joinLabel));
 
         auto elseBlock = Fragment.label(elseLabel)
-            .then(elseFragment)
+            .then(elseArm)
             .then(Fragment.jump(joinLabel));
 
-        return condition
-            .then(Fragment.instruction(
-                "br i1 %s, label %%%s, label %%%s".format(condition.value, trueLabel, elseLabel), resultType))
+        auto branches = condition
+            .then(Fragment.branch(condition.value, thenLabel, elseLabel))
             .then(thenBlock)
             .then(elseBlock)
-            .then(Fragment.label(joinLabel).then(
-                Fragment.phi(result, resultType, [
-                    [thenFragment.value, thenBlock.endBlock],
-                    [elseFragment.value, elseBlock.endBlock]])));
+            .then(Fragment.label(joinLabel));
+        if (resultType is null) return branches;
+
+        // An arm without a value never reaches the join (it returned), so its operand is never read.
+        auto result = _function.newTemp();
+        return branches.then(Fragment.phi(result, resultType, [
+            [thenArm.value is null ? "undef" : thenArm.value, thenBlock.endBlock],
+            [elseArm.value is null ? "undef" : elseArm.value, elseBlock.endBlock]]));
+    }
+
+    /// `==` and `!=` on Strings compare contents, through the runtime.
+    Fragment emitStringComparison(BinaryOp op, Fragment lhs, Fragment rhs)
+    {
+        auto equal = lhs.then(rhs).then(callRuntime("silver_string_equals", [lhs.value, rhs.value]));
+        if (op == BinaryOp.Equal) return equal;
+        auto result = _function.newTemp();
+        return equal.then(Fragment.instruction("%s = xor i1 %s, true".format(result, equal.value), result));
     }
 
     Fragment emitUnary(const Expr expr, const UnaryExpr unary)
@@ -502,20 +566,27 @@ final class Generator
     {
         return statement.kind.match!(
             (const VarDecl var) => emitVarDecl(var),
-            (const AssignStmt assign) => unsupported(statement.span, "assignment").withValue(null),
+            (const AssignStmt assign) => emitAssign(assign, statement.span),
             (const ExprStmt exprStmt) => emitExpr(exprStmt.expr).withValue(null),
             (const FunctionDecl function_) => unsupported(statement.span, "nested functions").withValue(null),
-            (const ReturnStmt return_) => unsupported(statement.span, "`return`").withValue(null),
+            (const ReturnStmt return_) => emitReturn(return_),
         );
+    }
+
+    /// `ret`, then a fresh block for whatever follows it, which LLVM drops as unreachable.
+    Fragment emitReturn(const ReturnStmt return_)
+    {
+        auto value = emitExpr(return_.value);
+        return value
+            .then(Fragment.instruction(returnInstruction(value.value)))
+            .then(Fragment.label(_function.newLabel("dead")));
     }
 
     Fragment emitVarDecl(const VarDecl var)
     {
         auto value = emitExpr(var.value);
-        if (value.value is null)
-        {
-            return unsupported(var.nameSpan, "Unit-typed locals").withValue(null);
-        }
+        // Unit has no operand, so a Unit local has no slot: only its initializer's effects remain.
+        if (value.value is null) return value.withValue(null);
         auto type = llvmType(_analysis.typeOf(var.id));
         auto slot = _function.newSlot(var.name);
         _function.slots[var.id] = slot;
@@ -523,6 +594,33 @@ final class Generator
             value.allocas ~ "  %s = alloca %s".format(slot, type),
             value.code ~ "  store %s %s, ptr %s".format(type, value.value, slot),
             null);
+    }
+
+    /// A store to the target's slot. Reads are always fresh loads, so later uses see it.
+    Fragment emitAssign(const AssignStmt assign, Span span)
+    {
+        auto value = emitExpr(assign.value);
+        if (value.value is null) return value.withValue(null);
+
+        auto slot = slotOf(assign.target);
+        if (slot is null) return unsupported(span, "assigning to this target").withValue(null);
+
+        auto type = llvmType(_analysis.typeOf(assign.target.id));
+        return value
+            .then(Fragment.instruction("store %s %s, ptr %s".format(type, value.value, slot)))
+            .withValue(null);
+    }
+
+    /// The stack slot `target` names, or null if it isn't a local.
+    string slotOf(const Expr target)
+    {
+        if (!target.kind.match!((const Identifier _) => true, _ => false)) return null;
+        auto resolved = _analysis.resolutionOf(target.id);
+        if (resolved is null) return null;
+        return (*resolved).match!(
+            (const Id!VarDecl decl) => _function.slots[decl],
+            _ => cast(string) null,
+        );
     }
 
     string mangleFunctionName(const Module module_, string functionName)
