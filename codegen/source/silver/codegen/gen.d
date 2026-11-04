@@ -250,7 +250,7 @@ final class Generator
             (const CallExpr call) => emitFunctionCall(call, expr),
             (const MemberAccess access) => unsupported(expr.span, "member access"),
             (const WhileExpr while_) => unsupported(expr.span, "`while`"),
-            (const IfExpr if_) => unsupported(expr.span, "`if`"),
+            (const IfExpr if_) => emitIfExpr(expr, if_),
             (const BlockExpr block) => emitBlock(block),
         );
     }
@@ -315,6 +315,14 @@ final class Generator
                         "%s = %s %s %s, %s".format(result, llOp, llType, lhs.value, rhs.value),
                         result));
         }
+    }
+
+    Fragment emitIfExpr(const Expr expr, const IfExpr if_)
+    {   
+        return emitConditional(emitExpr(*if_.condition), llvmType(_analysis.typeOf(expr.id)),
+            emitExpr(*if_.trueBody),
+            emitExpr(*if_.falseBody),
+            "if");
     }
 
     Fragment emitConditional(Fragment condition, string resultType,
