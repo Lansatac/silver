@@ -357,7 +357,7 @@ unittest
     auto ir = generateSource(source);
 
     ir.should.contain("br label %while.cond.0\nwhile.cond.0:\n");
-    ir.should.contain("br i1 %.t2, label %while.body.1, label %while.end.2");
+    ir.should.contain("br i1 %.t1, label %while.body.1, label %while.end.2");
     // The body always jumps back to the condition, never falls through.
     ir.should.contain("br label %while.cond.0\nwhile.end.2:\n");
 
