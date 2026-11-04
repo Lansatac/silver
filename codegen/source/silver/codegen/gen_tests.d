@@ -89,7 +89,7 @@ bool compileAndRun(string source, out Run run, string file = __FILE__, size_t li
 
     auto result = execute([exePath]);
     run = Run(result.status, result.output.replace("\r\n", "\n"));
-    //rmdirRecurse(directory);
+    rmdirRecurse(directory);
     return true;
 }
 

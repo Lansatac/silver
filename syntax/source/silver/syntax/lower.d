@@ -264,9 +264,9 @@ private final class Lowering
         case "Silver.ScientificLiteral":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(FloatLiteral(cst.matches[0].to!double)));
         case "Silver.HexaLiteral":
-            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(IntLiteral(cst.matches[0].to!long)));
+            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(IntLiteral(radixValue(cst.matches[0], 16))));
         case "Silver.BinaryLiteral":
-            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(IntLiteral(cst.matches[0].to!long)));
+            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(IntLiteral(radixValue(cst.matches[0], 2))));
         default:
             break;
         }
@@ -485,6 +485,15 @@ void validateNodeIs(ParseTree tree, string type)
     {
         throw new Exception("Expected node of type '%s', got '%s'".format(type, tree.name));
     }
+}
+
+/// `0x`/`0b` literals are 64-bit patterns, so values above `Int.max` wrap to negatives.
+private long radixValue(string text, uint radix)
+{
+    import std.array : replace;
+    import std.conv : to;
+
+    return cast(long) text[2 .. $].replace("_", "").to!ulong(radix);
 }
 
 private Span spanOf(ParseTree cst, string file)
