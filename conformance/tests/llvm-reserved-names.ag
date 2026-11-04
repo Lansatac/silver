@@ -1,0 +1,7 @@
+// Names that codegen also uses internally
+def id(entry: Int): Int => entry
+
+def main(): Unit {
+    val entry = 2
+    printl(id(3) + entry)
+}

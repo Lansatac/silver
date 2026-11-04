@@ -176,7 +176,7 @@ unittest
         ~ "def main(): Unit {\n    val a = 7\n    printl(same(a))\n}";
     auto ir = generateSource(source);
 
-    ir.should.contain("define i64 @\"main.same\"(i64 %x) {\nentry:\n  ret i64 %x\n}");
+    ir.should.contain("define i64 @\"main.same\"(i64 %x.arg) {\nentry:\n  ret i64 %x.arg\n}");
     ir.should.contain("store i64 7, ptr %a.addr");
     ir.should.contain("%.t0 = load i64, ptr %a.addr");
     ir.should.contain("call i64 @\"main.same\"(i64 %.t0)");

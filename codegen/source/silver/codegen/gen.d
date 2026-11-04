@@ -110,7 +110,9 @@ final class FunctionState
         return "%s.%s".format(hint, _nextLabel++);
     }
 
-    /// A fresh SSA name. Silver identifiers can't contain `.`, so these never clash with user names.
+    /// A fresh SSA name. Labels and values share one namespace per function. Silver identifiers
+    /// can't contain `.`, so every name built from one gets a dotted suffix (`.arg`, `.addr`),
+    /// leaving undotted names and `.`-prefixed temps to codegen.
     string newTemp()
     {
         return "%%.t%s".format(_nextTemp++);
@@ -244,7 +246,7 @@ final class Generator
                 continue;
             }
             // Params are immutable, so they're used directly as SSA values with no stack slot.
-            auto name = "%" ~ param.name;
+            auto name = "%" ~ param.name ~ ".arg";
             _function.params[param.id] = name;
             generated ~= "%s %s".format(llvmType(_analysis.typeOf(param.id)), name);
         }
