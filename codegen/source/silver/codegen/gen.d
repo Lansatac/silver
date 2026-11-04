@@ -267,7 +267,7 @@ final class Generator
             (const BinaryExpr binary) => emitBinaryExpr(binary, expr),
             (const CallExpr call) => emitFunctionCall(call, expr),
             (const MemberAccess access) => unsupported(expr.span, "member access"),
-            (const WhileExpr while_) => unsupported(expr.span, "`while`"),
+            (const WhileExpr while_) => emitWhile(while_),
             (const IfExpr if_) => emitIfExpr(expr, if_),
             (const BlockExpr block) => emitBlock(block),
         );
@@ -405,6 +405,24 @@ final class Generator
         return branches.then(Fragment.phi(result, resultType, [
             [thenArm.value is null ? "undef" : thenArm.value, thenBlock.endBlock],
             [elseArm.value is null ? "undef" : elseArm.value, elseBlock.endBlock]]));
+    }
+
+    /// Unit-valued. The condition is re-evaluated before every iteration, so its code lives in
+    /// its own block, which the body jumps back to.
+    Fragment emitWhile(const WhileExpr while_)
+    {
+        auto condLabel = _function.newLabel("while.cond");
+        auto bodyLabel = _function.newLabel("while.body");
+        auto endLabel = _function.newLabel("while.end");
+        auto condition = emitExpr(*while_.condition);
+        return Fragment.jump(condLabel)
+            .then(Fragment.label(condLabel))
+            .then(condition)
+            .then(Fragment.branch(condition.value, bodyLabel, endLabel))
+            .then(Fragment.label(bodyLabel))
+            .then(emitExpr(*while_.body))
+            .then(Fragment.jump(condLabel))
+            .then(Fragment.label(endLabel));
     }
 
     /// `==` and `!=` on Strings compare contents, through the runtime.
