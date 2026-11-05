@@ -28,3 +28,5 @@ runtime/build/
 
 # Experimental Silver programs, kept out of the repo on purpose.
 /exploration/
+/scratch/
+/scratch.ag
