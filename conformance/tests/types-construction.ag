@@ -1,0 +1,47 @@
+type Point(x: Int, y: Int)
+type Line(start: Point, end: Point)
+type Mixed(count: Int, ratio: Float, done: Bool, name: String)
+// Field names don't clash with locals or functions.
+type Named(main: Int, x: Int)
+
+def swap(p: Point): Point => Point(p.y, p.x)
+def origin(): Point => Point(0, 0)
+def noisy(n: Int): Int {
+    printl(n)
+    n
+}
+
+def main(): Unit {
+    val p = Point(1, 2)
+    printl(p.x)
+    printl(p.y)
+    printl(Point(3, 4).y)
+
+    val line = Line(p, Point(5, 6))
+    printl(line.start.x)
+    printl(line.end.y)
+    printl(swap(p).x)
+
+    val mixed = Mixed(7, 0.5, true, "seven")
+    printl(mixed.count)
+    printl(mixed.ratio)
+    printl(mixed.done)
+    printl(mixed.name)
+
+    val x = Named(8, 9).x
+    printl(x)
+    printl(Named(8, 9).main)
+
+    // Rebinding replaces the binding; a value already read from it is unchanged.
+    mutable val current = Point(10, 11)
+    val before = current
+    current = Point(12, 13)
+    printl(before.x)
+    printl(current.x)
+
+    val chosen = if p.x > 0 => Point(14, 15) else origin()
+    printl(chosen.y)
+
+    // Arguments run left to right.
+    printl(Point(noisy(16), noisy(17)).x)
+}

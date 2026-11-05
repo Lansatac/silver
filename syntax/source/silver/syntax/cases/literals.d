@@ -41,7 +41,7 @@ immutable Case[] radixLiterals = [
     parsesAs("a = 0x8000000000000000", "(assign a -9223372036854775808)"),
 ];
 
-/// Grammar only: constructors (TypeName) aren't lowered yet.
+/// Grammar only: `Some` and `None` don't have their own AST nodes yet.
 immutable Case[] constructors = [
     accepts("a = None"),
     accepts("a = Some(1)"),

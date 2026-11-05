@@ -155,6 +155,45 @@ void shouldHaveNoCallee(const Analyzed a, At call, string file = __FILE__, size_
     }
 }
 
+/// Asserts that the call whose callee name is at `call` constructs the type declared at `declaration`.
+void shouldConstruct(const Analyzed a, At call, At declaration,
+    string file = __FILE__, size_t line = __LINE__)
+{
+    auto expected = declaration.offsetIn(a) in a.names[declaration.moduleName].declarations;
+    if (expected is null)
+    {
+        throw new AssertError(format("%s isn't a declaration", declaration), file, line);
+    }
+    auto callId = call.offsetIn(a) in a.names[call.moduleName].calls;
+    if (callId is null)
+    {
+        throw new AssertError(format("%s isn't the callee of a call", call), file, line);
+    }
+    auto actual = a.analysis.constructionOf(*callId);
+    if (actual is null)
+    {
+        throw new AssertError(format("%s isn't a construction", call), file, line);
+    }
+    if (SymbolId(*actual) != *expected)
+    {
+        throw new AssertError(format("%s constructs %s, expected %s", call, *actual, *expected), file, line);
+    }
+}
+
+/// Asserts that the call whose callee name is at `call` isn't a construction.
+void shouldNotConstruct(const Analyzed a, At call, string file = __FILE__, size_t line = __LINE__)
+{
+    auto callId = call.offsetIn(a) in a.names[call.moduleName].calls;
+    if (callId is null)
+    {
+        throw new AssertError(format("%s isn't the callee of a call", call), file, line);
+    }
+    if (auto actual = a.analysis.constructionOf(*callId))
+    {
+        throw new AssertError(format("%s constructs %s, expected no construction", call, *actual), file, line);
+    }
+}
+
 /// Asserts that `use` was left unresolved, e.g. a member of a value.
 void shouldNotResolve(const Analyzed a, At use, string file = __FILE__, size_t line = __LINE__)
 {
@@ -252,7 +291,7 @@ NameIndex indexNames(const Module m)
     {
         d.kind.match!(
             (const FunctionDecl f) => indexer.visit(f),
-            (const TypeDecl _) {},
+            (const TypeDecl t) => indexer.visit(t),
             (const ImportStmt _) {},
         );
     }
@@ -271,6 +310,11 @@ private final class Indexer
             index.declarations[p.nameSpan.start] = SymbolId(p.id);
         }
         visit(f.body);
+    }
+
+    void visit(const TypeDecl t)
+    {
+        index.declarations[t.nameSpan.start] = SymbolId(t.id);
     }
 
     void visit(const Stmt s)
@@ -803,4 +847,222 @@ unittest
 def main(): Unit => ()");
     a.shouldHaveNoCallee(At("f", 2));
     a.shouldHaveNoDiagnostics();
+}
+
+// Constructors
+
+@("name resolution links a constructor to its type declaration")
+unittest
+{
+    auto a = analyzed(`type Point(x: Int)
+type Origin
+def main(): Unit {
+    val p = Point(1)
+    val o = Origin
+}`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldResolve("Point", 2, 1);
+    a.shouldResolve("Origin", 2, 1);
+}
+
+@("name resolution finds a constructor declared later in the module")
+unittest
+{
+    auto a = analyzed("def main(): Unit {\n    val p = Point(1)\n}\ntype Point(x: Int)");
+    a.shouldHaveNoDiagnostics();
+    a.shouldResolve("Point", 1, 2);
+}
+
+@("name resolution doesn't record a construction as a call to a function")
+unittest
+{
+    auto files = ["geo.ag": "module geo\ntype Point(x: Int)"];
+    auto a = analyzed("import geo\ndef main(): Unit {\n    val p = Point(1)\n    val q = geo.Point(2)\n}", files);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveNoCallee(At("Point", 1));
+    a.shouldHaveNoCallee(At("Point", 2));
+}
+
+@("name resolution finds an imported constructor, plain or qualified")
+unittest
+{
+    auto files = ["a/geo.ag": "module a.geo\ntype Point(x: Int)\ntype Origin"];
+    auto a = analyzed(`import a.geo
+def main(): Unit {
+    val p = Point(1)
+    val q = a.geo.Point(2)
+    val o = Origin
+    val r = a.geo.Origin
+}`, files);
+    a.shouldHaveNoDiagnostics();
+    a.shouldResolve(At("Point", 1), At("Point", 1, "a.geo"));
+    a.shouldResolve(At("Point", 2), At("Point", 1, "a.geo"));
+    a.shouldResolve(At("Origin", 1), At("Origin", 1, "a.geo"));
+    a.shouldResolve(At("Origin", 2), At("Origin", 1, "a.geo"));
+}
+
+@("name resolution prefers a module's own constructor over an imported one")
+unittest
+{
+    auto files = ["geo.ag": "module geo\ntype Point(x: Int)"];
+    auto a = analyzed("import geo\ntype Point(y: Int)\ndef main(): Unit {\n    val p = Point(1)\n}", files);
+    a.shouldHaveNoDiagnostics();
+    a.shouldResolve("Point", 2, 1);
+}
+
+@("name resolution reports a constructor two imports define only where it's used, and accepts it qualified")
+unittest
+{
+    auto files = [
+        "a.ag": "module a\ntype Shared(x: Int)",
+        "b.ag": "module b\ntype Shared(y: Int)",
+    ];
+    analyzed("import a\nimport b\ndef main(): Unit {\n    val s = Shared(1)\n}", files)
+        .shouldReport(DiagnosticCode.AmbiguousName, At("Shared", 1));
+    analyzed("import a\nimport b\ndef main(): Unit {\n    val s = b.Shared(1)\n}", files)
+        .shouldHaveNoDiagnostics();
+}
+
+@("name resolution doesn't see constructors from the imports of an imported module")
+unittest
+{
+    auto files = [
+        "a.ag": "module a\nimport b",
+        "b.ag": "module b\ntype Secret(x: Int)",
+    ];
+    analyzed("import a\ndef main(): Unit {\n    val s = Secret(1)\n}", files)
+        .shouldReport(DiagnosticCode.UnknownName, At("Secret", 1));
+}
+
+@("name resolution reports a constructor that doesn't exist")
+unittest
+{
+    auto files = ["geo.ag": "module geo\ntype Point(x: Int)"];
+    analyzed("def main(): Unit {\n    val p = Nope(1)\n}")
+        .shouldReport(DiagnosticCode.UnknownName, At("Nope", 1));
+    analyzed("import geo\ndef main(): Unit {\n    val p = geo.Nope(1)\n}", files)
+        .shouldReport(DiagnosticCode.UnknownModuleMember, At("geo", 2));
+}
+
+@("name resolution leaves a field read for the type checker")
+unittest
+{
+    auto a = analyzed("type Point(x: Int)\ndef main(): Unit {\n    val p = Point(1)\n    val v = p.x\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldNotResolve(At("x", 2));
+}
+
+@("name resolution records a call to a type's name as a construction of that type")
+unittest
+{
+    auto a = analyzed("type Point(x: Int)\ndef main(): Unit {\n    val p = Point(1)\n}");
+    a.shouldConstruct(At("Point", 2), At("Point", 1));
+}
+
+@("name resolution records a construction of an imported type, plain or qualified")
+unittest
+{
+    auto files = ["a/geo.ag": "module a.geo\ntype Point(x: Int)"];
+    auto a = analyzed("import a.geo\ndef main(): Unit {\n    val p = Point(1)\n    val q = a.geo.Point(2)\n}", files);
+    a.shouldConstruct(At("Point", 1), At("Point", 1, "a.geo"));
+    a.shouldConstruct(At("Point", 2), At("Point", 1, "a.geo"));
+}
+
+@("name resolution records a construction of the module's own type over an imported one")
+unittest
+{
+    auto files = ["geo.ag": "module geo\ntype Point(x: Int)"];
+    auto a = analyzed("import geo\ntype Point(y: Int)\ndef main(): Unit {\n    val p = Point(1)\n}", files);
+    a.shouldConstruct(At("Point", 2), At("Point", 1));
+}
+
+@("name resolution records nested constructions separately")
+unittest
+{
+    auto a = analyzed("type Point(x: Int)\ntype Line(start: Point)\ndef main(): Unit {\n    val l = Line(Point(1))\n}");
+    a.shouldConstruct(At("Line", 2), At("Line", 1));
+    a.shouldConstruct(At("Point", 3), At("Point", 1));
+}
+
+@("name resolution doesn't record a call to a function as a construction")
+unittest
+{
+    auto a = analyzed("def f(): Int => 1\ndef main(): Unit {\n    val x = f()\n}");
+    a.shouldNotConstruct(At("f", 2));
+    a.shouldCall(At("f", 2), At("f", 1));
+}
+
+@("name resolution doesn't record a call through a local as a construction")
+unittest
+{
+    auto a = analyzed("type Point(x: Int)\ndef main(): Unit {\n    val make = Point\n    val p = make(1)\n}");
+    a.shouldNotConstruct(At("make", 2));
+    a.shouldHaveNoCallee(At("make", 2));
+}
+
+// The declarations table
+
+/// Asserts that the declaration at `where` has a table entry naming it, which also shows that
+/// the entry still points at the AST rather than at a copy that's gone.
+void shouldHaveDeclaration(const Analyzed a, At where, string file = __FILE__, size_t line = __LINE__)
+{
+    auto symbol = where.offsetIn(a) in a.names[where.moduleName].declarations;
+    if (symbol is null)
+    {
+        throw new AssertError(format("%s isn't a declaration", where), file, line);
+    }
+    auto name = (*symbol).match!(
+        (const Id!FunctionDecl id) => a.analysis.declarationOf(id).name,
+        (const Id!TypeDecl id) => a.analysis.declarationOf(id).name,
+        (const Id!VarDecl id) => a.analysis.declarationOf(id).name,
+        (const Id!Param id) => a.analysis.declarationOf(id).name,
+        (const Id!Module _) => cast(string) null,
+    );
+    if (name != where.word)
+    {
+        throw new AssertError(format("%s has the table entry '%s'", where, name), file, line);
+    }
+}
+
+@("name resolution records every kind of declaration, however deeply nested")
+unittest
+{
+    auto a = analyzed(`type Point(x: Int)
+native def external(raw: Int): Int
+def helper(given: Int): Int {
+    val outer = given
+    if outer > 0 {
+        val inner = outer
+        while false {
+            mutable val deepest = inner
+        }
+    }
+    outer
+}
+def main(): Unit => ()`);
+    a.shouldHaveNoDiagnostics();
+    foreach (name; ["Point", "external", "raw", "helper", "given", "outer", "inner", "deepest", "main"])
+    {
+        a.shouldHaveDeclaration(At(name, 1));
+    }
+}
+
+@("name resolution records the declarations of imported modules")
+unittest
+{
+    auto files = ["geo.ag": "module geo\ntype Point(x: Int)\ndef f(given: Int): Int {\n    val local = given\n    local\n}"];
+    auto a = analyzed("import geo\ndef main(): Unit => ()", files);
+    a.shouldHaveNoDiagnostics();
+    foreach (name; ["Point", "f", "given", "local"])
+    {
+        a.shouldHaveDeclaration(At(name, 1, "geo"));
+    }
+}
+
+@("name resolution records declarations that clash, since each still has an ID")
+unittest
+{
+    auto a = analyzed("def main(): Unit {\n    val x = 1\n    val x = 2\n}");
+    a.shouldHaveDeclaration(At("x", 1));
+    a.shouldHaveDeclaration(At("x", 2));
 }

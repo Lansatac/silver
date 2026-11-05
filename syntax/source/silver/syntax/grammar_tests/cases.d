@@ -12,5 +12,5 @@ mixin GrammarCases!(
     postfix, indexing, optionalChaining,
     ifs, blocks, loops,
     assignments, declarations, uninitializedDeclarations, typeAnnotations, moduleDeclarations, imports,
-    functions, typeDeclarations,
+    functions, typeDeclarations, typeConstruction,
 );

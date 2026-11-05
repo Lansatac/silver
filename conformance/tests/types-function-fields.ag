@@ -1,0 +1,8 @@
+type Op(apply: (Int) -> Int, n: Int)
+
+def double(x: Int): Int => x * 2
+
+def main(): Unit {
+    val op = Op(double, 3)
+    printl(op.apply(op.n))
+}

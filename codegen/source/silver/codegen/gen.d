@@ -134,7 +134,6 @@ final class Generator
     /// The function being generated.
     FunctionState _function;
     string[Id!FunctionDecl] mangledNames;
-    const(FunctionDecl)*[Id!FunctionDecl] _functions;
 
     /// Runtime functions the program calls, in first-use order. Each gets one `declare`.
     private string[] _usedRuntime;
@@ -168,8 +167,7 @@ final class Generator
             foreach(ref declaration; module_.declarations)
             {
                 declaration.kind.match!(
-                    (ref const FunctionDecl function_) {
-                        _functions[function_.id] = &function_;
+                    (const FunctionDecl function_) {
                         mangledNames[function_.id] = mangleFunctionName(*module_, function_.name);
                     },
                     (const _) {}
@@ -494,7 +492,7 @@ final class Generator
     {
         auto callee = _analysis.calleeOf(expr.id);
         if (callee is null) return unsupported(expr.span, "calls through values");
-        auto function_ = _functions[*callee];
+        auto function_ = _analysis.declarationOf(*callee);
 
         auto args = call.args.map!(arg => emitExpr(arg)).array;
         auto evaluated = Fragment.sequence(args);

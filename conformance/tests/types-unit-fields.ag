@@ -1,0 +1,7 @@
+type Holder(nothing: Unit, n: Int)
+
+def main(): Unit {
+    val h = Holder((), 1)
+    printl(h.n)
+    printl(h.nothing)
+}

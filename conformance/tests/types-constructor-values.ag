@@ -1,0 +1,9 @@
+type Point(x: Int, y: Int)
+
+def build(make: (Int, Int) -> Point): Point => make(1, 2)
+
+def main(): Unit {
+    val make = Point
+    printl(make(3, 4).y)
+    printl(build(Point).x)
+}

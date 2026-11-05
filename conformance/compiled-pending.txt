@@ -1,3 +1,11 @@
 # Conformance tests the LLVM backend doesn't pass yet, one name per line. Remove a name once it passes.
 types-imported
 types-signatures
+types-construction
+types-markers
+types-imported-construction
+types-unit-fields
+types-function-fields
+types-constructor-values
+types-field-assignment
+types-value-semantics

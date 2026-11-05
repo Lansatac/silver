@@ -99,6 +99,36 @@ final class Analysis
     {
         return call in _resolution.callees;
     }
+
+    const(Id!TypeDecl)* constructionOf(Id!Expr call) const
+    {
+        return call in _resolution.constructions;
+    }
+
+    /// The node an ID was given to. Name resolution records every declaration, so an ID
+    /// from this program always has one.
+    const(FunctionDecl)* declarationOf(Id!FunctionDecl func) const
+    {
+        return _resolution.declarations.functions[func];
+    }
+
+    /// ditto
+    const(TypeDecl)* declarationOf(Id!TypeDecl type) const
+    {
+        return _resolution.declarations.types[type];
+    }
+
+    /// ditto
+    const(VarDecl)* declarationOf(Id!VarDecl local) const
+    {
+        return _resolution.declarations.locals[local];
+    }
+
+    /// ditto
+    const(Param)* declarationOf(Id!Param param) const
+    {
+        return _resolution.declarations.params[param];
+    }
 }
 
 /// Analyzes every module in `program`, reporting problems to `collector`.

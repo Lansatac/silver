@@ -17,3 +17,15 @@ immutable Case[] typeDeclarations = [
     rejects("type Point(x: Int)"), // only at module level for now
     rejects("val type = 1"),
 ];
+
+/// Sema decides what an uppercase name means, so lowering treats it as a plain name.
+immutable Case[] typeConstruction = [
+    parsesAs("val p = Point(1, 2)", "(val p (call Point 1 2))"),
+    parsesAs("val o = Origin", "(val o Origin)"),
+    parsesAs("val l = Line(Point(1), Point(2))", "(val l (call Line (call Point 1) (call Point 2)))"),
+    parsesAs("val p = geo.Point(1)", "(val p (call (. geo Point) 1))"),
+    parsesAs("val o = geo.Origin", "(val o (. geo Origin))"),
+    parsesAs("val v = Point(1, 2).x", "(val v (. (call Point 1 2) x))"),
+    parsesAs("val v = line.start.x", "(val v (. (. line start) x))"),
+    parsesAs("p.x = 1", "(assign (. p x) 1)"),
+];

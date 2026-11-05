@@ -1,0 +1,15 @@
+type Point(x: Int, y: Int)
+type Line(start: Point, end: Point)
+
+def main(): Unit {
+    mutable val p = Point(1, 2)
+    p.x = 5
+    printl(p.x)
+    printl(p.y)
+
+    mutable val line = Line(Point(1, 2), Point(3, 4))
+    line.start.x = 9
+    printl(line.start.x)
+    printl(line.start.y)
+    printl(line.end.x)
+}

@@ -269,6 +269,8 @@ private final class Lowering
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(IntLiteral(radixValue(cst.matches[0], 16))));
         case "Silver.BinaryLiteral":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(IntLiteral(radixValue(cst.matches[0], 2))));
+        case "Silver.TypeName":
+            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(Identifier(cst.matches[0])));
         default:
             break;
         }

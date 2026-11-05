@@ -28,6 +28,8 @@ private struct BodyContext
     Type returnType;
 }
 
+struct FieldInfo { string name; Type type; }
+
 private final class TypeChecker
 {
     this(const Resolution resolutions, Collector collector)
@@ -43,6 +45,8 @@ private final class TypeChecker
     private Type[Id!Expr] _exprTypes;
     private Type[SymbolId] _symbolTypes;
     private Type[Id!TypeDecl] _nominalTypes;
+    private FieldInfo[][Id!TypeDecl] _fields;
+    private size_t[Id!Expr] _fieldIndexes;
 
     Typing checkProgram(const Program program)
     {
@@ -69,7 +73,9 @@ private final class TypeChecker
                     (const FunctionDecl f) {
                         declareSignature(f);
                     },
-                    (const TypeDecl _) {},
+                    (const TypeDecl decl) {
+                        declareConstructor(decl);
+                    },
                     (const ImportStmt _) {},
                 );
             }
@@ -136,8 +142,19 @@ private final class TypeChecker
             _symbolTypes[SymbolId(param.id)] = params[i];
         }
         _symbolTypes[SymbolId(func.id)] = _types.function_(params, resolveType(func.returnType));
-
     }
+
+    private void declareConstructor(const TypeDecl decl)
+    {
+        auto fields = decl.fields.map!(f => FieldInfo(f.name, resolveType(f.type))).array;
+        _fields[decl.id] = fields;
+
+        auto declared = _nominalTypes[decl.id];
+        _symbolTypes[SymbolId(decl.id)] = fields.length == 0
+            ? declared
+            : _types.function_(fields.map!(f => f.type).array, declared);
+    }
+
 
     private void checkFunction(const FunctionDecl func)
     {
@@ -177,6 +194,7 @@ private final class TypeChecker
             (const AssignStmt assign) {
                 auto lhsType = synthesize(assign.target, ctx);
                 auto rhsType = synthesize(assign.value, ctx);
+                if (lhsType != _types.error) checkAssignable(assign.target);
                 requireAssignable(rhsType, lhsType, assign.value.span);
             },
             (const ExprStmt expr) {
@@ -188,6 +206,49 @@ private final class TypeChecker
                 check(ret.value, ctx.returnType, ctx);
             },
         );
+    }
+
+    /// Reports `target` unless it's a mutable binding or a chain of fields rooted at one.
+    private void checkAssignable(const Expr target)
+    {
+        target.kind.match!(
+            (const Identifier _) => checkBindingMutable(target),
+            (const MemberAccess access) => checkAssignable(*access.object),
+            (_) => reportInvalidAssignment(target),
+        );
+    }
+
+    private void checkBindingMutable(const Expr name)
+    {
+        auto symbol = name.id in _resolutions.resolutions;
+        // A package prefix like `std` in `std.math.pow = f` has no resolution of its own.
+        if (symbol is null)
+        {
+            reportInvalidAssignment(name);
+            return;
+        }
+        (*symbol).match!(
+            (const Id!VarDecl local) {
+                auto decl = _resolutions.declarations.locals[local];
+                if (!decl.mutable)
+                {
+                    _collector.reportError(DiagnosticCode.AssignToImmutable, name.span,
+                        "`%s` is not mutable and cannot be assigned to; declare it with `mutable val`".format(decl.name));
+                }
+            },
+            (const Id!Param param) {
+                _collector.reportError(DiagnosticCode.AssignToImmutable, name.span,
+                    "`%s` is a parameter, which is not mutable and cannot be assigned to"
+                        .format(_resolutions.declarations.params[param].name));
+            },
+            (_) => reportInvalidAssignment(name),
+        );
+    }
+
+    private void reportInvalidAssignment(const Expr target)
+    {
+        _collector.reportError(DiagnosticCode.InvalidAssignmentTarget, target.span,
+            "Only a `mutable val` or one of its fields can be assigned to");
     }
 
     private Type synthesize(const Expr expr, BodyContext ctx)
@@ -371,9 +432,21 @@ private final class TypeChecker
         // `std.math.nope` or `std.nope`: resolution reported it.
         if (isModulePath(*member.object)) return _types.error;
 
-        // A member of a value. Field access isn't implemented yet, so every member is unknown.
         auto objectType = synthesize(*member.object, ctx);
         if (objectType == _types.error) return _types.error;
+
+        auto fields = _types[objectType].match!(
+            (const NominalData nominal) => _fields[nominal.decl],
+            (_) => FieldInfo[].init,
+        );
+        foreach (i, field; fields)
+        {
+            if (field.name == member.member)
+            {
+                _fieldIndexes[expr.id] = i;
+                return field.type;
+            }
+        }
         _collector.reportError(DiagnosticCode.UnknownMember, expr.span,
             "Type `%s` has no member named `%s`".format(_types.describe(objectType), member.member));
         return _types.error;

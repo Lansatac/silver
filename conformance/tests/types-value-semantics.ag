@@ -1,0 +1,50 @@
+// Assigning to a field changes that binding's value and nothing else.
+type Point(x: Int, y: Int)
+type Line(start: Point, end: Point)
+
+def bumped(p: Point): Point {
+    mutable val copy = p
+    copy.x = copy.x + 1
+    copy
+}
+
+def main(): Unit {
+    val fixed = Point(1, 2)
+    mutable val changing = fixed
+    changing.x = 5
+    printl(fixed.x)
+    printl(changing.x)
+
+    mutable val first = Point(1, 2)
+    mutable val second = first
+    first.x = 6
+    second.y = 7
+    printl(first.x)
+    printl(first.y)
+    printl(second.x)
+    printl(second.y)
+
+    mutable val source = Point(1, 2)
+    val held = Line(source, source)
+    source.x = 8
+    printl(held.start.x)
+    printl(source.x)
+
+    val inner = Point(1, 2)
+    mutable val line = Line(inner, inner)
+    val start = line.start
+    line.start.x = 9
+    printl(line.start.x)
+    printl(line.end.x)
+    printl(start.x)
+    printl(inner.x)
+
+    val original = Point(1, 2)
+    printl(bumped(original).x)
+    printl(original.x)
+
+    // The old value is still readable on the right-hand side.
+    mutable val total = Point(3, 4)
+    total.x = total.x + total.y
+    printl(total.x)
+}

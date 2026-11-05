@@ -14,5 +14,5 @@ mixin AstCases!(
     postfix,
     ifs, blocks, loops,
     assignments, declarations, typeAnnotations, moduleDeclarations, imports,
-    functions, typeDeclarations,
+    functions, typeDeclarations, typeConstruction,
 );

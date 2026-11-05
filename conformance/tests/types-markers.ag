@@ -1,0 +1,14 @@
+type Origin
+type Tagged(tag: Origin, n: Int)
+
+def takes(o: Origin): Int => 1
+def gives(): Origin => Origin
+
+def main(): Unit {
+    val o = Origin
+    printl(takes(o))
+    printl(takes(Origin))
+    printl(takes(gives()))
+    printl(Tagged(o, 2).n)
+    printl(takes(Tagged(Origin, 3).tag))
+}

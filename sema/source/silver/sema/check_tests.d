@@ -474,3 +474,296 @@ def g(q: lib.Point): Unit => f(q)
 def main(): Unit => ()`, files)
         .shouldHaveNoDiagnostics();
 }
+
+// Constructing declared types
+
+/// `body` as the body of `main`, with `Point` and `Origin` declared.
+private Analyzed analyzedWithTypes(string body)
+{
+    return analyzed("type Point(x: Int, y: Int)\ntype Origin\ndef main(): Unit {\n" ~ body ~ "\n}");
+}
+
+@("type checking gives a constructor a function type, and a construction the declared type")
+unittest
+{
+    auto a = analyzedWithTypes(`val p = Point(1, 2)
+    val make = Point`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("Point", 2, "(Int, Int) -> Point");
+    a.shouldHaveType("Point(1, 2)", "Point");
+    a.shouldDeclareType(At("p", 1), "Point");
+    a.shouldDeclareType(At("make", 1), "(Int, Int) -> Point");
+    a.shouldTypeEveryExpression();
+}
+
+@("type checking gives a marker's name the marker type, since it's already a value")
+unittest
+{
+    auto a = analyzedWithTypes(`val o = Origin`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("Origin", 2, "Origin");
+    a.shouldDeclareType(At("o", 1), "Origin");
+}
+
+@("type checking reports a marker called like a function")
+unittest
+{
+    analyzedWithTypes(`val o = Origin()`).shouldReport(DiagnosticCode.NotCallable, At("Origin", 2));
+}
+
+@("type checking reports a construction with the wrong number of arguments")
+unittest
+{
+    analyzedWithTypes(`val p = Point(1)`).shouldReport(DiagnosticCode.WrongArgumentCount, At("Point", 2));
+    analyzedWithTypes(`val p = Point(1, 2, 3)`).shouldReport(DiagnosticCode.WrongArgumentCount, At("Point", 2));
+    analyzedWithTypes(`val p = Point()`).shouldReport(DiagnosticCode.WrongArgumentCount, At("Point", 2));
+}
+
+@("type checking checks each constructor argument against its field")
+unittest
+{
+    analyzedWithTypes(`val p = Point(1, "a")`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
+    analyzed(`type Meters(value: Int)
+type Feet(value: Int)
+def main(): Unit {
+    val feet = Feet(1)
+    val meters = Meters(feet)
+}`).shouldReport(DiagnosticCode.TypeMismatch, At("feet", 2));
+}
+
+@("type checking adapts an integer literal to a Float field, but not an Int value")
+unittest
+{
+    enum box = "type Box(value: Float)\ndef main(): Unit {\n";
+    analyzed(box ~ "    val b = Box(1)\n}").shouldHaveNoDiagnostics();
+    analyzed(box ~ "    val i = 1\n    val b = Box(i)\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("i", 2));
+}
+
+@("type checking promotes a constructor argument to an option field")
+unittest
+{
+    analyzed("type Box(value: Int?)\ndef main(): Unit {\n    val b = Box(1)\n}").shouldHaveNoDiagnostics();
+}
+
+@("type checking finds constructors and fields of types declared later")
+unittest
+{
+    auto a = analyzed(`def main(): Unit {
+    val line = Line(Point(1))
+    val v = line.start.x
+}
+type Line(start: Point)
+type Point(x: Int)`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("line", 1), "Line");
+    a.shouldDeclareType(At("v", 1), "Int");
+}
+
+@("type checking accepts a type whose fields refer back to it")
+unittest
+{
+    auto a = analyzed(`type Node(value: Int, next: Node?)
+type Knot(self: Knot)
+def push(v: Int, n: Node): Node => Node(v, n)
+def tie(k: Knot): Knot => Knot(k)
+def rest(n: Node): Node? => n.next
+def main(): Unit => ()`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("Node", 5, "(Int, Node?) -> Node");
+    a.shouldHaveType("n.next", "Node?");
+}
+
+@("type checking treats plain and qualified constructors as the same type")
+unittest
+{
+    auto files = ["geo.ag": "module geo\ntype Point(x: Int)\ntype Origin"];
+    auto a = analyzed(`import geo
+def same(p: geo.Point, o: geo.Origin): Unit => ()
+def main(): Unit {
+    same(Point(1), Origin)
+    same(geo.Point(2), geo.Origin)
+}`, files);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("Point(1)", "Point");
+    a.shouldHaveType("geo.Point(2)", "Point");
+    a.shouldHaveType("geo.Origin", 2, "Origin");
+}
+
+@("type checking keeps same-named imported and local constructions apart")
+unittest
+{
+    auto files = ["geo.ag": "module geo\ntype Point(x: Int)"];
+    analyzed(`import geo
+type Point(y: Int)
+def own(p: Point): Unit => ()
+def main(): Unit {
+    own(geo.Point(1))
+}`, files).shouldReport(DiagnosticCode.TypeMismatch, At("geo", 2));
+}
+
+// Reading fields
+
+@("type checking gives a field read the field's declared type")
+unittest
+{
+    auto a = analyzed(`type Mixed(count: Int, ratio: Float, name: String, maybe: Int?, f: (Int) -> Bool)
+def read(m: Mixed): Unit {
+    val a = m.count
+    val b = m.ratio
+    val c = m.name
+    val d = m.maybe
+    val e = m.f
+    val g = m.f(1)
+}
+def main(): Unit => ()`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("a", 1), "Int");
+    a.shouldDeclareType(At("b", 1), "Float");
+    a.shouldDeclareType(At("c", 1), "String");
+    a.shouldDeclareType(At("d", 1), "Int?");
+    a.shouldDeclareType(At("e", 1), "(Int) -> Bool");
+    a.shouldDeclareType(At("g", 1), "Bool");
+}
+
+@("type checking reads fields through other fields and from any expression")
+unittest
+{
+    auto a = analyzed(`type Point(x: Int)
+type Line(start: Point)
+def make(): Line => Line(Point(1))
+def main(): Unit {
+    val line = make()
+    val fromChain = line.start.x
+    val fromCall = make().start
+    val fromConstruction = Point(2).x
+}`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("fromChain", 1), "Int");
+    a.shouldDeclareType(At("fromCall", 1), "Point");
+    a.shouldDeclareType(At("fromConstruction", 1), "Int");
+    a.shouldTypeEveryExpression();
+}
+
+@("type checking finds a field by the object's type, so types can reuse a field name")
+unittest
+{
+    auto a = analyzed(`type Count(value: Int)
+type Label(value: String)
+def main(): Unit {
+    val n = Count(1).value
+    val s = Label("a").value
+}`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("n", 1), "Int");
+    a.shouldDeclareType(At("s", 1), "String");
+}
+
+@("type checking keeps field names apart from locals and functions")
+unittest
+{
+    analyzed(`type Point(x: Int, main: Int)
+def main(): Unit {
+    val x = Point(1, 2).x
+    val y = Point(1, 2).main
+}`).shouldHaveNoDiagnostics();
+}
+
+@("type checking reads the fields of an imported type")
+unittest
+{
+    auto files = ["geo.ag": "module geo\ntype Point(x: Int)"];
+    auto a = analyzed("import geo\ndef main(): Unit {\n    val v = geo.Point(1).x\n}", files);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("v", 1), "Int");
+}
+
+@("type checking reports a field the type doesn't have, at the start of the read")
+unittest
+{
+    analyzedWithTypes(`val p = Point(1, 2)
+    val v = p.nope`).shouldReport(DiagnosticCode.UnknownMember, At("p", 2));
+    analyzedWithTypes(`val v = Origin.x`).shouldReport(DiagnosticCode.UnknownMember, At("Origin", 2));
+    // The constructor is a function, not an instance.
+    analyzedWithTypes(`val v = Point.x`).shouldReport(DiagnosticCode.UnknownMember, At("Point", 2));
+}
+
+@("type checking doesn't read a field through an option")
+unittest
+{
+    analyzed(`type Point(x: Int)
+def f(maybe: Point?): Int => maybe.x
+def main(): Unit => ()`).shouldReport(DiagnosticCode.UnknownMember, At("maybe", 2));
+}
+
+// Assigning to bindings and fields: the binding decides, not the type
+
+private enum lineTypes = "type Point(x: Int)\ntype Line(start: Point)\n";
+
+@("type checking accepts an assignment to a field through a mutable binding")
+unittest
+{
+    analyzedWithTypes(`mutable val p = Point(1, 2)
+    p.x = 3`).shouldHaveNoDiagnostics();
+    analyzed(lineTypes ~ "def main(): Unit {\n    mutable val line = Line(Point(1))\n    line.start.x = 2\n}")
+        .shouldHaveNoDiagnostics();
+}
+
+@("type checking reports an assignment to a field through an immutable binding")
+unittest
+{
+    analyzedWithTypes(`val p = Point(1, 2)
+    p.x = 3`).shouldReport(DiagnosticCode.AssignToImmutable, At("p", 2));
+    analyzed(lineTypes ~ "def main(): Unit {\n    val line = Line(Point(1))\n    line.start.x = 2\n}")
+        .shouldReport(DiagnosticCode.AssignToImmutable, At("line", 2));
+    analyzed(lineTypes ~ "def f(p: Point): Unit {\n    p.x = 2\n}\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.AssignToImmutable, At("p", 2));
+}
+
+@("type checking reports an assignment to an immutable binding")
+unittest
+{
+    analyzedWithTypes(`val x = 1
+    x = 2`).shouldReport(DiagnosticCode.AssignToImmutable, At("x", 3));
+    analyzed("def f(n: Int): Unit {\n    n = 2\n}\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.AssignToImmutable, At("n", 2));
+}
+
+@("type checking reports an assignment to a field of something that isn't a binding")
+unittest
+{
+    analyzedWithTypes(`Point(1, 2).x = 3`).shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("Point", 2));
+    analyzed(lineTypes ~ "def make(): Point => Point(1)\ndef main(): Unit {\n    make().x = 2\n}")
+        .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("make", 2));
+}
+
+@("type checking checks the value assigned to a field against the field's type")
+unittest
+{
+    analyzedWithTypes(`mutable val p = Point(1, 2)
+    p.x = "a"`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
+}
+
+@("type checking reports an assignment to a field the type doesn't have")
+unittest
+{
+    analyzedWithTypes(`mutable val p = Point(1, 2)
+    p.nope = 3`).shouldReport(DiagnosticCode.UnknownMember, At("p", 2));
+}
+
+@("type checking accepts rebinding a mutable binding to a new value")
+unittest
+{
+    analyzedWithTypes(`mutable val p = Point(1, 2)
+    p = Point(3, 4)`).shouldHaveNoDiagnostics();
+}
+
+@("type checking reports an assignment to something that isn't a binding at all")
+unittest
+{
+    auto files = ["geo.ag": "module geo\ndef f(): Int => 1"];
+    analyzed("def f(): Int => 1\ndef g(): Int => 2\ndef main(): Unit {\n    f = g\n}")
+        .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("f", 2));
+    analyzed("import geo\ndef main(): Unit {\n    geo.f = geo.f\n}", files)
+        .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("geo", 2));
+}

@@ -1,0 +1,15 @@
+import types_support.geometry
+import types_support.labels
+
+// Both imports define Point, but this module's own wins over them.
+type Point(z: Int)
+
+def takes(o: Origin): Int => 5
+
+def main(): Unit {
+    printl(Point(1).z)
+    printl(types_support.geometry.Point(2, 3).y)
+    printl(types_support.labels.Point("four").name)
+    printl(takes(Origin))
+    printl(takes(types_support.geometry.Origin))
+}

@@ -28,12 +28,23 @@ private TypeSymbol[string] builtinTypes() pure
     return types;
 }
 
+/// Every declaration in a program, by ID. The pointers are into the AST.
+package struct Declarations
+{
+    const(FunctionDecl)*[Id!FunctionDecl] functions;
+    const(TypeDecl)*[Id!TypeDecl] types;
+    const(VarDecl)*[Id!VarDecl] locals;
+    const(Param)*[Id!Param] params;
+}
+
 /// What name resolution produced.
 package struct Resolution
 {
     SymbolId[Id!Expr] resolutions;
-    Id!FunctionDecl[Id!Expr] callees;
     TypeSymbol[Id!TypeExpr] typeResolutions;
+    Id!FunctionDecl[Id!Expr] callees;
+    Id!TypeDecl[Id!Expr] constructions;
+    Declarations declarations;
 }
 
 /// Resolves every name in `program`, reporting problems to `collector`.
@@ -157,6 +168,8 @@ private final class NameResolver
     private SymbolId[Id!Expr] _resolutions;
     private TypeSymbol[Id!TypeExpr] _typeResolutions;
     private Id!FunctionDecl[Id!Expr] _callees;
+    private Id!TypeDecl[Id!Expr] _constructions;
+    private Declarations _declarations;
     private Collector _collector;
     /// Each module's own top-level declarations, by module name.
     private Scope[string] _moduleScopes;
@@ -179,7 +192,7 @@ private final class NameResolver
         {
             resolveModule(mod.name, mod);
         }
-        return Resolution(_resolutions, _callees, _typeResolutions);
+        return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _declarations);
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
@@ -201,10 +214,11 @@ private final class NameResolver
         }
 
         auto moduleScope = new Scope(visible);
-        foreach (decl; mod.declarations)
+        foreach (ref decl; mod.declarations)
         {
             decl.kind.match!(
-                (const FunctionDecl func) {
+                (ref const FunctionDecl func) {
+                    _declarations.functions[func.id] = &func;
                     if (moduleScope.resolveLocal(func.name) !is null)
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, func.nameSpan,
@@ -215,7 +229,8 @@ private final class NameResolver
                         moduleScope.declare(func.name, SymbolId(func.id));
                     }
                 },
-                (const TypeDecl type) {
+                (ref const TypeDecl type) {
+                    _declarations.types[type.id] = &type;
                     if (moduleScope.resolveLocalType(type.name) !is null)
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan,
@@ -259,8 +274,9 @@ private final class NameResolver
         {
             decl.kind.match!(
                 (const FunctionDecl func) {
-                    foreach (param; func.params)
+                    foreach (ref param; func.params)
                     {
+                        _declarations.params[param.id] = &param;
                         resolveTypeExpr(param.type, _moduleScopes[name]);
                     }
                     resolveTypeExpr(func.returnType, _moduleScopes[name]);
@@ -397,10 +413,11 @@ private final class NameResolver
         }
     }
 
-    void resolveStmt(const Stmt stmt, Scope scopeTable)
+    void resolveStmt(const ref Stmt stmt, Scope scopeTable)
     {
         stmt.kind.match!(
-            (const VarDecl varDecl) {
+            (ref const VarDecl varDecl) {
+                _declarations.locals[varDecl.id] = &varDecl;
                 if (varDecl.type !is null) resolveTypeExpr(*varDecl.type, scopeTable);
                 resolveExpr(varDecl.value, scopeTable);
                 declareLocal(varDecl.name, varDecl.nameSpan, SymbolId(varDecl.id), scopeTable,
@@ -428,7 +445,7 @@ private final class NameResolver
         expr.kind.match!(
             (const BlockExpr block) {
                 Scope blockScope = new Scope(scopeTable);
-                foreach (stmt; block.statements)
+                foreach (ref stmt; block.statements)
                 {
                     resolveStmt(stmt, blockScope);
                 }
@@ -445,6 +462,7 @@ private final class NameResolver
                 {
                     (*symbol).match!(
                         (const Id!FunctionDecl func) { _callees[expr.id] = func; },
+                        (const Id!TypeDecl type) { _constructions[expr.id] = type; },
                         (_) {},
                     );
                 }
