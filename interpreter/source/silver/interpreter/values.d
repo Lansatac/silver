@@ -1,7 +1,7 @@
 module silver.interpreter.values;
 
 import std.variant : Variant;
-import silver.ast : DiagnosticCode, FunctionDecl;
+import silver.ast : DiagnosticCode, FunctionDecl, TypeDecl;
 import silver.interpreter.environment : Environment;
 import silver.interpreter.errors : CodedException;
 
@@ -35,6 +35,85 @@ class Function
     override string toString() const
     {
         return declaration.name;
+    }
+}
+
+/// What a `type` declaration with fields binds its name to.
+class Constructor
+{
+    const TypeDecl declaration;
+
+    this(const TypeDecl declaration)
+    {
+        this.declaration = declaration;
+    }
+
+    override string toString() const
+    {
+        return declaration.name;
+    }
+}
+
+/// A value of a `type`. Never changes once built, so sharing one between bindings can't be
+/// observed: that's what gives `type` value semantics. Field assignment builds a new one.
+class Instance
+{
+    private Constructor constructor;
+    private Variant[] fields;
+
+    this(Constructor constructor, Variant[] fields)
+    {
+        this.constructor = constructor;
+        this.fields = fields;
+    }
+
+    Variant field(string name)
+    {
+        return fields[indexOf(name)];
+    }
+
+    /// A copy of this value with the field `name` replaced.
+    Instance withField(string name, Variant value)
+    {
+        auto copy = fields.dup;
+        copy[indexOf(name)] = value;
+        return new Instance(constructor, copy);
+    }
+
+    /// Whether each field equals the same field of `other`, a value of the same type.
+    bool fieldsEqual(Instance other, scope bool delegate(Variant, Variant) equal)
+    {
+        foreach (i, field; fields)
+        {
+            if (!equal(field, other.fields[i]))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private size_t indexOf(string name)
+    {
+        import std.format : format;
+
+        foreach (i, field; constructor.declaration.fields)
+        {
+            if (field.name == name)
+            {
+                return i;
+            }
+        }
+        throw new CodedException(DiagnosticCode.UnknownMember, "%s has no member %s".format(constructor, name));
+    }
+
+    override string toString()
+    {
+        import std.algorithm : map;
+        import std.array : join;
+
+        auto name = constructor.toString();
+        return fields.length == 0 ? name : name ~ "(" ~ fields.map!(f => f.toString()).join(", ") ~ ")";
     }
 }
 

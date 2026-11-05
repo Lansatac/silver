@@ -142,13 +142,22 @@ class Evaluator
 
     private void execute(const AssignStmt ast, Environment variables)
     {
-        // ast is const, so the target's kind holds const types; matching on
-        // `const Identifier` avoids has!/get! failing on the qualifier.
-        auto name = ast.target.kind.match!(
-            (const Identifier i) => i.name,
-            (_) => throw new CodedException(DiagnosticCode.InvalidAssignmentTarget, "PH: Can only assign to a variable"));
-        auto value = evaluate(ast.value, variables);
-        variables.setVariable(name, value);
+        assign(ast.target, evaluate(ast.value, variables), variables);
+    }
+
+    /// `p.x = v` rebuilds: it assigns `p` a copy of itself with `x` replaced, so `a.b.c = v`
+    /// works back through the chain until it reaches the binding, which is the only thing stored to.
+    private void assign(const Expr target, Variant value, Environment variables)
+    {
+        target.kind.match!(
+            (const Identifier i) { variables.setVariable(i.name, value); },
+            (const MemberAccess m) {
+                auto updated = withField(evaluate(*m.object, variables), m.member, value);
+                assign(*m.object, updated, variables);
+            },
+            (_) {
+                throw new CodedException(DiagnosticCode.InvalidAssignmentTarget, "PH: Can only assign to a variable or field");
+            });
     }
 
     private void bindNatives()
@@ -197,8 +206,13 @@ class Evaluator
         variables.defineVariable(ast.name, Variant(new Function(ast, variables, *binding)));
     }
 
+    /// A marker's name is its one value; any other type's name is its constructor.
     private void execute(const TypeDecl ast, Environment variables)
     {
+        auto constructor = new Constructor(ast);
+        variables.defineVariable(ast.name, ast.fields.length == 0
+                ? Variant(new Instance(constructor, []))
+                : Variant(constructor));
     }
 
     /// Adds the module to the importing module's ImportScope. It isn't bound as a variable;
@@ -366,6 +380,16 @@ class Evaluator
     {
         import std.format : format;
 
+        if (auto constructor = callee.peek!Constructor)
+        {
+            auto declaration = (*constructor).declaration;
+            if (args.length != declaration.fields.length)
+            {
+                throw new CodedException(DiagnosticCode.WrongArgumentCount, "%s expects %s arguments, got %s".format(
+                        declaration.name, declaration.fields.length, args.length));
+            }
+            return Variant(new Instance(*constructor, args));
+        }
         if (!callee.convertsTo!Function)
         {
             throw new CodedException(DiagnosticCode.NotCallable, "%s is not a function".format(callee));
@@ -413,8 +437,22 @@ class Evaluator
 
     private static Variant member(Variant object, string name)
     {
+        return instanceWithMember(object, name).field(name);
+    }
+
+    private static Variant withField(Variant object, string name, Variant value)
+    {
+        return Variant(instanceWithMember(object, name).withField(name, value));
+    }
+
+    private static Instance instanceWithMember(Variant object, string name)
+    {
         import std.format : format;
 
+        if (auto instance = object.peek!Instance)
+        {
+            return *instance;
+        }
         throw new CodedException(DiagnosticCode.UnknownMember, "%s has no member %s".format(object, name));
     }
 
@@ -534,15 +572,26 @@ class Evaluator
         switch (operator)
         {
         case BinaryOp.Equal:
-            return Variant(lhs == rhs);
+            return Variant(valuesEqual(lhs, rhs));
         case BinaryOp.NotEqual:
-            return Variant(lhs != rhs);
+            return Variant(!valuesEqual(lhs, rhs));
         default:
             import std.format : format;
 
             throw new CodedException(DiagnosticCode.InvalidOperand,
                 "Unsupported operator %s for type %s".format(operator, lhs.type));
         }
+    }
+
+    /// Instances compare structurally. Variant alone would compare them by reference,
+    /// which would expose whether two values share an Instance.
+    private bool valuesEqual(Variant lhs, Variant rhs)
+    {
+        if (auto left = lhs.peek!Instance)
+        {
+            return (*left).fieldsEqual(rhs.get!Instance, (a, b) => operate(BinaryOp.Equal, a, b).get!bool);
+        }
+        return lhs == rhs;
     }
 
     private Variant operate(T)(BinaryOp operator, T lhs, T rhs)

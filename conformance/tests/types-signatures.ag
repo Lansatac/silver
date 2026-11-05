@@ -1,4 +1,3 @@
-// Types can't be constructed yet, so these run only as far as a value isn't needed.
 type Point(x: Int)
 type Marker
 

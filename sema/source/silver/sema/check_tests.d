@@ -767,3 +767,66 @@ unittest
     analyzed("import geo\ndef main(): Unit {\n    geo.f = geo.f\n}", files)
         .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("geo", 2));
 }
+
+private Analyzed analyzedEquality(string declarations, string operands = "a: T, b: T")
+{
+    return analyzed(declarations ~ "\ndef same(" ~ operands ~ "): Bool => a == b\ndef main(): Unit => ()");
+}
+
+@("type checking accepts == on a type whose fields can all be compared")
+unittest
+{
+    analyzedEquality("type T(i: Int, f: Float, s: String, b: Bool, u: Unit)").shouldHaveNoDiagnostics();
+    analyzedEquality("type Inner(i: Int)\ntype T(inner: Inner, marker: Marker)\ntype Marker").shouldHaveNoDiagnostics();
+    analyzedEquality("type T(maybe: Int?)").shouldHaveNoDiagnostics();
+    analyzedEquality("type T", "a: T, b: T").shouldHaveNoDiagnostics();
+}
+
+@("type checking accepts == on a type that contains itself")
+unittest
+{
+    analyzedEquality("type T(next: T?)").shouldHaveNoDiagnostics();
+    analyzedEquality("type T(other: U?)\ntype U(back: T?)").shouldHaveNoDiagnostics();
+}
+
+@("type checking gives == on a declared type the type Bool")
+unittest
+{
+    auto a = analyzed("type T(i: Int)\ndef main(): Unit {\n    val same = T(1) == T(1)\n    val differs = T(1) != T(2)\n}");
+    a.shouldHaveType("T(1) == T(1)", "Bool");
+    a.shouldHaveType("T(1) != T(2)", "Bool");
+    a.shouldHaveNoDiagnostics();
+}
+
+@("type checking reports == on functions, at the comparison")
+unittest
+{
+    analyzed("def f(): Int => 1\ndef main(): Unit {\n    printl(f == f)\n}")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("f", 2));
+    analyzed("def f(): Int => 1\ndef main(): Unit {\n    printl(f != f)\n}")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("f", 2));
+    analyzed("type T(i: Int)\ndef main(): Unit {\n    printl(T == T)\n}")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("T", 2));
+}
+
+@("type checking reports == on a type with a function anywhere inside it")
+unittest
+{
+    analyzedEquality("type T(f: (Int) -> Int)").shouldReport(DiagnosticCode.InvalidOperand, At("a", 2));
+    analyzedEquality("type T(f: ((Int) -> Int)?)").shouldReport(DiagnosticCode.InvalidOperand, At("a", 2));
+    analyzedEquality("type Inner(f: () -> Int)\ntype T(inner: Inner)").shouldReport(DiagnosticCode.InvalidOperand, At("a", 2));
+    analyzedEquality("type T(next: T?, f: () -> Int)").shouldReport(DiagnosticCode.InvalidOperand, At("a", 2));
+}
+
+@("type checking reports == between different declared types with the same fields")
+unittest
+{
+    analyzedEquality("type T(i: Int)\ntype U(i: Int)", "a: T, b: U").shouldReport(DiagnosticCode.InvalidOperand, At("a", 2));
+}
+
+@("type checking reports ordering comparisons on a declared type")
+unittest
+{
+    analyzed("type T(i: Int)\ndef f(a: T, b: T): Bool => a < b\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("a", 2));
+}

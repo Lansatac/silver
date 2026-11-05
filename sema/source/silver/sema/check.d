@@ -279,6 +279,28 @@ private final class TypeChecker
         return t == _types.int_ || t == _types.float_;
     }
 
+    private bool isComparable(Type type)
+    {
+        bool[Type] visited;
+        return isComparable(type, visited);
+    }
+
+    /// A type can contain itself through an option field, so one already visited counts as
+    /// comparable: only a type that really can't be compared can make the answer false.
+    private bool isComparable(Type type, ref bool[Type] visited)
+    {
+        if (type in visited) return true;
+        visited[type] = true;
+
+        return _types[type].match!(
+            (const Primitive primitive) => primitive.kind != Primitive.Kind.Any,
+            (const OptionData option) => isComparable(option.inner, visited),
+            (const FunctionData _) => false,
+            (const NominalData nominal) => _fields[nominal.decl].all!(f => isComparable(f.type, visited)),
+            (const ErrorType _) => true,
+        );
+    }
+
     private Type synthesizeUnary(const UnaryExpr unary, Span span, BodyContext ctx)
     {
         auto operandType = synthesize(*unary.operand, ctx);
@@ -372,6 +394,12 @@ private final class TypeChecker
                 {
                     _collector.reportError(DiagnosticCode.InvalidOperand, span,
                         "`%s` can't compare `%s` and `%s`".format(binary.op, _types.describe(leftType), _types.describe(rightType)));
+                    return _types.error;
+                }
+                if (!isComparable(leftType))
+                {
+                    _collector.reportError(DiagnosticCode.InvalidOperand, span,
+                        "`%s` can't compare values of type `%s`".format(binary.op, _types.describe(leftType)));
                     return _types.error;
                 }
                 return _types.bool_;

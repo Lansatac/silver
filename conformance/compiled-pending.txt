@@ -9,3 +9,4 @@ types-function-fields
 types-constructor-values
 types-field-assignment
 types-value-semantics
+types-equality

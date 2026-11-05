@@ -1,0 +1,51 @@
+type Point(x: Int, y: Int)
+type Line(start: Point, end: Point)
+type Origin
+type Named(name: String, active: Bool)
+type Holder(nothing: Unit, n: Int)
+type Measure(value: Float)
+
+def main(): Unit {
+    printl(Point(1, 2) == Point(1, 2))
+    printl(Point(1, 2) == Point(1, 3))
+    printl(Point(1, 2) != Point(1, 2))
+    printl(Point(1, 2) != Point(3, 2))
+
+    printl(Line(Point(1, 2), Point(3, 4)) == Line(Point(1, 2), Point(3, 4)))
+    printl(Line(Point(1, 2), Point(3, 4)) == Line(Point(1, 2), Point(3, 5)))
+
+    printl(Origin == Origin)
+    printl(Origin != Origin)
+
+    // Strings compare by contents, so these need not be the same string in memory.
+    printl(Named("a", true) == Named("a", true))
+    printl(Named("a", true) == Named("b", true))
+    printl(Named("a", true) == Named("a", false))
+
+    printl(Holder((), 1) == Holder((), 1))
+    printl(Holder((), 1) == Holder((), 2))
+
+    // A rebuilt value equals one built directly, and an old value stays what it was.
+    val before = Point(1, 2)
+    mutable val after = before
+    printl(after == before)
+    after.x = 5
+    printl(after == before)
+    printl(after == Point(5, 2))
+    after.x = 1
+    printl(after == before)
+
+    // Float fields follow Float's own `==`.
+    val zero: Float = 0.0
+    val nan = zero / zero
+    printl(nan == nan)
+    printl(Measure(nan) == Measure(nan))
+    printl(Measure(nan) != Measure(nan))
+    printl(-zero == zero)
+    printl(Measure(-zero) == Measure(zero))
+    printl(Measure(1.5) == Measure(1.5))
+    printl(Measure(1) == Measure(1.0))
+
+    val measure = Measure(nan)
+    printl(measure == measure)
+}
