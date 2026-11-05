@@ -1,0 +1,6 @@
+module types_support.geometry
+
+type Point(x: Int, y: Int)
+type Origin
+
+def answer(): Int => 42

@@ -1,0 +1,3 @@
+module types_support.labels
+
+type Point(name: String)

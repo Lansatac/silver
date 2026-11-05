@@ -1,0 +1,26 @@
+// Types can't be constructed yet, so these run only as far as a value isn't needed.
+type Point(x: Int)
+type Marker
+
+def identity(p: Point): Point => p
+
+def viaLocal(p: Point): Point {
+    val q: Point = p
+    q
+}
+
+def optional(p: Point?, m: Marker): Int => 1
+def higherOrder(f: (Point) -> Marker, g: (Marker) -> Point): Int => 2
+def usesLater(l: Later): Later => l
+type Later(p: Point)
+
+def makePoint(): Point => makePoint()
+def makeMarker(): Marker => makeMarker()
+def toMarker(p: Point): Marker => makeMarker()
+def toPoint(m: Marker): Point => makePoint()
+
+def main(): Unit {
+    printl(if false => optional(viaLocal(makePoint()), makeMarker()) else 3)
+    printl(if false => higherOrder(toMarker, toPoint) else 4)
+    printl("done")
+}

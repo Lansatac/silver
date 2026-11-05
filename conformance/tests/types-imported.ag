@@ -1,0 +1,16 @@
+import types_support.geometry
+import types_support.labels
+
+// Both imports define Point, but this module's own wins over them.
+type Point(z: Int)
+
+def own(p: Point): Point => p
+def geometryPoint(p: types_support.geometry.Point): types_support.geometry.Point => p
+def labelPoint(p: types_support.labels.Point): types_support.labels.Point => p
+
+// Only one import defines Origin, so it doesn't need qualifying.
+def origin(o: Origin): Origin => o
+
+def main(): Unit {
+    printl(answer())
+}

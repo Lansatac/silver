@@ -77,6 +77,8 @@ private final class Lowering
         case "Silver.FunctionDeclaration":
         case "Silver.NativeFunctionDeclaration":
             return Decl(spanOf(cst[0], file), DeclKind(convertFunctionDeclaration(cst[0])));
+        case "Silver.TypeDeclaration":
+            return Decl(spanOf(cst[0], file), DeclKind(convertTypeDeclaration(cst[0])));
         default:
             throw new Exception("lower: declaration '%s' not supported yet".format(cst[0].name));
         }
@@ -393,6 +395,32 @@ private final class Lowering
             }
         }
         return FunctionDecl(ids.next!FunctionDecl, name, spanOf(cst[0], file), params, body, returnType, native);
+    }
+
+    /// `type Name`, `type Name()` or `type Name(fields)`. Fields has no Params child when the parens are empty.
+    private TypeDecl convertTypeDeclaration(ParseTree cst)
+    {
+        cst.validateNodeIs("Silver.TypeDeclaration");
+        auto name = cst[0].matches[0];
+
+        Field[] fields;
+        bool emptyParens;
+        if (cst.children.length > 1)
+        {
+            auto fieldList = cst[1];
+            fieldList.validateNodeIs("Silver.Fields");
+            emptyParens = fieldList.children.length == 0;
+            foreach (params; fieldList.children)
+            {
+                params.validateNodeIs("Silver.Params");
+                foreach (param; params.children)
+                {
+                    fields ~= Field(ids.next!Field, param.matches[0], spanOf(param[0], file),
+                        convertTypeExpression(param[1]));
+                }
+            }
+        }
+        return TypeDecl(ids.next!TypeDecl, name, spanOf(cst[0], file), fields, emptyParens);
     }
 
     /// `{ Statement* }`. When the last statement is an expression it becomes the

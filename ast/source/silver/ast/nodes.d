@@ -7,7 +7,7 @@ import silver.ast.span;
 import silver.ast.id;
 
 /// The node kinds that get IDs. One NodeIds is shared by every module in a Program.
-alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt);
+alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt, TypeDecl, Field);
 
 struct Module
 {
@@ -33,7 +33,7 @@ struct Decl
     DeclKind kind;
 }
 
-alias DeclKind = SumType!(ImportStmt, FunctionDecl);
+alias DeclKind = SumType!(ImportStmt, FunctionDecl, TypeDecl);
 
 /// A type as written in source. Names aren't resolved, so `Int` is a NamedType
 /// like any other; the checker's resolved types are a separate representation.
@@ -324,6 +324,26 @@ struct FunctionDecl
     bool native;
 }
 
+/// `name: Type` in a type declaration.
+struct Field
+{
+    Id!Field id;
+    string name;
+    Span nameSpan;
+    TypeExpr type;
+}
+
+/// `type Name(fields)`, or `type Name` for a marker type, whose only value is `Name`.
+struct TypeDecl
+{
+    Id!TypeDecl id;
+    string name;
+    Span nameSpan;
+    Field[] fields;
+    /// `type Name()`, which must be written `type Name`.
+    bool emptyParens;
+}
+
 /// `return value`. A bare `return` has a UnitLiteral value.
 struct ReturnStmt
 {
@@ -356,6 +376,7 @@ string printDecl(const Decl d)
     return d.kind.match!(
         (const ImportStmt i) => printImport(i),
         (const FunctionDecl f) => printFunctionDecl(f),
+        (const TypeDecl t) => printTypeDecl(t),
     );
 }
 
@@ -389,6 +410,18 @@ private string printFunctionDecl(const FunctionDecl f)
     return f.native
         ? format("(native def %s %s)", f.name, printSignature(f))
         : format("(def %s %s %s)", f.name, printSignature(f), printExpr(*f.body));
+}
+
+private string printTypeDecl(const TypeDecl t)
+{
+    import std.algorithm : map;
+    import std.array : join;
+
+    if (t.fields.length == 0)
+    {
+        return t.emptyParens ? "(type " ~ t.name ~ " ())" : "(type " ~ t.name ~ ")";
+    }
+    return "(type " ~ t.name ~ " (" ~ t.fields.map!(f => f.name ~ ": " ~ printTypeExpr(f.type)).join(", ") ~ "))";
 }
 
 /// `(a: Int, b: Int): Int`, as written in source.

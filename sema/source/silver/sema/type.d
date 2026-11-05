@@ -2,6 +2,8 @@ module silver.sema.type;
 
 import std.sumtype;
 
+import silver.ast : Id, TypeDecl;
+
 struct Type { private uint index; }
 
 final class TypeTable
@@ -24,6 +26,7 @@ final class TypeTable
 
     private TypeData[int] _types;
     private Type[TypeData] _interned;
+    private string[Id!TypeDecl] _nominalNames;
 
 
     private Type registerTypeData(TypeData data)
@@ -45,6 +48,13 @@ final class TypeTable
     {
         return registerTypeData(TypeData(FunctionData(params.idup, ret)));
     }
+
+    /// The type declared by `decl`. `name` is only for `describe`, so it isn't part of the type's identity.
+    Type nominal(const(Id!TypeDecl) decl, string name)
+    {
+        _nominalNames[decl] = name;
+        return registerTypeData(TypeData(NominalData(decl)));
+    }
     
     const(TypeData) opIndex(Type t) const
     {
@@ -60,6 +70,7 @@ final class TypeTable
             (const Primitive p) => p.kind.text,
             (const OptionData o) => describe(o.inner) ~ "?",
             (const FunctionData f) => "(" ~ f.params.map!(p => describe(p)).join(", ") ~ ") -> " ~ describe(f.ret),
+            (const NominalData nd) => _nominalNames[nd.decl],
             (const ErrorType e) => "Error",
         );
     }
@@ -91,8 +102,13 @@ struct FunctionData
     Type ret;
 }
 
+struct NominalData
+{
+    Id!TypeDecl decl;
+}
+
 struct ErrorType
 {
 }
 
-alias TypeData = SumType!(Primitive, OptionData, FunctionData, ErrorType);
+alias TypeData = SumType!(Primitive, OptionData, FunctionData, NominalData, ErrorType);

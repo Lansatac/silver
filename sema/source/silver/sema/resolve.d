@@ -10,13 +10,30 @@ import std.sumtype;
 
 import silver.ast;
 
-alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module);
+alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module, Id!TypeDecl);
+
+enum Builtin { Never, Unit, Bool, Int, Float, String, Any }
+alias TypeSymbol = SumType!(Builtin, Id!TypeDecl);
+
+private TypeSymbol[string] builtinTypes() pure
+{
+    import std.conv : to;
+    import std.traits : EnumMembers;
+
+    TypeSymbol[string] types;
+    foreach (builtin; EnumMembers!Builtin)
+    {
+        types[builtin.to!string] = TypeSymbol(builtin);
+    }
+    return types;
+}
 
 /// What name resolution produced.
 package struct Resolution
 {
     SymbolId[Id!Expr] resolutions;
     Id!FunctionDecl[Id!Expr] callees;
+    TypeSymbol[Id!TypeExpr] typeResolutions;
 }
 
 /// Resolves every name in `program`, reporting problems to `collector`.
@@ -25,22 +42,32 @@ package Resolution resolveNames(const ref Program program, Collector collector)
     return new NameResolver(collector).resolveProgram(program);
 }
 
+private immutable Scope universal = new Scope(builtinTypes);
+
 /// The names declared in one module, function, or block. Lookups fall back to the parent.
 package final class Scope
 {
     private SymbolId[string] _scopeTable;
-    private Scope _parent;
+    private const Scope _parent;
     /// The modules visible from here: the enclosing module's imports, plus the prelude.
     private const(string)[] _visibleModules;
+    private TypeSymbol[string] _typeTable;
+
+    this(TypeSymbol[string] builtInTypes) pure
+    {
+        _parent = null;
+        _typeTable = builtInTypes.dup;
+    }
 
     /// A module's top-level scope.
     this(const(string)[] visibleModules)
     {
+        _parent = universal;
         _visibleModules = visibleModules;
     }
 
     /// A function, lambda, or block scope inside `parent`, seeing the same modules.
-    this(Scope parent)
+    this(const Scope parent)
     {
         _parent = parent;
         _visibleModules = parent._visibleModules;
@@ -65,9 +92,28 @@ package final class Scope
         return _parent is null ? null : _parent.resolve(name);
     }
 
+    const(TypeSymbol)* resolveLocalType(string name) const
+    {
+        return name in _typeTable;
+    }
+
+    const(TypeSymbol)* resolveType(string name) const
+    {
+        if (auto found = name in _typeTable)
+        {
+            return found;
+        }
+        return _parent is null ? null : _parent.resolveType(name);
+    }
+
     void declare(string name, SymbolId id)
     {
         _scopeTable[name] = id;
+    }
+
+    void declare(string name, TypeSymbol type)
+    {
+        _typeTable[name] = type;
     }
 
     override string toString() const
@@ -76,6 +122,7 @@ package final class Scope
         import std.array : array;
 
         auto entries = _scopeTable.byKeyValue.map!(kv => format("%s: %s", kv.key, kv.value)).array;
+        entries ~= _typeTable.byKeyValue.map!(kv => format("type %s: %s", kv.key, kv.value)).array;
         if (_parent !is null)
         {
             entries ~= "Parent: " ~ _parent.toString();
@@ -108,6 +155,7 @@ private final class NameResolver
     private enum preludeName = "prelude";
 
     private SymbolId[Id!Expr] _resolutions;
+    private TypeSymbol[Id!TypeExpr] _typeResolutions;
     private Id!FunctionDecl[Id!Expr] _callees;
     private Collector _collector;
     /// Each module's own top-level declarations, by module name.
@@ -131,7 +179,7 @@ private final class NameResolver
         {
             resolveModule(mod.name, mod);
         }
-        return Resolution(_resolutions, _callees);
+        return Resolution(_resolutions, _callees, _typeResolutions);
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
@@ -141,6 +189,7 @@ private final class NameResolver
         {
             decl.kind.match!(
                 (const FunctionDecl _) {},
+                (const TypeDecl _) {},
                 (const ImportStmt importStmt) {
                     auto imported = importStmt.path.join(".");
                     if (!visible.canFind(imported))
@@ -166,6 +215,28 @@ private final class NameResolver
                         moduleScope.declare(func.name, SymbolId(func.id));
                     }
                 },
+                (const TypeDecl type) {
+                    if (moduleScope.resolveLocalType(type.name) !is null)
+                    {
+                        _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan,
+                            "'%s' is already declared in this module".format(type.name));
+                    }
+                    else if (universal.resolveLocalType(type.name) !is null)
+                    {
+                        _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan,
+                            "'%s' is a built-in type".format(type.name));
+                    }
+                    else
+                    {
+                        if (type.emptyParens)
+                        {
+                            _collector.reportError(DiagnosticCode.TypeEmptyParens, type.nameSpan,
+                                "a type with no fields should be `type %s`".format(type.name));
+                        }
+                        moduleScope.declare(type.name, TypeSymbol(type.id));
+                        moduleScope.declare(type.name, SymbolId(type.id));
+                    }
+                },
                 (const ImportStmt _) {},
             );
         }
@@ -176,6 +247,7 @@ private final class NameResolver
         {
             decl.kind.match!(
                 (const FunctionDecl func) => reportModuleRootClash(func.name, func.nameSpan, visible),
+                (const TypeDecl _) {},
                 (const ImportStmt _) {},
             );
         }
@@ -187,14 +259,92 @@ private final class NameResolver
         {
             decl.kind.match!(
                 (const FunctionDecl func) {
+                    foreach (param; func.params)
+                    {
+                        resolveTypeExpr(param.type, _moduleScopes[name]);
+                    }
+                    resolveTypeExpr(func.returnType, _moduleScopes[name]);
+
                     if (func.body !is null)
                     {
                         resolveBody(func.params, *func.body, _moduleScopes[name]);
                     }
                 },
+                (const TypeDecl type) {
+                    bool[string] seen;
+                    foreach (field; type.fields)
+                    {
+                        if (field.name in seen)
+                        {
+                            _collector.reportError(DiagnosticCode.DuplicateField, field.nameSpan,
+                                "'%s' is already a field of this type".format(field.name));
+                        }
+                        seen[field.name] = true;
+                        resolveTypeExpr(field.type, _moduleScopes[name]);
+                    }
+                },
                 (const ImportStmt _) {},
             );
         }
+    }
+
+    private void resolveTypeExpr(const TypeExpr type, const Scope current)
+    {
+        type.kind.match!(
+            (const NamedType named) {
+                foreach (arg; named.args)
+                {
+                    resolveTypeExpr(arg, current);
+                }
+                auto name = named.path.back;
+                const(TypeSymbol)* resolvedType;
+                if (named.path.length == 1)
+                {
+                    resolvedType = current.resolveType(name);
+                    if (resolvedType is null)
+                    {
+                        auto owners = current.visibleModules
+                            .filter!(m => _moduleScopes[m].resolveLocalType(name) !is null)
+                            .array;
+                        if (owners.length > 1)
+                        {
+                            _collector.reportError(DiagnosticCode.AmbiguousName, type.span,
+                                "'%s' is defined in more than one imported module (%s); qualify it, e.g. '%s.%s'"
+                                    .format(name, owners.join(", "), owners[0], name));
+                            return;
+                        }
+                        if (owners.length == 1)
+                        {
+                            resolvedType = _moduleScopes[owners[0]].resolveLocalType(name);
+                        }
+                    }
+                }
+                else
+                {
+                    auto moduleName = named.path[0 .. $ - 1].join(".");
+                    if (current.visibleModules.canFind(moduleName))
+                    {
+                        resolvedType = _moduleScopes[moduleName].resolveLocalType(name);
+                    }
+                }
+                if (resolvedType is null)
+                {
+                    _collector.reportError(DiagnosticCode.UnknownType, type.span,
+                        "Unknown type `%s`".format(named.path.join(".")));
+                    return;
+                }
+                _typeResolutions[type.id] = *resolvedType;
+            },
+            (const OptionType option) => resolveTypeExpr(*option.inner, current),
+            (const FunctionType func) {
+                foreach (param; func.params)
+                {
+                    resolveTypeExpr(param, current);
+                }
+                resolveTypeExpr(*func.returnType, current);
+            },
+            (const UnitType _) {},
+        );
     }
 
     /// Resolves a function or lambda body in a new scope holding its params, inside `enclosing`.
@@ -251,6 +401,7 @@ private final class NameResolver
     {
         stmt.kind.match!(
             (const VarDecl varDecl) {
+                if (varDecl.type !is null) resolveTypeExpr(*varDecl.type, scopeTable);
                 resolveExpr(varDecl.value, scopeTable);
                 declareLocal(varDecl.name, varDecl.nameSpan, SymbolId(varDecl.id), scopeTable,
                     DiagnosticCode.DuplicateDeclaration, "'%s' is already declared in this scope");

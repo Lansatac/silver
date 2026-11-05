@@ -17,3 +17,4 @@ public import silver.syntax.cases.literals;
 public import silver.syntax.cases.operators;
 public import silver.syntax.cases.postfix;
 public import silver.syntax.cases.statements;
+public import silver.syntax.cases.types;

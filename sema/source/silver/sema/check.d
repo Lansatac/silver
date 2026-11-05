@@ -30,7 +30,7 @@ private struct BodyContext
 
 private final class TypeChecker
 {
-    this(const(SymbolId[Id!Expr]) resolutions, Collector collector)
+    this(const Resolution resolutions, Collector collector)
     {
         _types = new TypeTable();
         _collector = collector;
@@ -39,14 +39,28 @@ private final class TypeChecker
 
     private TypeTable _types;
     private Collector _collector;
-    private const(SymbolId[Id!Expr]) _resolutions;
+    private const Resolution _resolutions;
     private Type[Id!Expr] _exprTypes;
     private Type[SymbolId] _symbolTypes;
+    private Type[Id!TypeDecl] _nominalTypes;
 
     Typing checkProgram(const Program program)
     {
         auto programModules = program.sortedModules;
-       // phase 1: all signatures; phase 2: all bodies
+        // phase 1: all declared types; phase 2: all signatures; phase 3: all bodies
+        foreach (mod; programModules)
+        {
+            foreach (decl; mod.declarations)
+            {
+                decl.kind.match!(
+                    (const TypeDecl t) {
+                        _nominalTypes[t.id] = _types.nominal(t.id, t.name);
+                    },
+                    (_) {},
+                );
+            }
+        }
+
         foreach (mod; programModules)
         {
             foreach (decl; mod.declarations)
@@ -55,6 +69,7 @@ private final class TypeChecker
                     (const FunctionDecl f) {
                         declareSignature(f);
                     },
+                    (const TypeDecl _) {},
                     (const ImportStmt _) {},
                 );
             }
@@ -68,6 +83,7 @@ private final class TypeChecker
                     (const FunctionDecl f) {
                         checkFunction(f);
                     },
+                    (const TypeDecl _) {},
                     (const ImportStmt _) {},
                 );
             }
@@ -79,7 +95,7 @@ private final class TypeChecker
     private Type resolveType(const TypeExpr type)
     {
         return type.kind.match!(
-            (const NamedType named) => resolveNamedType(named, type.span),
+            (const NamedType _) => resolveNamedType(type),
             (const OptionType option) => _types.option(resolveType(*option.inner)),
             (const FunctionType func) => _types.function_(
                 func.params.map!(p => resolveType(p)).array, resolveType(*func.returnType)),
@@ -87,24 +103,29 @@ private final class TypeChecker
         );
     }
 
-    private Type resolveNamedType(const NamedType named, Span span)
+    private Type resolveNamedType(const TypeExpr typeExpr)
     {
-        if (named.path.length == 1 && named.args.length == 0)
+        auto symbol = typeExpr.id in _resolutions.typeResolutions;
+        if (symbol is null) return _types.error;
+
+        return (*symbol).match!(
+            (const Builtin builtIn) => builtinType(builtIn),
+            (const Id!TypeDecl decl) => _nominalTypes[decl],
+        );
+    }
+
+    private Type builtinType(Builtin builtin)
+    {
+        final switch (builtin)
         {
-            switch (named.path[0])
-            {
-                case "Never": return _types.never;
-                case "Unit": return _types.unit;
-                case "Bool": return _types.bool_;
-                case "Int": return _types.int_;
-                case "Float": return _types.float_;
-                case "String": return _types.string_;
-                case "Any": return _types.any;
-                default: break;
-            }
+            case Builtin.Never: return _types.never;
+            case Builtin.Unit: return _types.unit;
+            case Builtin.Bool: return _types.bool_;
+            case Builtin.Int: return _types.int_;
+            case Builtin.Float: return _types.float_;
+            case Builtin.String: return _types.string_;
+            case Builtin.Any: return _types.any;
         }
-        _collector.reportError(DiagnosticCode.UnknownType, span, "Unknown type `" ~ named.path.join(".") ~ "`");
-        return _types.error;
     }
 
     private void declareSignature(const FunctionDecl func)
@@ -343,14 +364,14 @@ private final class TypeChecker
     private Type synthesizeMemberAccess(const Expr expr, const MemberAccess member, BodyContext ctx)
     {
         // `std.math.pow`: resolution already found the declaration.
-        if (auto symbol = expr.id in _resolutions)
+        if (auto symbol = expr.id in _resolutions.resolutions)
         {
             return symbolType(*symbol);   // the same lookup synthesizeIdentifier uses
         }
         // `std.math.nope` or `std.nope`: resolution reported it.
         if (isModulePath(*member.object)) return _types.error;
 
-        // A member of a value. There are no struct types yet, so every member is unknown.
+        // A member of a value. Field access isn't implemented yet, so every member is unknown.
         auto objectType = synthesize(*member.object, ctx);
         if (objectType == _types.error) return _types.error;
         _collector.reportError(DiagnosticCode.UnknownMember, expr.span,
@@ -360,7 +381,7 @@ private final class TypeChecker
 
     private bool isModulePath(const Expr expr)
     {
-        if (auto symbol = expr.id in _resolutions)
+        if (auto symbol = expr.id in _resolutions.resolutions)
         {
             return (*symbol).match!(
                 (const Id!Module _) => true,
@@ -452,7 +473,7 @@ private final class TypeChecker
 
     private Type synthesizeIdentifier(const Expr expr)
     {
-        if (auto symbol = expr.id in _resolutions)
+        if (auto symbol = expr.id in _resolutions.resolutions)
         {
             return symbolType(*symbol);
         }
@@ -517,6 +538,6 @@ private final class TypeChecker
 
 package Typing checkTypes(const ref Program program, const ref Resolution resolution, Collector collector)
 {
-    auto typeChecker = new TypeChecker(resolution.resolutions, collector);
+    auto typeChecker = new TypeChecker(resolution, collector);
     return typeChecker.checkProgram(program);
 }

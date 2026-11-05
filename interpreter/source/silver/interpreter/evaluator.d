@@ -197,6 +197,10 @@ class Evaluator
         variables.defineVariable(ast.name, Variant(new Function(ast, variables, *binding)));
     }
 
+    private void execute(const TypeDecl ast, Environment variables)
+    {
+    }
+
     /// Adds the module to the importing module's ImportScope. It isn't bound as a variable;
     /// identifiers and member accesses find it there.
     private void execute(const ImportStmt ast, Environment variables)

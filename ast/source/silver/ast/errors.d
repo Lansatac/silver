@@ -25,6 +25,8 @@ enum DiagnosticCode : string
     InvalidAssignmentTarget = "S0011",
     MultipleMains = "S0012",
     ShadowedDeclaration = "S0013",
+    TypeEmptyParens = "S0014",
+    DuplicateField = "S0015",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",

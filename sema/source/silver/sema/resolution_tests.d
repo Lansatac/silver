@@ -252,6 +252,7 @@ NameIndex indexNames(const Module m)
     {
         d.kind.match!(
             (const FunctionDecl f) => indexer.visit(f),
+            (const TypeDecl _) {},
             (const ImportStmt _) {},
         );
     }
@@ -620,6 +621,165 @@ unittest
 {
     auto a = analyzed("def main(): Unit {\n    def inner(): Unit => ()\n}");
     a.shouldReport(DiagnosticCode.InternalError, At("inner", 1));
+}
+
+@("name resolution passes a type declaration")
+unittest
+{
+    analyzed("type Point(x: Int, y: Int)\ndef main(): Unit => ()")
+        .shouldHaveNoDiagnostics();
+    analyzed("type Marker\ndef main(): Unit => ()")
+        .shouldHaveNoDiagnostics();
+}
+
+private enum emptyMain = "\ndef main(): Unit => ()";
+
+@("name resolution reports a type declared twice in a module, at the second name")
+unittest
+{
+    analyzed("type Point(x: Int)\ntype Point(y: Int)" ~ emptyMain)
+        .shouldReport(DiagnosticCode.DuplicateDeclaration, At("Point", 2));
+    analyzed("type Point(x: Int)\ntype Point" ~ emptyMain)
+        .shouldReport(DiagnosticCode.DuplicateDeclaration, At("Point", 2));
+}
+
+@("name resolution reports a type declared with empty parens, and still declares it")
+unittest
+{
+    analyzed("type Marker()" ~ emptyMain)
+        .shouldReport(DiagnosticCode.TypeEmptyParens, At("Marker", 1));
+    analyzed("type Marker()\ndef f(m: Marker): Unit => ()" ~ emptyMain)
+        .shouldReport(DiagnosticCode.TypeEmptyParens, At("Marker", 1));
+}
+
+@("name resolution reports a repeated field name, at the repeat, but other types may reuse it")
+unittest
+{
+    analyzed("type Point(x: Int, x: String)" ~ emptyMain)
+        .shouldReport(DiagnosticCode.DuplicateField, At("x", 2));
+    analyzed("type Point(x: Int, y: Int)\ntype Line(x: Int, y: Int)" ~ emptyMain)
+        .shouldHaveNoDiagnostics();
+}
+
+@("name resolution reports a type that redeclares a built-in")
+unittest
+{
+    static foreach (name; ["Never", "Unit", "Bool", "Int", "Float", "String", "Any"])
+    {
+        analyzed("type " ~ name ~ "(x: Int)" ~ emptyMain)
+            .shouldReport(DiagnosticCode.DuplicateDeclaration, At(name, 1));
+    }
+}
+
+@("name resolution finds every built-in type")
+unittest
+{
+    analyzed("def takes(a: Never, b: Unit, c: Bool, d: Int, e: Float, f: String, g: Any): Unit => ()" ~ emptyMain)
+        .shouldHaveNoDiagnostics();
+    analyzed("type All(a: Never, b: Unit, c: Bool, d: Int, e: Float, f: String, g: Any)" ~ emptyMain)
+        .shouldHaveNoDiagnostics();
+}
+
+@("name resolution finds a declared type wherever a type can be written")
+unittest
+{
+    enum point = "type Point(x: Int)\n";
+    static foreach (declaration; [
+        "def f(p: Point): Unit => ()",
+        "def f(p: Point): Point => p",
+        "def f(p: Point): Unit {\n    val q: Point = p\n}",
+        "def f(p: Point?): Unit => ()",
+        "def f(g: (Point) -> Int): Unit => ()",
+        "def f(g: (Int) -> Point): Unit => ()",
+        "native def f(p: Point): Unit",
+        "type Line(a: Point, b: Point)",
+        "type Box(p: Point?, f: (Point) -> Point)",
+    ])
+    {
+        analyzed(point ~ declaration ~ emptyMain).shouldHaveNoDiagnostics();
+    }
+    analyzed("type Marker\ndef f(m: Marker): Unit => ()" ~ emptyMain).shouldHaveNoDiagnostics();
+}
+
+@("name resolution finds a type declared later in the module")
+unittest
+{
+    analyzed("def f(p: Point): Unit => ()\ntype Point(x: Int)" ~ emptyMain).shouldHaveNoDiagnostics();
+    analyzed("type Line(a: Point)\ntype Point(x: Int)" ~ emptyMain).shouldHaveNoDiagnostics();
+}
+
+@("name resolution reports an unknown type in a field, once, at its name")
+unittest
+{
+    static foreach (field; ["x: Nope", "x: Nope?", "f: (Nope) -> Int", "f: (Int) -> Nope"])
+    {
+        analyzed("type Box(" ~ field ~ ")" ~ emptyMain)
+            .shouldReport(DiagnosticCode.UnknownType, At("Nope", 1));
+    }
+}
+
+@("name resolution reports an unknown type in a signature or annotation, once, at its name")
+unittest
+{
+    analyzed("def f(p: Nope): Unit => ()" ~ emptyMain).shouldReport(DiagnosticCode.UnknownType, At("Nope", 1));
+    analyzed("native def f(): Nope" ~ emptyMain).shouldReport(DiagnosticCode.UnknownType, At("Nope", 1));
+    analyzed("def main(): Unit {\n    val x: Nope? = 1\n}").shouldReport(DiagnosticCode.UnknownType, At("Nope", 1));
+}
+
+@("name resolution finds an imported type, plain or qualified")
+unittest
+{
+    auto files = ["geo.ag": "module geo\ntype Point(x: Int)\ntype Origin"];
+    analyzed("import geo\ndef f(p: Point): Unit => ()" ~ emptyMain, files).shouldHaveNoDiagnostics();
+    analyzed("import geo\ndef f(p: geo.Point): Unit => ()" ~ emptyMain, files).shouldHaveNoDiagnostics();
+    analyzed("import geo\ndef f(o: Origin): Unit => ()" ~ emptyMain, files).shouldHaveNoDiagnostics();
+    analyzed("import geo\ntype Line(a: geo.Point)" ~ emptyMain, files).shouldHaveNoDiagnostics();
+
+    auto nested = ["a/b.ag": "module a.b\ntype Point(x: Int)"];
+    analyzed("import a.b\ndef f(p: a.b.Point): Unit => ()" ~ emptyMain, nested).shouldHaveNoDiagnostics();
+}
+
+@("name resolution reports a qualified type that doesn't exist, at the start of its path")
+unittest
+{
+    auto files = ["geo.ag": "module geo\ntype Point(x: Int)"];
+    analyzed("import geo\ndef f(p: geo.Nope): Unit => ()" ~ emptyMain, files)
+        .shouldReport(DiagnosticCode.UnknownType, At("geo", 2));
+    analyzed("def f(p: geo.Point): Unit => ()" ~ emptyMain)
+        .shouldReport(DiagnosticCode.UnknownType, At("geo", 1));
+}
+
+@("name resolution doesn't see types from the imports of an imported module")
+unittest
+{
+    auto files = [
+        "a.ag": "module a\nimport b",
+        "b.ag": "module b\ntype Secret(x: Int)",
+    ];
+    analyzed("import a\ndef f(s: Secret): Unit => ()" ~ emptyMain, files)
+        .shouldReport(DiagnosticCode.UnknownType, At("Secret", 1));
+}
+
+@("name resolution reports a type two imports define only where it's used, and accepts it qualified")
+unittest
+{
+    auto files = [
+        "a.ag": "module a\ntype Shared(x: Int)",
+        "b.ag": "module b\ntype Shared(y: Int)",
+    ];
+    analyzed("import a\nimport b" ~ emptyMain, files).shouldHaveNoDiagnostics();
+    analyzed("import a\nimport b\ndef f(s: Shared): Unit => ()" ~ emptyMain, files)
+        .shouldReport(DiagnosticCode.AmbiguousName, At("Shared", 1));
+    analyzed("import a\nimport b\ndef f(s: b.Shared): Unit => ()" ~ emptyMain, files)
+        .shouldHaveNoDiagnostics();
+}
+
+@("name resolution prefers a module's own type over an imported one")
+unittest
+{
+    auto files = ["a.ag": "module a\ntype Shared(x: Int)"];
+    analyzed("import a\ntype Shared(y: Int)\ndef f(s: Shared): Unit => ()" ~ emptyMain, files)
+        .shouldHaveNoDiagnostics();
 }
 
 @("name resolution records the function a direct call invokes, plain or qualified")

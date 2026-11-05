@@ -68,6 +68,16 @@ private final class IdCheck
         visit(f.body);
     }
 
+    void visit(const TypeDecl t, Span span)
+    {
+        see(t.id, t.nameSpan);
+        foreach (f; t.fields)
+        {
+            see(f.id, f.nameSpan);
+            visit(f.type);
+        }
+    }
+
     void visit(const Stmt s)
     {
         s.kind.match!(k => visit(k, s.span));

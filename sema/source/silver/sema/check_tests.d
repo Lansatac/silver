@@ -420,3 +420,57 @@ def main(): Unit {
     a.shouldHaveNoDiagnostics();
     a.shouldTypeEveryExpression();
 }
+
+// Declared types
+
+@("type checking gives a param, local or function its declared type")
+unittest
+{
+    auto a = analyzed(`type Point(x: Int)
+type Marker
+def f(p: Point, m: Marker, maybe: Point?): Point {
+    val q = p
+    q
+}
+def main(): Unit => ()`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("p", 1), "Point");
+    a.shouldDeclareType(At("m", 1), "Marker");
+    a.shouldDeclareType(At("maybe", 1), "Point?");
+    a.shouldDeclareType(At("q", 1), "Point");
+    a.shouldDeclareType(At("f", 1), "(Point, Marker, Point?) -> Point");
+}
+
+@("type checking treats a declared type by name, so the same fields don't make the same type")
+unittest
+{
+    analyzed(`type Meters(value: Int)
+type Feet(value: Int)
+def f(m: Meters): Unit => ()
+def g(x: Feet): Unit => f(x)
+def main(): Unit => ()`)
+        .shouldReport(DiagnosticCode.TypeMismatch, At("x", 2));
+}
+
+@("type checking keeps same-named types in different modules apart")
+unittest
+{
+    auto files = ["lib.ag": "module lib\ntype Point(x: Int)"];
+    analyzed(`import lib
+type Point(x: Int)
+def f(p: Point): Unit => ()
+def g(q: lib.Point): Unit => f(q)
+def main(): Unit => ()`, files)
+        .shouldReport(DiagnosticCode.TypeMismatch, At("q", 2));
+}
+
+@("type checking treats plain and qualified names for a type as the same type")
+unittest
+{
+    auto files = ["lib.ag": "module lib\ntype Point(x: Int)"];
+    analyzed(`import lib
+def f(p: Point): Unit => ()
+def g(q: lib.Point): Unit => f(q)
+def main(): Unit => ()`, files)
+        .shouldHaveNoDiagnostics();
+}

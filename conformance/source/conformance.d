@@ -52,7 +52,7 @@ version (unittest)
     /// Loads and analyzes `c`. Returns why that failed, or null if it worked.
     string loadAndAnalyze(Case c, SourceContext context, out Program program, out Analysis analysis)
     {
-        program = load(readText(c.sourcePath), c.sourcePath, [standardLibraryPath()], context);
+        program = load(readText(c.sourcePath), c.sourcePath, [standardLibraryPath(), dirName(c.sourcePath)], context);
         if (!context.collector.hasErrors)
         {
             analysis = analyze(program, context.collector);

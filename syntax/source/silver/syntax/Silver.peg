@@ -3,10 +3,15 @@ Silver:
     Declarations         < Sep? Declaration (Sep Declaration)* Sep?
     Sep                  <: ((eol / ';') Spacing)+
 
-    Declaration          < ImportStatement / FunctionDeclaration / NativeFunctionDeclaration
+    Declaration          <  (
+                            / ImportStatement
+                            / FunctionDeclaration
+                            / NativeFunctionDeclaration
+                            / TypeDeclaration
+                            )
 
     # ExpressionStatement is last: anything that isn't another kind of statement is an expression
-    Statement            < (
+    Statement            <  (
                             / VariableDeclaration
                             / ValueDeclaration
                             / FunctionDeclaration
@@ -14,7 +19,7 @@ Silver:
                             / ReturnStatement
                             / AssignmentStatement
                             / ExpressionStatement
-                           )
+                            )
 
     QualifiedName        <- ValueName ('.' ValueName)*
 
@@ -39,6 +44,10 @@ Silver:
 
     # The value is optional so `return` alone returns ()
     ReturnStatement      < RETURN Expression?
+
+    TypeDeclaration      < :TYPE TypeName Fields?
+    # The parens are kept so `type M()` still has a node, which sema rejects in favor of `type M`
+    Fields               < '(' Params ')'
 
     ExpressionStatement  < Expression
 
@@ -141,6 +150,7 @@ Silver:
     VAL                 <- Kword("val")
     MUTABLE             <- Kword("mutable")
     DEF                 <- Kword("def")
+    TYPE                <- Kword("type")
     NATIVE              <- Kword("native")
     WHILE               <- Kword("while")
     IF                  <- Kword("if")
@@ -151,7 +161,7 @@ Silver:
     IMPORT              <- Kword("import")
     MODULE              <- Kword("module")
 
-    Keyword             <- VAL / MUTABLE / DEF / NATIVE / WHILE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE
+    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / WHILE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE
     IdentChar           <- [a-zA-Z0-9_]
     Identifier          <- !Keyword ValueName
 

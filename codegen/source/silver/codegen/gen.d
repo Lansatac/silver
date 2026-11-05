@@ -200,6 +200,7 @@ final class Generator
         {
             topLevelStatements ~= declaration.kind.match!(
                 (const ImportStmt _) => "",
+                (const TypeDecl _) => "",
                 (const FunctionDecl function_) => emitFunction(function_)
             );
         }
@@ -324,6 +325,10 @@ final class Generator
                 },
             (const Id!Module module_) {
                  _collector.reportError(DiagnosticCode.InternalError, expr.span, "trying to emit a module");
+                return Fragment.undef();
+            },
+            (const Id!TypeDecl type) {
+                _collector.reportError(DiagnosticCode.InternalError, expr.span, "trying to emit a type declaration");
                 return Fragment.undef();
             }
         );
@@ -655,6 +660,10 @@ final class Generator
             (const Primitive p) => primitiveName (p),
             (const OptionData _) => "ptr",//placeholder
             (const FunctionData f) => "ptr",
+            (const NominalData nd) {
+                _collector.reportError(DiagnosticCode.InternalError, Span.init, "NominalData not Supported");
+                return "NOT_SUPPORTED";
+            },
             (const ErrorType _) {
                 _collector.reportError(DiagnosticCode.InternalError, Span.init, "Unknown type!");
                 return "UNKNOWN";
@@ -669,6 +678,10 @@ final class Generator
             (const Primitive p) => primitiveReturnName (p),
             (const OptionData _) => "ptr",//placeholder
             (const FunctionData f) => "ptr",
+            (const NominalData nd) {
+                _collector.reportError(DiagnosticCode.InternalError, Span.init, "NominalData not Supported");
+                return "NOT_SUPPORTED";
+            },
             (const ErrorType _) {
                 _collector.reportError(DiagnosticCode.InternalError, Span.init, "Unknown type!");
                 return "UNKNOWN";

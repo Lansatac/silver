@@ -1,0 +1,21 @@
+// Declaring types changes nothing at runtime, in any form or order.
+import types_support.geometry
+
+type Marker
+type Pair(first: Int, second: String)
+type Everything(a: Unit, b: Bool, c: Int, d: Float, e: String, f: Any)
+type Wrapper(maybe: Int?, transform: (Int) -> Int)
+type Line(start: Later, end: Later)
+type Later(x: Int)
+
+// Fields don't share a namespace with functions or other types' fields.
+type Named(main: Int, helper: Int)
+type AlsoNamed(main: String)
+
+def helper(): Int => 1
+
+def main(): Unit {
+    printl(helper())
+    printl(types_support.geometry.answer())
+    printl(answer())
+}
