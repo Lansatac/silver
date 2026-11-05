@@ -25,3 +25,6 @@ docs/
 
 # The compiled runtime library, rebuilt when its sources change.
 runtime/build/
+
+# Experimental Silver programs, kept out of the repo on purpose.
+/exploration/
