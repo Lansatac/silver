@@ -8,6 +8,7 @@ import core.exception : AssertError;
 import std.format : format;
 
 import silver.ast;
+import silver.sema.check : FieldInfo;
 import silver.sema.resolution_tests;
 
 /// Asserts that the expression whose source is exactly the `nth` occurrence of `text` has type `expected`.
@@ -829,4 +830,91 @@ unittest
 {
     analyzed("type T(i: Int)\ndef f(a: T, b: T): Bool => a < b\ndef main(): Unit => ()")
         .shouldReport(DiagnosticCode.InvalidOperand, At("a", 2));
+}
+
+private void shouldHaveFieldIndex(const Analyzed a, string text, size_t nth, size_t expected,
+    string file = __FILE__, size_t line = __LINE__)
+{
+    auto start = occurrence(a.sources["main"], text, nth);
+    size_t[2] span = [start, start + text.length];
+    auto id = span in a.names["main"].exprs;
+    if (id is null)
+    {
+        throw new AssertError(format("No expression spans exactly `%s` #%s", text, nth), file, line);
+    }
+    auto actual = a.analysis.fieldIndexOf(*id);
+    if (actual != expected)
+    {
+        throw new AssertError(format("`%s` #%s is field %s, expected %s", text, nth, actual, expected), file, line);
+    }
+}
+
+@("type checking records which field a member access reads")
+unittest
+{
+    auto a = analyzed(`type Point(x: Int, y: Int)
+type Line(start: Point, end: Point)
+def main(): Unit {
+    val p = Point(1, 2)
+    val line = Line(p, p)
+    printl(p.x)
+    printl(p.y)
+    printl(line.end)
+    printl(line.end.y)
+    printl(Point(3, 4).y)
+}`);
+    a.shouldHaveFieldIndex("p.x", 1, 0);
+    a.shouldHaveFieldIndex("p.y", 1, 1);
+    a.shouldHaveFieldIndex("line.end", 1, 1);
+    a.shouldHaveFieldIndex("line.end.y", 1, 1);
+    a.shouldHaveFieldIndex("Point(3, 4).y", 1, 1);
+}
+
+@("type checking records which field an assignment target writes, at each step of the chain")
+unittest
+{
+    auto a = analyzed(`type Point(x: Int, y: Int)
+type Line(start: Point, end: Point)
+def main(): Unit {
+    mutable val line = Line(Point(1, 2), Point(3, 4))
+    line.end.y = 5
+}`);
+    a.shouldHaveFieldIndex("line.end.y", 1, 1);
+    a.shouldHaveFieldIndex("line.end", 1, 1);
+}
+
+@("type checking records a type's fields in declaration order, with their types")
+unittest
+{
+    import std.algorithm : map;
+    import std.array : array;
+    import std.sumtype : match;
+
+    auto a = analyzed(`type Later(n: Int)
+type Mixed(name: String, later: Later, maybe: Int?, f: (Int) -> Int, nothing: Unit)
+type Origin
+def main(): Unit => ()`);
+
+    const(FieldInfo)[] fieldsAt(string name)
+    {
+        auto symbol = occurrence(a.sources["main"], name, 1) in a.names["main"].declarations;
+        return (*symbol).match!(
+            (const Id!TypeDecl decl) => a.analysis.fieldsOf(decl),
+            (_) => assert(0, name ~ " isn't a type"),
+        );
+    }
+
+    auto mixed = fieldsAt("Mixed");
+    mixed.map!(f => f.name).array.shouldEqual(["name", "later", "maybe", "f", "nothing"]);
+    mixed.map!(f => a.analysis.types.describe(f.type)).array
+        .shouldEqual(["String", "Later", "Int?", "(Int) -> Int", "Unit"]);
+    assert(fieldsAt("Origin").length == 0);
+}
+
+private void shouldEqual(const(string)[] actual, const(string)[] expected, string file = __FILE__, size_t line = __LINE__)
+{
+    if (actual != expected)
+    {
+        throw new AssertError(format("Got %s, expected %s", actual, expected), file, line);
+    }
 }

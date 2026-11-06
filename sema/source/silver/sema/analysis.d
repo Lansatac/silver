@@ -105,6 +105,19 @@ final class Analysis
         return call in _resolution.constructions;
     }
 
+    /// The fields of `type`, in declaration order.
+    const(FieldInfo)[] fieldsOf(Id!TypeDecl type) const
+    {
+        return _typing.fields[type];
+    }
+
+    /// Where in `fieldsOf` the field read or assigned by the member access `access` is. Only
+    /// for a member of a value: `geo.Origin` is a resolution (see `resolutionOf`) and has no index.
+    size_t fieldIndexOf(Id!Expr access) const
+    {
+        return _typing.fieldIndexes[access];
+    }
+
     /// The node an ID was given to. Name resolution records every declaration, so an ID
     /// from this program always has one.
     const(FunctionDecl)* declarationOf(Id!FunctionDecl func) const

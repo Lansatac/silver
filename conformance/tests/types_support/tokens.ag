@@ -1,0 +1,3 @@
+module types_support.tokens
+
+type Origin

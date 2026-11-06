@@ -18,6 +18,8 @@ package struct Typing
     TypeTable types;
     Type[Id!Expr] exprTypes;
     Type[SymbolId] symbolTypes;
+    FieldInfo[][Id!TypeDecl] fields;
+    size_t[Id!Expr] fieldIndexes;
 }
 
 /// Where the checker is inside a function body. Passed by value, so a nested body (a lambda)
@@ -95,7 +97,7 @@ private final class TypeChecker
             }
         }
 
-        return Typing(_types, _exprTypes, _symbolTypes);
+        return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes);
     }
 
     private Type resolveType(const TypeExpr type)
@@ -177,7 +179,6 @@ private final class TypeChecker
 
     private void checkStmt(const Stmt stmt, BodyContext ctx)
     {
-        //VarDecl, AssignStmt, ExprStmt, FunctionDecl, ReturnStmt
         stmt.kind.match!(
             (const VarDecl var) {
                 if (var.type is null)

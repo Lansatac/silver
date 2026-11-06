@@ -134,6 +134,7 @@ final class Generator
     /// The function being generated.
     FunctionState _function;
     string[Id!FunctionDecl] mangledNames;
+    string[Id!TypeDecl] typeConstructors;
 
     /// Runtime functions the program calls, in first-use order. Each gets one `declare`.
     private string[] _usedRuntime;
@@ -170,6 +171,9 @@ final class Generator
                     (const FunctionDecl function_) {
                         mangledNames[function_.id] = mangleFunctionName(*module_, function_.name);
                     },
+                    (const TypeDecl typeDecl) {
+                        typeConstructors[typeDecl.id] = mangleTypeConstructor(*module_, typeDecl.name);
+                    },
                     (const _) {}
                 );
             }
@@ -198,11 +202,71 @@ final class Generator
         {
             topLevelStatements ~= declaration.kind.match!(
                 (const ImportStmt _) => "",
-                (const TypeDecl _) => "",
+                (const TypeDecl type) => emitTypeConstructor(type),
                 (const FunctionDecl function_) => emitFunction(function_)
             );
         }
         return topLevelStatements.join("\n");
+    }
+
+    string emitTypeConstructor(const TypeDecl type)
+    {
+        if (type.fields.length == 0)
+            return "@\"%s\" = private unnamed_addr constant i8 0\n".format(typeConstructors[type.id]);   // a marker has no constructor
+        if (!hasLayout(type.id)) return "";
+
+        _function = new FunctionState;
+        _function.returnType = "ptr";
+
+        auto fields = _analysis.fieldsOf(type.id);
+        auto types = fields.map!(f => f.type).array;
+        auto operands = fields.map!(f => paramOperand(f.name, f.type)).array;
+        auto layout = llvmStruct(type.id);
+
+        auto allocated = callRuntime("silver_alloc",
+            ["ptrtoint (ptr getelementptr (%s, ptr null, i32 1) to i64)".format(layout)]);
+        auto body = allocated;
+        foreach (i, field; fields)
+        {
+            if (operands[i] is null) continue;
+            auto pointer = fieldPointer(layout, allocated.value, llvmFieldIndex(type.id, i));
+            body = body.then(pointer).then(Fragment.instruction(
+                "store %s %s, ptr %s".format(llvmType(field.type), operands[i], pointer.value)));
+        }
+        auto lines = body.code ~ ("  " ~ returnInstruction(allocated.value));
+
+        return "define ptr @\"%s\"(%s) {\nentry:\n%s}\n".format(typeConstructors[type.id],
+            typedOperands(types, operands), lines.map!(line => line ~ "\n").join);
+    }
+
+    /// Whether compiled code can hold `type`'s values. Declaring one that can't is fine;
+    /// only building or reading a value is reported.
+    bool hasLayout(Id!TypeDecl type)
+    {
+        return _analysis.fieldsOf(type).all!(f => f.type != _analysis.types.any && f.type != _analysis.types.never);
+    }
+
+    /// The literal struct type of `type`'s values. Unit fields have no value, so they take no space.
+    string llvmStruct(Id!TypeDecl type)
+    {
+        auto stored = _analysis.fieldsOf(type)
+            .filter!(f => f.type != _analysis.types.unit)
+            .map!(f => llvmType(f.type));
+        return "{ %-(%s, %) }".format(stored);
+    }
+
+    /// Where field `fieldIndex` of `fieldsOf(type)` is in `llvmStruct(type)`.
+    size_t llvmFieldIndex(Id!TypeDecl type, size_t fieldIndex)
+    {
+        return _analysis.fieldsOf(type)[0 .. fieldIndex].count!(f => f.type != _analysis.types.unit);
+    }
+
+    /// The address of the field at `index` of the struct `object` points to.
+    Fragment fieldPointer(string layout, string object, size_t index)
+    {
+        auto pointer = _function.newTemp();
+        return Fragment.instruction("%s = getelementptr %s, ptr %s, i32 0, i32 %s".format(
+            pointer, layout, object, index), pointer);
     }
 
     string emitFunction(const FunctionDecl function_)
@@ -233,23 +297,32 @@ final class Generator
         return "ret %s %s".format(type, value is null ? "undef" : value);
     }
 
+    /// `"i64 %a, ptr %b"`, leaving out Units, whose operand is null.
+    string typedOperands(const(Type)[] types, const(string)[] operands)
+    {
+        return zip(types, operands)
+            .filter!(pair => pair[1] !is null)
+            .map!(pair => "%s %s".format(llvmType(pair[0]), pair[1]))
+            .join(", ");
+    }
+
+    /// The operand for a param called `name`, or null for Unit, which has none.
+    /// Params are immutable, so they're used directly as SSA values with no stack slot.
+    string paramOperand(string name, Type type)
+    {
+        return type == _analysis.types.unit ? null : "%" ~ name ~ ".arg";
+    }
+
     string emitParams(const(Param[]) params)
     {
-        string[] generated;
-        foreach (param; params)
+        auto types = params.map!(p => _analysis.typeOf(p.id)).array;
+        string[] operands;
+        foreach (i, param; params)
         {
-            // A Unit param has no operand, so it isn't in the signature.
-            if (_analysis.typeOf(param.id) == _analysis.types.unit)
-            {
-                _function.params[param.id] = null;
-                continue;
-            }
-            // Params are immutable, so they're used directly as SSA values with no stack slot.
-            auto name = "%" ~ param.name ~ ".arg";
-            _function.params[param.id] = name;
-            generated ~= "%s %s".format(llvmType(_analysis.typeOf(param.id)), name);
+            operands ~= paramOperand(param.name, types[i]);
+            _function.params[param.id] = operands[i];
         }
-        return generated.join(", ");
+        return typedOperands(types, operands);
     }
 
     Fragment emitExpr(const Expr expr)
@@ -267,11 +340,33 @@ final class Generator
             (const UnaryExpr unary) => emitUnary(expr, unary),
             (const BinaryExpr binary) => emitBinaryExpr(binary, expr),
             (const CallExpr call) => emitFunctionCall(call, expr),
-            (const MemberAccess access) => unsupported(expr.span, "member access"),
+            (const MemberAccess access) => emitMemberAccess(access, expr),
             (const WhileExpr while_) => emitWhile(while_),
             (const IfExpr if_) => emitIfExpr(expr, if_),
             (const BlockExpr block) => emitBlock(block),
         );
+    }
+
+    Fragment emitMemberAccess(const MemberAccess access, const Expr expr)
+    {
+        // `geo.pow` names a declaration, rather than reading a field.
+        if (_analysis.resolutionOf(expr.id) !is null) return emitIdentifier(expr);
+
+        auto object = emitExpr(*access.object);
+        auto type = _analysis.types[_analysis.typeOf(access.object.id)].match!(
+            (const NominalData nominal) => nominal.decl,
+            (_) => assert(0, "sema only finds fields on a declared type"),
+        );
+        if (!hasLayout(type)) return unsupported(expr.span, "types with `Any` or `Never` fields");
+
+        auto index = _analysis.fieldIndexOf(expr.id);
+        auto fieldType = _analysis.fieldsOf(type)[index].type;
+        if (fieldType == _analysis.types.unit) return object.withValue(null);
+
+        auto pointer = fieldPointer(llvmStruct(type), object.value, llvmFieldIndex(type, index));
+        auto result = _function.newTemp();
+        return object.then(pointer).then(Fragment.instruction(
+            "%s = load %s, ptr %s".format(result, llvmType(fieldType), pointer.value), result));
     }
 
     /// A decimal literal must be exactly representable for LLVM to accept it; the bit pattern always is.
@@ -325,10 +420,7 @@ final class Generator
                  _collector.reportError(DiagnosticCode.InternalError, expr.span, "trying to emit a module");
                 return Fragment.undef();
             },
-            (const Id!TypeDecl type) {
-                _collector.reportError(DiagnosticCode.InternalError, expr.span, "trying to emit a type declaration");
-                return Fragment.undef();
-            }
+            (const Id!TypeDecl type) => Fragment.constant("@\"%s\"".format(typeConstructors[type])),
         );
 
         return fragment;
@@ -490,29 +582,51 @@ final class Generator
 
     Fragment emitFunctionCall(const CallExpr call, const Expr expr)
     {
+        if (auto type = _analysis.constructionOf(expr.id))
+        {
+            if (!hasLayout(*type)) return unsupported(expr.span, "types with `Any` or `Never` fields");
+            return emitDirectCall(call, typeConstructors[*type]);
+        }
+
         auto callee = _analysis.calleeOf(expr.id);
         if (callee is null) return unsupported(expr.span, "calls through values");
         auto function_ = _analysis.declarationOf(*callee);
+
+        if (function_.native) return emitNativeCall(*function_, call, expr);
+        return emitDirectCall(call, mangledNames[function_.id]);
+    }
+
+    Fragment emitDirectCall(const CallExpr call, const string mangledName)
+    {
+        auto signature = calleeSignature(call);
 
         auto args = call.args.map!(arg => emitExpr(arg)).array;
         auto evaluated = Fragment.sequence(args);
         auto operands = args.map!(arg => arg.value).array;
 
-        if (function_.native)
-        {
-            auto name = runtimeNameFor(*function_, call, expr.span);
-            if (name is null) return evaluated.withValue("undef");
-            return evaluated.then(callRuntime(name, operands.filter!(o => o !is null).array));
-        }
-
-        auto signature = _analysis.signatureOf(function_.id);
-        auto typedOperands = zip(signature.params, operands)
-            .filter!(pair => pair[1] !is null)
-            .map!(pair => "%s %s".format(llvmType(pair[0]), pair[1]))
-            .join(", ");
         return evaluated.then(emitCall(llvmReturnType(signature.ret),
-            "@\"" ~ mangledNames[function_.id] ~ "\"", typedOperands));
+            "@\"" ~ mangledName ~ "\"", typedOperands(signature.params, operands)));
     }
+
+    FunctionData calleeSignature(const CallExpr call)
+    {
+        return _analysis.types[_analysis.typeOf(call.callee.id)].match!(
+            (const FunctionData data) => data,
+            (_) => assert(0, "sema only lets a function type be called"),
+        );
+    }
+
+    Fragment emitNativeCall(const FunctionDecl native, const CallExpr call, const Expr expr)
+    {
+        auto args = call.args.map!(arg => emitExpr(arg)).array;
+        auto evaluated = Fragment.sequence(args);
+        auto operands = args.map!(arg => arg.value).array;
+
+        auto name = runtimeNameFor(native, call, expr.span);
+        if (name is null) return evaluated.withValue("undef");
+        return evaluated.then(callRuntime(name, operands.filter!(o => o !is null).array));
+    }
+
 
     /// The runtime function implementing a call to `native`: `silver_<name>`, with a suffix
     /// for each `Any` parameter naming the argument's actual type. Null if an argument has a
@@ -645,10 +759,13 @@ final class Generator
             _ => cast(string) null,
         );
     }
+    string mangleTypeConstructor(const Module module_, string typeName)
+    {
+        return "%s.%s_ctor".format(module_.name, typeName);
+    }
 
     string mangleFunctionName(const Module module_, string functionName)
     {
-        //TODO: this, properly
         return "%s.%s".format(module_.name, functionName);
     }
 
@@ -658,10 +775,7 @@ final class Generator
             (const Primitive p) => primitiveName (p),
             (const OptionData _) => "ptr",//placeholder
             (const FunctionData f) => "ptr",
-            (const NominalData nd) {
-                _collector.reportError(DiagnosticCode.InternalError, Span.init, "NominalData not Supported");
-                return "NOT_SUPPORTED";
-            },
+            (const NominalData nd) => "ptr",
             (const ErrorType _) {
                 _collector.reportError(DiagnosticCode.InternalError, Span.init, "Unknown type!");
                 return "UNKNOWN";
@@ -676,10 +790,7 @@ final class Generator
             (const Primitive p) => primitiveReturnName (p),
             (const OptionData _) => "ptr",//placeholder
             (const FunctionData f) => "ptr",
-            (const NominalData nd) {
-                _collector.reportError(DiagnosticCode.InternalError, Span.init, "NominalData not Supported");
-                return "NOT_SUPPORTED";
-            },
+            (const NominalData nd) => "ptr",
             (const ErrorType _) {
                 _collector.reportError(DiagnosticCode.InternalError, Span.init, "Unknown type!");
                 return "UNKNOWN";

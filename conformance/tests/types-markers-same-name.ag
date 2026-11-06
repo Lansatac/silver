@@ -1,0 +1,11 @@
+// Markers named the same in two modules are different types with different globals.
+import types_support.geometry
+import types_support.tokens
+
+def fromGeometry(o: types_support.geometry.Origin): Int => 1
+def fromTokens(o: types_support.tokens.Origin): Int => 2
+
+def main(): Unit {
+    printl(fromGeometry(types_support.geometry.Origin))
+    printl(fromTokens(types_support.tokens.Origin))
+}

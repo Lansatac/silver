@@ -15,6 +15,7 @@ static immutable RuntimeFunction[string] runtime = [
     "silver_printl_unit": RuntimeFunction("void", []),
 
     "silver_read":        RuntimeFunction("ptr",  []),
+    "silver_alloc":       RuntimeFunction("ptr",  ["i64"]),
 
     "silver_pow_int":     RuntimeFunction("i64", ["i64", "i64"]),
     "silver_pow_float":   RuntimeFunction("double", ["double", "double"]),

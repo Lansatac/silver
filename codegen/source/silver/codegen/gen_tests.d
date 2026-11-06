@@ -365,3 +365,113 @@ unittest
     if (!compileAndRun(source, run)) return;
     run.output.should.equal("6\n6\n");
 }
+
+@("codegen builds a type's value on the heap and reads its fields back")
+unittest
+{
+    auto source = `type Point(x: Int, y: Int)
+type Reading(id: Int, ok: Bool, ratio: Float, label: String)
+
+def yOf(p: Point): Int => p.y
+
+def main(): Unit {
+    val p = Point(3, 4)
+    printl(p.x)
+    printl(yOf(p))
+    printl(Point(5, 6).y)
+
+    val r = Reading(7, true, 1.5, "hi")
+    printl(r.id)
+    printl(r.ok)
+    printl(r.ratio)
+    printl(r.label)
+}`;
+    generateSource(source).should.contain("declare ptr @silver_alloc(i64)");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.status.should.equal(0);
+    run.output.should.equal("3\n4\n6\n7\ntrue\n1.5\nhi\n");
+}
+
+@("codegen emits one global per marker, whether or not it's used")
+unittest
+{
+    auto source = `type Used
+type Unused
+def takes(u: Used): Int => 1
+def main(): Unit {
+    printl(takes(Used))
+}`;
+    generateSource(source).count("private unnamed_addr constant i8 0").should.equal(2);
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("1\n");
+}
+
+@("codegen passes a marker around like any other value")
+unittest
+{
+    auto source = `type Origin
+type Tagged(tag: Origin, n: Int)
+
+def takes(o: Origin): Int => 1
+def gives(): Origin => Origin
+
+def main(): Unit {
+    val o = Origin
+    printl(takes(o))
+    printl(takes(gives()))
+    printl(Tagged(o, 2).n)
+    printl(takes(Tagged(Origin, 3).tag))
+}`;
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.status.should.equal(0);
+    run.output.should.equal("1\n1\n2\n1\n");
+}
+
+@("codegen uses a constructor as a value without calling it")
+unittest
+{
+    auto source = `type Point(x: Int, y: Int)
+
+def ignores(make: (Int, Int) -> Point): Int => 1
+
+def main(): Unit {
+    val make = Point
+    printl(ignores(make))
+    printl(ignores(Point))
+}`;
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.status.should.equal(0);
+    run.output.should.equal("1\n1\n");
+}
+
+@("codegen leaves Unit fields out of a type's layout, wherever they are")
+unittest
+{
+    auto source = `type Holder(first: Int, gap: Unit, second: Int, last: Unit)
+type OnlyUnit(nothing: Unit)
+
+def say(): Unit => printl("said")
+
+def main(): Unit {
+    val h = Holder(1, say(), 2, ())
+    printl(h.first)
+    printl(h.second)
+    printl(h.gap)
+    printl(h.last)
+    printl(OnlyUnit(()).nothing)
+}`;
+    auto ir = generateSource(source);
+    ir.should.contain("getelementptr ({ i64, i64 }, ptr null, i32 1)");
+    ir.should.contain("getelementptr ({  }, ptr null, i32 1)");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.status.should.equal(0);
+    run.output.should.equal("said\n1\n2\n()\n()\n()\n");
+}
