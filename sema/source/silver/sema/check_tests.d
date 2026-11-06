@@ -918,3 +918,138 @@ private void shouldEqual(const(string)[] actual, const(string)[] expected, strin
         throw new AssertError(format("Got %s, expected %s", actual, expected), file, line);
     }
 }
+
+// Integer types
+
+@("type checking treats Int64 and UInt64 as Int and UInt")
+unittest
+{
+    auto a = analyzed("def f(a: Int64, b: UInt64): Int => a\ndef g(b: UInt): UInt64 => b\ndef main(): Unit => ()");
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("a", 1), "Int");
+    a.shouldDeclareType(At("b", 1), "UInt");
+}
+
+@("an integer literal takes the type expected of it, and is otherwise an Int")
+unittest
+{
+    auto a = analyzedMain(`val x: UInt8 = 200
+    val y = x + 1
+    val z = 2 * x
+    val w = 7
+    mutable val v: Int16 = 0
+    v = 9
+    printl(y)`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("200", "UInt8");
+    a.shouldHaveType("1", "UInt8");
+    a.shouldHaveType("2", "UInt8");
+    a.shouldHaveType("7", "Int");
+    a.shouldHaveType("9", "Int16");
+}
+
+@("an integer literal adapts through if arms and block values")
+unittest
+{
+    auto a = analyzed(`def f(c: Bool): UInt8 {
+    if c { return 1 }
+    if c => 2 else 3
+}
+def g(): Int8 {
+    val unused = 0
+    -4
+}
+def main(): Unit => ()`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("2", "UInt8");
+    a.shouldHaveType("3", "UInt8");
+    a.shouldHaveType("-4", "Int8");
+}
+
+@("type checking reports a literal that doesn't fit its type")
+unittest
+{
+    analyzedMain("val x: UInt8 = 256").shouldReport(DiagnosticCode.LiteralOutOfRange, At("256", 1));
+    analyzedMain("val x: Int8 = 128").shouldReport(DiagnosticCode.LiteralOutOfRange, At("128", 1));
+    analyzedMain("val x: Int8 = -129").shouldReport(DiagnosticCode.LiteralOutOfRange, At("129", 1));
+    analyzedMain("val x: UInt8 = -1").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1", 1));
+    analyzedMain("val x: UInt8 = -0").shouldReport(DiagnosticCode.LiteralOutOfRange, At("0", 1));
+    analyzedMain("val x = 9223372036854775808").shouldReport(DiagnosticCode.LiteralOutOfRange, At("9223372036854775808", 1));
+    analyzedMain("val x = 0x8000000000000000").shouldReport(DiagnosticCode.LiteralOutOfRange, At("0x8000000000000000", 1));
+    analyzedMain("val x: UInt = 18446744073709551616").shouldReport(DiagnosticCode.LiteralOutOfRange, At("18446744073709551616", 1));
+    analyzedMain("val x: UInt8 = 200\nval y = x + 300").shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
+    analyzedMain("printl(UInt8(256))").shouldReport(DiagnosticCode.LiteralOutOfRange, At("256", 1));
+    analyzedMain("printl(UInt8(-1))").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1", 1));
+}
+
+@("the boundary literals of each type are accepted")
+unittest
+{
+    analyzedMain(`val a: Int8 = -128
+    val b: Int8 = 127
+    val c: UInt8 = 255
+    val d: Int = -9223372036854775808
+    val e = 9223372036854775807
+    val f: UInt = 18446744073709551615
+    val g: Float = 18446744073709551615`).shouldHaveNoDiagnostics();
+}
+
+@("integers of different types don't mix without a conversion")
+unittest
+{
+    analyzedMain("val a: UInt8 = 1\nval b: Int = 2\nprintl(a + b)").shouldReport(DiagnosticCode.InvalidOperand, At("a + b", 1));
+    analyzedMain("val a: UInt8 = 1\nval b: Int16 = 2\nprintl(a < b)").shouldReport(DiagnosticCode.InvalidOperand, At("a < b", 1));
+    analyzedMain("val a: UInt8 = 1\nval b: Int = 2\nprintl(a == b)").shouldReport(DiagnosticCode.InvalidOperand, At("a == b", 1));
+    analyzedMain("val a: UInt8 = 1\nval b: Int = a").shouldReport(DiagnosticCode.TypeMismatch, At("a", 2));
+    analyzed("def f(x: UInt8): Unit => ()\ndef main(): Unit {\n    val n = 1\n    f(n)\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("n", 2));
+    analyzedMain("val a: UInt8 = 1\nval b: Float = a").shouldReport(DiagnosticCode.TypeMismatch, At("a", 2));
+}
+
+@("bit and wrapping operators need integers of one type")
+unittest
+{
+    analyzedMain("printl(1.5 & 1)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
+    analyzedMain("printl(1 | 1.5)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
+    analyzedMain("printl(1.5 ^ 2.5)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
+    analyzedMain("printl(1.5 << 1)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
+    analyzedMain("printl(1.5 &+ 1)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
+    analyzedMain("printl(true &* 1)").shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
+    analyzedMain("printl(~1.5)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
+    analyzedMain("printl(~true)").shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
+    analyzedMain("val a: UInt8 = 1\nval b = 1\nprintl(a >> b)").shouldReport(DiagnosticCode.InvalidOperand, At("a >> b", 1));
+}
+
+@("an unsigned value can't be negated")
+unittest
+{
+    analyzedMain("val a: UInt8 = 1\nprintl(-a)").shouldReport(DiagnosticCode.InvalidOperand, At("a", 2));
+}
+
+@("a conversion names any numeric type, and takes one number")
+unittest
+{
+    auto a = analyzedMain(`val n = 1
+    val b = UInt8(n)
+    val c = Float(n)
+    val d = Int(2.5)
+    val e = UInt64(b)
+    printl(e)`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("UInt8(n)", "UInt8");
+    a.shouldHaveType("Float(n)", "Float");
+    a.shouldHaveType("Int(2.5)", "Int");
+    a.shouldHaveType("UInt64(b)", "UInt");
+
+    analyzedMain(`printl(Int("a"))`).shouldReport(DiagnosticCode.InvalidOperand, At(`"a"`, 1));
+    analyzedMain("printl(Int(true))").shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
+    analyzedMain("printl(Int(1, 2))").shouldReport(DiagnosticCode.WrongArgumentCount, At("Int(1, 2)", 1));
+    analyzedMain("printl(Int())").shouldReport(DiagnosticCode.WrongArgumentCount, At("Int()", 1));
+}
+
+@("a conversion can't be used as a value, or built-in numeric types redeclared")
+unittest
+{
+    analyzedMain("val f = Int").shouldReport(DiagnosticCode.UnknownName, At("Int", 1));
+    analyzed("type UInt8(x: Int)\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("UInt8", 1));
+}

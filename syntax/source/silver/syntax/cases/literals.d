@@ -37,8 +37,9 @@ immutable Case[] radixLiterals = [
     parsesAs("a = 0xff", "(assign a 255)"),
     parsesAs("a = 0b101", "(assign a 5)"),
     parsesAs("a = 0b1010_0101", "(assign a 165)"),
-    parsesAs("a = 0xFFFFFFFFFFFFFFFF", "(assign a -1)"),
-    parsesAs("a = 0x8000000000000000", "(assign a -9223372036854775808)"),
+    parsesAs("a = 0xFFFFFFFFFFFFFFFF", "(assign a 18446744073709551615)"),
+    parsesAs("a = 0x8000000000000000", "(assign a 9223372036854775808)"),
+    parsesAs("a = 18446744073709551615", "(assign a 18446744073709551615)"),
 ];
 
 /// Grammar only: `Some` and `None` don't have their own AST nodes yet.

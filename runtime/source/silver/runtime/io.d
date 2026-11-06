@@ -1,6 +1,7 @@
 /// The prelude's `print`, `printl` and `read`. `print` and `printl` take `Any`, so there's one
 /// function per argument type, named `silver_<native>_<type>`. Values are formatted with
 /// `to!string`, as the interpreter does, so both backends print the same thing.
+/// Every integer type widens to `int` or `uint` first.
 module silver.runtime.io;
 
 import std.conv : to;
@@ -12,12 +13,14 @@ import silver.runtime.panic : panic;
 extern (C) nothrow:
 
 void silver_print_int(long value) { output(value.to!string, false); }
+void silver_print_uint(ulong value) { output(value.to!string, false); }
 void silver_print_float(double value) { output(value.to!string, false); }
 void silver_print_bool(bool value) { output(value.to!string, false); }
 void silver_print_string(const(char)* value) { output(value.fromStringz, false); }
 void silver_print_unit() { output("()", false); }
 
 void silver_printl_int(long value) { output(value.to!string, true); }
+void silver_printl_uint(ulong value) { output(value.to!string, true); }
 void silver_printl_float(double value) { output(value.to!string, true); }
 void silver_printl_bool(bool value) { output(value.to!string, true); }
 void silver_printl_string(const(char)* value) { output(value.fromStringz, true); }

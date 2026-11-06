@@ -1,0 +1,4 @@
+def main(): Unit {
+    val n = -9223372036854775807
+    printl(n - 2)
+}

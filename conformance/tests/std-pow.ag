@@ -1,0 +1,30 @@
+import std.math
+
+def main(): Unit {
+    printl(pow(2, 10))
+    printl(pow(2, 0.5))
+    printl(pow(2, -1))
+    printl(pow(0, 0))
+    printl(pow(10, 300))
+    val nan = pow(-8, 0.5)
+    printl(nan != nan)
+    printl(std.math.pow(1.5, 2))
+
+    printl(powInt(2, 10))
+    printl(powInt(2, 0))
+    printl(powInt(0, 0))
+    printl(powInt(0, 5))
+    printl(powInt(-2, 3))
+    printl(powInt(-2, 4))
+    printl(powInt(3, 39))
+    printl(powInt(2, 62))
+    printl(powInt(-2, 63))
+    printl(powInt(9223372036854775807, 1))
+
+    // A negative exponent truncates like division.
+    printl(powInt(2, -1))
+    printl(powInt(1, -5))
+    printl(powInt(-1, -3))
+    printl(powInt(-1, -4))
+    printl(powInt(1, -9223372036854775807 - 1))
+}

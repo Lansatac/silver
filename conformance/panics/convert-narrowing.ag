@@ -1,0 +1,4 @@
+def main(): Unit {
+    val n = 300
+    printl(UInt8(n))
+}

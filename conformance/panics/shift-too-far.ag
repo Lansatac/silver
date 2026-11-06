@@ -1,0 +1,4 @@
+def main(): Unit {
+    val n = 64
+    printl(1 << n)
+}

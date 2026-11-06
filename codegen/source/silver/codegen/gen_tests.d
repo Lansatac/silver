@@ -194,18 +194,18 @@ unittest
 @("codegen lowers Int arithmetic and comparison to the signed integer instructions")
 unittest
 {
-    auto source = "def main(): Unit {\n    val a = 0 - 7\n    val b = 2\n"
+    auto source = "def main(): Unit {\n    val a = -7\n    val b = 2\n"
         ~ "    printl(a / b)\n    printl(a % b)\n    printl(a * b + 1)\n"
         ~ "    printl(a < b)\n    printl(a == b)\n}";
     auto ir = generateSource(source);
 
     // The left operand is evaluated before the right one.
-    ir.should.contain("%.t1 = load i64, ptr %a.addr");
-    ir.should.contain("%.t2 = load i64, ptr %b.addr");
-    ir.should.contain("sdiv i64 %.t1, %.t2");
+    ir.should.contain("%.t0 = load i64, ptr %a.addr");
+    ir.should.contain("%.t1 = load i64, ptr %b.addr");
+    ir.should.contain("sdiv i64 %.t0, %.t1");
     ir.should.contain("srem i64 ");
-    ir.should.contain("mul i64 ");
-    ir.should.contain("add i64 ");
+    ir.should.contain("@llvm.smul.with.overflow.i64(");
+    ir.should.contain("@llvm.sadd.with.overflow.i64(");
     ir.should.contain("icmp slt i64 ");
     ir.should.contain("icmp eq i64 ");
 
@@ -275,7 +275,7 @@ unittest
         ~ "    printl(-a)\n    printl(-x)\n    printl(!(a == 7))\n    printl(-(-a))\n    printl(x * -2)\n}";
     auto ir = generateSource(source);
 
-    ir.should.contain("sub i64 0, ");
+    ir.should.contain("@llvm.ssub.with.overflow.i64(i64 0, ");
     ir.should.contain("fneg double ");
     ir.should.contain("xor i1 ");
     ir.should.not.contain("fsub double");
@@ -313,9 +313,9 @@ unittest
 @("codegen lowers an if expression to a branch and a phi, chaining else-ifs")
 unittest
 {
-    auto source = "def sign(n: Int): Int => if n < 0 => 0 - 1 else if n == 0 => 0 else 1\n"
+    auto source = "def sign(n: Int): Int => if n < 0 => -1 else if n == 0 => 0 else 1\n"
         ~ "def main(): Unit {\n"
-        ~ "    printl(sign(0 - 5))\n    printl(sign(0))\n    printl(sign(9))\n"
+        ~ "    printl(sign(-5))\n    printl(sign(0))\n    printl(sign(9))\n"
         ~ "    val label = if sign(3) == 1 {\n        printl(true)\n        10\n    } else {\n        20\n    }\n"
         ~ "    printl(label)\n}";
     auto ir = generateSource(source);
@@ -651,4 +651,50 @@ unittest
 {
     auto ir = generateSource("def main(): Unit => printl(1.0 / 0.0)");
     ir.should.not.contain("silver_panic");
+}
+
+@("codegen checks integer arithmetic for overflow, panicking with the source location")
+unittest
+{
+    auto source = "def add(a: Int, b: Int): Int => a + b\ndef main(): Unit {\n    printl(add(1, 2))\n"
+        ~ "    printl(add(9223372036854775807, 1))\n}";
+    auto ir = generateSource(source);
+    ir.should.contain("declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.status.should.equal(1);
+    run.output.should.equal("3\npanic: main.ag(1,33): Integer overflow\n");
+}
+
+@("codegen doesn't check the wrapping operators")
+unittest
+{
+    auto ir = generateSource("def f(a: Int): Int => a &+ a &- a &* a\ndef main(): Unit => printl(f(1))");
+    ir.should.not.contain("with.overflow");
+    ir.should.contain("add i64 ");
+    ir.should.contain("sub i64 ");
+    ir.should.contain("mul i64 ");
+}
+
+@("codegen picks unsigned instructions for unsigned types, at their own width")
+unittest
+{
+    auto ir = generateSource("def f(a: UInt8, b: UInt8): Bool => a / b > a % b >> 1\n"
+        ~ "def main(): Unit => printl(f(4, 2))");
+    ir.should.contain("udiv i8 ");
+    ir.should.contain("urem i8 ");
+    ir.should.contain("lshr i8 ");
+    ir.should.contain("icmp ugt i8 ");
+    ir.should.not.contain("sdiv");
+    ir.should.not.contain("srem");
+    ir.should.not.contain("ashr");
+}
+
+@("codegen emits a negated literal as a constant, since its magnitude may not fit the type")
+unittest
+{
+    auto ir = generateSource("def main(): Unit {\n    val a: Int8 = -128\n    printl(a)\n}");
+    ir.should.contain("store i8 -128, ");
+    ir.should.not.contain("with.overflow");
 }

@@ -1,0 +1,5 @@
+def main(): Unit {
+    val n = 9223372036854775807
+    printl("before")
+    printl(n + 1)
+}

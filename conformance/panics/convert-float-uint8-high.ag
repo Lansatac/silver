@@ -1,0 +1,1 @@
+def main(): Unit => printl(UInt8(256.0))

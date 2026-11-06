@@ -1,0 +1,50 @@
+// `&+`, `&-` and `&*` wrap around instead of panicking, at every size.
+def main(): Unit {
+    val intMax = 9223372036854775807
+    val intMin = -9223372036854775807 - 1
+    printl(intMax &+ 1)
+    printl(intMin &- 1)
+    printl(intMax &* 2)
+
+    val byteMax: UInt8 = 255
+    val byteZero: UInt8 = 0
+    printl(byteMax &+ 1)
+    printl(byteZero &- 1)
+    printl(byteMax &* byteMax)
+
+    val i8Max: Int8 = 127
+    val i8Min: Int8 = -128
+    printl(i8Max &+ 1)
+    printl(i8Min &- 1)
+    printl(i8Max &* 2)
+
+    val shortMax: UInt16 = 65535
+    printl(shortMax &* shortMax)
+    val i16Max: Int16 = 32767
+    printl(i16Max &+ 1)
+    val wordMax: UInt32 = 4294967295
+    printl(wordMax &+ 1)
+    printl(wordMax &* wordMax)
+    val i32Max: Int32 = 2147483647
+    printl(i32Max &+ 1)
+    val longMax: UInt64 = 18446744073709551615
+    printl(longMax &+ 1)
+    printl(longMax &* longMax)
+
+    // Knuth's MMIX generator, whose values are well known.
+    mutable val state: UInt64 = 42
+    state = state &* 6364136223846793005 &+ 1442695040888963407
+    printl(state)
+    state = state &* 6364136223846793005 &+ 1442695040888963407
+    printl(state)
+
+    // The compound forms, which bind like what they wrap.
+    mutable val x: UInt8 = 250
+    x &+= 10
+    printl(x)
+    x &-= 5
+    printl(x)
+    x &*= 100
+    printl(x)
+    printl(1 &+ 2 &* 3)
+}

@@ -550,7 +550,6 @@ unittest
     evaluateExpression("-7 % 2").should.equal("-1");
     evaluateExpression("7 / -2").should.equal("-3");
     evaluateExpression("-2 * 3").should.equal("-6");
-    evaluateExpression("(-2) ^ 3").should.equal("-8");
     evaluateExpression("-1 < 1").should.equal("true");
 }
 

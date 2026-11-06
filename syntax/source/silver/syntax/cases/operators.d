@@ -39,17 +39,33 @@ immutable Case[] precedence = [
     parsesAs("val x = a ?? b + 1 < c ?? d ?? e",
         "(val x (Less (Coalesce a (Add b 1)) (Coalesce c (Coalesce d e))))"),
 
-    // Power binds tighter than multiply and unary
-    parsesAs("val a = 2 * 3 ^ 2\nval c = -2 ^ 2\nval d = 2 ^ -1", [
-        "(val a (Multiply 2 (Power 3 2)))",
-        "(val c (Minus (Power 2 2)))",
-        "(val d (Power 2 (Minus 1)))",
-    ]),
+    // Bit operators bind tighter than comparison, from loose to tight: | ^ & shifts
+    parsesAs("val x = a & b == c", "(val x (Equal (BitAnd a b) c))"),
+    parsesAs("val x = a | b < c", "(val x (Less (BitOr a b) c))"),
+    parsesAs("val x = a | b ^ c & d << e", "(val x (BitOr a (BitXor b (BitAnd c (ShiftLeft d e)))))"),
+    parsesAs("val x = a + b << c * d", "(val x (ShiftLeft (Add a b) (Multiply c d)))"),
+    parsesAs("val x = a >> b + c", "(val x (ShiftRight a (Add b c)))"),
+    parsesAs("val x = a ?? b | c", "(val x (Coalesce a (BitOr b c)))"),
+
+    // Wrapping operators bind like what they wrap
+    parsesAs("val x = a &+ b &* c", "(val x (WrappingAdd a (WrappingMultiply b c)))"),
+    parsesAs("val x = a &* b + c", "(val x (Add (WrappingMultiply a b) c))"),
+    parsesAs("val x = a &- b", "(val x (WrappingSubtract a b))"),
+
+    // Spacing tells these apart: `& -b` is a bitwise and of a negation
+    parsesAs("val x = a & -b", "(val x (BitAnd a (Minus b)))"),
+    parsesAs("val x = a && b", "(val x (And a b))"),
+    parsesAs("val x = a || b", "(val x (Or a b))"),
+
+    parsesAs("val x = ~a & b", "(val x (BitAnd (BitNot a) b))"),
+    parsesAs("val x = -a ^ b", "(val x (BitXor (Minus a) b))"),
+
 ];
 
 immutable Case[] associativity = [
     parsesAs("val x = 1+2+3", "(val x (Add (Add 1 2) 3))"),
     parsesAs("val x = 1 - 2 - 3\nval y = a == b", ["(val x (Subtract (Subtract 1 2) 3))", "(val y (Equal a b))"]),
     parsesAs("a = b ?? c ?? 0", "(assign a (Coalesce b (Coalesce c 0)))"), // right
-    parsesAs("val b = 2 ^ 3 ^ 2", "(val b (Power 2 (Power 3 2)))"), // right
+    parsesAs("val x = a ^ b ^ c", "(val x (BitXor (BitXor a b) c))"),
+    parsesAs("val x = a << b >> c", "(val x (ShiftRight (ShiftLeft a b) c))"),
 ];

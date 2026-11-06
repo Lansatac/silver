@@ -121,9 +121,13 @@ struct BoolLiteral
     bool value;
 }
 
+/// A sign is a UnaryExpr around this, so the value is a magnitude. Sema checks that it fits the
+/// type the literal ends up with.
 struct IntLiteral
 {
-    long value;
+    ulong value;
+    /// The text doesn't fit 64 bits, whatever the type.
+    bool tooLarge;
 }
 
 struct FloatLiteral
@@ -149,7 +153,14 @@ enum BinaryOp
     Multiply = "*",
     Divide = "/",
     Modulo = "%",
-    Power = "**",
+    BitAnd = "&",
+    BitOr = "|",
+    BitXor = "^",
+    ShiftLeft = "<<",
+    ShiftRight = ">>",
+    WrappingAdd = "&+",
+    WrappingSubtract = "&-",
+    WrappingMultiply = "&*",
     Equal = "==",
     NotEqual = "!=",
     And = "&&",
@@ -166,6 +177,7 @@ enum UnaryOp
     Plus = "+",
     Minus = "-",
     Not = "!",
+    BitNot = "~",
 }
 
 struct UnaryExpr

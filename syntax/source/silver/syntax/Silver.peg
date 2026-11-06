@@ -30,7 +30,7 @@ Silver:
     VariableDeclaration  < :MUTABLE :VAL Identifier (TypeAnnotation ('=' Expression)? / '=' Expression)
 
     AssignmentStatement  < AssignTarget AssignOp Expression
-    AssignOp             < "+=" / "-=" / "*=" / "/=" / "^=" / "=" !"="
+    AssignOp             < "+=" / "-=" / "*=" / "/=" / "^=" / "&+=" / "&-=" / "&*=" / "&=" / "|=" / "<<=" / ">>=" / "=" !"="
 
     AssignTarget         < Postfix
 
@@ -74,12 +74,15 @@ Silver:
     AndExpression        < EqExpression (AndOperator EqExpression)*
     EqExpression         < RelationalExpression ((EqOperator) RelationalExpression)*
     RelationalExpression < CoalesceExpression (RelationalOperator CoalesceExpression)?
-    CoalesceExpression   < AdditionExpression (CoalesceOperator CoalesceExpression)?
+    CoalesceExpression   < BitOrExpression (CoalesceOperator CoalesceExpression)?
+    BitOrExpression      < BitXorExpression (BitOrOperator BitXorExpression)*
+    BitXorExpression     < BitAndExpression (BitXorOperator BitAndExpression)*
+    BitAndExpression     < ShiftExpression (BitAndOperator ShiftExpression)*
+    ShiftExpression      < AdditionExpression (ShiftOperator AdditionExpression)*
     AdditionExpression   < MultiplyExpression (AdditionOperator MultiplyExpression)*
     MultiplyExpression   < Unary (MultiplyOperator Unary)*
-    Unary                < UnaryOperator? PowerExpression
-    UnaryOperator        < "-" / "!"
-    PowerExpression      < Postfix (PowerOperator Unary)?
+    Unary                < UnaryOperator? Postfix
+    UnaryOperator        < "-" / "!" / "~"
 
     Postfix              < Eval PostfixOp*
     PostfixOp            < CallArgs / IndexArgs / SafeMemberAccess / MemberAccess / PropagateNone
@@ -117,9 +120,12 @@ Silver:
     EqOperator          <  "==" / "!="
     RelationalOperator  < "<=" / ">=" / "<" / ">"
     CoalesceOperator    < "??"
-    AdditionOperator    <  "+" / "-"
-    MultiplyOperator    <  "*" / "/" / "%"
-    PowerOperator       <  "^"
+    BitOrOperator       <- "|" !("|" / ">")
+    BitXorOperator      <- "^"
+    BitAndOperator      <- "&" !("&" / "+" / "-" / "*")
+    ShiftOperator       <- "<<" / ">>"
+    AdditionOperator    <  "&+" / "&-" / "+" / "-"
+    MultiplyOperator    <  "&*" / "*" / "/" / "%"
 
 
     BooleanLiteral      <- TRUE / FALSE

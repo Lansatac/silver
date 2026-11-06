@@ -58,7 +58,7 @@ def main(): Unit {
     mutable val i = -1000
     mutable val allNear = true
     while i <= 1000 {
-        val x = toFloat(i) / 1000
+        val x = Float(i) / 1000
         allNear = allNear && near(sin(asin(x)), x) && near(cos(acos(x)), x)
         i += 1
     }

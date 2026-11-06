@@ -1,0 +1,9 @@
+def negate(x: Int): Int => -x
+def note(x: Int): Unit => printl(x)
+
+def main(): Unit {
+    val least = -9223372036854775807 - 1
+    note(1)
+    note(-least)
+    note(2)
+}

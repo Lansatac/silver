@@ -1,0 +1,4 @@
+def main(): Unit {
+    val n: UInt32 = 65536
+    printl(n * n)
+}

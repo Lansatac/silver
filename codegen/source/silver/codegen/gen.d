@@ -167,6 +167,8 @@ final class Generator
     /// Runtime functions the program calls, in first-use order. Each gets one `declare`.
     private string[] _usedRuntime;
     private bool[string] _runtimeSeen;
+    /// The `declare` of each LLVM intrinsic the program uses.
+    private string[] _usedIntrinsics;
     /// One private global per string literal.
     private string[] _strings;
 
@@ -219,7 +221,8 @@ final class Generator
     string emitDeclares()
     {
         return _usedRuntime.map!(name => "declare %s @%s(%s) %s\n".format(
-            runtime[name].returnType, name, runtime[name].params.join(", "), runtime[name].attributes)).join;
+            runtime[name].returnType, name, runtime[name].params.join(", "), runtime[name].attributes)).join
+            ~ _usedIntrinsics.map!(line => line ~ "\n").join;
     }
 
     /// `silver_main`, which the runtime's D `main` calls once druntime has started.
@@ -376,9 +379,9 @@ final class Generator
     {
         return expr.kind.match!(
             (const BoolLiteral literal) => Fragment.constant(literal.value ? "true" : "false"),
-            (const IntLiteral literal) => 
+            (const IntLiteral literal) =>
                 _analysis.typeOf(expr.id) == _analysis.types.float_
-                    ? Fragment.constant(floatConstant(literal.value))
+                    ? Fragment.constant(floatConstant(cast(double) literal.value))
                     : Fragment.constant(literal.value.to!string),
             (const FloatLiteral literal) => Fragment.constant(floatConstant(literal.value)),
             (const StringLiteral literal) => emitStringLiteral(literal.value),
@@ -492,11 +495,11 @@ final class Generator
             case BinaryOp.Or:
                 return emitConditional(lhs, "i1",
                     Fragment.constant("true"), rhs, "or");
-            case BinaryOp.Power:
-            {
-                auto name = type == _analysis.types.float_ ? "silver_pow_float" : "silver_pow_int";
-                return lhs.then(rhs).then(callRuntime(name, [lhs.value, rhs.value]));
-            }
+            case BinaryOp.Add:
+            case BinaryOp.Subtract:
+            case BinaryOp.Multiply:
+                if (!_analysis.types.isInteger(type)) goto default;
+                return lhs.then(rhs).then(emitCheckedArithmetic(binary.op, type, lhs.value, rhs.value, expr.span));
             case BinaryOp.Equal:
             case BinaryOp.NotEqual:
                 if (comparesWithInstruction(type)) goto default;
@@ -506,9 +509,7 @@ final class Generator
                 if (llOp is null) return unsupported(expr.span, "`" ~ binary.op ~ "`");
 
                 auto llType = llvmType(type);
-                auto isIntDivision = type == _analysis.types.int_
-                    && (binary.op == BinaryOp.Divide || binary.op == BinaryOp.Modulo);
-                auto check = isIntDivision ? emitDivisionByZeroCheck(rhs.value, expr.span) : Fragment.init;
+                auto check = emitOperandChecks(binary.op, type, lhs.value, rhs.value, expr.span);
                 auto result = _function.newTemp();
                 return
                         lhs
@@ -520,22 +521,161 @@ final class Generator
         }
     }
 
-    /// Panics if the Int operand `divisor` is zero. `sdiv` and `srem` by zero are undefined
-    /// behaviour, not a trap to rely on.
-    Fragment emitDivisionByZeroCheck(string divisor, Span span)
+    /// `lhs op rhs` through the overflow intrinsic, panicking if the result doesn't fit.
+    Fragment emitCheckedArithmetic(BinaryOp op, Type type, string lhs, string rhs, Span span)
+    {
+        auto info = _analysis.types.integerOf(type);
+        auto llType = llvmType(type);
+        auto name = op == BinaryOp.Add ? "add" : op == BinaryOp.Subtract ? "sub" : "mul";
+        auto intrinsic = "llvm.%s%s.with.overflow.%s".format(info.signed ? "s" : "u", name, llType);
+        useIntrinsic("declare { %s, i1 } @%s(%s, %s)".format(llType, intrinsic, llType, llType));
+
+        auto pair = _function.newTemp();
+        auto value = _function.newTemp();
+        auto overflowed = _function.newTemp();
+        return Fragment.instruction("%s = call { %s, i1 } @%s(%s %s, %s %s)".format(
+                pair, llType, intrinsic, llType, lhs, llType, rhs))
+            .then(Fragment.instruction("%s = extractvalue { %s, i1 } %s, 0".format(value, llType, pair)))
+            .then(Fragment.instruction("%s = extractvalue { %s, i1 } %s, 1".format(overflowed, llType, pair)))
+            .then(emitPanicIf(overflowed, span, "Integer overflow"))
+            .withValue(value);
+    }
+
+    void useIntrinsic(string declaration)
+    {
+        if (!_usedIntrinsics.canFind(declaration)) _usedIntrinsics ~= declaration;
+    }
+
+    /// The checks `op` needs before its instruction, which would otherwise be undefined for
+    /// these operands: dividing by zero, the most negative value divided by -1, and shifting
+    /// by the type's width or more.
+    Fragment emitOperandChecks(BinaryOp op, Type type, string lhs, string rhs, Span span)
+    {
+        if (!_analysis.types.isInteger(type)) return Fragment.init;
+        auto info = _analysis.types.integerOf(type);
+        auto llType = llvmType(type);
+
+        if (op == BinaryOp.ShiftLeft || op == BinaryOp.ShiftRight)
+        {
+            // Unsigned, so a negative amount counts as too large.
+            auto tooFar = _function.newTemp();
+            return Fragment.instruction("%s = icmp uge %s %s, %s".format(tooFar, llType, rhs, info.bits))
+                .then(emitPanicIf(tooFar, span, "Shift amount is out of range"));
+        }
+        if (op != BinaryOp.Divide && op != BinaryOp.Modulo) return Fragment.init;
+
+        auto isZero = _function.newTemp();
+        auto checks = Fragment.instruction("%s = icmp eq %s %s, 0".format(isZero, llType, rhs))
+            .then(emitPanicIf(isZero, span, "Division by zero"));
+        if (!info.signed) return checks;
+
+        auto isMin = _function.newTemp();
+        auto isMinusOne = _function.newTemp();
+        auto overflows = _function.newTemp();
+        return checks
+            .then(Fragment.instruction("%s = icmp eq %s %s, -%s".format(isMin, llType, lhs, info.minMagnitude)))
+            .then(Fragment.instruction("%s = icmp eq %s %s, -1".format(isMinusOne, llType, rhs)))
+            .then(Fragment.instruction("%s = and i1 %s, %s".format(overflows, isMin, isMinusOne)))
+            .then(emitPanicIf(overflows, span, "Integer overflow"));
+    }
+
+    /// Panics with `message` and the location of `span` if the `i1` operand `condition` is true.
+    Fragment emitPanicIf(string condition, Span span, string message)
     {
         auto location = _sources.locate(span);
-        auto message = emitStringLiteral("%s(%s,%s): Division by zero".format(
-            span.file, location.line, location.column));
-        auto isZero = _function.newTemp();
-        auto zeroLabel = _function.newLabel("div.zero");
-        auto okLabel = _function.newLabel("div.ok");
-        return Fragment.instruction("%s = icmp eq i64 %s, 0".format(isZero, divisor))
-            .then(Fragment.branch(isZero, zeroLabel, okLabel))
-            .then(Fragment.label(zeroLabel))
-            .then(callRuntime("silver_panic", [message.value]))
+        auto text = emitStringLiteral("%s(%s,%s): %s".format(span.file, location.line, location.column, message));
+        auto panicLabel = _function.newLabel("panic");
+        auto okLabel = _function.newLabel("ok");
+        return Fragment.branch(condition, panicLabel, okLabel)
+            .then(Fragment.label(panicLabel))
+            .then(callRuntime("silver_panic", [text.value]))
             .then(Fragment.instruction("unreachable"))
             .then(Fragment.label(okLabel));
+    }
+
+    /// `UInt8(x)`: checks that the value fits, then changes its representation.
+    Fragment emitConversion(const Expr argument, Type target, Span span)
+    {
+        auto value = emitExpr(argument);
+        auto source = _analysis.typeOf(argument.id);
+        if (source == target) return value;
+
+        auto types = _analysis.types;
+        if (target == types.float_)
+        {
+            auto signed = types.integerOf(source).signed;
+            auto result = _function.newTemp();
+            return value.then(Fragment.instruction("%s = %s %s %s to double".format(
+                result, signed ? "sitofp" : "uitofp", llvmType(source), value.value), result));
+        }
+
+        auto to = types.integerOf(target);
+        auto message = "Value is out of range for %sInt%s".format(to.signed ? "" : "U", to.bits);
+        if (source == types.float_)
+        {
+            return value.then(emitFloatToIntegerCheck(value.value, to, span, message))
+                .then(castInstruction(to.signed ? "fptosi" : "fptoui", "double", value.value, llvmType(target)));
+        }
+
+        auto from = types.integerOf(source);
+        auto checks = emitIntegerRangeCheck(value.value, llvmType(source), from, to, span, message);
+        auto converted = value.then(checks);
+        if (from.bits == to.bits) return converted.withValue(value.value);
+        auto opcode = to.bits < from.bits ? "trunc" : from.signed ? "sext" : "zext";
+        return converted.then(castInstruction(opcode, llvmType(source), value.value, llvmType(target)));
+    }
+
+    Fragment castInstruction(string opcode, string fromType, string value, string toType)
+    {
+        auto result = _function.newTemp();
+        return Fragment.instruction("%s = %s %s %s to %s".format(result, opcode, fromType, value, toType), result);
+    }
+
+    /// Panics unless `value` of `from`'s type is between `to`'s bounds. Each bound is only
+    /// compared when `from` can get past it, so the constant always fits `from`'s type.
+    Fragment emitIntegerRangeCheck(string value, string llType, IntegerInfo from, IntegerInfo to,
+        Span span, string message)
+    {
+        Fragment checks;
+        if (from.minMagnitude > to.minMagnitude)
+        {
+            auto inRange = _function.newTemp();
+            auto outOfRange = _function.newTemp();
+            checks = checks
+                .then(Fragment.instruction("%s = icmp sge %s %s, %s%s".format(
+                    inRange, llType, value, to.minMagnitude == 0 ? "" : "-", to.minMagnitude)))
+                .then(Fragment.instruction("%s = xor i1 %s, true".format(outOfRange, inRange)))
+                .then(emitPanicIf(outOfRange, span, message));
+        }
+        if (from.maxValue > to.maxValue)
+        {
+            auto tooLarge = _function.newTemp();
+            checks = checks
+                .then(Fragment.instruction("%s = icmp %s %s %s, %s".format(
+                    tooLarge, from.signed ? "sgt" : "ugt", llType, value, to.maxValue)))
+                .then(emitPanicIf(tooLarge, span, message));
+        }
+        return checks;
+    }
+
+    /// Panics unless `value`, truncated toward zero, fits `to`. The comparisons are ordered,
+    /// so NaN fails them, and `fptosi`/`fptoui` are undefined for anything that gets past them.
+    Fragment emitFloatToIntegerCheck(string value, IntegerInfo to, Span span, string message)
+    {
+        double limit = 2.0 ^^ (to.signed ? to.bits - 1 : to.bits);
+        // The lowest value that fits, or the highest one below that doesn't.
+        auto lowest = to.signed && to.bits == 64;
+        double lower = !to.signed ? -1.0 : lowest ? -limit : -limit - 1;
+        auto aboveLower = _function.newTemp();
+        auto belowUpper = _function.newTemp();
+        auto fits = _function.newTemp();
+        auto fails = _function.newTemp();
+        return Fragment.instruction("%s = fcmp %s double %s, %s".format(
+                aboveLower, lowest ? "oge" : "ogt", value, floatConstant(lower)))
+            .then(Fragment.instruction("%s = fcmp olt double %s, %s".format(belowUpper, value, floatConstant(limit))))
+            .then(Fragment.instruction("%s = and i1 %s, %s".format(fits, aboveLower, belowUpper)))
+            .then(Fragment.instruction("%s = xor i1 %s, true".format(fails, fits)))
+            .then(emitPanicIf(fails, span, message));
     }
 
     Fragment emitIfExpr(const Expr expr, const IfExpr if_)
@@ -600,7 +740,7 @@ final class Generator
     /// Whether a single `icmp` or `fcmp` compares two values of `type`.
     bool comparesWithInstruction(Type type)
     {
-        return type == _analysis.types.int_ || type == _analysis.types.float_ || type == _analysis.types.bool_;
+        return _analysis.types.isInteger(type) || type == _analysis.types.float_ || type == _analysis.types.bool_;
     }
 
     /// `==` and `!=` on values that aren't a single number: their contents are compared.
@@ -675,30 +815,48 @@ final class Generator
 
     Fragment emitUnary(const Expr expr, const UnaryExpr unary)
     {
+        auto type = _analysis.typeOf(unary.operand.id);
+        // A negated literal is a constant: `-128` is an Int8 even though `128` alone isn't.
+        auto isLiteral = (*unary.operand).kind.match!(
+            (const IntLiteral _) => true,
+            _ => false);
+        if (unary.op == UnaryOp.Minus && isLiteral && _analysis.types.isInteger(type))
+        {
+            auto literal = (*unary.operand).kind.match!(
+                (const IntLiteral l) => l.value,
+                (_) => assert(0, "checked above"));
+            return Fragment.constant("-%s".format(literal));
+        }
+
         auto operand = emitExpr(*unary.operand);
         if (unary.op == UnaryOp.Plus) return operand;
 
-        auto isFloat = _analysis.typeOf(unary.operand.id) == _analysis.types.float_;
+        auto isFloat = type == _analysis.types.float_;
         auto result = _function.newTemp();
-        // `fneg` rather than `fsub -0.0, x`, which gets -0.0 wrong.
-        auto text = unary.op == UnaryOp.Not
-            ? "%s = xor i1 %s, true".format(result, operand.value)
-            : isFloat
-                ? "%s = fneg double %s".format(result, operand.value)
-                : "%s = sub i64 0, %s".format(result, operand.value);
-        return operand.then(Fragment.instruction(text, result));
+        final switch (unary.op)
+        {
+            case UnaryOp.Plus:
+                assert(0, "handled above");
+            case UnaryOp.Not:
+                return operand.then(Fragment.instruction("%s = xor i1 %s, true".format(result, operand.value), result));
+            case UnaryOp.BitNot:
+                return operand.then(Fragment.instruction(
+                    "%s = xor %s %s, -1".format(result, llvmType(type), operand.value), result));
+            case UnaryOp.Minus:
+                // `fneg` rather than `fsub -0.0, x`, which gets -0.0 wrong.
+                if (isFloat) return operand.then(Fragment.instruction("%s = fneg double %s".format(result, operand.value), result));
+                return operand.then(emitCheckedArithmetic(BinaryOp.Subtract, type, "0", operand.value, expr.span));
+        }
     }
 
     /// The LLVM opcode, with its predicate for comparisons, for `op` on two operands of
-    /// `operandType`. Null when there is no single instruction: `&&`/`||` short-circuit, `^`
-    /// and `??` take several, and String comparison can't be a pointer compare.
+    /// `operandType`. Null when there is no single instruction: `&&`/`||` short-circuit,
+    /// `??` takes several, and String comparison can't be a pointer compare.
     string llBinaryOp(BinaryOp op, Type operandType)
     {
-        auto kind = _analysis.types[operandType].match!(
-            (const Primitive p) => p.kind,
-            (_) => Primitive.Kind.Any);
-        if (kind == Primitive.Kind.String) return null;
-        auto isFloat = kind == Primitive.Kind.Float;
+        if (operandType == _analysis.types.string_) return null;
+        auto isFloat = operandType == _analysis.types.float_;
+        auto isUnsigned = _analysis.types.isInteger(operandType) && !_analysis.types.integerOf(operandType).signed;
 
         // `!=` is unordered so that comparing with NaN is true, as IEEE says it is.
         final switch (op)
@@ -706,17 +864,24 @@ final class Generator
             case BinaryOp.Add: return isFloat ? "fadd" : "add";
             case BinaryOp.Subtract: return isFloat ? "fsub" : "sub";
             case BinaryOp.Multiply: return isFloat ? "fmul" : "mul";
-            case BinaryOp.Divide: return isFloat ? "fdiv" : "sdiv";
-            case BinaryOp.Modulo: return isFloat ? "frem" : "srem";
+            case BinaryOp.Divide: return isFloat ? "fdiv" : isUnsigned ? "udiv" : "sdiv";
+            case BinaryOp.Modulo: return isFloat ? "frem" : isUnsigned ? "urem" : "srem";
+            case BinaryOp.WrappingAdd: return "add";
+            case BinaryOp.WrappingSubtract: return "sub";
+            case BinaryOp.WrappingMultiply: return "mul";
+            case BinaryOp.BitAnd: return "and";
+            case BinaryOp.BitOr: return "or";
+            case BinaryOp.BitXor: return "xor";
+            case BinaryOp.ShiftLeft: return "shl";
+            case BinaryOp.ShiftRight: return isUnsigned ? "lshr" : "ashr";
             case BinaryOp.Equal: return isFloat ? "fcmp oeq" : "icmp eq";
             case BinaryOp.NotEqual: return isFloat ? "fcmp une" : "icmp ne";
-            case BinaryOp.Less: return isFloat ? "fcmp olt" : "icmp slt";
-            case BinaryOp.LessEqual: return isFloat ? "fcmp ole" : "icmp sle";
-            case BinaryOp.Greater: return isFloat ? "fcmp ogt" : "icmp sgt";
-            case BinaryOp.GreaterEqual: return isFloat ? "fcmp oge" : "icmp sge";
+            case BinaryOp.Less: return isFloat ? "fcmp olt" : isUnsigned ? "icmp ult" : "icmp slt";
+            case BinaryOp.LessEqual: return isFloat ? "fcmp ole" : isUnsigned ? "icmp ule" : "icmp sle";
+            case BinaryOp.Greater: return isFloat ? "fcmp ogt" : isUnsigned ? "icmp ugt" : "icmp sgt";
+            case BinaryOp.GreaterEqual: return isFloat ? "fcmp oge" : isUnsigned ? "icmp uge" : "icmp sge";
             case BinaryOp.And:
             case BinaryOp.Or:
-            case BinaryOp.Power:
             case BinaryOp.Coalesce:
                 return null;
         }
@@ -724,6 +889,11 @@ final class Generator
 
     Fragment emitFunctionCall(const CallExpr call, const Expr expr)
     {
+        if (_analysis.isConversion(expr.id))
+        {
+            return emitConversion(call.args[0], _analysis.typeOf(expr.id), expr.span);
+        }
+
         if (auto type = _analysis.constructionOf(expr.id))
         {
             if (!hasLayout(*type)) return unsupported(expr.span, "types with `Any` or `Never` fields");
@@ -767,9 +937,23 @@ final class Generator
 
     Fragment emitNativeCall(const FunctionDecl native, const CallExpr call, const Expr expr)
     {
-        auto args = call.args.map!(arg => emitExpr(arg)).array;
-        auto evaluated = Fragment.sequence(args);
-        auto operands = args.map!(arg => arg.value).array;
+        auto params = _analysis.signatureOf(native.id).params;
+        Fragment evaluated;
+        string[] operands;
+        foreach (i, arg; call.args)
+        {
+            auto value = emitExpr(arg);
+            auto argType = _analysis.typeOf(arg.id);
+            // An `Any` integer reaches the runtime as the runtime's one signed or unsigned width.
+            if (params[i] == _analysis.types.any && _analysis.types.isInteger(argType)
+                && _analysis.types.integerOf(argType).bits < 64)
+            {
+                auto opcode = _analysis.types.integerOf(argType).signed ? "sext" : "zext";
+                value = value.then(castInstruction(opcode, llvmType(argType), value.value, "i64"));
+            }
+            evaluated = evaluated.then(value);
+            operands ~= value.value;
+        }
 
         auto name = runtimeNameFor(native, call, expr.span);
         if (name is null) return evaluated.withValue("undef");
@@ -800,6 +984,7 @@ final class Generator
 
     string runtimeSuffix(Type type)
     {
+        if (_analysis.types.isInteger(type)) return _analysis.types.integerOf(type).signed ? "int" : "uint";
         return _analysis.types[type].match!(
             (const Primitive p) => p.kind.to!string.toLower,
             (_) => cast(string) null,
@@ -977,7 +1162,14 @@ final class Generator
         final switch ( primitive.kind )
         {
             case Primitive.Kind.Bool: return "i1";
-            case Primitive.Kind.Int: return "i64";
+            case Primitive.Kind.Int:
+            case Primitive.Kind.UInt: return "i64";
+            case Primitive.Kind.Int8:
+            case Primitive.Kind.UInt8: return "i8";
+            case Primitive.Kind.Int16:
+            case Primitive.Kind.UInt16: return "i16";
+            case Primitive.Kind.Int32:
+            case Primitive.Kind.UInt32: return "i32";
             case Primitive.Kind.Float: return "double";
             case Primitive.Kind.String: return "ptr";
 
@@ -993,7 +1185,14 @@ final class Generator
         final switch ( primitive.kind )
         {
             case Primitive.Kind.Bool: return "i1";
-            case Primitive.Kind.Int: return "i64";
+            case Primitive.Kind.Int:
+            case Primitive.Kind.UInt: return "i64";
+            case Primitive.Kind.Int8:
+            case Primitive.Kind.UInt8: return "i8";
+            case Primitive.Kind.Int16:
+            case Primitive.Kind.UInt16: return "i16";
+            case Primitive.Kind.Int32:
+            case Primitive.Kind.UInt32: return "i32";
             case Primitive.Kind.Float: return "double";
             case Primitive.Kind.String: return "ptr";
 

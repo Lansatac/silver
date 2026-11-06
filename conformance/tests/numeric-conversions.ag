@@ -1,18 +1,46 @@
 def main(): Unit {
     val n = 7
-    printl(toFloat(n) / 2)
-    printl(toFloat(-3))
+    printl(Float(n) / 2)
+    printl(Float(-3))
+    val small: UInt8 = 200
+    printl(Float(small) / 8)
+    val huge: UInt64 = 0xFFFFFFFFFFFFFFFF
+    printl(Float(huge) == 18446744073709551616.0)
 
-    // Truncates toward zero.
-    printl(toInt(2.9))
-    printl(toInt(-2.9))
-    printl(toInt(5))
-    printl(toInt(0.0))
-    printl(toInt(7.5) / 2)
+    // Float to integer truncates toward zero.
+    printl(Int(2.9))
+    printl(Int(-2.9))
+    printl(Int(5))
+    printl(Int(0.0))
+    printl(Int(7.5) / 2)
+    printl(UInt8(255.9))
+    printl(UInt8(-0.9))
+    printl(Int8(-128.9))
+    printl(Int8(127.9))
 
     // Largest and smallest Floats that fit an Int exactly.
-    printl(toInt(9223372036854774784.0))
-    printl(toInt(-9223372036854775808.0))
+    printl(Int(9223372036854774784.0))
+    printl(Int(-9223372036854775808.0))
+    printl(UInt64(18446744073709549568.0))
+    printl(Int(Float(n)) == n)
 
-    printl(toInt(toFloat(n)) == n)
+    // Between integers, anything in range converts.
+    printl(UInt8(n))
+    printl(Int64(n) == n)
+    printl(UInt64(n))
+    printl(Int(small))
+    printl(Int8(small - 100))
+    printl(UInt16(small) * 300)
+    printl(Int32(-5))
+    val minusOne: Int8 = -1
+    printl(Int(minusOne))
+    printl(Int16(minusOne))
+    val top: UInt32 = 4294967295
+    printl(Int(top))
+    printl(UInt(top))
+    printl(Int(UInt64(9223372036854775807)))
+
+    // The conversion's argument adapts when it's a literal, so it can use all of the type.
+    printl(UInt64(18446744073709551615))
+    printl(Int8(-128))
 }

@@ -1,7 +1,11 @@
 type Point(x: Float, y: Float)
 
 def half(x: Float): Float => x / 2
+def n(): Int => 1
 def three(): Float => 3
+def blockBody(): Float {
+    3
+}
 def viaBlock(): Float {
     return 3
 }
@@ -13,6 +17,7 @@ def main(): Unit {
     printl(half(-3))
     printl(three() / 2)
     printl(viaBlock() / 2)
+    printl(blockBody() / 2)
     printl(twice(half, 3))
 
     val annotated: Float = 3
@@ -22,6 +27,15 @@ def main(): Unit {
 
     mutable val typed: Float = 7
     printl(typed / 2)
+    typed = 3
+    printl(typed / 2)
+    val chosen: Float = if n() > 0 => 1 else 2
+    printl(chosen / 2)
+    val blockValue: Float = {
+        val unused = 1
+        5
+    }
+    printl(blockValue / 2)
 
     printl(Point(3, 5).x / 2)
     printl(Point(3, 5) == Point(3.0, 5.0))
@@ -34,5 +48,4 @@ def main(): Unit {
     val int = 7
     printl(int / 2)
     printl(-7 % 3)
-    printl(2 ^ 3)
 }

@@ -1,0 +1,98 @@
+type Packet(tag: UInt8, length: UInt16, id: UInt32, sequence: UInt64, offset: Int8, delta: Int16, base: Int32)
+
+def wider(x: UInt8): UInt16 => UInt16(x) * 2
+def bump(x: UInt8): UInt8 {
+    x + 1
+}
+def clamp(x: Int8): Int8 => if x < 0 => 0 else x
+def apply(f: (UInt8) -> UInt8, x: UInt8): UInt8 => f(x)
+
+def main(): Unit {
+    // Each type holds exactly its range.
+    val i8Low: Int8 = -128
+    val i8High: Int8 = 127
+    printl(i8Low)
+    printl(i8High)
+    val i16Low: Int16 = -32768
+    val i16High: Int16 = 32767
+    printl(i16Low)
+    printl(i16High)
+    val i32Low: Int32 = -2147483648
+    val i32High: Int32 = 2147483647
+    printl(i32Low)
+    printl(i32High)
+    val i64Low: Int64 = -9223372036854775808
+    val i64High: Int = 9223372036854775807
+    printl(i64Low)
+    printl(i64High)
+    val u8High: UInt8 = 255
+    val u16High: UInt16 = 65535
+    val u32High: UInt32 = 4294967295
+    val u64High: UInt64 = 18446744073709551615
+    printl(u8High)
+    printl(u16High)
+    printl(u32High)
+    printl(u64High)
+
+    // Int and Int64, and UInt and UInt64, are the same type.
+    val same: Int = i64High
+    val sameUnsigned: UInt = u64High
+    printl(same == i64High)
+    printl(sameUnsigned == u64High)
+
+    // Literals take the type of what's beside them.
+    printl(u8High - 5)
+    printl(5 + i8Low)
+    printl(u64High / 2)
+    printl(u64High % 10)
+    printl(i16Low / 2)
+    printl(u8High > 200)
+
+    // Unsigned compares and divides as unsigned, so the top bit isn't a sign.
+    val top: UInt64 = 0x8000000000000000
+    printl(top > 1)
+    printl(top >= top)
+    printl(top / 2)
+    printl(top < 1)
+    printl(i64Low < 1)
+    val topByte: UInt8 = 128
+    printl(topByte > 127)
+    printl(topByte / 3)
+    printl(topByte % 3)
+
+    // `-7 / 2` keeps truncating toward zero at every size.
+    val minusSeven: Int8 = -7
+    printl(minusSeven / 2)
+    printl(minusSeven % 2)
+
+    // Values travel through parameters, returns, fields, and function values at their own size.
+    printl(wider(200))
+    printl(bump(254))
+    printl(clamp(-3))
+    printl(apply(bump, 9))
+    mutable val packet = Packet(255, 65535, 4294967295, 18446744073709551615, -128, -32768, -2147483648)
+    printl(packet.tag)
+    printl(packet.length)
+    printl(packet.id)
+    printl(packet.sequence)
+    printl(packet.offset)
+    printl(packet.delta)
+    printl(packet.base)
+    printl(packet == Packet(255, 65535, 4294967295, 18446744073709551615, -128, -32768, -2147483648))
+    packet.tag = 1
+    printl(packet.tag)
+    printl(packet == Packet(255, 65535, 4294967295, 18446744073709551615, -128, -32768, -2147483648))
+
+    // Literals adapt through assignment, `if` arms and block values.
+    mutable val counter: UInt8 = 0
+    counter = 200
+    counter += 55
+    printl(counter)
+    val chosen: UInt8 = if counter == 255 => 1 else 2
+    printl(chosen)
+    val fromBlock: Int16 = {
+        val ignored = 1
+        -300
+    }
+    printl(fromBlock)
+}

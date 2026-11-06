@@ -209,6 +209,10 @@ private final class Lowering
         case "Silver.AdditionExpression":
         case "Silver.MultiplyExpression":
         case "Silver.CoalesceExpression":
+        case "Silver.BitOrExpression":
+        case "Silver.BitXorExpression":
+        case "Silver.BitAndExpression":
+        case "Silver.ShiftExpression":
             // `X (Op X)*`, folded left so `1 - 2 - 3` is `(1 - 2) - 3`.
             auto lhs = convertExpression(cst[0]);
             foreach (pair; cst.children.drop(1).chunks(2))
@@ -229,18 +233,6 @@ private final class Lowering
             auto span = Span(file, cst.begin, operand.span.end);
             return Expr(ids.next!Expr, span, ExprKind(UnaryExpr(op, boxed(operand))));
             break;
-        case "Silver.PowerExpression":
-            // `Postfix (^ Unary)?` - the exponent recurses, so `2 ^ 3 ^ 2` is `2 ^ (3 ^ 2)`.
-            {
-                auto base = convertExpression(cst[0]);
-                if (cst.children.length == 1)
-                {
-                    return base;
-                }
-                auto exponent = convertExpression(cst[2]);
-                auto span = Span(file, base.span.start, exponent.span.end);
-                return Expr(ids.next!Expr, span, ExprKind(BinaryExpr(BinaryOp.Power, boxed(base), boxed(exponent))));
-            }
         case "Silver.Postfix":
             // `Eval PostfixOp*`, folded left so `m.f(1)` is `call (m.f) 1`.
             {
@@ -255,8 +247,17 @@ private final class Lowering
         case "Silver.BooleanLiteral":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(BoolLiteral(cst.matches[0].to!bool)));
         case "Silver.UnsignedLiteral":
+            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(integerLiteral(cst.matches[0], 10)));
         case "Silver.IntegerLiteral":
-            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(IntLiteral(cst.matches[0].to!long)));
+            // The sign is only here when a unary operator didn't take it first, as in `--5`.
+            {
+                auto text = cst.matches[0];
+                auto signed = text[0] == '-' || text[0] == '+';
+                auto literal = Expr(ids.next!Expr, spanOf(cst, file),
+                    ExprKind(integerLiteral(signed ? text[1 .. $] : text, 10)));
+                if (text[0] != '-') return literal;
+                return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(UnaryExpr(UnaryOp.Minus, boxed(literal))));
+            }
         case "Silver.FloatingLiteral":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(FloatLiteral(cst.matches[0].to!double)));
         case "Silver.Identifier":
@@ -266,9 +267,9 @@ private final class Lowering
         case "Silver.ScientificLiteral":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(FloatLiteral(cst.matches[0].to!double)));
         case "Silver.HexaLiteral":
-            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(IntLiteral(radixValue(cst.matches[0], 16))));
+            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(integerLiteral(cst.matches[0][2 .. $], 16)));
         case "Silver.BinaryLiteral":
-            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(IntLiteral(radixValue(cst.matches[0], 2))));
+            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(integerLiteral(cst.matches[0][2 .. $], 2)));
         case "Silver.TypeName":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(Identifier(cst.matches[0])));
         default:
@@ -455,6 +456,8 @@ private final class Lowering
             return UnaryOp.Minus;
         case "!":
             return UnaryOp.Not;
+        case "~":
+            return UnaryOp.BitNot;
         default:
             throw new Exception("Unknown unary operator '%s'".format(op));
         }
@@ -474,8 +477,22 @@ private final class Lowering
             return BinaryOp.Divide;
         case "%":
             return BinaryOp.Modulo;
+        case "&":
+            return BinaryOp.BitAnd;
+        case "|":
+            return BinaryOp.BitOr;
         case "^":
-            return BinaryOp.Power;
+            return BinaryOp.BitXor;
+        case "<<":
+            return BinaryOp.ShiftLeft;
+        case ">>":
+            return BinaryOp.ShiftRight;
+        case "&+":
+            return BinaryOp.WrappingAdd;
+        case "&-":
+            return BinaryOp.WrappingSubtract;
+        case "&*":
+            return BinaryOp.WrappingMultiply;
         case "==":
             return BinaryOp.Equal;
         case "!=":
@@ -517,13 +534,20 @@ void validateNodeIs(ParseTree tree, string type)
     }
 }
 
-/// `0x`/`0b` literals are 64-bit patterns, so values above `Int.max` wrap to negatives.
-private long radixValue(string text, uint radix)
+/// `digits` without any prefix or sign.
+private IntLiteral integerLiteral(string digits, uint radix)
 {
     import std.array : replace;
-    import std.conv : to;
+    import std.conv : ConvOverflowException, to;
 
-    return cast(long) text[2 .. $].replace("_", "").to!ulong(radix);
+    try
+    {
+        return IntLiteral(digits.replace("_", "").to!ulong(radix));
+    }
+    catch (ConvOverflowException)
+    {
+        return IntLiteral(0, true);
+    }
 }
 
 private Span spanOf(ParseTree cst, string file)

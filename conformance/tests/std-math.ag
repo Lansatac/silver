@@ -28,8 +28,8 @@ def main(): Unit {
     printl(round(2.5))
     printl(round(-2.5))
 
-    // The result is a Float, which toInt can convert.
-    printl(toInt(floor(2.7)) / 2)
+    // The result is a Float, which Int() can convert.
+    printl(Int(floor(2.7)) / 2)
 
     // Outside a function's domain the result is NaN, which is the only value unequal to itself.
     val root = sqrt(-1)

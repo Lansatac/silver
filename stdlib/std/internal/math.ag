@@ -8,10 +8,10 @@ def magnitude(x: Float): Float => if isNegative(x) => -x else x
 
 // Rounds toward zero, keeping the sign of a zero result as IEEE requires.
 def truncate(x: Float): Float {
-    // From 2^52 up every Float is whole, and toInt would panic on NaN or the infinities.
+    // From 2^52 up every Float is whole, and Int() would panic on NaN or the infinities.
     if x != x || x == 0 || magnitude(x) >= 4503599627370496.0 {
         return x
     }
-    val whole = toFloat(toInt(x))
+    val whole = Float(Int(x))
     if whole == 0 && x < 0 => -0.0 else whole
 }

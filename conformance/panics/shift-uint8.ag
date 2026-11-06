@@ -1,0 +1,4 @@
+def main(): Unit {
+    val n: UInt8 = 8
+    printl(n >> n)
+}

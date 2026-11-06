@@ -34,12 +34,15 @@ enum DiagnosticCode : string
     ConditionNotBool = "T0004",
     InvalidOperand = "T0005",
     UnknownMember = "T0006",
+    LiteralOutOfRange = "T0007",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",
     MissingNativeBinding = "R0002",
     DivisionByZero = "R0003",
     InvalidConversion = "R0004",
+    IntegerOverflow = "R0005",
+    InvalidShift = "R0006",
 
     /// Something the implementation doesn't handle yet, or a broken invariant.
     InternalError = "I0001",

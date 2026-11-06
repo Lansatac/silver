@@ -1,0 +1,4 @@
+def main(): Unit {
+    val n: Int8 = -128
+    printl(n / -1)
+}

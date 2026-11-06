@@ -1,0 +1,5 @@
+import std.math
+def main(): Unit {
+    printl(factorial(20))
+    printl(factorial(21))
+}

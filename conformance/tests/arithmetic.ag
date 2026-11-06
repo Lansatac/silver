@@ -16,11 +16,6 @@ def main(): Unit {
     printl(-2 * -3)
     printl(a * b)
 
-    // Unary minus binds looser than power, so -2 ^ 2 is -(2 ^ 2)
-    printl(-2 ^ 2)
-    printl((-2) ^ 3)
-    printl(2 ^ 10)
-    printl(2 ^ 0)
 
     printl(-1 < 1)
     printl(-1 > -2)
@@ -30,6 +25,5 @@ def main(): Unit {
     // Float results that are exactly representable, so the printed form isn't in question
     printl(-7.0 / 2.0)
     printl(1.5 * -2.0)
-    printl(-1.5 ^ 2)
     printl(10.0 / 4)
 }

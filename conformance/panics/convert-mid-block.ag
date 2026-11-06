@@ -1,0 +1,8 @@
+def note(x: Int): Unit => printl(x)
+
+def main(): Unit {
+    val big = 300
+    note(1)
+    note(Int(UInt8(big)))
+    note(2)
+}

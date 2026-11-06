@@ -1,0 +1,70 @@
+def main(): Unit {
+    printl(12 & 10)
+    printl(12 | 10)
+    printl(12 ^ 10)
+    printl(~0)
+    printl(~5)
+    printl(1 << 4)
+    printl(256 >> 4)
+
+    // `>>` keeps the sign of a signed value, and fills with zeros on an unsigned one.
+    printl(-16 >> 2)
+    printl(-1 >> 63)
+    val high: UInt64 = 0x8000000000000000
+    printl(high >> 63)
+    val byte: UInt8 = 0xF0
+    printl(byte >> 4)
+    val negative: Int8 = -128
+    printl(negative >> 7)
+
+    // Results stay in the type, whatever falls off the end.
+    printl(byte << 4)
+    printl(~byte)
+    printl(byte ^ 0xFF)
+    printl(byte | 0x0F)
+    printl(byte & 0x3C)
+    val word: UInt16 = 0xFF00
+    printl(~word)
+    printl(word << 8)
+    printl(1 << 63)
+    val one: Int8 = 1
+    printl(one << 7)
+    val all: UInt32 = 0xFFFFFFFF
+    printl(all << 31)
+    printl(all >> 31)
+    printl(~all)
+
+    // Shifting by one less than the width is fine.
+    val top: UInt64 = 1
+    printl(top << 63)
+    val narrow: UInt8 = 1
+    printl(narrow << 7)
+
+    // Tighter than comparison, unlike C. From loose to tight: | ^ & shifts, then arithmetic.
+    printl(1 | 2 == 3)
+    printl(6 & 3 == 2)
+    printl(1 | 2 ^ 3 & 4)
+    printl(1 + 1 << 2)
+    printl(1 << 1 + 1)
+    printl(8 >> 1 >> 1)
+    printl(6 & 3 << 1)
+    printl(-1 & 3)
+    printl(~1 & 3)
+    printl(!(1 | 2 == 0))
+
+    // `&&` and `||` are still the logical ones.
+    printl(true && false || true)
+
+    // Compound assignment.
+    mutable val x: UInt8 = 0b1100
+    x &= 0b1010
+    printl(x)
+    x |= 0b0001
+    printl(x)
+    x ^= 0b1111
+    printl(x)
+    x <<= 2
+    printl(x)
+    x >>= 1
+    printl(x)
+}

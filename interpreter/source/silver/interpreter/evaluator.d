@@ -1,12 +1,17 @@
 module silver.interpreter.evaluator;
 
+static import std.meta;
 import std.sumtype;
+import std.traits : isSigned;
 import std.variant : Variant;
 import silver.ast;
 import silver.interpreter.environment : Environment, ImportScope;
 import silver.interpreter.errors : CodedException;
 import silver.interpreter.values;
-import silver.sema : Analysis;
+import silver.sema : Analysis, IntegerInfo, Type;
+
+/// The D type holding each Silver integer type's values.
+private alias IntegerTypes = std.meta.AliasSeq!(byte, short, int, long, ubyte, ushort, uint, ulong);
 
 class RuntimeError : DiagnosticException
 {
@@ -178,23 +183,15 @@ class Evaluator
     private void bindNumericNatives()
     {
         import libm = core.stdc.math;
+        import std.datetime.systime : Clock;
 
         static NativeFunction floatFunction(alias f)()
         {
             return (Variant[] args) => Variant(f(args[0].get!double));
         }
 
-        nativeBindings["toInt"] = (Variant[] args) {
-            auto value = args[0].get!double;
-            if (!(value >= -0x1p63 && value < 0x1p63))
-            {
-                throw new CodedException(DiagnosticCode.InvalidConversion,
-                    "toInt: the value is NaN or outside Int's range");
-            }
-            return Variant(cast(long) value);
-        };
-        nativeBindings["toFloat"] = (Variant[] args) => Variant(cast(double) args[0].get!long);
-
+        nativeBindings["nowNanos"] = (Variant[] args) => Variant((Clock.currStdTime - 621_355_968_000_000_000L) * 100);
+        nativeBindings["pow"] = (Variant[] args) => Variant(libm.pow(args[0].get!double, args[1].get!double));
         nativeBindings["sqrt"] = floatFunction!(libm.sqrt);
         nativeBindings["exp"] = floatFunction!(libm.exp);
         nativeBindings["log"] = floatFunction!(libm.log);
@@ -291,6 +288,7 @@ class Evaluator
         {
             return ast.kind.match!(
                 (const IntLiteral literal) => intLiteralValue(literal, ast.id),
+                (const CallExpr call) => evaluateCall(call, ast.id, variables),
                 s => evaluate(s, variables));
         }
         catch (RuntimeError e)
@@ -303,14 +301,120 @@ class Evaluator
         }
     }
 
-    /// Sema types an integer literal as Float where one is expected, as in `half(3)`.
+    /// `if`, not `?:`: with dmd 2.113, an exception thrown from a `?:` that produces a Variant
+    /// could vanish, so the statement was skipped without any error.
+    private Variant evaluateCall(const CallExpr call, Id!Expr id, Environment variables)
+    {
+        if (analysis !is null && analysis.isConversion(id))
+        {
+            return convert(evaluate(call.args[0], variables), analysis.typeOf(id));
+        }
+        return evaluate(call, variables);
+    }
+
+    /// Sema gives an integer literal the type expected of it, as in `half(3)`.
     private Variant intLiteralValue(const IntLiteral literal, Id!Expr id)
     {
-        if (analysis !is null && analysis.typeOf(id) == analysis.types.float_)
+        if (analysis is null) return Variant(cast(long) literal.value);
+
+        auto type = analysis.typeOf(id);
+        if (type == analysis.types.float_) return Variant(cast(double) literal.value);
+        auto info = analysis.types.integerOf(type);
+        foreach (T; IntegerTypes)
         {
-            return Variant(cast(double) literal.value);
+            if (isType!T(info)) return Variant(cast(T) literal.value);
         }
-        return makeValue(literal.value);
+        assert(0, "every integer type has a D type");
+    }
+
+    private static bool isType(T)(IntegerInfo info)
+    {
+        return T.sizeof * 8 == info.bits && isSigned!T == info.signed;
+    }
+
+    /// `UInt8(x)`. A value that doesn't fit panics, as does NaN; a Float is truncated first.
+    private Variant convert(Variant value, Type target)
+    {
+        if (target == analysis.types.float_)
+        {
+            if (value.peek!double) return value;
+            foreach (S; IntegerTypes)
+            {
+                if (auto source = value.peek!S) return Variant(cast(double) *source);
+            }
+            assert(0, "sema only converts numbers");
+        }
+
+        auto info = analysis.types.integerOf(target);
+        foreach (T; IntegerTypes)
+        {
+            if (!isType!T(info)) continue;
+
+            if (auto source = value.peek!double)
+            {
+                if (!floatFits!T(*source)) throw conversionFailure!T();
+                return Variant(cast(T) *source);
+            }
+            foreach (S; IntegerTypes)
+            {
+                if (auto source = value.peek!S)
+                {
+                    if (!integerFits!T(*source)) throw conversionFailure!T();
+                    return Variant(cast(T) *source);
+                }
+            }
+        }
+        assert(0, "sema only converts numbers");
+    }
+
+    private static CodedException conversionFailure(T)()
+    {
+        import std.format : format;
+
+        auto name = "%sInt%s".format(isSigned!T ? "" : "U", T.sizeof * 8);
+        return new CodedException(DiagnosticCode.InvalidConversion, "Value is out of range for " ~ name);
+    }
+
+    /// Whether `value`, truncated toward zero, is a `T`. False for NaN.
+    private static bool floatFits(T)(double value)
+    {
+        enum bits = T.sizeof * 8;
+        static if (isSigned!T)
+        {
+            enum double limit = 2.0 ^^ (bits - 1);
+            static if (bits == 64)
+            {
+                return value >= -limit && value < limit;
+            }
+            else
+            {
+                return value > -limit - 1 && value < limit;
+            }
+        }
+        else
+        {
+            enum double limit = 2.0 ^^ bits;
+            return value > -1 && value < limit;
+        }
+    }
+
+    private static bool integerFits(T, S)(S value)
+    {
+        static if (isSigned!S)
+        {
+            if (value < 0)
+            {
+                static if (isSigned!T)
+                {
+                    return long(value) >= long(T.min);
+                }
+                else
+                {
+                    return false;
+                }
+            }
+        }
+        return cast(ulong) value <= cast(ulong) T.max;
     }
 
     /// An exception without a code, e.g. from a failed Variant operation, gets
@@ -360,7 +464,23 @@ class Evaluator
     private Variant evaluate(const UnaryExpr ast, Environment variables)
     {
         auto value = evaluate(*ast.operand, variables);
+        // A negated literal is a constant: `-128` is an Int8 even though `128` alone isn't.
+        auto negatedLiteral = ast.op == UnaryOp.Minus
+            && (*ast.operand).kind.match!((const IntLiteral _) => true, _ => false);
+        if (negatedLiteral)
+        {
+            return negateLiteral(value);
+        }
         return unaryOperate(ast.op, value);
+    }
+
+    private static Variant negateLiteral(Variant value)
+    {
+        foreach (T; IntegerTypes)
+        {
+            if (auto literal = value.peek!T) return Variant(cast(T)(0 - *literal));
+        }
+        return Variant(-value.get!double);
     }
 
     private Variant evaluate(const BinaryExpr ast, Environment variables)
@@ -606,9 +726,12 @@ class Evaluator
         {
             return operate(operator, lhs.get!double, rhs.get!double);
         }
-        if (auto left = lhs.peek!long)
+        foreach (T; IntegerTypes)
         {
-            return operate(operator, *left, rhs.get!long);
+            if (auto left = lhs.peek!T)
+            {
+                return operateInteger(operator, *left, rhs.get!T);
+            }
         }
         switch (operator)
         {
@@ -635,11 +758,9 @@ class Evaluator
         return lhs == rhs;
     }
 
-    private Variant operate(T)(BinaryOp operator, T lhs, T rhs)
+    private Variant operate(BinaryOp operator, double lhs, double rhs)
     {
-        import std.traits : isIntegral;
-
-        final switch (operator)
+        switch (operator)
         {
         case BinaryOp.Add:
             return Variant(lhs + rhs);
@@ -648,17 +769,73 @@ class Evaluator
         case BinaryOp.Multiply:
             return Variant(lhs * rhs);
         case BinaryOp.Divide:
+            return Variant(lhs / rhs);
         case BinaryOp.Modulo:
-            static if (isIntegral!T)
+            return Variant(lhs % rhs);
+        default:
+            return compare(operator, lhs, rhs);
+        }
+    }
+
+    /// Arithmetic that doesn't fit the type panics; only the `&` forms wrap.
+    private Variant operateInteger(T)(BinaryOp operator, T lhs, T rhs)
+    {
+        switch (operator)
+        {
+        case BinaryOp.Add:
+            return Variant(checked!"+"(lhs, rhs));
+        case BinaryOp.Subtract:
+            return Variant(checked!"-"(lhs, rhs));
+        case BinaryOp.Multiply:
+            return Variant(checked!"*"(lhs, rhs));
+        case BinaryOp.WrappingAdd:
+            return Variant(cast(T)(lhs + rhs));
+        case BinaryOp.WrappingSubtract:
+            return Variant(cast(T)(lhs - rhs));
+        case BinaryOp.WrappingMultiply:
+            return Variant(cast(T)(lhs * rhs));
+        case BinaryOp.Divide:
+        case BinaryOp.Modulo:
+            if (rhs == 0)
             {
-                if (rhs == 0)
-                {
-                    throw new CodedException(DiagnosticCode.DivisionByZero, "Division by zero");
-                }
+                throw new CodedException(DiagnosticCode.DivisionByZero, "Division by zero");
             }
-            return Variant(operator == BinaryOp.Divide ? lhs / rhs : lhs % rhs);
-        case BinaryOp.Power:
-            return Variant(lhs ^^ rhs);
+            static if (isSigned!T)
+            {
+                if (lhs == T.min && rhs == -1) throw overflow();
+            }
+            return Variant(cast(T)(operator == BinaryOp.Divide ? lhs / rhs : lhs % rhs));
+        case BinaryOp.BitAnd:
+            return Variant(cast(T)(lhs & rhs));
+        case BinaryOp.BitOr:
+            return Variant(cast(T)(lhs | rhs));
+        case BinaryOp.BitXor:
+            return Variant(cast(T)(lhs ^ rhs));
+        case BinaryOp.ShiftLeft:
+        case BinaryOp.ShiftRight:
+            static if (isSigned!T)
+            {
+                auto inRange = rhs >= 0 && rhs < T.sizeof * 8;
+            }
+            else
+            {
+                auto inRange = rhs < T.sizeof * 8;
+            }
+            if (!inRange)
+            {
+                throw new CodedException(DiagnosticCode.InvalidShift, "Shift amount is out of range");
+            }
+            auto count = cast(int) rhs;
+            return Variant(cast(T)(operator == BinaryOp.ShiftLeft ? lhs << count : lhs >> count));
+        default:
+            return compare(operator, lhs, rhs);
+        }
+    }
+
+    private static Variant compare(T)(BinaryOp operator, T lhs, T rhs)
+    {
+        switch (operator)
+        {
         case BinaryOp.Equal:
             return Variant(lhs == rhs);
         case BinaryOp.NotEqual:
@@ -676,36 +853,75 @@ class Evaluator
             assert(0, "and/or short-circuit in evaluate(BinaryExpr)");
         case BinaryOp.Coalesce:
             throw new CodedException(DiagnosticCode.InternalError, "Coalesce operator not implemented");
+        default:
+            import std.format : format;
+
+            throw new CodedException(DiagnosticCode.InvalidOperand,
+                "Unsupported operator %s for %s".format(operator, T.stringof));
+        }
+    }
+
+    private static CodedException overflow()
+    {
+        return new CodedException(DiagnosticCode.IntegerOverflow, "Integer overflow");
+    }
+
+    private static T checked(string op, T)(T lhs, T rhs)
+    {
+        static if (T.sizeof < 4)
+        {
+            // These fit an int, whatever the operator.
+            int wide = mixin("int(lhs) " ~ op ~ " int(rhs)");
+            if (wide < T.min || wide > T.max) throw overflow();
+            return cast(T) wide;
+        }
+        else
+        {
+            import core.checkedint : adds, addu, muls, mulu, subs, subu;
+
+            bool overflowed;
+            static if (isSigned!T)
+            {
+                static if (op == "+") T result = adds(lhs, rhs, overflowed);
+                else static if (op == "-") T result = subs(lhs, rhs, overflowed);
+                else T result = muls(lhs, rhs, overflowed);
+            }
+            else
+            {
+                static if (op == "+") T result = addu(lhs, rhs, overflowed);
+                else static if (op == "-") T result = subu(lhs, rhs, overflowed);
+                else T result = mulu(lhs, rhs, overflowed);
+            }
+            if (overflowed) throw overflow();
+            return result;
         }
     }
 
     private Variant unaryOperate(UnaryOp operator, Variant value)
     {
-        final switch (operator)
-        {
-        case UnaryOp.Minus:
-            // Check long first: long implicitly converts to double, so the
-            // other order would turn every negated integer into a float.
-            if (value.convertsTo!long)
-            {
-                return Variant(-value.get!long);
-            }
-            else if (value.convertsTo!double)
-            {
-                return Variant(-value.get!double);
-            }
-            else
-            {
-                import std.conv : to;
+        if (operator == UnaryOp.Plus) return value;
+        if (operator == UnaryOp.Not) return Variant(!value.get!bool);
 
-                throw new CodedException(DiagnosticCode.InvalidOperand,
-                    "Unsupported unary operator " ~ operator.to!string ~ " for type " ~ value
-                        .type.to!string);
-            }
-        case UnaryOp.Plus:
-            return value;
-        case UnaryOp.Not:
-            return Variant(!value.get!bool);
+        if (auto number = value.peek!double)
+        {
+            if (operator == UnaryOp.Minus) return Variant(-*number);
         }
+        foreach (T; IntegerTypes)
+        {
+            if (auto number = value.peek!T)
+            {
+                if (operator == UnaryOp.BitNot) return Variant(cast(T)~*number);
+                static if (isSigned!T)
+                {
+                    if (*number == T.min) throw overflow();
+                    return Variant(cast(T)-*number);
+                }
+            }
+        }
+
+        import std.conv : to;
+
+        throw new CodedException(DiagnosticCode.InvalidOperand,
+            "Unsupported unary operator " ~ operator.to!string ~ " for type " ~ value.type.to!string);
     }
 }

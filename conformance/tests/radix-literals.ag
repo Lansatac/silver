@@ -1,4 +1,4 @@
-// Hex and binary literals are 64-bit patterns, so values above Int.max wrap to negatives
+// Hex and binary literals are ordinary integers, so they have to fit their type.
 def main(): Unit {
     printl(0x1F)
     printl(0xff)
@@ -6,8 +6,15 @@ def main(): Unit {
     printl(0b1010_0101)
     printl(-0x10)
     printl(0x7FFFFFFFFFFFFFFF)
-    printl(0x8000000000000000)
-    printl(0xFFFFFFFFFFFFFFFF)
-    printl(0x9E3779B97F4A7C15)
     printl(0x10 + 0b10)
+    val high: UInt64 = 0x8000000000000000
+    printl(high)
+    val all: UInt = 0xFFFFFFFFFFFFFFFF
+    printl(all)
+    val golden: UInt64 = 0x9E3779B97F4A7C15
+    printl(golden)
+    val byte: UInt8 = 0xFF
+    printl(byte)
+    val negative: Int8 = -0x80
+    printl(negative)
 }

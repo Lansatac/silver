@@ -12,8 +12,31 @@ import silver.ast;
 
 alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module, Id!TypeDecl);
 
-enum Builtin { Never, Unit, Bool, Int, Float, String, Any }
+enum Builtin
+{
+    Never, Unit, Bool, Int, Float, String, Any,
+    Int8, Int16, Int32, Int64,
+    UInt, UInt8, UInt16, UInt32, UInt64,
+}
 alias TypeSymbol = SumType!(Builtin, Id!TypeDecl);
+
+/// `name` as a type that values can be converted to with `Name(x)`, if it is one.
+/// Types can't be declared with these names, so nothing can hide them.
+private const(Builtin)* numericBuiltin(string name)
+{
+    import std.conv : to;
+    import std.traits : EnumMembers;
+
+    static immutable Builtin[] notNumeric = [Builtin.Never, Builtin.Unit, Builtin.Bool, Builtin.String, Builtin.Any];
+    foreach (builtin; EnumMembers!Builtin)
+    {
+        if (builtin.to!string == name && !notNumeric.canFind(builtin))
+        {
+            return new Builtin(builtin);
+        }
+    }
+    return null;
+}
 
 private TypeSymbol[string] builtinTypes() pure
 {
@@ -44,6 +67,8 @@ package struct Resolution
     TypeSymbol[Id!TypeExpr] typeResolutions;
     Id!FunctionDecl[Id!Expr] callees;
     Id!TypeDecl[Id!Expr] constructions;
+    /// Calls like `UInt8(x)`, by the type they convert to.
+    Builtin[Id!Expr] conversions;
     Declarations declarations;
 }
 
@@ -169,6 +194,7 @@ private final class NameResolver
     private TypeSymbol[Id!TypeExpr] _typeResolutions;
     private Id!FunctionDecl[Id!Expr] _callees;
     private Id!TypeDecl[Id!Expr] _constructions;
+    private Builtin[Id!Expr] _conversions;
     private Declarations _declarations;
     private Collector _collector;
     /// Each module's own top-level declarations, by module name.
@@ -192,7 +218,7 @@ private final class NameResolver
         {
             resolveModule(mod.name, mod);
         }
-        return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _declarations);
+        return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _conversions, _declarations);
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
@@ -457,7 +483,18 @@ private final class NameResolver
             (const Identifier _) => requireValue(expr, resolvePath(expr, scopeTable)),
             (const MemberAccess _) => requireValue(expr, resolvePath(expr, scopeTable)),
             (const CallExpr call) {
-                resolveExpr(*call.callee, scopeTable);
+                auto target = (*call.callee).kind.match!(
+                    (const Identifier id) => numericBuiltin(id.name),
+                    (_) => cast(const(Builtin)*) null,
+                );
+                if (target !is null)
+                {
+                    _conversions[expr.id] = *target;
+                }
+                else
+                {
+                    resolveExpr(*call.callee, scopeTable);
+                }
                 if (auto symbol = call.callee.id in _resolutions)
                 {
                     (*symbol).match!(

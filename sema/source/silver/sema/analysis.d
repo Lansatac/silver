@@ -105,6 +105,13 @@ final class Analysis
         return call in _resolution.constructions;
     }
 
+    /// Whether `call` converts a number, like `UInt8(x)`. Its argument is the only thing it
+    /// evaluates, and `typeOf(call)` is the type it converts to.
+    bool isConversion(Id!Expr call) const
+    {
+        return (call in _resolution.conversions) !is null;
+    }
+
     /// The fields of `type`, in declaration order.
     const(FieldInfo)[] fieldsOf(Id!TypeDecl type) const
     {

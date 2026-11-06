@@ -1,0 +1,12 @@
+import std.time
+
+def main(): Unit {
+    val first = nowNanos()
+    val second = nowNanos()
+    // 2020-09-13, so it's in nanoseconds since the Unix epoch and not some other unit.
+    printl(first > 1600000000000000000)
+    // Before the year 2100.
+    printl(first < 4102444800000000000)
+    printl(second >= first)
+    printl(UInt64(first) > 0)
+}

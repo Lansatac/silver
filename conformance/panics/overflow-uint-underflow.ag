@@ -1,0 +1,4 @@
+def main(): Unit {
+    val n: UInt = 0
+    printl(n - 1)
+}

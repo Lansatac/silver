@@ -49,6 +49,10 @@ private final class TypeChecker
     private Type[Id!TypeDecl] _nominalTypes;
     private FieldInfo[][Id!TypeDecl] _fields;
     private size_t[Id!Expr] _fieldIndexes;
+    /// Every integer literal. A literal's type can change after it's first seen, as it adapts
+    /// to where it's used, so ranges are checked once all the bodies have been.
+    private const(Expr)[] _intLiterals;
+    private bool[Id!Expr] _negatedLiterals;
 
     Typing checkProgram(const Program program)
     {
@@ -97,7 +101,41 @@ private final class TypeChecker
             }
         }
 
+        foreach (literal; _intLiterals)
+        {
+            checkLiteralRange(literal);
+        }
+
         return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes);
+    }
+
+    private void checkLiteralRange(const Expr expr)
+    {
+        auto literal = expr.kind.match!(
+            (const IntLiteral l) => l,
+            (_) => assert(0, "only integer literals are recorded"),
+        );
+        if (literal.tooLarge)
+        {
+            _collector.reportError(DiagnosticCode.LiteralOutOfRange, expr.span,
+                "This integer literal doesn't fit in 64 bits");
+            return;
+        }
+        auto type = _exprTypes[expr.id];
+        if (!_types.isInteger(type)) return;
+
+        auto info = _types.integerOf(type);
+        auto negated = (expr.id in _negatedLiterals) !is null;
+        if (negated && !info.signed)
+        {
+            _collector.reportError(DiagnosticCode.LiteralOutOfRange, expr.span,
+                "`%s` can't hold a negative value".format(_types.describe(type)));
+        }
+        else if (literal.value > (negated ? info.minMagnitude : info.maxValue))
+        {
+            _collector.reportError(DiagnosticCode.LiteralOutOfRange, expr.span,
+                "`%s%s` doesn't fit in `%s`".format(negated ? "-" : "", literal.value, _types.describe(type)));
+        }
     }
 
     private Type resolveType(const TypeExpr type)
@@ -133,6 +171,15 @@ private final class TypeChecker
             case Builtin.Float: return _types.float_;
             case Builtin.String: return _types.string_;
             case Builtin.Any: return _types.any;
+            case Builtin.Int8: return _types.int8;
+            case Builtin.Int16: return _types.int16;
+            case Builtin.Int32: return _types.int32;
+            case Builtin.Int64: return _types.int_;
+            case Builtin.UInt: return _types.uint_;
+            case Builtin.UInt8: return _types.uint8;
+            case Builtin.UInt16: return _types.uint16;
+            case Builtin.UInt32: return _types.uint32;
+            case Builtin.UInt64: return _types.uint_;
         }
     }
 
@@ -194,9 +241,8 @@ private final class TypeChecker
             },
             (const AssignStmt assign) {
                 auto lhsType = synthesize(assign.target, ctx);
-                auto rhsType = synthesize(assign.value, ctx);
                 if (lhsType != _types.error) checkAssignable(assign.target);
-                requireAssignable(rhsType, lhsType, assign.value.span);
+                check(assign.value, lhsType, ctx);
             },
             (const ExprStmt expr) {
                 synthesize(expr.expr, ctx);
@@ -258,12 +304,17 @@ private final class TypeChecker
         
         auto type = expr.kind.match!(
             (const BoolLiteral _) => _types.bool_,
-            (const IntLiteral _) => _types.int_,
+            (const IntLiteral _) {
+                _intLiterals ~= expr;
+                return _types.int_;
+            },
             (const FloatLiteral _) => _types.float_,
             (const StringLiteral _) => _types.string_,
             (const UnaryExpr unary) => synthesizeUnary(unary, expr.span, ctx),
             (const BinaryExpr binary) => synthesizeBinary(binary, expr.span, ctx),
-            (const CallExpr call) => synthesizeCall(call, expr.span, ctx),
+            (const CallExpr call) => expr.id in _resolutions.conversions
+                ? synthesizeConversion(call, builtinType(_resolutions.conversions[expr.id]), expr.span, ctx)
+                : synthesizeCall(call, expr.span, ctx),
             (const MemberAccess member) => synthesizeMemberAccess(expr, member, ctx),
             (const WhileExpr while_) => synthesizeWhile(while_, expr.span, ctx),
             (const IfExpr if_) => synthesizeIf(if_, expr.span, ctx),
@@ -277,7 +328,38 @@ private final class TypeChecker
 
     private bool isNumeric(Type t)
     {
-        return t == _types.int_ || t == _types.float_;
+        return _types.isInteger(t) || t == _types.float_;
+    }
+
+    /// `UInt8(x)`: a literal is checked against the target where it's written, and any other
+    /// number at runtime, where one that doesn't fit panics.
+    private Type synthesizeConversion(const CallExpr call, Type target, Span span, BodyContext ctx)
+    {
+        _exprTypes[call.callee.id] = target;
+        if (call.args.length != 1)
+        {
+            foreach (arg; call.args)
+            {
+                synthesize(arg, ctx);
+            }
+            _collector.reportError(DiagnosticCode.WrongArgumentCount, span,
+                "`%s` converts one number, got %s arguments".format(_types.describe(target), call.args.length));
+            return target;
+        }
+
+        auto arg = call.args[0];
+        if (isIntLiteral(arg))
+        {
+            check(arg, target, ctx);
+            return target;
+        }
+        auto argType = synthesize(arg, ctx);
+        if (argType != _types.error && !isNumeric(argType))
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, arg.span,
+                "`%s` can only convert a number, got `%s`".format(_types.describe(target), _types.describe(argType)));
+        }
+        return target;
     }
 
     private bool isComparable(Type type)
@@ -308,12 +390,33 @@ private final class TypeChecker
         final switch (unary.op)
         {
             case UnaryOp.Minus:
+                auto isLiteral = (*unary.operand).kind.match!((const IntLiteral _) => true, _ => false);
+                if (isLiteral)
+                {
+                    _negatedLiterals[unary.operand.id] = true;
+                }
+                else if (_types.isInteger(operandType) && !_types.integerOf(operandType).signed)
+                {
+                    _collector.reportError(DiagnosticCode.InvalidOperand, unary.operand.span,
+                        "`%s` can't be negated".format(_types.describe(operandType)));
+                    return _types.error;
+                }
+                goto case;
             case UnaryOp.Plus:
                 if (operandType == _types.error) return _types.error;
                 if (!isNumeric(operandType))
                 {
                     _collector.reportError(DiagnosticCode.InvalidOperand, unary.operand.span,
                         "`%s` needs a number, got `%s`".format(unary.op, _types.describe(operandType)));
+                    return _types.error;
+                }
+                return operandType;
+            case UnaryOp.BitNot:
+                if (operandType == _types.error) return _types.error;
+                if (!_types.isInteger(operandType))
+                {
+                    _collector.reportError(DiagnosticCode.InvalidOperand, unary.operand.span,
+                        "`%s` needs an integer, got `%s`".format(unary.op, _types.describe(operandType)));
                     return _types.error;
                 }
                 return operandType;
@@ -328,24 +431,54 @@ private final class TypeChecker
         auto leftType = synthesize(*binary.left, ctx);
         auto rightType = synthesize(*binary.right, ctx);
         if (leftType == _types.error || rightType == _types.error) return _types.error;
-        // An integer literal beside a Float is a Float, so `x * 2` and `x == 0` work.
-        if (leftType == _types.float_ && isIntLiteral(*binary.right))
+        // An integer literal takes the type of the number beside it, so `x * 2` and `x == 0` work.
+        // Not a Float beside an integer-only operator, or the error would blame the literal.
+        with (BinaryOp)
         {
-            rightType = adaptToFloat(*binary.right);
-        }
-        else if (rightType == _types.float_ && isIntLiteral(*binary.left))
-        {
-            leftType = adaptToFloat(*binary.left);
+            auto integerOnly = [BitAnd, BitOr, BitXor, ShiftLeft, ShiftRight,
+                WrappingAdd, WrappingSubtract, WrappingMultiply].canFind(binary.op);
+            bool adaptsTo(Type t) => integerOnly ? _types.isInteger(t) : isNumeric(t);
+            if (adaptsTo(leftType) && isIntLiteral(*binary.right) && !isIntLiteral(*binary.left))
+            {
+                rightType = adaptLiteral(*binary.right, leftType);
+            }
+            else if (adaptsTo(rightType) && isIntLiteral(*binary.left) && !isIntLiteral(*binary.right))
+            {
+                leftType = adaptLiteral(*binary.left, rightType);
+            }
         }
         final switch (binary.op)
         {
-
+            case BinaryOp.BitAnd:
+            case BinaryOp.BitOr:
+            case BinaryOp.BitXor:
+            case BinaryOp.ShiftLeft:
+            case BinaryOp.ShiftRight:
+            case BinaryOp.WrappingAdd:
+            case BinaryOp.WrappingSubtract:
+            case BinaryOp.WrappingMultiply:
+                if (!_types.isInteger(leftType))  {
+                    _collector.reportError(DiagnosticCode.InvalidOperand, binary.left.span,
+                        "`%s` needs an integer, got `%s`".format(binary.op, _types.describe(leftType)));
+                    return _types.error;
+                }
+                if (!_types.isInteger(rightType)) {
+                    _collector.reportError(DiagnosticCode.InvalidOperand, binary.right.span,
+                        "`%s` needs an integer, got `%s`".format(binary.op, _types.describe(rightType)));
+                    return _types.error;
+                }
+                if (leftType != rightType)
+                {
+                    _collector.reportError(DiagnosticCode.InvalidOperand, span,
+                        "`%s` can't combine `%s` and `%s`".format(binary.op, _types.describe(leftType), _types.describe(rightType)));
+                    return _types.error;
+                }
+                return leftType;
             case BinaryOp.Add:
             case BinaryOp.Subtract:
             case BinaryOp.Multiply:
             case BinaryOp.Divide:
             case BinaryOp.Modulo:
-            case BinaryOp.Power:
                 if (!isNumeric(leftType))  {
                     _collector.reportError(DiagnosticCode.InvalidOperand, binary.left.span,
                         "`%s` needs a number, got `%s`".format(binary.op, _types.describe(leftType)));
@@ -556,6 +689,12 @@ private final class TypeChecker
         {
             return synthesize(*block.value, ctx);
         }
+        return valuelessBlockType(block);
+    }
+
+    /// The type of a block with no value expression, after its statements have been checked.
+    private Type valuelessBlockType(const BlockExpr block)
+    {
         if (block.statements.length > 0 && alwaysExits(block.statements[$ - 1]))
         {
             return _types.never;
@@ -585,17 +724,62 @@ private final class TypeChecker
 
     private Type check(const Expr expr, Type expected, BodyContext ctx)
     {
-        auto type = synthesize(expr, ctx);
-        if (expected == _types.float_ && isIntLiteral(expr))
+        // A number is passed down, so that a literal adapts in an `if` arm or as a block's value too.
+        if (isNumeric(expected))
         {
-            return adaptToFloat(expr);
+            auto passedDown = expr.kind.match!(
+                (const IfExpr if_) => if_.falseBody !is null,
+                (const BlockExpr _) => true,
+                _ => false,
+            );
+            if (passedDown)
+            {
+                auto type = expr.kind.match!(
+                    (const IfExpr if_) => checkIf(if_, expected, ctx),
+                    (const BlockExpr block) => checkBlock(block, expected, expr.span, ctx),
+                    (_) => assert(0, "only ifs and blocks are passed down"),
+                );
+                _exprTypes[expr.id] = type;
+                return type;
+            }
+        }
+
+        auto type = synthesize(expr, ctx);
+        if (isNumeric(expected) && isIntLiteral(expr))
+        {
+            return adaptLiteral(expr, expected);
         }
         requireAssignable(type, expected, expr.span);
         return type;
     }
 
-    /// An integer literal, possibly signed: the only Int that may become a Float.
-    /// Int values never convert implicitly; only literals adapt to where they're used.
+    private Type checkIf(const IfExpr if_, Type expected, BodyContext ctx)
+    {
+        auto condType = synthesize(*if_.condition, ctx);
+        requireAssignable(condType, _types.bool_, if_.condition.span);
+        auto thenType = check(*if_.trueBody, expected, ctx);
+        auto elseType = check(*if_.falseBody, expected, ctx);
+        return thenType == _types.never && elseType == _types.never ? _types.never : expected;
+    }
+
+    private Type checkBlock(const BlockExpr block, Type expected, Span span, BodyContext ctx)
+    {
+        foreach (stmt; block.statements)
+        {
+            checkStmt(stmt, ctx);
+        }
+        if (block.value !is null)
+        {
+            auto type = check(*block.value, expected, ctx);
+            return type == _types.never ? type : expected;
+        }
+        auto type = valuelessBlockType(block);
+        requireAssignable(type, expected, span);
+        return type == _types.never ? type : expected;
+    }
+
+    /// An integer literal, possibly signed: the only integer that takes the type expected of it.
+    /// Number values never convert implicitly; only literals adapt to where they're used.
     private bool isIntLiteral(const Expr expr)
     {
         return expr.kind.match!(
@@ -606,15 +790,15 @@ private final class TypeChecker
         );
     }
 
-    /// Re-records an integer literal (and any sign on it) as a Float.
-    private Type adaptToFloat(const Expr expr)
+    /// Re-records an integer literal (and any sign on it) as `type`.
+    private Type adaptLiteral(const Expr expr, Type type)
     {
         expr.kind.match!(
-            (const UnaryExpr unary) { adaptToFloat(*unary.operand); },
+            (const UnaryExpr unary) { adaptLiteral(*unary.operand, type); },
             (_) {},
         );
-        _exprTypes[expr.id] = _types.float_;
-        return _types.float_;
+        _exprTypes[expr.id] = type;
+        return type;
     }
 
     private bool isAssignable(Type from, Type to)
