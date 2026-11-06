@@ -1,0 +1,41 @@
+def add(a: Int, b: Int): Int => a + b
+
+def subtract(a: Int, b: Int): Int => a - b
+
+def say(text: String): Unit => printl(text)
+
+def noted(text: String, value: Int): Int {
+    printl(text)
+    return value
+}
+
+def pick(): (Int, Int) -> Int {
+    printl("callee")
+    return add
+}
+
+def run(f: (Int, Int) -> Int, x: Int): Int => f(x, x)
+
+def twice(action: (String) -> Unit, text: String): Unit {
+    action(text)
+    action(text)
+}
+
+def takesUnit(nothing: Unit, n: Int): Int => n + 1
+
+def main(): Unit {
+    val f = add
+    printl(f(1, 2))
+    printl(run(add, 3))
+    twice(say, "hi")
+
+    mutable val g = add
+    g = subtract
+    printl(g(5, 2))
+
+    val u = takesUnit
+    printl(u((), 4))
+
+    // The callee is evaluated first, then the arguments in order.
+    printl(pick()(noted("first", 1), noted("second", 2)))
+}

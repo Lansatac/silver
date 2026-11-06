@@ -48,4 +48,7 @@ def main(): Unit {
 
     val measure = Measure(nan)
     printl(measure == measure)
+
+    printl(() == ())
+    printl(() != ())
 }

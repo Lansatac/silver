@@ -155,6 +155,13 @@ final class Generator
     FunctionState _function;
     string[Id!FunctionDecl] mangledNames;
     string[Id!TypeDecl] typeConstructors;
+    string[Id!TypeDecl] typeEqualities;
+
+    /// Types compared so far whose equality function hasn't been generated, each with a place
+    /// that needs it. Generating one can ask for more, for its fields' types.
+    private struct PendingEquality { Id!TypeDecl type; Span span; }
+    private PendingEquality[] _pendingEqualities;
+    private bool[Id!TypeDecl] _equalitySeen;
 
     /// Runtime functions the program calls, in first-use order. Each gets one `declare`.
     private string[] _usedRuntime;
@@ -176,6 +183,12 @@ final class Generator
         {
             modules ~= emitModule(module_);
         }
+        while (!_pendingEqualities.empty)
+        {
+            auto pending = _pendingEqualities.front;
+            _pendingEqualities.popFront();
+            modules ~= emitTypeEquality(pending);
+        }
 
         // After the modules, so every runtime call and string literal has been seen.
         return emitDeclares() ~ _strings.map!(s => s ~ "\n").join ~ modules.join("\n") ~ "\n" ~ emitLLMain();
@@ -193,6 +206,7 @@ final class Generator
                     },
                     (const TypeDecl typeDecl) {
                         typeConstructors[typeDecl.id] = mangleTypeConstructor(*module_, typeDecl.name);
+                        typeEqualities[typeDecl.id] = "%s.%s_eq".format(module_.name, typeDecl.name);
                     },
                     (const _) {}
                 );
@@ -384,10 +398,7 @@ final class Generator
         if (_analysis.resolutionOf(expr.id) !is null) return emitIdentifier(expr);
 
         auto object = emitExpr(*access.object);
-        auto type = _analysis.types[_analysis.typeOf(access.object.id)].match!(
-            (const NominalData nominal) => nominal.decl,
-            (_) => assert(0, "sema only finds fields on a declared type"),
-        );
+        auto type = declOf(*access.object);
         if (!hasLayout(type)) return unsupported(expr.span, "types with `Any` or `Never` fields");
 
         auto index = _analysis.fieldIndexOf(expr.id);
@@ -396,6 +407,15 @@ final class Generator
 
         auto pointer = fieldPointer(llvmStruct(type), object.value, llvmFieldIndex(type, index));
         return object.then(pointer).then(load(llvmType(fieldType), pointer.value));
+    }
+
+    /// The declaration of the type `object` has, for an expression whose fields are being used.
+    Id!TypeDecl declOf(const Expr object)
+    {
+        return _analysis.types[_analysis.typeOf(object.id)].match!(
+            (const NominalData nominal) => nominal.decl,
+            (_) => assert(0, "sema only finds fields on a declared type"),
+        );
     }
 
     /// A decimal literal must be exactly representable for LLVM to accept it; the bit pattern always is.
@@ -435,6 +455,7 @@ final class Generator
         }
         auto fragment = (*resolved).match!(
             (const Id!FunctionDecl decl) {
+                if (_analysis.declarationOf(decl).native) return unsupported(expr.span, "native functions as values");
                 auto name = mangledNames[decl];
                 return Fragment.constant("@\"%s\"".format(name));
             },
@@ -447,7 +468,10 @@ final class Generator
                  _collector.reportError(DiagnosticCode.InternalError, expr.span, "trying to emit a module");
                 return Fragment.undef();
             },
-            (const Id!TypeDecl type) => Fragment.constant("@\"%s\"".format(typeConstructors[type])),
+            (const Id!TypeDecl type) {
+                if (!hasLayout(type)) return unsupported(expr.span, "types with `Any` or `Never` fields");
+                return Fragment.constant("@\"%s\"".format(typeConstructors[type]));
+            },
         );
 
         return fragment;
@@ -473,8 +497,8 @@ final class Generator
             }
             case BinaryOp.Equal:
             case BinaryOp.NotEqual:
-                if (type == _analysis.types.string_) return emitStringComparison(binary.op, lhs, rhs);
-                goto default;
+                if (comparesWithInstruction(type)) goto default;
+                return emitStructuralComparison(binary.op, type, lhs, rhs, expr.span);
             default:
                 auto llOp = llBinaryOp(binary.op, type);
                 if (llOp is null) return unsupported(expr.span, "`" ~ binary.op ~ "`");
@@ -549,13 +573,80 @@ final class Generator
             .then(Fragment.label(endLabel));
     }
 
-    /// `==` and `!=` on Strings compare contents, through the runtime.
-    Fragment emitStringComparison(BinaryOp op, Fragment lhs, Fragment rhs)
+    /// Whether a single `icmp` or `fcmp` compares two values of `type`.
+    bool comparesWithInstruction(Type type)
     {
-        auto equal = lhs.then(rhs).then(callRuntime("silver_string_equals", [lhs.value, rhs.value]));
+        return type == _analysis.types.int_ || type == _analysis.types.float_ || type == _analysis.types.bool_;
+    }
+
+    /// `==` and `!=` on values that aren't a single number: their contents are compared.
+    Fragment emitStructuralComparison(BinaryOp op, Type type, Fragment lhs, Fragment rhs, Span span)
+    {
+        auto equal = lhs.then(rhs).then(emitEquals(type, lhs.value, rhs.value, span));
         if (op == BinaryOp.Equal) return equal;
         auto result = _function.newTemp();
         return equal.then(Fragment.instruction("%s = xor i1 %s, true".format(result, equal.value), result));
+    }
+
+    /// Whether the operands `lhs` and `rhs`, of `type`, are equal, as an `i1`.
+    Fragment emitEquals(Type type, string lhs, string rhs, Span span)
+    {
+        if (comparesWithInstruction(type))
+        {
+            auto result = _function.newTemp();
+            return Fragment.instruction("%s = %s %s %s, %s".format(
+                result, llBinaryOp(BinaryOp.Equal, type), llvmType(type), lhs, rhs), result);
+        }
+        if (type == _analysis.types.string_) return callRuntime("silver_string_equals", [lhs, rhs]);
+
+        return _analysis.types[type].match!(
+            // Unit has one value and no operand. A Never operand means this is never reached.
+            (const Primitive _) => Fragment.constant("true"),
+            (const NominalData nominal) {
+                if (!hasLayout(nominal.decl)) return unsupported(span, "types with `Any` or `Never` fields");
+                if (nominal.decl !in _equalitySeen)
+                {
+                    _equalitySeen[nominal.decl] = true;
+                    _pendingEqualities ~= PendingEquality(nominal.decl, span);
+                }
+                return emitCall("i1", "@\"%s\"".format(typeEqualities[nominal.decl]),
+                    "ptr %s, ptr %s".format(lhs, rhs));
+            },
+            (const OptionData _) => unsupported(span, "comparing options"),
+            (_) => assert(0, "sema only allows comparing comparable types"),
+        );
+    }
+
+    /// The function comparing two values of `type`, field by field, stopping at the first
+    /// difference. Generated once for each type the program compares.
+    string emitTypeEquality(PendingEquality pending)
+    {
+        _function = new FunctionState;
+        _function.returnType = "i1";
+
+        enum left = "%left.arg", right = "%right.arg";
+        auto type = pending.type;
+        auto fields = _analysis.fieldsOf(type);
+        auto layout = llvmStruct(type);
+
+        // Built from the last field back: each comparison's true arm is the rest of them.
+        auto body = Fragment.constant("true");
+        foreach_reverse (i, field; fields)
+        {
+            if (field.type == _analysis.types.unit) continue;
+            auto fieldLlvmType = llvmType(field.type);
+            auto leftPointer = fieldPointer(layout, left, llvmFieldIndex(type, i));
+            auto leftField = load(fieldLlvmType, leftPointer.value);
+            auto rightPointer = fieldPointer(layout, right, llvmFieldIndex(type, i));
+            auto rightField = load(fieldLlvmType, rightPointer.value);
+            auto comparison = leftPointer.then(leftField).then(rightPointer).then(rightField)
+                .then(emitEquals(field.type, leftField.value, rightField.value, pending.span));
+            body = emitConditional(comparison, "i1", body, Fragment.constant("false"), "field");
+        }
+        auto lines = body.code ~ ("  " ~ returnInstruction(body.value));
+
+        return "define private i1 @\"%s\"(ptr %s, ptr %s) {\nentry:\n%s}\n".format(
+            typeEqualities[type], left, right, lines.map!(line => line ~ "\n").join);
     }
 
     Fragment emitUnary(const Expr expr, const UnaryExpr unary)
@@ -612,27 +703,34 @@ final class Generator
         if (auto type = _analysis.constructionOf(expr.id))
         {
             if (!hasLayout(*type)) return unsupported(expr.span, "types with `Any` or `Never` fields");
-            return emitDirectCall(call, typeConstructors[*type]);
+            return emitCallTo(call, Fragment.constant("@\"%s\"".format(typeConstructors[*type])));
         }
 
         auto callee = _analysis.calleeOf(expr.id);
-        if (callee is null) return unsupported(expr.span, "calls through values");
+        if (callee is null)
+        {
+            if (calleeSignature(call).params.canFind(_analysis.types.any))
+                return unsupported(expr.span, "calling a value that takes `Any`");
+            return emitCallTo(call, emitExpr(*call.callee));
+        }
         auto function_ = _analysis.declarationOf(*callee);
 
         if (function_.native) return emitNativeCall(*function_, call, expr);
-        return emitDirectCall(call, mangledNames[function_.id]);
+        return emitCallTo(call, Fragment.constant("@\"%s\"".format(mangledNames[function_.id])));
     }
 
-    Fragment emitDirectCall(const CallExpr call, const string mangledName)
+    /// A call of the function `callee` holds. LLVM pointers are untyped, so the same code calls
+    /// a named function and a function value; the callee is evaluated first, then the arguments.
+    Fragment emitCallTo(const CallExpr call, Fragment callee)
     {
         auto signature = calleeSignature(call);
 
         auto args = call.args.map!(arg => emitExpr(arg)).array;
-        auto evaluated = Fragment.sequence(args);
+        auto evaluated = callee.then(Fragment.sequence(args));
         auto operands = args.map!(arg => arg.value).array;
 
         return evaluated.then(emitCall(llvmReturnType(signature.ret),
-            "@\"" ~ mangledName ~ "\"", typedOperands(signature.params, operands)));
+            callee.value, typedOperands(signature.params, operands)));
     }
 
     FunctionData calleeSignature(const CallExpr call)
@@ -730,7 +828,7 @@ final class Generator
     {
         return statement.kind.match!(
             (const VarDecl var) => emitVarDecl(var),
-            (const AssignStmt assign) => emitAssign(assign, statement.span),
+            (const AssignStmt assign) => emitAssign(assign),
             (const ExprStmt exprStmt) => emitExpr(exprStmt.expr).withValue(null),
             (const FunctionDecl function_) => unsupported(statement.span, "nested functions").withValue(null),
             (const ReturnStmt return_) => emitReturn(return_),
@@ -760,35 +858,24 @@ final class Generator
             null);
     }
 
-    /// A store to the target's slot. Reads are always fresh loads, so later uses see it.
-    Fragment emitAssign(const AssignStmt assign, Span span)
+    /// A store to the target. Reads are always fresh loads, so later uses see it.
+    Fragment emitAssign(const AssignStmt assign)
     {
         auto value = emitExpr(assign.value);
         if (value.value is null) return value.withValue(null);
-
-        auto slot = slotOf(assign.target);
-        if (slot is null)
-        {
-            return Fragment.traced("field assignment", rebuild(assign.target, value));
-        }
-
-        auto type = llvmType(_analysis.typeOf(assign.target.id));
-        return value
-            .then(Fragment.store(type, value.value, slot))
-            .withValue(null);
+        return assignTo(assign.target, value);
     }
 
-    //load an object, modify it's field and save it as a copy
-    Fragment rebuild(const Expr target, Fragment value)
+    /// `value`, then a store of it to `target`. Objects never change, so a field is written by
+    /// building a copy of its object and assigning that to the object in turn, up to the local.
+    Fragment assignTo(const Expr target, Fragment value)
     {
         return target.kind.match!(
             (const MemberAccess access) {
-                auto type = _analysis.types[_analysis.typeOf(access.object.id)].match!(
-                    (const NominalData nominal) => nominal.decl,
-                    (_) => assert(0, "sema only finds fields on a declared type"),
-                );
-                auto layout = llvmStruct(type);
+                auto type = declOf(*access.object);
+                if (!hasLayout(type)) return unsupported(target.span, "types with `Any` or `Never` fields").withValue(null);
 
+                auto layout = llvmStruct(type);
                 auto object = emitExpr(*access.object);
                 auto index = _analysis.fieldIndexOf(target.id);
                 auto fieldType = llvmType(_analysis.fieldsOf(type)[index].type);
@@ -800,35 +887,28 @@ final class Generator
                         updated, layout, contents.value, fieldType, value.value, llvmFieldIndex(type, index)),
                     updated);
                 auto newAlloc = alloc(layout);
-                
+
                 auto rebuilt = value.then(object).then(contents).then(insert).then(newAlloc)
                     .then(Fragment.store(layout, updated, newAlloc.value))
                     .withValue(newAlloc.value);
-                return rebuild(*access.object, rebuilt);
-
+                return assignTo(*access.object, rebuilt);
             },
             (const Identifier _) => value
-                                    .then(Fragment.store(
-                                        llvmType(_analysis.typeOf(target.id)),
-                                        value.value,
-                                         slotOf(target)))
-                                    .withValue(null),
+                .then(Fragment.store(llvmType(_analysis.typeOf(target.id)), value.value, slotOf(target)))
+                .withValue(null),
             (_) => assert(0, "sema only allows names and fields as assignment targets"),
         );
     }
 
-
-    /// The stack slot `target` names, or null if it isn't a local.
+    /// The stack slot of the local `target` names. Sema only allows assigning to mutable locals.
     string slotOf(const Expr target)
     {
-        if (!target.kind.match!((const Identifier _) => true, _ => false)) return null;
-        auto resolved = _analysis.resolutionOf(target.id);
-        if (resolved is null) return null;
-        return (*resolved).match!(
+        return (*_analysis.resolutionOf(target.id)).match!(
             (const Id!VarDecl decl) => _function.slots[decl],
-            _ => cast(string) null,
+            (_) => assert(0, "sema only allows assigning to locals"),
         );
     }
+
     string mangleTypeConstructor(const Module module_, string typeName)
     {
         return "%s.%s_ctor".format(module_.name, typeName);

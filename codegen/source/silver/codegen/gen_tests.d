@@ -475,3 +475,160 @@ def main(): Unit {
     run.status.should.equal(0);
     run.output.should.equal("said\n1\n2\n()\n()\n()\n");
 }
+
+/// The errors codegen reports for `source`, which must load and analyze cleanly.
+private string codegenErrors(string source, string file = __FILE__, size_t line = __LINE__)
+{
+    auto context = new SourceContext;
+    auto program = load(source, "main.ag", [standardLibraryPath()], context);
+    Analysis analysis;
+    if (!context.collector.hasErrors)
+    {
+        analysis = analyze(program, context.collector);
+    }
+    if (context.collector.hasErrors)
+    {
+        throw new AssertError("The test program failed to load or analyze:\n"
+            ~ describeErrors(context), file, line);
+    }
+
+    generate(program, analysis, context.collector);
+    return describeErrors(context);
+}
+
+@("codegen assigns a field by building a new object, leaving the old one alone")
+unittest
+{
+    auto ir = generateSource(`type Point(x: Int, y: Int)
+
+def main(): Unit {
+    mutable val p = Point(1, 2)
+    p.x = 5
+}`);
+    ir.should.contain("insertvalue { i64, i64 } ");
+    ir.should.contain(", i64 5, 0");
+    ir.should.not.contain("store i64 5");
+    // Writes to the copy, and to `p` when it's bound and rebound; none to the old object.
+    ir.count("store { i64, i64 }").should.equal(1);
+    ir.count("store ptr").should.equal(2);
+}
+
+@("codegen rebuilds every object on the way to a nested field")
+unittest
+{
+    auto source = `type Point(x: Int, y: Int)
+type Line(start: Point, end: Point)
+
+def main(): Unit {
+    mutable val line = Line(Point(1, 2), Point(3, 4))
+    val before = line
+    line.end.y = 9
+    printl(line.end.y)
+    printl(line.start.y)
+    printl(before.end.y)
+}`;
+    auto ir = generateSource(source);
+    ir.count("insertvalue").should.equal(2);
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.status.should.equal(0);
+    run.output.should.equal("9\n2\n4\n");
+}
+
+@("codegen finds a field's place in the layout when assigning past a Unit field")
+unittest
+{
+    auto source = `type Holder(gap: Unit, n: Int)
+
+def main(): Unit {
+    mutable val h = Holder((), 1)
+    h.n = 2
+    h.gap = ()
+    printl(h.n)
+}`;
+    auto ir = generateSource(source);
+    ir.should.contain(", i64 2, 0");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.status.should.equal(0);
+    run.output.should.equal("2\n");
+}
+
+@("codegen reports types it can't lay out instead of crashing on them")
+unittest
+{
+    enum message = "types with `Any` or `Never` fields";
+    codegenErrors(`type Box(v: Any)
+
+def main(): Unit {
+    mutable val b = Box(1)
+    b.v = 2
+}`).should.contain(message);
+
+    codegenErrors(`type Box(v: Any)
+
+def main(): Unit {
+    val make = Box
+}`).should.contain(message);
+}
+
+@("codegen reports native functions used as values")
+unittest
+{
+    codegenErrors(`def main(): Unit {
+    val p = printl
+    p(1)
+}`).should.contain("native functions as values");
+
+    codegenErrors(`def run(f: (Any) -> Unit): Unit => f(1)
+
+def main(): Unit => ()`).should.contain("calling a value that takes `Any`");
+}
+
+@("codegen generates one equality function per compared type, including its fields' types")
+unittest
+{
+    auto ir = generateSource(`type Point(x: Int, y: Int)
+type Line(start: Point, end: Point)
+type Unrelated(n: Int)
+
+def main(): Unit {
+    printl(Line(Point(1, 2), Point(3, 4)) == Line(Point(1, 2), Point(3, 4)))
+    printl(Line(Point(1, 2), Point(3, 4)) != Line(Point(1, 2), Point(3, 4)))
+    printl(Point(1, 2) == Point(1, 2))
+}`);
+    ir.count(`define private i1 @"main.Line_eq"`).should.equal(1);
+    ir.count(`define private i1 @"main.Point_eq"`).should.equal(1);
+    ir.count("Unrelated_eq").should.equal(0);
+}
+
+@("codegen compares every field but stops at the first difference")
+unittest
+{
+    auto ir = generateSource(`type Named(name: String, n: Int, f: Float, gap: Unit)
+
+def main(): Unit {
+    printl(Named("a", 1, 1.5, ()) == Named("a", 1, 1.5, ()))
+}`);
+    ir.should.contain("silver_string_equals");
+    ir.should.contain("icmp eq i64");
+    ir.should.contain("fcmp oeq double");
+    ir.count("phi i1").should.equal(3);
+}
+
+@("codegen reports comparing options, even inside a type that contains itself")
+unittest
+{
+    enum message = "comparing options";
+    codegenErrors(`def same(a: Int?, b: Int?): Bool => a == b
+
+def main(): Unit => ()`).should.contain(message);
+
+    codegenErrors(`type Node(n: Int, next: Node?)
+
+def same(a: Node, b: Node): Bool => a == b
+
+def main(): Unit => ()`).should.contain(message);
+}
