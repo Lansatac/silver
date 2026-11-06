@@ -1,0 +1,18 @@
+def main(): Unit {
+    val n = 7
+    printl(toFloat(n) / 2)
+    printl(toFloat(-3))
+
+    // Truncates toward zero.
+    printl(toInt(2.9))
+    printl(toInt(-2.9))
+    printl(toInt(5))
+    printl(toInt(0.0))
+    printl(toInt(7.5) / 2)
+
+    // Largest and smallest Floats that fit an Int exactly.
+    printl(toInt(9223372036854774784.0))
+    printl(toInt(-9223372036854775808.0))
+
+    printl(toInt(toFloat(n)) == n)
+}

@@ -1,0 +1,90 @@
+import std.math
+
+def infinity(): Float => 1.0 / 0.0
+def nan(): Float => 0.0 / 0.0
+def isNan(x: Float): Bool => x != x
+
+// Printing shows 6 digits, so precision is checked here instead.
+def near(actual: Float, expected: Float): Bool {
+    val difference = if actual > expected => actual - expected else expected - actual
+    difference <= 0.000000000000001
+}
+
+def apply(f: (Float) -> Float, x: Float): Float => f(x)
+
+def main(): Unit {
+    // Rounding keeps a zero's sign, including a zero that's the result of rounding.
+    printl(floor(-0.0))
+    printl(ceil(-0.0))
+    printl(round(-0.0))
+    printl(ceil(-0.5))
+    printl(round(-0.3))
+    printl(floor(0.5))
+
+    // Halfway cases go away from zero, and just under halfway doesn't.
+    printl(round(0.5))
+    printl(round(-0.5))
+    printl(round(1.5))
+    printl(round(0.49999999999999994))
+
+    // Too large for an Int, or not a number, passes through without panicking.
+    printl(floor(infinity()))
+    printl(ceil(-infinity()))
+    printl(round(infinity()))
+    printl(floor(1e300))
+    printl(isNan(floor(nan())))
+    printl(isNan(ceil(nan())))
+    printl(isNan(round(nan())))
+    printl(floor(4503599627370497.0) == 4503599627370497.0)
+    printl(floor(4503599627370495.5))
+
+    // Silver functions can be passed around.
+    printl(apply(floor, 2.5))
+
+    printl(near(tan(1), 1.5574077246549023))
+    printl(near(asin(0.5), 0.5235987755982989))
+    printl(near(acos(0.5), 1.0471975511965979))
+    printl(near(atan2(1, -1), 2.356194490192345))
+    printl(near(asin(1), pi() / 2))
+    printl(near(asin(-1), -pi() / 2))
+    printl(acos(1))
+    printl(near(acos(-1), pi()))
+    printl(asin(-0.0))
+    printl(isNan(asin(2)))
+    printl(isNan(acos(-2)))
+    printl(isNan(asin(nan())))
+
+    // Round trips across the whole domain.
+    mutable val i = -1000
+    mutable val allNear = true
+    while i <= 1000 {
+        val x = toFloat(i) / 1000
+        allNear = allNear && near(sin(asin(x)), x) && near(cos(acos(x)), x)
+        i += 1
+    }
+    printl(allNear)
+
+    // atan2's special cases, by quadrant and by the sign of zero.
+    printl(atan2(0.0, 1))
+    printl(atan2(-0.0, 1))
+    printl(near(atan2(0.0, -1), pi()))
+    printl(near(atan2(-0.0, -1), -pi()))
+    printl(atan2(0.0, 0.0))
+    printl(atan2(-0.0, 0.0))
+    printl(near(atan2(0.0, -0.0), pi()))
+    printl(near(atan2(-0.0, -0.0), -pi()))
+    printl(near(atan2(1, 0), pi() / 2))
+    printl(near(atan2(-1, 0), -pi() / 2))
+    printl(near(atan2(infinity(), 1), pi() / 2))
+    printl(near(atan2(infinity(), infinity()), pi() / 4))
+    printl(near(atan2(infinity(), -infinity()), 3 * pi() / 4))
+    printl(near(atan2(-infinity(), infinity()), -pi() / 4))
+    printl(near(atan2(1, -infinity()), pi()))
+    printl(atan2(1, infinity()))
+    printl(isNan(atan2(nan(), 1)))
+    printl(isNan(atan2(1, nan())))
+
+    // dmd's std.math got these wrong; libm doesn't.
+    printl(near(sin(1e22), -0.8522008497671888))
+    printl(near(sin(pi()) * 10000000000000000.0, 1.2246467991473532))
+}

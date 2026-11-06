@@ -1,6 +1,6 @@
 module silver.codegen.runtime_bindings;
 
-struct RuntimeFunction { string returnType; string[] params; }
+struct RuntimeFunction { string returnType; string[] params; string attributes; }
 static immutable RuntimeFunction[string] runtime = [
     "silver_print_int":  RuntimeFunction("void", ["i64"]),
     "silver_print_float": RuntimeFunction("void", ["double"]),
@@ -20,4 +20,15 @@ static immutable RuntimeFunction[string] runtime = [
     "silver_pow_int":     RuntimeFunction("i64", ["i64", "i64"]),
     "silver_pow_float":   RuntimeFunction("double", ["double", "double"]),
     "silver_string_equals": RuntimeFunction("zeroext i1", ["ptr", "ptr"]),
+    "silver_panic":       RuntimeFunction("void", ["ptr"], "noreturn"),
+
+    "silver_toInt":       RuntimeFunction("i64", ["double"]),
+    "silver_toFloat":     RuntimeFunction("double", ["i64"]),
+
+    "silver_sqrt":        RuntimeFunction("double", ["double"]),
+    "silver_exp":         RuntimeFunction("double", ["double"]),
+    "silver_log":         RuntimeFunction("double", ["double"]),
+    "silver_sin":         RuntimeFunction("double", ["double"]),
+    "silver_cos":         RuntimeFunction("double", ["double"]),
+    "silver_atan":        RuntimeFunction("double", ["double"]),
 ];

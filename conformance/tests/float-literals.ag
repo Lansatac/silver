@@ -1,0 +1,38 @@
+type Point(x: Float, y: Float)
+
+def half(x: Float): Float => x / 2
+def three(): Float => 3
+def viaBlock(): Float {
+    return 3
+}
+def twice(f: (Float) -> Float, x: Float): Float => f(f(x))
+
+def main(): Unit {
+    // An integer literal is a Float wherever a Float is expected, and divides like one.
+    printl(half(3))
+    printl(half(-3))
+    printl(three() / 2)
+    printl(viaBlock() / 2)
+    printl(twice(half, 3))
+
+    val annotated: Float = 3
+    printl(annotated / 2)
+    val negative: Float = -3
+    printl(negative / 2)
+
+    mutable val typed: Float = 7
+    printl(typed / 2)
+
+    printl(Point(3, 5).x / 2)
+    printl(Point(3, 5) == Point(3.0, 5.0))
+
+    printl((1.5 + 1) / 2)
+    printl(3.0 * 1)
+
+    // Everywhere else it stays an Int.
+    printl(7 / 2)
+    val int = 7
+    printl(int / 2)
+    printl(-7 % 3)
+    printl(2 ^ 3)
+}

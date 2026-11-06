@@ -27,7 +27,7 @@ version (unittest)
 
     string runProgram(string source)
     {
-        auto evaluator = new Evaluator(loadProgram(source, "test", [standardLibraryPath()]));
+        auto evaluator = new Evaluator(loadProgram(source, "test", [standardLibraryPath()]), null);
         evaluator.run();
         return evaluator.output;
     }
@@ -52,7 +52,7 @@ version (unittest)
             auto header = text.startsWith("module ") ? "" : "module " ~ fileName.stripExtension.replace("/", ".") ~ "\n";
             write(path, header ~ text);
         }
-        auto evaluator = new Evaluator(loadProgram(source, "test", [directory, standardLibraryPath()]));
+        auto evaluator = new Evaluator(loadProgram(source, "test", [directory, standardLibraryPath()]), null);
         evaluator.run();
         return evaluator.output;
     }
@@ -291,7 +291,7 @@ unittest
     auto source = "def main(): Unit {\n    val a = 1\n    a = 2\n}";
     auto context = new SourceContext;
     auto program = load(source, "test.ag", [], context);
-    auto evaluator = new Evaluator(program);
+    auto evaluator = new Evaluator(program, null);
     try
     {
         evaluator.run();

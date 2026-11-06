@@ -35,7 +35,7 @@ int interpret(string programFile, string[] importPaths)
 {
     auto context = new SourceContext();
     Program program;
-    loadAndAnalyze(programFile, importPaths, context, program);
+    auto analysis = loadAndAnalyze(programFile, importPaths, context, program);
     printDiagnostics(context);
     if (context.collector.hasErrors)
     {
@@ -44,7 +44,7 @@ int interpret(string programFile, string[] importPaths)
 
     try
     {
-        auto evaluator = new Evaluator(program, true);
+        auto evaluator = new Evaluator(program, analysis, true);
         evaluator.run();
     }
     catch (DiagnosticException e)

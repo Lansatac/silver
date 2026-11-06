@@ -1,0 +1,4 @@
+def main(): Unit {
+    mutable val x = 7
+    x /= 0
+}

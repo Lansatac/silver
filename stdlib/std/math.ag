@@ -1,5 +1,54 @@
 module std.math
 
+import std.internal.math
+
+def pi(): Float => 3.141592653589793
+
+native def sqrt(x: Float): Float
+native def exp(x: Float): Float
+native def log(x: Float): Float
+
+// Angles are in radians.
+native def sin(x: Float): Float
+native def cos(x: Float): Float
+native def atan(x: Float): Float
+
+def tan(x: Float): Float => sin(x) / cos(x)
+
+def asin(x: Float): Float => atan2(x, sqrt((1 - x) * (1 + x)))
+def acos(x: Float): Float => atan2(sqrt((1 - x) * (1 + x)), x)
+
+def atan2(y: Float, x: Float): Float {
+    if x != x || y != y {
+        return x + y
+    }
+    val rise = magnitude(y)
+    val angle = if x == 0 {
+        if rise != 0 => pi() / 2 else if isNegative(x) => pi() else 0.0
+    } else if rise / x != rise / x {
+        // Only two infinities get here: NaN and a zero x are already handled.
+        if x > 0 => pi() / 4 else 3 * pi() / 4
+    } else if x > 0 => atan(rise / x) else pi() + atan(rise / x)
+    if isNegative(y) => -angle else angle
+}
+
+def floor(x: Float): Float {
+    val whole = truncate(x)
+    if whole > x => whole - 1 else whole
+}
+
+def ceil(x: Float): Float {
+    val whole = truncate(x)
+    if whole < x => whole + 1 else whole
+}
+
+// Halfway cases round away from zero.
+def round(x: Float): Float {
+    val whole = truncate(x)
+    val rest = x - whole
+    if rest >= 0.5 => whole + 1 else if rest <= -0.5 => whole - 1 else whole
+}
+
 def pow(base: Float, exponent: Float): Float {
     mutable val result = 1.0
     if !(exponent == 0) {

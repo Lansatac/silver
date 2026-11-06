@@ -1,0 +1,45 @@
+import std.math
+
+def main(): Unit {
+    printl(sqrt(16))
+    printl(sqrt(2))
+    printl(sqrt(16) / 3)
+    printl(exp(0))
+    printl(exp(1))
+    printl(log(1))
+    printl(log(exp(2)))
+
+    printl(sin(0))
+    printl(sin(1))
+    printl(cos(0))
+    printl(cos(1))
+    printl(tan(1))
+    printl(asin(1))
+    printl(acos(1))
+    printl(atan(1))
+    printl(atan2(1, 1))
+    printl(atan2(1, -1))
+
+    printl(floor(2.7))
+    printl(floor(-2.7))
+    printl(ceil(2.1))
+    printl(ceil(-2.1))
+    printl(round(2.4))
+    printl(round(2.5))
+    printl(round(-2.5))
+
+    // The result is a Float, which toInt can convert.
+    printl(toInt(floor(2.7)) / 2)
+
+    // Outside a function's domain the result is NaN, which is the only value unequal to itself.
+    val root = sqrt(-1)
+    printl(root != root)
+    val logarithm = log(-1)
+    printl(logarithm != logarithm)
+    printl(log(0))
+
+    printl(std.math.sqrt(9))
+
+    val y = 3.0
+    printl(sqrt(y * y + 16))
+}

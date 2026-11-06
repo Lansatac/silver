@@ -1,0 +1,7 @@
+def divide(a: Int, b: Int): Int => a / b
+
+def main(): Unit {
+    printl(divide(7, 2))
+    printl(divide(1, 0))
+    printl("unreachable")
+}

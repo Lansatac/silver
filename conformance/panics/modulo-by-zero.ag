@@ -1,0 +1,4 @@
+def main(): Unit {
+    val zero = 0
+    printl(7 % zero)
+}

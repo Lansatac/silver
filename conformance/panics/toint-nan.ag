@@ -1,0 +1,4 @@
+def main(): Unit {
+    printl("before")
+    printl(toInt(0.0 / 0.0))
+}

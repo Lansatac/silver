@@ -6,6 +6,7 @@ import silver.ast;
 import silver.interpreter.environment : Environment, ImportScope;
 import silver.interpreter.errors : CodedException;
 import silver.interpreter.values;
+import silver.sema : Analysis;
 
 class RuntimeError : DiagnosticException
 {
@@ -19,6 +20,7 @@ class RuntimeError : DiagnosticException
 class Evaluator
 {
     private Program program;
+    private const Analysis analysis;
 
     private bool useStdOut;
     private string outputText;
@@ -29,9 +31,12 @@ class Evaluator
         return outputText;
     }
 
-    nothrow this(Program program, bool useStdOut = false)
+    /// `analysis` is null only for programs that skip sema, like the interpreter's own tests.
+    /// Integer literals in those programs stay Int, even where a Float is expected.
+    nothrow this(Program program, const Analysis analysis, bool useStdOut = false)
     {
         this.program = program;
+        this.analysis = analysis;
         this.useStdOut = useStdOut;
     }
 
@@ -136,8 +141,7 @@ class Evaluator
 
     private void execute(const VarDecl ast, Environment variables)
     {
-        auto value = ast.value.kind.match!(s => evaluate(s, variables));
-        variables.defineVariable(ast.name, value, ast.mutable);
+        variables.defineVariable(ast.name, evaluate(ast.value, variables), ast.mutable);
     }
 
     private void execute(const AssignStmt ast, Environment variables)
@@ -167,6 +171,36 @@ class Evaluator
         nativeBindings["print"] = (Variant[] args) => print(args[0], false);
         nativeBindings["printl"] = (Variant[] args) => print(args[0], true);
         nativeBindings["read"] = (Variant[] args) => Variant(readln());
+        bindNumericNatives();
+    }
+
+    /// Each is the same D expression as the compiled backend's, in the runtime's numeric module.
+    private void bindNumericNatives()
+    {
+        import libm = core.stdc.math;
+
+        static NativeFunction floatFunction(alias f)()
+        {
+            return (Variant[] args) => Variant(f(args[0].get!double));
+        }
+
+        nativeBindings["toInt"] = (Variant[] args) {
+            auto value = args[0].get!double;
+            if (!(value >= -0x1p63 && value < 0x1p63))
+            {
+                throw new CodedException(DiagnosticCode.InvalidConversion,
+                    "toInt: the value is NaN or outside Int's range");
+            }
+            return Variant(cast(long) value);
+        };
+        nativeBindings["toFloat"] = (Variant[] args) => Variant(cast(double) args[0].get!long);
+
+        nativeBindings["sqrt"] = floatFunction!(libm.sqrt);
+        nativeBindings["exp"] = floatFunction!(libm.exp);
+        nativeBindings["log"] = floatFunction!(libm.log);
+        nativeBindings["sin"] = floatFunction!(libm.sin);
+        nativeBindings["cos"] = floatFunction!(libm.cos);
+        nativeBindings["atan"] = floatFunction!(libm.atan);
     }
 
     private Variant print(Variant value, bool newline)
@@ -255,7 +289,9 @@ class Evaluator
     {
         try
         {
-            return ast.kind.match!(s => evaluate(s, variables));
+            return ast.kind.match!(
+                (const IntLiteral literal) => intLiteralValue(literal, ast.id),
+                s => evaluate(s, variables));
         }
         catch (RuntimeError e)
         {
@@ -265,6 +301,16 @@ class Evaluator
         {
             throw runtimeError(ast.span, e);
         }
+    }
+
+    /// Sema types an integer literal as Float where one is expected, as in `half(3)`.
+    private Variant intLiteralValue(const IntLiteral literal, Id!Expr id)
+    {
+        if (analysis !is null && analysis.typeOf(id) == analysis.types.float_)
+        {
+            return Variant(cast(double) literal.value);
+        }
+        return makeValue(literal.value);
     }
 
     /// An exception without a code, e.g. from a failed Variant operation, gets
@@ -288,11 +334,6 @@ class Evaluator
     }
 
     private Variant evaluate(const BoolLiteral ast, Environment variables)
-    {
-        return makeValue(ast.value);
-    }
-
-    private Variant evaluate(const IntLiteral ast, Environment variables)
     {
         return makeValue(ast.value);
     }
@@ -557,8 +598,8 @@ class Evaluator
     }
 
     /// Numbers are unwrapped first: Variant's own operators compute two longs as ulong.
-    /// Sema only lets Int and Float meet when an integer literal adapted to Float, which
-    /// the interpreter evaluates as a long anyway, so a mixed pair is Float arithmetic.
+    /// Int and Float only meet in programs that skipped sema, where an integer literal beside
+    /// a Float hasn't been adapted, so a mixed pair is Float arithmetic.
     private Variant operate(BinaryOp operator, Variant lhs, Variant rhs)
     {
         if (lhs.peek!double || rhs.peek!double)

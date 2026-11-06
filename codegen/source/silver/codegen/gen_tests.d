@@ -632,3 +632,23 @@ def same(a: Node, b: Node): Bool => a == b
 
 def main(): Unit => ()`).should.contain(message);
 }
+
+@("codegen checks Int division for zero, panicking with the source location")
+unittest
+{
+    auto source = "def divide(a: Int, b: Int): Int => a / b\ndef main(): Unit {\n    printl(divide(7, 2))\n    printl(divide(1, 0))\n}";
+    auto ir = generateSource(source);
+    ir.should.contain("declare void @silver_panic(ptr) noreturn");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.status.should.equal(1);
+    run.output.should.equal("3\npanic: main.ag(1,36): Division by zero\n");
+}
+
+@("codegen doesn't check Float division, which gives infinity")
+unittest
+{
+    auto ir = generateSource("def main(): Unit => printl(1.0 / 0.0)");
+    ir.should.not.contain("silver_panic");
+}

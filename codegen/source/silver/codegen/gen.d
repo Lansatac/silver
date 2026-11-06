@@ -156,6 +156,7 @@ final class Generator
     string[Id!FunctionDecl] mangledNames;
     string[Id!TypeDecl] typeConstructors;
     string[Id!TypeDecl] typeEqualities;
+    private const SourceMap _sources;
 
     /// Types compared so far whose equality function hasn't been generated, each with a place
     /// that needs it. Generating one can ask for more, for its fields' types.
@@ -169,10 +170,11 @@ final class Generator
     /// One private global per string literal.
     private string[] _strings;
 
-    this(const Analysis analysis, Collector collector)
+    this(const Analysis analysis, Collector collector, const SourceMap sources)
     {
         _analysis = analysis;
         _collector = collector;
+        _sources = sources;
     }
 
     string emitProgram(const ref Program program)
@@ -216,8 +218,8 @@ final class Generator
 
     string emitDeclares()
     {
-        return _usedRuntime.map!(name => "declare %s @%s(%s)\n".format(
-            runtime[name].returnType, name, runtime[name].params.join(", "))).join;
+        return _usedRuntime.map!(name => "declare %s @%s(%s) %s\n".format(
+            runtime[name].returnType, name, runtime[name].params.join(", "), runtime[name].attributes)).join;
     }
 
     /// `silver_main`, which the runtime's D `main` calls once druntime has started.
@@ -504,14 +506,36 @@ final class Generator
                 if (llOp is null) return unsupported(expr.span, "`" ~ binary.op ~ "`");
 
                 auto llType = llvmType(type);
+                auto isIntDivision = type == _analysis.types.int_
+                    && (binary.op == BinaryOp.Divide || binary.op == BinaryOp.Modulo);
+                auto check = isIntDivision ? emitDivisionByZeroCheck(rhs.value, expr.span) : Fragment.init;
                 auto result = _function.newTemp();
-                return 
+                return
                         lhs
                     .then(rhs)
+                    .then(check)
                     .then(Fragment.instruction(
                         "%s = %s %s %s, %s".format(result, llOp, llType, lhs.value, rhs.value),
                         result));
         }
+    }
+
+    /// Panics if the Int operand `divisor` is zero. `sdiv` and `srem` by zero are undefined
+    /// behaviour, not a trap to rely on.
+    Fragment emitDivisionByZeroCheck(string divisor, Span span)
+    {
+        auto location = _sources.locate(span);
+        auto message = emitStringLiteral("%s(%s,%s): Division by zero".format(
+            span.file, location.line, location.column));
+        auto isZero = _function.newTemp();
+        auto zeroLabel = _function.newLabel("div.zero");
+        auto okLabel = _function.newLabel("div.ok");
+        return Fragment.instruction("%s = icmp eq i64 %s, 0".format(isZero, divisor))
+            .then(Fragment.branch(isZero, zeroLabel, okLabel))
+            .then(Fragment.label(zeroLabel))
+            .then(callRuntime("silver_panic", [message.value]))
+            .then(Fragment.instruction("unreachable"))
+            .then(Fragment.label(okLabel));
     }
 
     Fragment emitIfExpr(const Expr expr, const IfExpr if_)
@@ -987,6 +1011,6 @@ final class Generator
 /// Anything the backend can't compile yet is reported to `collector` as an internal error.
 string generate(const ref Program program, const Analysis analysis, Collector collector)
 {
-    auto generator = new Generator(analysis, collector);
+    auto generator = new Generator(analysis, collector, program.sources);
     return generator.emitProgram(program);
 }

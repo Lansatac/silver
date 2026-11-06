@@ -2,7 +2,8 @@
 	"name": "interpreter",
 	"targetType": "library",
 	"dependencies": {
-		"silver:ast": "*"
+		"silver:ast": "*",
+		"silver:sema": "*"
 	},
 	"configurations": [
 		{ "name": "library" },

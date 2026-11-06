@@ -25,23 +25,41 @@ version (unittest)
     {
         string name;
         string sourcePath;
+        /// What the program prints; for a panic case, what it prints before panicking.
         string expected;
+        /// The panic message, from `.panic`. Only `panics/` cases have one.
+        string panicMessage;
     }
 
-    /// Every `tests/*.ag` with its `.expected` output, sorted by name.
-    Case[] cases()
+    /// Every `*.ag` in `directory` under conformance/ with its `.expected` output, sorted by name.
+    Case[] casesIn(string directory)
     {
-        auto testsDirectory = buildPath(conformanceDirectory, "tests");
+        auto casesDirectory = buildPath(conformanceDirectory, directory);
         Case[] result;
-        foreach (entry; dirEntries(testsDirectory, "*.ag", SpanMode.shallow))
+        foreach (entry; dirEntries(casesDirectory, "*.ag", SpanMode.shallow))
         {
             auto name = baseName(entry.name).stripExtension;
-            auto expectedPath = buildPath(testsDirectory, name ~ ".expected");
+            auto expectedPath = buildPath(casesDirectory, name ~ ".expected");
             assert(exists(expectedPath), "Missing expected output file for " ~ entry.name);
-            result ~= Case(name, entry.name, readText(expectedPath).normalizeNewlines);
+            auto panicPath = buildPath(casesDirectory, name ~ ".panic");
+            auto panicMessage = exists(panicPath) ? readText(panicPath).strip : null;
+            result ~= Case(name, entry.name, readText(expectedPath).normalizeNewlines, panicMessage);
         }
-        assert(result.length > 0, "No conformance .ag files were found");
+        assert(result.length > 0, "No conformance .ag files were found in " ~ directory);
         return result.sort!((a, b) => a.name < b.name).release;
+    }
+
+    /// Programs that run to the end.
+    Case[] cases()
+    {
+        return casesIn("tests");
+    }
+
+    /// Programs that fail at runtime. Both backends must report the same message and stop
+    /// with a failing status, after printing the same output.
+    Case[] panicCases()
+    {
+        return casesIn("panics");
     }
 
     string normalizeNewlines(string text)
@@ -79,9 +97,14 @@ version (unittest)
             .array;
     }
 
-    /// Compiles `c` in `workDirectory`, runs it, and returns why its output didn't match,
-    /// or null if it did.
-    string runCompiled(Case c, const Toolchain toolchain, string workDirectory)
+    struct CompiledRun
+    {
+        int status;
+        string output;
+    }
+
+    /// Compiles `c` in `workDirectory` and runs it. Returns why it couldn't, or null with `run` set.
+    string compileAndRun(Case c, const Toolchain toolchain, string workDirectory, out CompiledRun run)
     {
         auto context = new SourceContext();
         Program program;
@@ -116,12 +139,73 @@ version (unittest)
             return "linking failed (IR kept at " ~ irPath ~ "):\n" ~ linked.output;
         }
 
-        auto run = execute([exePath]);
+        auto result = execute([exePath]);
+        run = CompiledRun(result.status, result.output.normalizeNewlines);
+        return null;
+    }
+
+    /// Compiles and runs `c`, and returns why its output didn't match, or null if it did.
+    string runCompiled(Case c, const Toolchain toolchain, string workDirectory)
+    {
+        CompiledRun run;
+        if (auto failure = compileAndRun(c, toolchain, workDirectory, run))
+        {
+            return failure;
+        }
         if (run.status != 0)
         {
             return "the program exited with status " ~ run.status.to!string ~ ":\n" ~ run.output;
         }
-        return compareOutput(c, run.output.normalizeNewlines);
+        return compareOutput(c, run.output);
+    }
+
+    /// Compiles and runs the panic case `c`, and returns why it didn't panic as expected, or null.
+    string runCompiledPanic(Case c, const Toolchain toolchain, string workDirectory)
+    {
+        CompiledRun run;
+        if (auto failure = compileAndRun(c, toolchain, workDirectory, run))
+        {
+            return failure;
+        }
+        if (run.status != 1)
+        {
+            return "expected exit status 1, got " ~ run.status.to!string ~ ":\n" ~ run.output;
+        }
+        if (!run.output.startsWith(c.expected ~ "panic: ") || !run.output.canFind(c.panicMessage))
+        {
+            return "output differs.\n--- expected\n" ~ c.expected ~ "panic: ... " ~ c.panicMessage
+                ~ "\n--- actual\n" ~ run.output;
+        }
+        return null;
+    }
+
+    /// Interprets the panic case `c`, and returns why it didn't fail as expected, or null.
+    string runInterpretedPanic(Case c)
+    {
+        import silver.ast : DiagnosticException;
+
+        auto context = new SourceContext();
+        Program program;
+        Analysis analysis;
+        if (auto failure = loadAndAnalyze(c, context, program, analysis))
+        {
+            return failure;
+        }
+
+        auto evaluator = new Evaluator(program, analysis);
+        try
+        {
+            evaluator.run();
+        }
+        catch (DiagnosticException e)
+        {
+            if (e.diagnostic.message != c.panicMessage)
+            {
+                return "expected the error `" ~ c.panicMessage ~ "`, got `" ~ e.diagnostic.message ~ "`";
+            }
+            return compareOutput(c, evaluator.output);
+        }
+        return "expected the error `" ~ c.panicMessage ~ "`, but the program finished";
     }
 
     /// Interprets `c` and returns why its output didn't match, or null if it did.
@@ -137,7 +221,7 @@ version (unittest)
             return failure;
         }
 
-        auto evaluator = new Evaluator(program);
+        auto evaluator = new Evaluator(program, analysis);
         try
         {
             evaluator.run();
@@ -220,4 +304,46 @@ unittest
         rmdirRecurse(workDirectory);
     }
     assert(message.length == 0, message);
+}
+
+@("Interpreted programs that panic report the expected error")
+unittest
+{
+    string[] failures;
+    foreach (c; panicCases)
+    {
+        if (auto failure = runInterpretedPanic(c))
+        {
+            failures ~= c.name ~ ": " ~ failure;
+        }
+    }
+    assert(failures.length == 0, "Interpreted panic failures:\n\n" ~ failures.join("\n\n"));
+}
+
+@("Compiled programs that panic report the expected error and exit with status 1")
+unittest
+{
+    Toolchain toolchain;
+    if (auto missing = findToolchain(toolchain))
+    {
+        writeln("    note: ", missing, " Compiled panic conformance was skipped.");
+        return;
+    }
+
+    auto workDirectory = buildPath(tempDir, "silver-conformance-panics-" ~ thisProcessID.to!string);
+    mkdirRecurse(workDirectory);
+
+    string[] failures;
+    foreach (c; panicCases)
+    {
+        if (auto failure = runCompiledPanic(c, toolchain, workDirectory))
+        {
+            failures ~= c.name ~ ": " ~ failure;
+        }
+    }
+    if (failures.length == 0)
+    {
+        rmdirRecurse(workDirectory);
+    }
+    assert(failures.length == 0, "Compiled panic failures:\n\n" ~ failures.join("\n\n"));
 }
