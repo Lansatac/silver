@@ -8,6 +8,7 @@ Silver:
                             / FunctionDeclaration
                             / NativeFunctionDeclaration
                             / TypeDeclaration
+                            / ConstantDeclaration
                             )
 
     # ExpressionStatement is last: anything that isn't another kind of statement is an expression
@@ -26,6 +27,8 @@ Silver:
     ModuleDeclaration    < :MODULE QualifiedName
     ImportStatement      < :IMPORT QualifiedName
 
+    # The annotation is required, but sema can say so better than a parse error could
+    ConstantDeclaration  < :VAL Identifier TypeAnnotation? '=' Expression
     ValueDeclaration     < :VAL Identifier TypeAnnotation? '=' Expression
     VariableDeclaration  < :MUTABLE :VAL Identifier (TypeAnnotation ('=' Expression)? / '=' Expression)
 

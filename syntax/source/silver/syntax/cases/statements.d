@@ -73,6 +73,22 @@ immutable Case[] typeAnnotations = [
     rejects("val a: List<> = xs"),
 ];
 
+immutable Case[] constantDeclarations = [
+    declaresAs("val a: Int = 1", "(val a: Int 1)"),
+    declaresAs("val low: Int8 = -128", "(val low: Int8 (Minus 128))"),
+    declaresAs("val u: () = ()", "(val u: () ())"),
+    declaresAs("val tau: Float = std.math.pi * 2", "(val tau: Float (Multiply (. (. std math) pi) 2))"),
+    declaresAs("module a\nimport b\nval c: Int = d\ndef f(): Int => c\nval d: Int = 1", [
+        "(module a)", "(import b)", "(val c: Int d)", "(def f (): Int c)", "(val d: Int 1)",
+    ]),
+
+    // Parsed without the annotation so sema can say what's missing.
+    declaresAs("val a = 1", "(val a 1)"),
+    rejectsDeclaration("val a: Int"),
+    rejectsDeclaration("val Point: Int = 1"),
+    rejectsDeclaration("mutable val a: Int = 1"),
+];
+
 immutable Case[] moduleDeclarations = [
     declaresAs("module app", "(module app)"),
     declaresAs("module std.math\n", "(module std.math)"),

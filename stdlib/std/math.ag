@@ -2,7 +2,7 @@ module std.math
 
 import std.internal.math
 
-def pi(): Float => 3.141592653589793
+val pi: Float = 3.141592653589793
 
 native def sqrt(x: Float): Float
 native def exp(x: Float): Float
@@ -24,11 +24,11 @@ def atan2(y: Float, x: Float): Float {
     }
     val rise = magnitude(y)
     val angle = if x == 0 {
-        if rise != 0 => pi() / 2 else if isNegative(x) => pi() else 0.0
+        if rise != 0 => pi / 2 else if isNegative(x) => pi else 0.0
     } else if rise / x != rise / x {
         // Only two infinities get here: NaN and a zero x are already handled.
-        if x > 0 => pi() / 4 else 3 * pi() / 4
-    } else if x > 0 => atan(rise / x) else pi() + atan(rise / x)
+        if x > 0 => pi / 4 else 3 * pi / 4
+    } else if x > 0 => atan(rise / x) else pi + atan(rise / x)
     if isNegative(y) => -angle else angle
 }
 

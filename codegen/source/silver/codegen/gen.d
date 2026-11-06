@@ -156,6 +156,7 @@ final class Generator
     string[Id!FunctionDecl] mangledNames;
     string[Id!TypeDecl] typeConstructors;
     string[Id!TypeDecl] typeEqualities;
+    string[Id!ConstDecl] constantGlobals;
     private const SourceMap _sources;
 
     /// Types compared so far whose equality function hasn't been generated, each with a place
@@ -212,6 +213,10 @@ final class Generator
                         typeConstructors[typeDecl.id] = mangleTypeConstructor(*module_, typeDecl.name);
                         typeEqualities[typeDecl.id] = "%s.%s_eq".format(module_.name, typeDecl.name);
                     },
+                    (const ConstDecl constant) {
+                        // Functions and constants share a namespace, so this can't clash with a function's name.
+                        constantGlobals[constant.id] = mangleFunctionName(*module_, constant.name);
+                    },
                     (const _) {}
                 );
             }
@@ -242,10 +247,29 @@ final class Generator
             topLevelStatements ~= declaration.kind.match!(
                 (const ImportStmt _) => "",
                 (const TypeDecl type) => emitTypeConstructor(type),
-                (const FunctionDecl function_) => emitFunction(function_)
+                (const FunctionDecl function_) => emitFunction(function_),
+                (const ConstDecl constant) => emitConstant(constant)
             );
         }
         return topLevelStatements.join("\n");
+    }
+
+    /// The private global holding `constant`. A Unit constant has no value, so it has no global.
+    string emitConstant(const ConstDecl constant)
+    {
+        auto type = _analysis.typeOf(constant.id);
+        if (type == _analysis.types.unit) return "";
+
+        auto initializer = _analysis.valueOf(constant.id).match!(
+            (const ConstInt v) => v.value.to!string,
+            (const ConstUInt v) => v.value.to!string,
+            (const bool v) => v ? "true" : "false",
+            (const double v) => floatConstant(v),
+            (string v) => emitStringLiteral(v).value,
+            (const ConstUnit _) => assert(0, "only a Unit constant holds this, and it has no global"),
+        );
+        return "@\"%s\" = private unnamed_addr constant %s %s\n".format(
+            constantGlobals[constant.id], llvmType(type), initializer);
     }
 
     string emitTypeConstructor(const TypeDecl type)
@@ -476,6 +500,11 @@ final class Generator
             (const Id!TypeDecl type) {
                 if (!hasLayout(type)) return unsupported(expr.span, "types with `Any` or `Never` fields");
                 return Fragment.constant("@\"%s\"".format(typeConstructors[type]));
+            },
+            (const Id!ConstDecl decl) {
+                auto type = _analysis.typeOf(decl);
+                if (type == _analysis.types.unit) return Fragment.init;
+                return load(llvmType(type), "@\"%s\"".format(constantGlobals[decl]));
             },
         );
 

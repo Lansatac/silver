@@ -1,0 +1,58 @@
+val yes: Bool = true
+val no: Bool = false
+
+val int8Low: Int8 = -128
+val int8High: Int8 = 127
+val int16Low: Int16 = -32768
+val int16High: Int16 = 32767
+val int32Low: Int32 = -2147483648
+val int32High: Int32 = 2147483647
+val intLow: Int = -9223372036854775808
+val intHigh: Int = 9223372036854775807
+val int64Low: Int64 = -9223372036854775808
+
+val uint8High: UInt8 = 255
+val uint16High: UInt16 = 65535
+val uint32High: UInt32 = 4294967295
+val uintHigh: UInt = 18446744073709551615
+val uint64High: UInt64 = 18446744073709551615
+val zero: UInt8 = 0
+
+val half: Float = 0.5
+val negative: Float = -2.5
+val adapted: Float = 3
+val negativeZero: Float = -0
+
+val greeting: String = "hello\tworld"
+val empty: String = ""
+
+val nothing: Unit = ()
+val alsoNothing: () = ()
+
+def main(): Unit {
+    printl(yes)
+    printl(no)
+    printl(int8Low)
+    printl(int8High)
+    printl(int16Low)
+    printl(int16High)
+    printl(int32Low)
+    printl(int32High)
+    printl(intLow)
+    printl(intHigh)
+    printl(int64Low)
+    printl(uint8High)
+    printl(uint16High)
+    printl(uint32High)
+    printl(uintHigh)
+    printl(uint64High)
+    printl(zero)
+    printl(half)
+    printl(negative)
+    printl(adapted)
+    printl(1 / negativeZero < 0)
+    printl(greeting)
+    printl(empty)
+    printl(nothing)
+    printl(alsoNothing)
+}

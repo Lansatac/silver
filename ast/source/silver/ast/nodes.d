@@ -7,7 +7,7 @@ import silver.ast.span;
 import silver.ast.id;
 
 /// The node kinds that get IDs. One NodeIds is shared by every module in a Program.
-alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt, TypeDecl, Field);
+alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt, TypeDecl, Field, ConstDecl);
 
 struct Module
 {
@@ -33,7 +33,7 @@ struct Decl
     DeclKind kind;
 }
 
-alias DeclKind = SumType!(ImportStmt, FunctionDecl, TypeDecl);
+alias DeclKind = SumType!(ImportStmt, FunctionDecl, TypeDecl, ConstDecl);
 
 /// A type as written in source. Names aren't resolved, so `Int` is a NamedType
 /// like any other; the checker's resolved types are a separate representation.
@@ -216,7 +216,7 @@ struct IfExpr
     Expr* falseBody;
 }
 
-/// `while c => b` or `while c { ... }`.
+/// `while c { ... }`, whose value is `()`.
 struct WhileExpr
 {
     Expr* condition;
@@ -356,6 +356,17 @@ struct TypeDecl
     bool emptyParens;
 }
 
+/// `val name: Type = value` at the top level of a module. Sema evaluates `value`, so it never runs.
+struct ConstDecl
+{
+    Id!ConstDecl id;
+    string name;
+    Span nameSpan;
+    /// null when the type isn't annotated, which sema reports.
+    TypeExpr* type;
+    Expr value;
+}
+
 /// `return value`. A bare `return` has a UnitLiteral value.
 struct ReturnStmt
 {
@@ -389,6 +400,7 @@ string printDecl(const Decl d)
         (const ImportStmt i) => printImport(i),
         (const FunctionDecl f) => printFunctionDecl(f),
         (const TypeDecl t) => printTypeDecl(t),
+        (const ConstDecl c) => printConstDecl(c),
     );
 }
 
@@ -434,6 +446,13 @@ private string printTypeDecl(const TypeDecl t)
         return t.emptyParens ? "(type " ~ t.name ~ " ())" : "(type " ~ t.name ~ ")";
     }
     return "(type " ~ t.name ~ " (" ~ t.fields.map!(f => f.name ~ ": " ~ printTypeExpr(f.type)).join(", ") ~ "))";
+}
+
+private string printConstDecl(const ConstDecl c)
+{
+    import std.format : format;
+
+    return format("(val %s%s %s)", c.name, c.type is null ? "" : ": " ~ printTypeExpr(*c.type), printExpr(c.value));
 }
 
 /// `(a: Int, b: Int): Int`, as written in source.

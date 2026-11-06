@@ -2,6 +2,7 @@ module silver.sema.analysis;
 
 import silver.ast;
 import silver.sema.check;
+import silver.sema.constant : ConstValue;
 import silver.sema.resolve;
 import silver.sema.type;
 
@@ -59,6 +60,18 @@ final class Analysis
     Type typeOf(Id!VarDecl var) const
     {
         return typeOf(SymbolId(var));
+    }
+
+    /// ditto
+    Type typeOf(Id!ConstDecl constant) const
+    {
+        return typeOf(SymbolId(constant));
+    }
+
+    /// What `constant` evaluated to. An analysis with no errors has one for every constant.
+    const(ConstValue) valueOf(Id!ConstDecl constant) const
+    {
+        return _typing.constants[constant];
     }
 
     package Type typeOf(SymbolId symbol) const
@@ -136,6 +149,12 @@ final class Analysis
     const(TypeDecl)* declarationOf(Id!TypeDecl type) const
     {
         return _resolution.declarations.types[type];
+    }
+
+    /// ditto
+    const(ConstDecl)* declarationOf(Id!ConstDecl constant) const
+    {
+        return _resolution.declarations.constants[constant];
     }
 
     /// ditto

@@ -6,9 +6,11 @@ version (unittest):
 
 import core.exception : AssertError;
 import std.format : format;
+import std.sumtype : get, has, match;
 
 import silver.ast;
 import silver.sema.check : FieldInfo;
+import silver.sema.constant : ConstInt, ConstUInt, ConstUnit;
 import silver.sema.resolution_tests;
 
 /// Asserts that the expression whose source is exactly the `nth` occurrence of `text` has type `expected`.
@@ -1052,4 +1054,297 @@ unittest
 {
     analyzedMain("val f = Int").shouldReport(DiagnosticCode.UnknownName, At("Int", 1));
     analyzed("type UInt8(x: Int)\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("UInt8", 1));
+}
+
+// Top-level constants
+
+/// The value and type sema gave the constant declared as the first occurrence of `name`.
+private void shouldEvaluateTo(T)(const Analyzed a, string name, T expected, string type,
+    string file = __FILE__, size_t line = __LINE__)
+{
+    auto symbol = occurrence(a.sources["main"], name, 1) in a.names["main"].declarations;
+    if (symbol is null)
+    {
+        throw new AssertError(format("`%s` #1 isn't a declaration", name), file, line);
+    }
+    auto id = (*symbol).match!(
+        (const Id!ConstDecl c) => c,
+        (_) => Id!ConstDecl.init,
+    );
+    if (!id.isValid)
+    {
+        throw new AssertError(format("`%s` #1 isn't a constant", name), file, line);
+    }
+    auto actualType = a.analysis.types.describe(a.analysis.typeOf(id));
+    if (actualType != type)
+    {
+        throw new AssertError(format("`%s` has type %s, expected %s", name, actualType, type), file, line);
+    }
+    auto value = a.analysis.valueOf(id);
+    if (!value.has!(const T) || value.get!(const T) != expected)
+    {
+        throw new AssertError(format("`%s` is %s, expected %s", name, value, expected), file, line);
+    }
+}
+
+private Analyzed analyzedConstants(string declarations)
+{
+    return analyzed(declarations ~ "\ndef main(): Unit => ()");
+}
+
+@("type checking gives a constant its annotated type, wherever it's used")
+unittest
+{
+    auto a = analyzed("val limit: UInt8 = 255\ndef main(): Unit {\n    val x = limit\n    printl(x)\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("limit", 2, "UInt8");
+    a.shouldEvaluateTo("limit", ConstUInt(255), "UInt8");
+}
+
+@("a constant evaluates to the value of each primitive type")
+unittest
+{
+    auto a = analyzedConstants(`val b: Bool = true
+val i: Int = 1
+val u: UInt = 18446744073709551615
+val f: Float = 1.5
+val s: String = "text"
+val n: Unit = ()`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldEvaluateTo("b", true, "Bool");
+    a.shouldEvaluateTo("i", ConstInt(1), "Int");
+    a.shouldEvaluateTo("u", ConstUInt(ulong.max), "UInt");
+    a.shouldEvaluateTo("f", 1.5, "Float");
+    a.shouldEvaluateTo("s", "text", "String");
+    a.shouldEvaluateTo("n", ConstUnit(), "Unit");
+}
+
+@("a literal initializer adapts to the constant's type, and is range-checked against it")
+unittest
+{
+    auto a = analyzedConstants("val limit: UInt8 = 255\nval low: Int8 = -128\nval min: Int = -9223372036854775808\nval whole: Float = 3\nval signed: Float = -3");
+    a.shouldHaveNoDiagnostics();
+    a.shouldEvaluateTo("limit", ConstUInt(255), "UInt8");
+    a.shouldEvaluateTo("low", ConstInt(-128), "Int8");
+    a.shouldEvaluateTo("min", ConstInt(long.min), "Int");
+    a.shouldEvaluateTo("whole", 3.0, "Float");
+    a.shouldEvaluateTo("signed", -3.0, "Float");
+
+    analyzedConstants("val x: UInt8 = 256").shouldReport(DiagnosticCode.LiteralOutOfRange, At("256", 1));
+    analyzedConstants("val x: Int8 = 128").shouldReport(DiagnosticCode.LiteralOutOfRange, At("128", 1));
+    analyzedConstants("val x: Int8 = -129").shouldReport(DiagnosticCode.LiteralOutOfRange, At("129", 1));
+    analyzedConstants("val x: UInt8 = -1").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1", 1));
+    analyzedConstants("val x: Int = 99999999999999999999").shouldReport(DiagnosticCode.LiteralOutOfRange, At("99999999999999999999", 1));
+}
+
+@("literal arithmetic doesn't adapt to a constant's type, and values never convert")
+unittest
+{
+    analyzedConstants("val x: UInt8 = 1 + 2").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+    analyzedConstants("val x: Float = 7 / 2").shouldReport(DiagnosticCode.TypeMismatch, At("7", 1));
+    analyzedConstants("val a: Int = 1\nval b: UInt8 = a").shouldReport(DiagnosticCode.TypeMismatch, At("a", 2));
+    analyzedConstants(`val x: Int = "text"`).shouldReport(DiagnosticCode.TypeMismatch, At(`"text"`, 1));
+    analyzedConstants("val x: Bool = !1").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+}
+
+@("a literal beside a constant takes its type")
+unittest
+{
+    auto a = analyzedConstants("val m: UInt8 = 200\nval sum: UInt8 = m + 55\nval d: Float = 1.0 / 4");
+    a.shouldHaveNoDiagnostics();
+    a.shouldEvaluateTo("sum", ConstUInt(255), "UInt8");
+    a.shouldEvaluateTo("d", 0.25, "Float");
+}
+
+@("a constant may name another, in any order, and across modules")
+unittest
+{
+    auto a = analyzed("import lib.values\nval total: Int = doubled + lib.values.base\nval doubled: Int = base * 2\ndef main(): Unit => ()",
+        ["lib/values.ag": "module lib.values\nval base: Int = 21"]);
+    a.shouldHaveNoDiagnostics();
+    a.shouldEvaluateTo("total", ConstInt(63), "Int");
+}
+
+@("an initializer must be a constant expression")
+unittest
+{
+    void shouldBeNonConstant(string initializer, At at, string file = __FILE__, size_t line = __LINE__)
+    {
+        analyzed("type Point(x: Int)\ntype Marker\ndef f(): Int => 1\nval k: Int = 1\nval x: Int = "
+                ~ initializer ~ "\ndef main(): Unit => ()")
+            .shouldReport(DiagnosticCode.NonConstantInitializer, at, file, line);
+    }
+
+    shouldBeNonConstant("f()", At("f", 2));
+    shouldBeNonConstant("f", At("f", 2));
+    shouldBeNonConstant("Int8(1)", At("Int8", 1));
+    shouldBeNonConstant("Point(1)", At("Point", 2));
+    shouldBeNonConstant("Marker", At("Marker", 2));
+    shouldBeNonConstant("if true => 1 else 2", At("if", 1));
+    shouldBeNonConstant("{ 1 }", At("{", 1));
+    shouldBeNonConstant("{ val y = 1\ny }", At("{", 1));
+    shouldBeNonConstant("{ return 1 }", At("{", 1));
+    shouldBeNonConstant("while false { }", At("while", 1));
+    shouldBeNonConstant("k.field", At("k", 2));
+    shouldBeNonConstant("Point(1).x", At("Point", 2));
+    shouldBeNonConstant("1 + f()", At("f", 2));
+    shouldBeNonConstant("-f()", At("f", 2));
+}
+
+@("a constant that names itself is a cycle, reported once at the use")
+unittest
+{
+    analyzedConstants("val a: Int = a").shouldReport(DiagnosticCode.ConstantCycle, At("a", 2));
+    analyzedConstants("val a: Int = a + a").shouldReport(DiagnosticCode.ConstantCycle, At("a", 2));
+}
+
+@("two constants naming each other are a cycle, reported once at the use that closes it")
+unittest
+{
+    analyzedConstants("val a: Int = b\nval b: Int = a").shouldReport(DiagnosticCode.ConstantCycle, At("a", 2));
+    analyzedConstants("val a: Int = b + 1\nval b: Int = c\nval c: Int = a")
+        .shouldReport(DiagnosticCode.ConstantCycle, At("a", 2));
+
+    // `c` closes two different cycles here, each of which needs fixing.
+    assert(analyzedConstants("val a: Int = b\nval b: Int = c\nval c: Int = a + b").collector.diagnostics.length == 2);
+}
+
+@("a cycle can run through modules")
+unittest
+{
+    analyzed("import a\ndef main(): Unit => ()", [
+        "a.ag": "module a\nimport b\nval y: Int = b.z",
+        "b.ag": "module b\nimport a\nval z: Int = a.y",
+    ]).shouldReport(DiagnosticCode.ConstantCycle, At("a", 2, "b"));
+}
+
+@("a short-circuited operand can't hide a cycle, or a failure in a constant it names")
+unittest
+{
+    analyzedConstants("val a: Bool = false && a").shouldReport(DiagnosticCode.ConstantCycle, At("a", 2));
+    analyzedConstants("val a: Bool = true || b\nval b: Bool = 1 / 0 == 0")
+        .shouldReport(DiagnosticCode.ConstantEvaluationFailed, At("1", 1));
+}
+
+@("a short-circuited operand isn't evaluated, as at runtime")
+unittest
+{
+    auto a = analyzedConstants("val p: Bool = false && 1 / 0 == 0\nval q: Bool = true || 1 / 0 == 0\nval r: Bool = true && false\nval s: Bool = false || true");
+    a.shouldHaveNoDiagnostics();
+    a.shouldEvaluateTo("p", false, "Bool");
+    a.shouldEvaluateTo("q", true, "Bool");
+    a.shouldEvaluateTo("r", false, "Bool");
+    a.shouldEvaluateTo("s", true, "Bool");
+}
+
+@("arithmetic in an initializer that would panic at runtime is a compile-time error")
+unittest
+{
+    void shouldFail(string declarations, At at, string file = __FILE__, size_t line = __LINE__)
+    {
+        analyzedConstants(declarations).shouldReport(DiagnosticCode.ConstantEvaluationFailed, at, file, line);
+    }
+
+    shouldFail("val x: Int = 9223372036854775807 + 1", At("9223372036854775807", 1));
+    shouldFail("val x: Int = 4611686018427387904 * 2", At("4611686018427387904", 1));
+    shouldFail("val m: Int8 = 127\nval x: Int8 = m + 1", At("m", 2));
+    shouldFail("val m: Int8 = 127\nval x: Int8 = m * 2", At("m", 2));
+    shouldFail("val m: UInt8 = 0\nval x: UInt8 = m - 1", At("m", 2));
+    shouldFail("val m: UInt = 18446744073709551615\nval x: UInt = m + 1", At("m", 2));
+    shouldFail("val x: Int = 1 / 0", At("1", 1));
+    shouldFail("val x: Int = 1 % 0", At("1", 1));
+    shouldFail("val m: Int8 = -128\nval x: Int8 = m / -1", At("m", 2));
+    shouldFail("val m: Int8 = -128\nval x: Int8 = m % -1", At("m", 2));
+    shouldFail("val m: Int = -9223372036854775808\nval x: Int = m / -1", At("m", 2));
+    shouldFail("val m: Int8 = -128\nval x: Int8 = -m", At("-m", 1));
+    shouldFail("val x: Int = 1 << 64", At("1", 1));
+    shouldFail("val x: Int = 1 >> 64", At("1", 1));
+    shouldFail("val x: Int = 1 << -1", At("1", 1));
+    shouldFail("val m: UInt8 = 1\nval x: UInt8 = m << 8", At("m", 2));
+}
+
+@("a constant that failed only reports where it failed, not where it's used")
+unittest
+{
+    analyzedConstants("val a: Int = 1 / 0\nval b: Int = a + 1\nval c: Int = b").shouldReport(
+        DiagnosticCode.ConstantEvaluationFailed, At("1", 1));
+    analyzedConstants("val a: Int = nope\nval b: Int = a + 1").shouldReport(DiagnosticCode.UnknownName, At("nope", 1));
+}
+
+@("wrapping operators and shifts in an initializer use the checked type's width and signedness")
+unittest
+{
+    auto a = analyzedConstants(`val umax: UInt8 = 255
+val imax: Int8 = 127
+val imin: Int8 = -128
+val addedU: UInt8 = umax &+ 1
+val addedI: Int8 = imax &+ 1
+val subbedU: UInt8 = 0 &- umax
+val subbedI: Int8 = imin &- 1
+val timesU: UInt8 = umax &* umax
+val timesI: Int8 = imax &* 2
+val leftU: UInt8 = umax << 4
+val leftI: Int8 = imax << 1
+val rightU: UInt8 = umax >> 4
+val rightI: Int8 = imin >> 2
+val notU: UInt8 = ~umax
+val notI: Int8 = ~imax
+val wide: Int = 9223372036854775807 &+ 1`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldEvaluateTo("addedU", ConstUInt(0), "UInt8");
+    a.shouldEvaluateTo("addedI", ConstInt(-128), "Int8");
+    a.shouldEvaluateTo("subbedU", ConstUInt(1), "UInt8");
+    a.shouldEvaluateTo("subbedI", ConstInt(127), "Int8");
+    a.shouldEvaluateTo("timesU", ConstUInt(1), "UInt8");
+    a.shouldEvaluateTo("timesI", ConstInt(-2), "Int8");
+    a.shouldEvaluateTo("leftU", ConstUInt(240), "UInt8");
+    a.shouldEvaluateTo("leftI", ConstInt(-2), "Int8");
+    a.shouldEvaluateTo("rightU", ConstUInt(15), "UInt8");
+    a.shouldEvaluateTo("rightI", ConstInt(-32), "Int8");
+    a.shouldEvaluateTo("notU", ConstUInt(0), "UInt8");
+    a.shouldEvaluateTo("notI", ConstInt(-128), "Int8");
+    a.shouldEvaluateTo("wide", ConstInt(long.min), "Int");
+}
+
+@("Float and comparison operators evaluate as they do at runtime")
+unittest
+{
+    auto a = analyzedConstants(`val rest: Float = 5.5 % 2
+val low: Bool = 1 < 2
+val eq: Bool = "a" == "b"
+val ne: Bool = "a" != "b"
+val units: Bool = () == ()
+val flags: Bool = true != false
+val negated: Bool = !true
+val nanEq: Bool = 0.0 / 0.0 == 0.0 / 0.0
+val trunc: Int = -7 / 2
+val rem: Int = -7 % 2`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldEvaluateTo("rest", 1.5, "Float");
+    a.shouldEvaluateTo("low", true, "Bool");
+    a.shouldEvaluateTo("eq", false, "Bool");
+    a.shouldEvaluateTo("ne", true, "Bool");
+    a.shouldEvaluateTo("units", true, "Bool");
+    a.shouldEvaluateTo("flags", true, "Bool");
+    a.shouldEvaluateTo("negated", false, "Bool");
+    a.shouldEvaluateTo("nanEq", false, "Bool");
+    a.shouldEvaluateTo("trunc", ConstInt(-3), "Int");
+    a.shouldEvaluateTo("rem", ConstInt(-1), "Int");
+
+    // Dividing Floats by zero doesn't panic, and -0 keeps its sign.
+    auto b = analyzed(`val up: Float = 1.0 / 0.0
+val zero: Float = -0
+def main(): Unit => ()`);
+    b.shouldHaveNoDiagnostics();
+    b.shouldEvaluateTo("zero", -0.0, "Float");
+    b.shouldEvaluateTo("up", double.infinity, "Float");
+}
+
+@("a constant can't be assigned to")
+unittest
+{
+    analyzed("val x: Int = 1\ndef main(): Unit {\n    x = 2\n}")
+        .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("x", 2));
+    analyzed("import a\ndef main(): Unit {\n    a.x = 2\n}", ["a.ag": "module a\nval x: Int = 1"])
+        .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("a", 2));
 }

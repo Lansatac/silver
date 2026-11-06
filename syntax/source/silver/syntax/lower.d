@@ -79,6 +79,8 @@ private final class Lowering
             return Decl(spanOf(cst[0], file), DeclKind(convertFunctionDeclaration(cst[0])));
         case "Silver.TypeDeclaration":
             return Decl(spanOf(cst[0], file), DeclKind(convertTypeDeclaration(cst[0])));
+        case "Silver.ConstantDeclaration":
+            return Decl(spanOf(cst[0], file), DeclKind(convertConstantDeclaration(cst[0])));
         default:
             throw new Exception("lower: declaration '%s' not supported yet".format(cst[0].name));
         }
@@ -424,6 +426,15 @@ private final class Lowering
             }
         }
         return TypeDecl(ids.next!TypeDecl, name, spanOf(cst[0], file), fields, emptyParens);
+    }
+
+    /// `Identifier TypeAnnotation? '=' Expression` once the keyword is discarded.
+    private ConstDecl convertConstantDeclaration(ParseTree cst)
+    {
+        cst.validateNodeIs("Silver.ConstantDeclaration");
+        TypeExpr* type = cst[1].name == "Silver.TypeAnnotation" ? boxed(convertTypeExpression(cst[1])) : null;
+        return ConstDecl(ids.next!ConstDecl, cst[0].matches[0], spanOf(cst[0], file), type,
+            convertExpression(cst.children[$ - 1]));
     }
 
     /// `{ Statement* }`. When the last statement is an expression it becomes the

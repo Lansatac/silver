@@ -8,7 +8,7 @@ import silver.ast;
 import silver.interpreter.environment : Environment, ImportScope;
 import silver.interpreter.errors : CodedException;
 import silver.interpreter.values;
-import silver.sema : Analysis, IntegerInfo, Type;
+import silver.sema : Analysis, ConstInt, ConstUInt, ConstUnit, IntegerInfo, Type;
 
 /// The D type holding each Silver integer type's values.
 private alias IntegerTypes = std.meta.AliasSeq!(byte, short, int, long, ubyte, ushort, uint, ulong);
@@ -244,6 +244,36 @@ class Evaluator
         variables.defineVariable(ast.name, ast.fields.length == 0
                 ? Variant(new Instance(constructor, []))
                 : Variant(constructor));
+    }
+
+    /// Sema has already evaluated it, so nothing here depends on the order modules run in.
+    private void execute(const ConstDecl ast, Environment variables)
+    {
+        if (analysis is null)
+        {
+            throw new CodedException(DiagnosticCode.InternalError, "A top-level constant needs sema to evaluate it");
+        }
+        auto type = analysis.typeOf(ast.id);
+        auto value = analysis.valueOf(ast.id).match!(
+            (const ConstInt v) => integerValue(v.value, type),
+            (const ConstUInt v) => integerValue(v.value, type),
+            (const bool v) => makeValue(v),
+            (const double v) => makeValue(v),
+            (string v) => Variant(v),
+            (const ConstUnit _) => Variant(Unit()),
+        );
+        variables.defineVariable(ast.name, value, false);
+    }
+
+    /// `value` as the D type holding Silver's `type`.
+    private Variant integerValue(V)(V value, Type type)
+    {
+        auto info = analysis.types.integerOf(type);
+        foreach (T; IntegerTypes)
+        {
+            if (isType!T(info)) return Variant(cast(T) value);
+        }
+        assert(0, "every integer type has a D type");
     }
 
     /// Adds the module to the importing module's ImportScope. It isn't bound as a variable;

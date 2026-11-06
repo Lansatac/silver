@@ -1,0 +1,6 @@
+module constants_support.limits
+
+val byteMax: UInt8 = 255
+val offset: Int = base + 2
+val base: Int = 40
+val label: String = "limit"

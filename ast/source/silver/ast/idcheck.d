@@ -78,6 +78,16 @@ private final class IdCheck
         }
     }
 
+    void visit(const ConstDecl c, Span span)
+    {
+        see(c.id, c.nameSpan);
+        if (c.type !is null)
+        {
+            visit(*c.type);
+        }
+        visit(c.value);
+    }
+
     void visit(const Stmt s)
     {
         s.kind.match!(k => visit(k, s.span));

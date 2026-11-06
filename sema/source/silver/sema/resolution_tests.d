@@ -292,6 +292,7 @@ NameIndex indexNames(const Module m)
         d.kind.match!(
             (const FunctionDecl f) => indexer.visit(f),
             (const TypeDecl t) => indexer.visit(t),
+            (const ConstDecl c) => indexer.visit(c),
             (const ImportStmt _) {},
         );
     }
@@ -315,6 +316,12 @@ private final class Indexer
     void visit(const TypeDecl t)
     {
         index.declarations[t.nameSpan.start] = SymbolId(t.id);
+    }
+
+    void visit(const ConstDecl c)
+    {
+        index.declarations[c.nameSpan.start] = SymbolId(c.id);
+        visit(c.value);
     }
 
     void visit(const Stmt s)
@@ -1014,6 +1021,7 @@ void shouldHaveDeclaration(const Analyzed a, At where, string file = __FILE__, s
     auto name = (*symbol).match!(
         (const Id!FunctionDecl id) => a.analysis.declarationOf(id).name,
         (const Id!TypeDecl id) => a.analysis.declarationOf(id).name,
+        (const Id!ConstDecl id) => a.analysis.declarationOf(id).name,
         (const Id!VarDecl id) => a.analysis.declarationOf(id).name,
         (const Id!Param id) => a.analysis.declarationOf(id).name,
         (const Id!Module _) => cast(string) null,
@@ -1065,4 +1073,213 @@ unittest
     auto a = analyzed("def main(): Unit {\n    val x = 1\n    val x = 2\n}");
     a.shouldHaveDeclaration(At("x", 1));
     a.shouldHaveDeclaration(At("x", 2));
+}
+
+// Top-level constants
+
+@("name resolution finds a constant wherever it's declared in the module")
+unittest
+{
+    auto a = analyzed("def f(): Int => late\nval early: Int = late\nval late: Int = 1\ndef main(): Unit => ()");
+    a.shouldHaveNoDiagnostics();
+    a.shouldResolve("late", 1, 3);
+    a.shouldResolve("late", 2, 3);
+    a.shouldHaveDeclaration(At("late", 3));
+}
+
+@("name resolution finds an imported constant, plain or qualified")
+unittest
+{
+    auto a = analyzed("import lib.values\nval mine: Int = limit\nval theirs: Int = lib.values.limit\ndef main(): Unit => ()",
+        ["lib/values.ag": "module lib.values\nval limit: Int = 1"]);
+    a.shouldHaveNoDiagnostics();
+    a.shouldResolve(At("limit", 1), At("limit", 1, "lib.values"));
+    a.shouldResolve(At("limit", 2), At("limit", 1, "lib.values"));
+}
+
+@("name resolution reports a constant two imports define only where it's used, and accepts it qualified")
+unittest
+{
+    auto files = [
+        "a.ag": "module a\nval limit: Int = 1",
+        "b.ag": "module b\nval limit: Int = 2",
+    ];
+    analyzed("import a\nimport b\ndef main(): Unit => ()", files).shouldHaveNoDiagnostics();
+    analyzed("import a\nimport b\nval x: Int = a.limit + b.limit\ndef main(): Unit => ()", files)
+        .shouldHaveNoDiagnostics();
+    analyzed("import a\nimport b\nval x: Int = limit\ndef main(): Unit => ()", files)
+        .shouldReport(DiagnosticCode.AmbiguousName, At("limit", 1));
+}
+
+@("name resolution prefers a module's own constant over an imported one")
+unittest
+{
+    auto a = analyzed("import a\nval limit: Int = 2\nval x: Int = limit\ndef main(): Unit => ()",
+        ["a.ag": "module a\nval limit: Int = 1"]);
+    a.shouldHaveNoDiagnostics();
+    a.shouldResolve("limit", 2, 1);
+}
+
+@("name resolution doesn't see constants from the imports of an imported module")
+unittest
+{
+    analyzed("import a\nval x: Int = hidden\ndef main(): Unit => ()", [
+        "a.ag": "module a\nimport b",
+        "b.ag": "module b\nval hidden: Int = 1",
+    ]).shouldReport(DiagnosticCode.UnknownName, At("hidden", 1));
+}
+
+@("name resolution reports a constant declared twice, or sharing a function's name, at the second name")
+unittest
+{
+    analyzed("val x: Int = 1\nval x: Int = 2\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.DuplicateDeclaration, At("x", 2));
+    analyzed("def x(): Int => 1\nval x: Int = 2\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.DuplicateDeclaration, At("x", 2));
+    analyzed("val x: Int = 2\ndef x(): Int => 1\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.DuplicateDeclaration, At("x", 2));
+}
+
+// Case keeps a type and a constant apart in source, so this builds the declarations directly.
+@("name resolution reports a constant and a type sharing a name, whichever comes second")
+unittest
+{
+    import silver.syntax.parse : parse;
+
+    DiagnosticCode[] codesWith(Decl delegate(NodeIds, Span)[] makers...)
+    {
+        auto context = new SourceContext;
+        auto ids = new NodeIds;
+        auto m = new Module;
+        *m = parse("def main(): Unit => ()", "main", ids, "main.ag");
+        foreach (make; makers)
+        {
+            m.declarations ~= make(ids, Span("main.ag", 0, 0));
+        }
+        Program program;
+        program.sources = context.sources;
+        program.ids = ids;
+        program.modules["main"] = m;
+        analyze(program, context.collector);
+
+        DiagnosticCode[] codes;
+        foreach (diagnostic; context.collector.diagnostics)
+        {
+            codes ~= diagnostic.code;
+        }
+        return codes;
+    }
+
+    Decl type(NodeIds ids, Span span)
+    {
+        return Decl(span, DeclKind(TypeDecl(ids.next!TypeDecl, "Clash", span)));
+    }
+
+    Decl constant(NodeIds ids, Span span)
+    {
+        auto one = Expr(ids.next!Expr, span, ExprKind(IntLiteral(1)));
+        auto annotation = new TypeExpr(ids.next!TypeExpr, span, TypeExprKind(NamedType(["Int"])));
+        return Decl(span, DeclKind(ConstDecl(ids.next!ConstDecl, "Clash", span, annotation, one)));
+    }
+
+    assert(codesWith(&type, &constant) == [DiagnosticCode.DuplicateDeclaration]);
+    assert(codesWith(&constant, &type) == [DiagnosticCode.DuplicateDeclaration]);
+}
+
+@("name resolution reports a local or parameter with the same name as a constant in its module")
+unittest
+{
+    analyzed("val x: Int = 1\ndef main(): Unit {\n    val x = 2\n}")
+        .shouldReport(DiagnosticCode.ShadowedDeclaration, At("x", 2));
+    analyzed("val x: Int = 1\ndef f(x: Int): Int => x\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.ShadowedDeclaration, At("x", 2));
+}
+
+@("name resolution lets a local hide an imported constant")
+unittest
+{
+    auto a = analyzed("import a\ndef main(): Unit {\n    val limit = 2\n    printl(limit)\n}",
+        ["a.ag": "module a\nval limit: Int = 1"]);
+    a.shouldHaveNoDiagnostics();
+    a.shouldResolve("limit", 2, 1);
+}
+
+@("name resolution reports a constant with the same name as an imported module's root")
+unittest
+{
+    analyzed("import std.math\nval std: Int = 1\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.ShadowedDeclaration, At("std", 2));
+}
+
+@("name resolution reports an unknown constant, plain or qualified, once")
+unittest
+{
+    analyzed("val x: Int = nope\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.UnknownName, At("nope", 1));
+    analyzed("import std.math\nval x: Float = std.math.nope\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.UnknownModuleMember, At("std", 2));
+    analyzed("import std.math\nval x: Float = std.nope\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.UnknownName, At("std", 2));
+}
+
+@("name resolution reports a module used as a constant's value, once")
+unittest
+{
+    analyzed("import std.math\nval x: Int = std.math\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.ModuleIsNotAValue, At("std", 2));
+}
+
+@("name resolution reports a constant with no type, at its name, and nothing else")
+unittest
+{
+    analyzed("val x = 1\ndef main(): Unit => ()").shouldReport(DiagnosticCode.MissingConstantType, At("x", 1));
+    // It has no type to compare a use with, and evaluating it can't add anything.
+    analyzed("val x = 1\nval y: String = x\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.MissingConstantType, At("x", 1));
+}
+
+@("name resolution accepts a constant of every primitive type")
+unittest
+{
+    analyzed(`val a: Bool = true
+val b: Int = 1
+val c: Int8 = 1
+val d: Int16 = 1
+val e: Int32 = 1
+val f: Int64 = 1
+val g: UInt = 1
+val h: UInt8 = 1
+val i: UInt16 = 1
+val j: UInt32 = 1
+val k: UInt64 = 1
+val l: Float = 1.5
+val m: String = "s"
+val n: Unit = ()
+val o: () = ()
+def main(): Unit => ()`).shouldHaveNoDiagnostics();
+}
+
+@("name resolution reports a constant whose type isn't a primitive, at the type, and nothing else")
+unittest
+{
+    void check(string annotation, string initializer, string file = __FILE__, size_t line = __LINE__)
+    {
+        analyzed("type Marker\ndef f(): Int => 1\nval x: " ~ annotation ~ " = " ~ initializer
+                ~ "\nval y: String = x\ndef main(): Unit => ()")
+            .shouldReport(DiagnosticCode.InvalidConstantType, At(annotation, annotation == "Marker" ? 2 : 1), file, line);
+    }
+
+    check("Any", "1");
+    check("Never", "1");
+    check("Marker", "Marker");
+    analyzed("val x: Int? = 1\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidConstantType, At("Int", 1));
+    analyzed("def f(): Int => 1\nval x: () -> Int = f\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidConstantType, At("()", 1));
+}
+
+@("name resolution reports an unknown type on a constant, once")
+unittest
+{
+    analyzed("val x: Nope = 1\ndef main(): Unit => ()").shouldReport(DiagnosticCode.UnknownType, At("Nope", 1));
 }

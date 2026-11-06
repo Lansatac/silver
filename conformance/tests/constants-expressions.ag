@@ -1,0 +1,84 @@
+// Declared before what they name, as the order doesn't matter.
+val total: Int = first + second * 2
+val second: Int = first - 1
+val first: Int = 10
+
+val negated: Int = -first
+val inverted: UInt8 = ~mask
+val mask: UInt8 = 0x0f
+val bits: UInt8 = mask & 6 | mask ^ 1
+val shifted: UInt8 = mask << 6
+val down: Int8 = int8Min >> 2
+val high: UInt8 = 128
+val logical: UInt8 = high >> 3
+
+val wrappedUp: UInt8 = uint8Max &+ 1
+val wrappedDown: Int8 = int8Min &- 1
+val wrappedTimes: UInt8 = uint8Max &* 2
+val uint8Max: UInt8 = 255
+val int8Min: Int8 = -128
+
+val truncated: Int = -7 / 2
+val remainder: Int = -7 % 2
+val ratio: Float = 1.0 / 4
+val leftover: Float = 5.5 % 2
+
+val less: Bool = first < second
+val atLeast: Bool = first >= 10
+val same: Bool = "a" == "a"
+val different: Bool = "a" != "a"
+val units: Bool = () == ()
+val infinite: Bool = 1.0 / 0.0 > 1000000.0
+val unordered: Bool = 0.0 / 0.0 != 0.0 / 0.0
+
+// Short-circuiting, as at runtime: the right side is never evaluated.
+val skipped: Bool = false && 1 / 0 == 0
+val taken: Bool = true || 1 / 0 == 0
+val notTaken: Bool = !(first == 10) || less
+
+val nothing: Unit = ()
+val sameNothing: Unit = nothing
+
+def twice(x: Int): Int => x * 2
+def ignore(u: Unit, x: Int): Int => x
+
+def main(): Unit {
+    printl(total)
+    printl(second)
+    printl(negated)
+    printl(inverted)
+    printl(bits)
+    printl(shifted)
+    printl(down)
+    printl(logical)
+    printl(wrappedUp)
+    printl(wrappedDown)
+    printl(wrappedTimes)
+    printl(truncated)
+    printl(remainder)
+    printl(ratio)
+    printl(leftover)
+    printl(less)
+    printl(atLeast)
+    printl(same)
+    printl(different)
+    printl(units)
+    printl(infinite)
+    printl(unordered)
+    printl(skipped)
+    printl(taken)
+    printl(notTaken)
+
+    // Inside arithmetic, as an argument, and as a condition.
+    printl(first + total * 2)
+    printl(twice(first))
+    printl(if atLeast => first else second)
+    printl(ignore(nothing, first))
+    printl(sameNothing)
+
+    // A local can hold one and change without affecting it.
+    mutable val copy = first
+    copy += 1
+    printl(copy)
+    printl(first)
+}

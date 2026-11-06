@@ -1,0 +1,6 @@
+module constants_support.derived
+
+import constants_support.limits
+
+val answer: Int = offset * 2 - 42 + constants_support.limits.base
+val lastByte: UInt8 = byteMax - 1

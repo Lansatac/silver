@@ -8,6 +8,7 @@ import std.string;
 
 
 import silver.ast;
+import silver.sema.constant;
 import silver.sema.type;
 import silver.sema.resolve;
 
@@ -20,6 +21,7 @@ package struct Typing
     Type[SymbolId] symbolTypes;
     FieldInfo[][Id!TypeDecl] fields;
     size_t[Id!Expr] fieldIndexes;
+    ConstValue[Id!ConstDecl] constants;
 }
 
 /// Where the checker is inside a function body. Passed by value, so a nested body (a lambda)
@@ -53,6 +55,12 @@ private final class TypeChecker
     /// to where it's used, so ranges are checked once all the bodies have been.
     private const(Expr)[] _intLiterals;
     private bool[Id!Expr] _negatedLiterals;
+    private ConstValue[Id!ConstDecl] _constants;
+    /// Constants whose initializer already has an error, which evaluating would only repeat.
+    private bool[Id!ConstDecl] _unevaluable;
+    /// True while a constant's dependencies are being evaluated, and false once they're done.
+    private bool[Id!ConstDecl] _evaluating;
+    private bool[Id!ConstDecl] _cycleReported;
 
     Typing checkProgram(const Program program)
     {
@@ -82,6 +90,9 @@ private final class TypeChecker
                     (const TypeDecl decl) {
                         declareConstructor(decl);
                     },
+                    (const ConstDecl c) {
+                        declareConstant(c);
+                    },
                     (const ImportStmt _) {},
                 );
             }
@@ -95,6 +106,9 @@ private final class TypeChecker
                     (const FunctionDecl f) {
                         checkFunction(f);
                     },
+                    (const ConstDecl c) {
+                        checkConstant(c);
+                    },
                     (const TypeDecl _) {},
                     (const ImportStmt _) {},
                 );
@@ -106,7 +120,253 @@ private final class TypeChecker
             checkLiteralRange(literal);
         }
 
-        return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes);
+        // Last, because an integer literal's type isn't final until everything's been checked.
+        foreach (mod; programModules)
+        {
+            foreach (decl; mod.declarations)
+            {
+                decl.kind.match!(
+                    (const ConstDecl c) => evaluateConstant(c.id),
+                    (_) {},
+                );
+            }
+        }
+
+        return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes, _constants);
+    }
+
+    private void declareConstant(const ConstDecl constant)
+    {
+        auto type = constant.type is null ? _types.error : resolveType(*constant.type);
+        // Name resolution reports any other type, so uses shouldn't report it again.
+        _symbolTypes[SymbolId(constant.id)] = isConstantType(type) ? type : _types.error;
+    }
+
+    private bool isConstantType(Type type)
+    {
+        return _types[type].match!(
+            (const Primitive p) => p.kind != Primitive.Kind.Any && p.kind != Primitive.Kind.Never,
+            _ => false,
+        );
+    }
+
+    private void checkConstant(const ConstDecl constant)
+    {
+        auto type = _symbolTypes[SymbolId(constant.id)];
+        auto reported = _collector.diagnostics.length;
+        if (type != _types.error && requireConstantExpr(constant.value))
+        {
+            // A constant expression can't contain a `return`, so nothing reads the return type.
+            check(constant.value, type, BodyContext(_types.error));
+        }
+        if (type == _types.error || _collector.diagnostics.length > reported)
+        {
+            _unevaluable[constant.id] = true;
+        }
+    }
+
+    /// Reports the first part of `expr` that a constant can't be built from, if there is one.
+    private bool requireConstantExpr(const Expr expr)
+    {
+        return expr.kind.match!(
+            (const BoolLiteral _) => true,
+            (const IntLiteral _) => true,
+            (const FloatLiteral _) => true,
+            (const StringLiteral _) => true,
+            (const UnitLiteral _) => true,
+            (const UnaryExpr unary) => requireConstantExpr(*unary.operand),
+            (const BinaryExpr binary) => requireConstantExpr(*binary.left) && requireConstantExpr(*binary.right),
+            (const Identifier _) => requireConstantName(expr),
+            (const MemberAccess _) => requireConstantName(expr),
+            (_) => reportNonConstant(expr),
+        );
+    }
+
+    private bool requireConstantName(const Expr name)
+    {
+        if (auto symbol = name.id in _resolutions.resolutions)
+        {
+            return (*symbol).match!(
+                (const Id!ConstDecl _) => true,
+                // Name resolution reports a module used as a value.
+                (const Id!Module _) => true,
+                (_) => reportNonConstant(name),
+            );
+        }
+        // Name resolution reports an unknown name, but a member of a value is left to types.
+        return isModulePath(name) || reportNonConstant(name);
+    }
+
+    private bool reportNonConstant(const Expr expr)
+    {
+        _collector.reportError(DiagnosticCode.NonConstantInitializer, expr.span,
+            "A top-level constant can only be built from literals, operators and other constants");
+        return false;
+    }
+
+    /// Evaluates a constant's initializer once, after the constants it names, so that any of
+    /// them being unusable is settled first. That goes for a short-circuited operand as well,
+    /// which is never evaluated but is still a reference, so `false && a` can't define `a`.
+    private void evaluateConstant(Id!ConstDecl id)
+    {
+        if (id in _evaluating || id in _unevaluable) return;
+
+        auto value = _resolutions.declarations.constants[id].value;
+        _evaluating[id] = true;
+        evaluateNamedConstants(value);
+        _evaluating[id] = false;
+        if (auto result = constantValue(value))
+        {
+            _constants[id] = *result;
+        }
+    }
+
+    private void evaluateNamedConstants(const Expr expr)
+    {
+        expr.kind.match!(
+            (const UnaryExpr unary) => evaluateNamedConstants(*unary.operand),
+            (const BinaryExpr binary) {
+                evaluateNamedConstants(*binary.left);
+                evaluateNamedConstants(*binary.right);
+            },
+            (const Identifier _) => evaluateNamedConstant(expr),
+            (const MemberAccess _) => evaluateNamedConstant(expr),
+            (_) {},
+        );
+    }
+
+    private void evaluateNamedConstant(const Expr name)
+    {
+        auto id = constantNamedBy(name);
+        if (!id.isValid) return;
+
+        if (!_evaluating.get(id, false))
+        {
+            evaluateConstant(id);
+        }
+        else if (id !in _cycleReported)
+        {
+            _cycleReported[id] = true;
+            _collector.reportError(DiagnosticCode.ConstantCycle, name.span,
+                "`%s` is defined in terms of itself".format(_resolutions.declarations.constants[id].name));
+        }
+    }
+
+    /// The constant `name` refers to, or an invalid ID if it isn't one.
+    private Id!ConstDecl constantNamedBy(const Expr name)
+    {
+        if (auto symbol = name.id in _resolutions.resolutions)
+        {
+            return (*symbol).match!(
+                (const Id!ConstDecl id) => id,
+                _ => Id!ConstDecl.init,
+            );
+        }
+        return Id!ConstDecl.init;
+    }
+
+    /// The value of a constant expression, or null if it has none, which is already reported.
+    private const(ConstValue)* constantValue(const Expr expr)
+    {
+        return expr.kind.match!(
+            (const BoolLiteral literal) => boxedConstant(ConstValue(bool(literal.value))),
+            (const FloatLiteral literal) => boxedConstant(ConstValue(double(literal.value))),
+            (const StringLiteral literal) {
+                string text = literal.value;
+                return boxedConstant(ConstValue(text));
+            },
+            (const UnitLiteral _) => boxedConstant(ConstValue(ConstUnit())),
+            (const IntLiteral literal) => integerLiteralValue(expr, literal),
+            (const Identifier _) => namedConstantValue(expr),
+            (const MemberAccess _) => namedConstantValue(expr),
+            (const UnaryExpr unary) => unaryConstantValue(expr, unary),
+            (const BinaryExpr binary) => binaryConstantValue(expr, binary),
+            (_) => assert(0, "requireConstantExpr rejected everything else"),
+        );
+    }
+
+    private static const(ConstValue)* boxedConstant(ConstValue value)
+    {
+        auto box = new ConstValue;
+        *box = value;
+        return box;
+    }
+
+    private const(ConstValue)* namedConstantValue(const Expr name)
+    {
+        return constantNamedBy(name) in _constants;
+    }
+
+    /// Takes in the sign of a negated literal, so that `-128` is a value even where `128` isn't.
+    private const(ConstValue)* integerLiteralValue(const Expr expr, const IntLiteral literal)
+    {
+        auto type = _exprTypes[expr.id];
+        auto negated = (expr.id in _negatedLiterals) !is null;
+        if (literal.tooLarge) return null;
+        if (!_types.isInteger(type))
+        {
+            double value = cast(double) literal.value;
+            return boxedConstant(ConstValue(negated ? -value : value));
+        }
+
+        auto info = _types.integerOf(type);
+        // checkLiteralRange has reported one that doesn't fit.
+        auto limit = negated ? info.minMagnitude : info.maxValue;
+        if ((negated && !info.signed) || literal.value > limit) return null;
+        if (!info.signed) return boxedConstant(ConstValue(ConstUInt(literal.value)));
+        return boxedConstant(ConstValue(ConstInt(cast(long)(negated ? 0 - literal.value : literal.value))));
+    }
+
+    private const(ConstValue)* unaryConstantValue(const Expr expr, const UnaryExpr unary)
+    {
+        auto operand = constantValue(*unary.operand);
+        if (operand is null || unary.operand.id in _negatedLiterals) return operand;
+
+        try
+        {
+            return boxedConstant(unaryValue(unary.op, *operand, integerInfoOf(*unary.operand)));
+        }
+        catch (ConstantFailure failure)
+        {
+            return reportConstantFailure(expr, failure);
+        }
+    }
+
+    private const(ConstValue)* binaryConstantValue(const Expr expr, const BinaryExpr binary)
+    {
+        auto left = constantValue(*binary.left);
+        if (left is null) return null;
+
+        if (binary.op == BinaryOp.And || binary.op == BinaryOp.Or)
+        {
+            auto decided = (*left).get!(const bool) == (binary.op == BinaryOp.Or);
+            return decided ? left : constantValue(*binary.right);
+        }
+
+        auto right = constantValue(*binary.right);
+        if (right is null) return null;
+
+        try
+        {
+            return boxedConstant(binaryValue(binary.op, *left, *right, integerInfoOf(*binary.left)));
+        }
+        catch (ConstantFailure failure)
+        {
+            return reportConstantFailure(expr, failure);
+        }
+    }
+
+    /// What's known about `expr`'s type as an integer, which is nothing for any other type.
+    private IntegerInfo integerInfoOf(const Expr expr)
+    {
+        auto type = _exprTypes[expr.id];
+        return _types.isInteger(type) ? _types.integerOf(type) : IntegerInfo.init;
+    }
+
+    private const(ConstValue)* reportConstantFailure(const Expr expr, ConstantFailure failure)
+    {
+        _collector.reportError(DiagnosticCode.ConstantEvaluationFailed, expr.span, failure.msg);
+        return null;
     }
 
     private void checkLiteralRange(const Expr expr)

@@ -27,6 +27,8 @@ enum DiagnosticCode : string
     ShadowedDeclaration = "S0013",
     TypeEmptyParens = "S0014",
     DuplicateField = "S0015",
+    MissingConstantType = "S0016",
+    InvalidConstantType = "S0017",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",
@@ -35,6 +37,9 @@ enum DiagnosticCode : string
     InvalidOperand = "T0005",
     UnknownMember = "T0006",
     LiteralOutOfRange = "T0007",
+    NonConstantInitializer = "T0008",
+    ConstantCycle = "T0009",
+    ConstantEvaluationFailed = "T0010",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

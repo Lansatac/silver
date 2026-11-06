@@ -1,0 +1,22 @@
+import std.math
+import constants_support.limits
+import constants_support.derived
+
+val tau: Float = 2 * std.math.pi
+val own: Int = constants_support.derived.answer + base
+
+def main(): Unit {
+    printl(byteMax)
+    printl(constants_support.limits.byteMax)
+    printl(offset)
+    printl(answer)
+    printl(lastByte)
+    printl(constants_support.limits.label)
+    printl(own)
+    printl(tau == pi * 2)
+    printl(std.math.pi > 3.14)
+
+    // A local may hide an imported constant.
+    val base = 1
+    printl(base)
+}

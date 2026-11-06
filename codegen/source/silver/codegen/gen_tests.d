@@ -698,3 +698,20 @@ unittest
     ir.should.contain("store i8 -128, ");
     ir.should.not.contain("with.overflow");
 }
+
+@("a constant is a private global, loaded where it's used, and a Unit constant has none")
+unittest
+{
+    auto ir = generateSource(`val limit: UInt8 = 255
+val name: String = "silver"
+val nothing: Unit = ()
+def main(): Unit {
+    printl(limit)
+    printl(name)
+    printl(nothing)
+}`);
+    ir.should.contain(`@"main.limit" = private unnamed_addr constant i8 255`);
+    ir.should.contain(`@"main.name" = private unnamed_addr constant ptr @.str.`);
+    ir.should.contain(`load i8, ptr @"main.limit"`);
+    ir.should.not.contain(`@"main.nothing"`);
+}

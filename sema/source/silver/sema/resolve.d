@@ -10,7 +10,7 @@ import std.sumtype;
 
 import silver.ast;
 
-alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module, Id!TypeDecl);
+alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module, Id!TypeDecl, Id!ConstDecl);
 
 enum Builtin
 {
@@ -56,6 +56,7 @@ package struct Declarations
 {
     const(FunctionDecl)*[Id!FunctionDecl] functions;
     const(TypeDecl)*[Id!TypeDecl] types;
+    const(ConstDecl)*[Id!ConstDecl] constants;
     const(VarDecl)*[Id!VarDecl] locals;
     const(Param)*[Id!Param] params;
 }
@@ -229,6 +230,7 @@ private final class NameResolver
             decl.kind.match!(
                 (const FunctionDecl _) {},
                 (const TypeDecl _) {},
+                (const ConstDecl _) {},
                 (const ImportStmt importStmt) {
                     auto imported = importStmt.path.join(".");
                     if (!visible.canFind(imported))
@@ -257,7 +259,7 @@ private final class NameResolver
                 },
                 (ref const TypeDecl type) {
                     _declarations.types[type.id] = &type;
-                    if (moduleScope.resolveLocalType(type.name) !is null)
+                    if (moduleScope.resolveLocalType(type.name) !is null || moduleScope.resolveLocal(type.name) !is null)
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan,
                             "'%s' is already declared in this module".format(type.name));
@@ -278,6 +280,18 @@ private final class NameResolver
                         moduleScope.declare(type.name, SymbolId(type.id));
                     }
                 },
+                (ref const ConstDecl constant) {
+                    _declarations.constants[constant.id] = &constant;
+                    if (moduleScope.resolveLocal(constant.name) !is null)
+                    {
+                        _collector.reportError(DiagnosticCode.DuplicateDeclaration, constant.nameSpan,
+                            "'%s' is already declared in this module".format(constant.name));
+                    }
+                    else
+                    {
+                        moduleScope.declare(constant.name, SymbolId(constant.id));
+                    }
+                },
                 (const ImportStmt _) {},
             );
         }
@@ -288,6 +302,7 @@ private final class NameResolver
         {
             decl.kind.match!(
                 (const FunctionDecl func) => reportModuleRootClash(func.name, func.nameSpan, visible),
+                (const ConstDecl constant) => reportModuleRootClash(constant.name, constant.nameSpan, visible),
                 (const TypeDecl _) {},
                 (const ImportStmt _) {},
             );
@@ -325,8 +340,44 @@ private final class NameResolver
                         resolveTypeExpr(field.type, _moduleScopes[name]);
                     }
                 },
+                (const ConstDecl constant) {
+                    resolveConstantType(constant, _moduleScopes[name]);
+                    resolveExpr(constant.value, _moduleScopes[name]);
+                },
                 (const ImportStmt _) {},
             );
+        }
+    }
+
+    /// Reports a constant with no type or one that sema can't evaluate a value of.
+    private void resolveConstantType(const ConstDecl constant, const Scope current)
+    {
+        if (constant.type is null)
+        {
+            _collector.reportError(DiagnosticCode.MissingConstantType, constant.nameSpan,
+                "a top-level constant needs a type: `val %s: Type = ...`".format(constant.name));
+            return;
+        }
+        resolveTypeExpr(*constant.type, current);
+
+        auto allowed = constant.type.kind.match!(
+            (const UnitType _) => true,
+            (const NamedType _) {
+                auto symbol = constant.type.id in _typeResolutions;
+                // An unknown type has already been reported.
+                if (symbol is null) return true;
+                return (*symbol).match!(
+                    (const Builtin builtin) => builtin != Builtin.Any && builtin != Builtin.Never,
+                    (const Id!TypeDecl _) => false,
+                );
+            },
+            _ => false,
+        );
+        if (!allowed)
+        {
+            _collector.reportError(DiagnosticCode.InvalidConstantType, constant.type.span,
+                "a top-level constant must be a Bool, integer, Float, String or Unit, not `%s`"
+                    .format(printTypeExpr(*constant.type)));
         }
     }
 
@@ -416,6 +467,7 @@ private final class NameResolver
             // Nested defs aren't supported, so a function found here is a module-level one.
             auto what = (*outer).match!(
                 (const Id!FunctionDecl _) => "a function in this module",
+                (const Id!ConstDecl _) => "a constant in this module",
                 _ => "a declaration in an enclosing scope",
             );
             _collector.reportError(DiagnosticCode.ShadowedDeclaration, span,
