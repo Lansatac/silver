@@ -30,6 +30,21 @@ struct Fragment
     /// and so ends in the one it started in.
     string endBlock;
 
+    static Fragment comment(string text)
+    {
+        return instruction("; " ~ text);
+    }
+
+    //debug block
+    static Fragment traced(string name, Fragment inner)
+    {
+        return comment("begin " ~ name)
+            .then(inner)
+            .then(comment("end " ~ name ~ " with value " ~ inner.value))
+            .withValue(inner.value);
+    }
+
+
     static Fragment constant(string operand)
     {
         return Fragment(null, null, operand);
@@ -43,6 +58,11 @@ struct Fragment
     static Fragment undef()
     {
         return constant("undef");
+    }
+
+    static Fragment store(string type, string value, string pointer)
+    {
+        return instruction("store %s %s, ptr %s".format(type, value, pointer));
     }
 
     /// Starts block `name`: everything sequenced after this is in it.
@@ -223,15 +243,13 @@ final class Generator
         auto operands = fields.map!(f => paramOperand(f.name, f.type)).array;
         auto layout = llvmStruct(type.id);
 
-        auto allocated = callRuntime("silver_alloc",
-            ["ptrtoint (ptr getelementptr (%s, ptr null, i32 1) to i64)".format(layout)]);
+        auto allocated = alloc(layout);
         auto body = allocated;
         foreach (i, field; fields)
         {
             if (operands[i] is null) continue;
             auto pointer = fieldPointer(layout, allocated.value, llvmFieldIndex(type.id, i));
-            body = body.then(pointer).then(Fragment.instruction(
-                "store %s %s, ptr %s".format(llvmType(field.type), operands[i], pointer.value)));
+            body = body.then(pointer).then(Fragment.store(llvmType(field.type), operands[i], pointer.value));
         }
         auto lines = body.code ~ ("  " ~ returnInstruction(allocated.value));
 
@@ -259,6 +277,19 @@ final class Generator
     size_t llvmFieldIndex(Id!TypeDecl type, size_t fieldIndex)
     {
         return _analysis.fieldsOf(type)[0 .. fieldIndex].count!(f => f.type != _analysis.types.unit);
+    }
+
+    Fragment load(string type, string pointer)
+    {
+        auto result = _function.newTemp();
+        return Fragment.instruction("%s = load %s, ptr %s".format(result, type, pointer), result);
+    }
+
+    /// Room on the heap for one `layout`; the operand is its address.
+    Fragment alloc(string layout)
+    {
+        return callRuntime("silver_alloc",
+            ["ptrtoint (ptr getelementptr (%s, ptr null, i32 1) to i64)".format(layout)]);
     }
 
     /// The address of the field at `index` of the struct `object` points to.
@@ -364,9 +395,7 @@ final class Generator
         if (fieldType == _analysis.types.unit) return object.withValue(null);
 
         auto pointer = fieldPointer(llvmStruct(type), object.value, llvmFieldIndex(type, index));
-        auto result = _function.newTemp();
-        return object.then(pointer).then(Fragment.instruction(
-            "%s = load %s, ptr %s".format(result, llvmType(fieldType), pointer.value), result));
+        return object.then(pointer).then(load(llvmType(fieldType), pointer.value));
     }
 
     /// A decimal literal must be exactly representable for LLVM to accept it; the bit pattern always is.
@@ -412,9 +441,7 @@ final class Generator
             (const Id!Param param) => Fragment.constant(_function.params[param]),
             (const Id!VarDecl decl) {
                 if (_analysis.typeOf(decl) == _analysis.types.unit) return Fragment.init;
-                auto type = llvmType(_analysis.typeOf(decl));
-                auto temp = _function.newTemp;
-                return Fragment.instruction("%s = load %s, ptr %s".format(temp, type, _function.slots[decl]), temp);
+                return load(llvmType(_analysis.typeOf(decl)), _function.slots[decl]);
                 },
             (const Id!Module module_) {
                  _collector.reportError(DiagnosticCode.InternalError, expr.span, "trying to emit a module");
@@ -740,13 +767,56 @@ final class Generator
         if (value.value is null) return value.withValue(null);
 
         auto slot = slotOf(assign.target);
-        if (slot is null) return unsupported(span, "assigning to this target").withValue(null);
+        if (slot is null)
+        {
+            return Fragment.traced("field assignment", rebuild(assign.target, value));
+        }
 
         auto type = llvmType(_analysis.typeOf(assign.target.id));
         return value
-            .then(Fragment.instruction("store %s %s, ptr %s".format(type, value.value, slot)))
+            .then(Fragment.store(type, value.value, slot))
             .withValue(null);
     }
+
+    //load an object, modify it's field and save it as a copy
+    Fragment rebuild(const Expr target, Fragment value)
+    {
+        return target.kind.match!(
+            (const MemberAccess access) {
+                auto type = _analysis.types[_analysis.typeOf(access.object.id)].match!(
+                    (const NominalData nominal) => nominal.decl,
+                    (_) => assert(0, "sema only finds fields on a declared type"),
+                );
+                auto layout = llvmStruct(type);
+
+                auto object = emitExpr(*access.object);
+                auto index = _analysis.fieldIndexOf(target.id);
+                auto fieldType = llvmType(_analysis.fieldsOf(type)[index].type);
+                auto contents = load(layout, object.value);
+
+                auto updated = _function.newTemp();
+                auto insert = Fragment.instruction(
+                    "%s = insertvalue %s %s, %s %s, %s".format(
+                        updated, layout, contents.value, fieldType, value.value, llvmFieldIndex(type, index)),
+                    updated);
+                auto newAlloc = alloc(layout);
+                
+                auto rebuilt = value.then(object).then(contents).then(insert).then(newAlloc)
+                    .then(Fragment.store(layout, updated, newAlloc.value))
+                    .withValue(newAlloc.value);
+                return rebuild(*access.object, rebuilt);
+
+            },
+            (const Identifier _) => value
+                                    .then(Fragment.store(
+                                        llvmType(_analysis.typeOf(target.id)),
+                                        value.value,
+                                         slotOf(target)))
+                                    .withValue(null),
+            (_) => assert(0, "sema only allows names and fields as assignment targets"),
+        );
+    }
+
 
     /// The stack slot `target` names, or null if it isn't a local.
     string slotOf(const Expr target)

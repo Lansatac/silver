@@ -1,6 +1,5 @@
 # Conformance tests the LLVM backend doesn't pass yet, one name per line. Remove a name once it passes.
 types-function-fields
 types-constructor-values
-types-field-assignment
 types-value-semantics
 types-equality
