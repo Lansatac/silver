@@ -3,6 +3,7 @@ module silver.syntax.lower;
 import std.format : format;
 import pegged.grammar : ParseTree;
 import silver.ast;
+import silver.syntax.parse : ParseException;
 
 import std.utf;
 
@@ -265,7 +266,7 @@ private final class Lowering
         case "Silver.Identifier":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(Identifier(cst.matches[0])));
         case "Silver.StringLiteral":
-            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(StringLiteral(stringValue(cst))));
+            return convertStringLiteral(cst);
         case "Silver.ScientificLiteral":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(FloatLiteral(cst.matches[0].to!double)));
         case "Silver.HexaLiteral":
@@ -280,27 +281,54 @@ private final class Lowering
         throw new Exception("lower: expression '%s' not supported yet".format(cst.name));
     }
 
-    /// The text of a StringLiteral, with escapes decoded.
-    private static string stringValue(ParseTree cst)
+    /// A StringLiteral with escapes decoded, or an InterpolatedString if the source has holes.
+    private Expr convertStringLiteral(ParseTree cst)
     {
-        string value;
+        Expr[] parts;
+        string text;
+        Span textSpan;
+        void endText()
+        {
+            if (text.length == 0) return;
+            parts ~= Expr(ids.next!Expr, textSpan, ExprKind(StringLiteral(text)));
+            text = null;
+        }
+
+        auto hasHoles = false;
         foreach (part; cst.children)
         {
             part.validateNodeIs("Silver.StringPart");
             auto piece = part[0];
+            if (piece.name == "Silver.StringHole")
+            {
+                if (piece.children.length == 0)
+                {
+                    throw new ParseException(Diagnostic(DiagnosticCode.ParseError, spanOf(piece, file),
+                        "A string hole needs an expression; write `\\{` for a literal brace", Severity.Error));
+                }
+                hasHoles = true;
+                endText();
+                parts ~= convertExpression(piece[0]);
+                continue;
+            }
+            auto pieceSpan = spanOf(piece, file);
+            textSpan = Span(file, text.length == 0 ? pieceSpan.start : textSpan.start, pieceSpan.end);
             switch (piece.name)
             {
             case "Silver.StringText":
-                value ~= piece.matches[0];
+                text ~= piece.matches[0];
                 break;
             case "Silver.EscapeSequence":
-                value ~= decodeEscape(piece.matches[0]);
+                text ~= decodeEscape(piece.matches[0]);
                 break;
             default:
                 throw new Exception("Unexpected '%s' in string literal".format(piece.name));
             }
         }
-        return value;
+
+        if (!hasHoles) return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(StringLiteral(text)));
+        endText();
+        return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(InterpolatedString(parts)));
     }
 
     private static char decodeEscape(string escape)

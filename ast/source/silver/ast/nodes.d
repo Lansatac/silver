@@ -108,8 +108,8 @@ struct Expr
     ExprKind kind;
 }
 
-alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, Identifier, UnaryExpr, BinaryExpr,
-    CallExpr, MemberAccess, WhileExpr, IfExpr, BlockExpr, UnitLiteral);
+alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, InterpolatedString, Identifier,
+    UnaryExpr, BinaryExpr, CallExpr, MemberAccess, WhileExpr, IfExpr, BlockExpr, UnitLiteral);
 
 /// `()`, the only value of type Unit.
 struct UnitLiteral
@@ -139,6 +139,13 @@ struct FloatLiteral
 struct StringLiteral
 {
     string value;
+}
+
+/// `"a{x}b"`: each part is the StringLiteral for a run of text or a hole's expression, and the
+/// value is every part formatted as `print` would show it, joined. No holes means a StringLiteral.
+struct InterpolatedString
+{
+    Expr[] parts;
 }
 
 struct Identifier
@@ -244,6 +251,7 @@ string printExpr(const Expr e)
         (const FloatLiteral f) => f.value.to!string,
         // %(%s%) writes a one-element array's string quoted and escaped.
         (const StringLiteral s) => format("%(%s%)", [s.value]),
+        (const InterpolatedString s) => format("(interpolate%s)", s.parts.map!(p => " " ~ printExpr(p)).join),
         (const Identifier i) => i.name,
         (const BinaryExpr b) => format("(%s %s %s)", b.op, printExpr(*b.left), printExpr(*b.right)),
         (const UnaryExpr u) => format("(%s %s)", u.op, printExpr(*u.operand)),

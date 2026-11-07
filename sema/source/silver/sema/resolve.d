@@ -22,15 +22,15 @@ alias TypeSymbol = SumType!(Builtin, Id!TypeDecl);
 
 /// `name` as a type that values can be converted to with `Name(x)`, if it is one.
 /// Types can't be declared with these names, so nothing can hide them.
-private const(Builtin)* numericBuiltin(string name)
+private const(Builtin)* conversionBuiltin(string name)
 {
     import std.conv : to;
     import std.traits : EnumMembers;
 
-    static immutable Builtin[] notNumeric = [Builtin.Never, Builtin.Unit, Builtin.Bool, Builtin.String, Builtin.Any];
+    static immutable Builtin[] notConversions = [Builtin.Never, Builtin.Unit, Builtin.Bool, Builtin.Any];
     foreach (builtin; EnumMembers!Builtin)
     {
-        if (builtin.to!string == name && !notNumeric.canFind(builtin))
+        if (builtin.to!string == name && !notConversions.canFind(builtin))
         {
             return new Builtin(builtin);
         }
@@ -536,7 +536,7 @@ private final class NameResolver
             (const MemberAccess _) => requireValue(expr, resolvePath(expr, scopeTable)),
             (const CallExpr call) {
                 auto target = (*call.callee).kind.match!(
-                    (const Identifier id) => numericBuiltin(id.name),
+                    (const Identifier id) => conversionBuiltin(id.name),
                     (_) => cast(const(Builtin)*) null,
                 );
                 if (target !is null)
@@ -583,6 +583,12 @@ private final class NameResolver
             (const IntLiteral _) {},
             (const FloatLiteral _) {},
             (const StringLiteral _) {},
+            (const InterpolatedString interpolated) {
+                foreach (part; interpolated.parts)
+                {
+                    resolveExpr(part, scopeTable);
+                }
+            },
             (const UnitLiteral _) {},
         );
     }

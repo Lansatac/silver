@@ -131,6 +131,12 @@ private final class IdCheck
     {
         see(e.id, e.span);
         e.kind.match!(
+            (const InterpolatedString s) {
+                foreach (part; s.parts)
+                {
+                    visit(part);
+                }
+            },
             (const UnaryExpr u) => visit(u.operand),
             (const BinaryExpr b) { visit(b.left); visit(b.right); },
             (const CallExpr c) {

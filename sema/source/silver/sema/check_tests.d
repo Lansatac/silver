@@ -1425,3 +1425,65 @@ unittest
     analyzed("import a\ndef main(): Unit {\n    a.x = 2\n}", ["a.ag": "module a\nval x: Int = 1"])
         .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("a", 2));
 }
+
+// String interpolation and `String(x)`
+
+@("an interpolated string is a String, whatever its holes hold")
+unittest
+{
+    auto a = analyzedMain(`val n: UInt8 = 1
+    val s = "a{n}b{"c"}{()}{1.5}{n > 0}"
+    val t: String = "{s}"
+    printl(t)`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType(`"{s}"`, "String");
+    a.shouldHaveType("n > 0", "Bool");
+}
+
+@("a hole's expression is resolved and checked like any other")
+unittest
+{
+    analyzedMain(`printl("a{nope}")`).shouldReport(DiagnosticCode.UnknownName, At("nope", 1));
+    analyzedMain(`printl("{1 + true}")`).shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
+    analyzedMain(`val x: Int = "{1}"`).shouldReport(DiagnosticCode.TypeMismatch, At(`"{1}"`, 1));
+    analyzedMain(`printl("{99999999999999999999}")`)
+        .shouldReport(DiagnosticCode.LiteralOutOfRange, At("99999999999999999999", 1));
+}
+
+@("String(x) takes one value of any type")
+unittest
+{
+    auto a = analyzedMain(`val n: UInt8 = 1
+    val b = String(n)
+    val c = String(1)
+    val d = String("s")
+    val e = String(())
+    printl(b ~ c ~ d ~ e)`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("String(n)", "String");
+    a.shouldHaveType("String(1)", "String");
+
+    analyzedMain("printl(String())").shouldReport(DiagnosticCode.WrongArgumentCount, At("String()", 1));
+    analyzedMain("printl(String(1, 2))").shouldReport(DiagnosticCode.WrongArgumentCount, At("String(1, 2)", 1));
+    analyzedMain("val f = String").shouldReport(DiagnosticCode.UnknownName, At("String", 1));
+}
+
+@("a constant can interpolate other constants, formatted as the backends format them")
+unittest
+{
+    auto a = analyzedConstants(`val major: UInt8 = 2
+val ratio: Float = 1.5
+val ok: Bool = true
+val nothing: Unit = ()
+val name: String = "silver"
+val text: String = "{name} v{major}.{1 + 1} {ratio} {ok} {nothing} {-1}"`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldEvaluateTo("text", "silver v2.2 1.5 true () -1", "String");
+
+    analyzedConstants(`val a: String = "{b}"` ~ "\n" ~ `val b: String = "{a}"`)
+        .shouldReport(DiagnosticCode.ConstantCycle, At("a", 2));
+    analyzedConstants(`val a: String = "{1 / 0}"`).shouldReport(DiagnosticCode.ConstantEvaluationFailed, At("1 / 0", 1));
+    analyzed("def f(): Int => 1\n" ~ `val a: String = "{f()}"` ~ "\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.NonConstantInitializer, At("f", 2));
+    analyzedConstants(`val a: String = String(1)`).shouldReport(DiagnosticCode.NonConstantInitializer, At("String", 2));
+}

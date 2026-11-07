@@ -1,0 +1,7 @@
+def zero(): Int => 0
+
+def main(): Unit {
+    printl("before")
+    printl("{printl("first hole")} then {1 / zero()} then {printl("never reached")}")
+    printl("after")
+}

@@ -159,6 +159,7 @@ final class Generator
     string[Id!FunctionDecl] mangledNames;
     string[Id!TypeDecl] typeConstructors;
     string[Id!TypeDecl] typeEqualities;
+    string[Id!TypeDecl] typeFormatters;
     string[Id!ConstDecl] constantGlobals;
     private const SourceMap _sources;
 
@@ -167,6 +168,11 @@ final class Generator
     private struct PendingEquality { Id!TypeDecl type; Span span; }
     private PendingEquality[] _pendingEqualities;
     private bool[Id!TypeDecl] _equalitySeen;
+
+    /// The same for the types formatted so far: a value's fields are formatted in turn.
+    private struct PendingFormat { Id!TypeDecl type; Span span; }
+    private PendingFormat[] _pendingFormats;
+    private bool[Id!TypeDecl] _formatSeen;
 
     /// Runtime functions the program calls, in first-use order. Each gets one `declare`.
     private string[] _usedRuntime;
@@ -197,6 +203,12 @@ final class Generator
             _pendingEqualities.popFront();
             modules ~= emitTypeEquality(pending);
         }
+        while (!_pendingFormats.empty)
+        {
+            auto pending = _pendingFormats.front;
+            _pendingFormats.popFront();
+            modules ~= emitTypeFormatter(pending);
+        }
 
         // After the modules, so every runtime call and string literal has been seen.
         return emitDeclares() ~ _strings.map!(s => s ~ "\n").join ~ modules.join("\n") ~ "\n" ~ emitLLMain();
@@ -215,6 +227,7 @@ final class Generator
                     (const TypeDecl typeDecl) {
                         typeConstructors[typeDecl.id] = mangleTypeConstructor(*module_, typeDecl.name);
                         typeEqualities[typeDecl.id] = "%s.%s_eq".format(module_.name, typeDecl.name);
+                        typeFormatters[typeDecl.id] = "%s.%s_format".format(module_.name, typeDecl.name);
                     },
                     (const ConstDecl constant) {
                         // Functions and constants share a namespace, so this can't clash with a function's name.
@@ -412,6 +425,7 @@ final class Generator
                     : Fragment.constant(literal.value.to!string),
             (const FloatLiteral literal) => Fragment.constant(floatConstant(literal.value)),
             (const StringLiteral literal) => emitStringLiteral(literal.value),
+            (const InterpolatedString interpolated) => emitInterpolatedString(interpolated),
             (const UnitLiteral literal) => Fragment.init,
             (const Identifier _) => emitIdentifier(expr),
             (const UnaryExpr unary) => emitUnary(expr, unary),
@@ -502,29 +516,130 @@ final class Generator
             .then(Fragment.instruction("%s = insertvalue %s %s, i64 %s, 1".format(whole, stringLayout, partial, length), whole));
     }
 
-    /// `lhs ~ rhs` in a new buffer. The sum needs no check: each length is the size of a buffer
-    /// that exists, so each is below 2^63 and together they fit `silver_alloc`'s unsigned size.
-    Fragment emitConcat(string lhs, string rhs)
+    /// The Strings `operands` joined in one new buffer, or the only one itself, since Strings
+    /// never change. The sum needs no check: each length is the size of a buffer that exists,
+    /// so with as few as a program can write they fit `silver_alloc`'s unsigned size.
+    Fragment emitConcat(string[] operands)
     {
+        if (operands.length == 1) return Fragment.constant(operands[0]);
+
         enum memcpy = "llvm.memcpy.p0.p0.i64";
         useIntrinsic("declare void @" ~ memcpy ~ "(ptr, ptr, i64, i1)");
 
-        auto left = stringParts(lhs);
-        auto right = stringParts(rhs);
-        auto total = _function.newTemp();
-        auto sum = Fragment.instruction("%s = add i64 %s, %s".format(total, left.length, right.length));
+        auto parts = operands.map!(operand => stringParts(operand)).array;
+        auto code = Fragment.sequence(parts.map!(part => part.code).array);
+        auto total = parts[0].length;
+        foreach (part; parts[1 .. $])
+        {
+            auto sum = _function.newTemp();
+            code = code.then(Fragment.instruction("%s = add i64 %s, %s".format(sum, total, part.length)));
+            total = sum;
+        }
+
         auto buffer = callRuntime("silver_alloc", [total]);
-        auto tail = _function.newTemp();
-        return left.code
-            .then(right.code)
-            .then(sum)
-            .then(buffer)
-            .then(Fragment.instruction("call void @%s(ptr %s, ptr %s, i64 %s, i1 false)".format(
-                memcpy, buffer.value, left.data, left.length)))
-            .then(Fragment.instruction("%s = getelementptr i8, ptr %s, i64 %s".format(tail, buffer.value, left.length)))
-            .then(Fragment.instruction("call void @%s(ptr %s, ptr %s, i64 %s, i1 false)".format(
-                memcpy, tail, right.data, right.length)))
-            .then(buildString(buffer.value, total));
+        code = code.then(buffer);
+        auto destination = buffer.value;
+        foreach (i, part; parts)
+        {
+            code = code.then(Fragment.instruction("call void @%s(ptr %s, ptr %s, i64 %s, i1 false)".format(
+                memcpy, destination, part.data, part.length)));
+            if (i + 1 == parts.length) break;
+            auto next = _function.newTemp();
+            code = code.then(Fragment.instruction(
+                "%s = getelementptr i8, ptr %s, i64 %s".format(next, destination, part.length)));
+            destination = next;
+        }
+        return code.then(buildString(buffer.value, total));
+    }
+
+    /// Every part formatted as it's evaluated, then all of them joined at once.
+    Fragment emitInterpolatedString(const InterpolatedString interpolated)
+    {
+        Fragment code;
+        string[] operands;
+        foreach (part; interpolated.parts)
+        {
+            auto value = emitExpr(part);
+            auto formatted = emitFormat(_analysis.typeOf(part.id), value.value, part.span);
+            code = code.then(value).then(formatted);
+            operands ~= formatted.value;
+        }
+        return code.then(emitConcat(operands));
+    }
+
+    /// The operand `value`, of `type`, as a String: what `print` would show.
+    Fragment emitFormat(Type type, string value, Span span)
+    {
+        auto types = _analysis.types;
+        if (type == types.string_) return Fragment.constant(value);
+        if (types.isInteger(type))
+        {
+            auto wide = widenForRuntime(type, value);
+            return wide.then(callRuntimeForString(
+                types.integerOf(type).signed ? "silver_format_int" : "silver_format_uint", [wide.value]));
+        }
+        if (type == types.float_) return callRuntimeForString("silver_format_float", [value]);
+        if (type == types.bool_) return callRuntimeForString("silver_format_bool", [value]);
+        if (type == types.unit) return emitStringLiteral("()");
+        // Control never gets here, so the operand is never read.
+        if (type == types.never) return Fragment.undef();
+
+        return types[type].match!(
+            (const NominalData nominal) {
+                if (!hasLayout(nominal.decl)) return unsupported(span, "types with `Any` or `Never` fields");
+                if (nominal.decl !in _formatSeen)
+                {
+                    _formatSeen[nominal.decl] = true;
+                    _pendingFormats ~= PendingFormat(nominal.decl, span);
+                }
+                return emitCall(stringLayout, "@\"%s\"".format(typeFormatters[nominal.decl]), "ptr " ~ value);
+            },
+            (_) => unsupported(span, "formatting a value of type `%s`".format(types.describe(type))),
+        );
+    }
+
+    /// The function formatting a value of `type` as `Point(1, 2)`, or `Red` for a marker.
+    /// Generated once for each type the program formats.
+    string emitTypeFormatter(PendingFormat pending)
+    {
+        _function = new FunctionState;
+        _function.returnType = stringLayout;
+
+        enum object = "%value.arg";
+        auto type = pending.type;
+        auto fields = _analysis.fieldsOf(type);
+        auto name = _analysis.declarationOf(type).name;
+
+        Fragment body;
+        if (fields.length == 0)
+        {
+            body = emitStringLiteral(name);
+        }
+        else
+        {
+            auto layout = llvmStruct(type);
+            string[] operands = [emitStringLiteral(name ~ "(").value];
+            foreach (i, field; fields)
+            {
+                if (i > 0) operands ~= emitStringLiteral(", ").value;
+
+                Fragment value;
+                if (field.type != _analysis.types.unit)
+                {
+                    auto pointer = fieldPointer(layout, object, llvmFieldIndex(type, i));
+                    value = pointer.then(load(llvmType(field.type), pointer.value));
+                }
+                auto formatted = emitFormat(field.type, value.value, pending.span);
+                body = body.then(value).then(formatted);
+                operands ~= formatted.value;
+            }
+            operands ~= emitStringLiteral(")").value;
+            body = body.then(emitConcat(operands));
+        }
+        auto lines = body.allocas ~ body.code ~ ("  " ~ returnInstruction(body.value));
+
+        return "define private %s @\"%s\"(ptr %s) {\nentry:\n%s}\n".format(stringLayout,
+            typeFormatters[type], object, lines.map!(line => line ~ "\n").join);
     }
 
     /// `lhs op rhs` for a comparison of two Strings, from the sign of the runtime's answer.
@@ -634,7 +749,7 @@ final class Generator
                 if (type != _analysis.types.string_) goto default;
                 return lhs.then(rhs).then(emitStringComparison(binary.op, lhs.value, rhs.value));
             case BinaryOp.Concat:
-                return lhs.then(rhs).then(emitConcat(lhs.value, rhs.value));
+                return lhs.then(rhs).then(emitConcat([lhs.value, rhs.value]));
             default:
                 auto llOp = llBinaryOp(binary.op, type);
                 if (llOp is null) return unsupported(expr.span, "`" ~ binary.op ~ "`");
@@ -725,6 +840,7 @@ final class Generator
     }
 
     /// `UInt8(x)`: checks that the value fits, then changes its representation.
+    /// `String(x)` formats it instead.
     Fragment emitConversion(const Expr argument, Type target, Span span)
     {
         auto value = emitExpr(argument);
@@ -732,6 +848,7 @@ final class Generator
         if (source == target) return value;
 
         auto types = _analysis.types;
+        if (target == types.string_) return value.then(emitFormat(source, value.value, span));
         if (target == types.float_)
         {
             auto signed = types.integerOf(source).signed;
@@ -1076,15 +1193,18 @@ final class Generator
         {
             auto value = emitExpr(arg);
             auto argType = _analysis.typeOf(arg.id);
-            // An `Any` integer reaches the runtime as the runtime's one signed or unsigned width.
-            if (params[i] == _analysis.types.any && _analysis.types.isInteger(argType)
-                && _analysis.types.integerOf(argType).bits < 64)
+            auto isAny = params[i] == _analysis.types.any;
+            auto formatted = isAny && isNominal(argType);
+            if (isAny && _analysis.types.isInteger(argType))
             {
-                auto opcode = _analysis.types.integerOf(argType).signed ? "sext" : "zext";
-                value = value.then(castInstruction(opcode, llvmType(argType), value.value, "i64"));
+                value = value.then(widenForRuntime(argType, value.value));
+            }
+            else if (formatted)
+            {
+                value = value.then(emitFormat(argType, value.value, arg.span));
             }
             evaluated = evaluated.then(value);
-            if (argType == _analysis.types.string_)
+            if (formatted || argType == _analysis.types.string_)
             {
                 auto parts = stringParts(value.value);
                 evaluated = evaluated.then(parts.code);
@@ -1096,6 +1216,9 @@ final class Generator
             }
         }
 
+        // Evaluating a Never argument doesn't come back, so the call is never reached.
+        if (call.args.any!(arg => _analysis.typeOf(arg.id) == _analysis.types.never)) return evaluated.withValue(null);
+
         auto name = runtimeNameFor(native, call, expr.span);
         if (name is null) return evaluated.withValue("undef");
         auto arguments = operands.filter!(o => o !is null).array;
@@ -1106,6 +1229,19 @@ final class Generator
         return evaluated.then(callRuntime(name, arguments));
     }
 
+
+    /// An integer reaches the runtime as the runtime's one signed or unsigned width.
+    Fragment widenForRuntime(Type type, string value)
+    {
+        auto info = _analysis.types.integerOf(type);
+        if (info.bits == 64) return Fragment.constant(value);
+        return castInstruction(info.signed ? "sext" : "zext", llvmType(type), value, "i64");
+    }
+
+    bool isNominal(Type type)
+    {
+        return _analysis.types[type].match!((const NominalData _) => true, _ => false);
+    }
 
     /// The runtime function implementing a call to `native`: `silver_<name>`, with a suffix
     /// for each `Any` parameter naming the argument's actual type. Null if an argument has a
@@ -1133,6 +1269,8 @@ final class Generator
         if (_analysis.types.isInteger(type)) return _analysis.types.integerOf(type).signed ? "int" : "uint";
         return _analysis.types[type].match!(
             (const Primitive p) => p.kind.to!string.toLower,
+            // emitNativeCall has formatted it.
+            (const NominalData _) => "string",
             (_) => cast(string) null,
         );
     }

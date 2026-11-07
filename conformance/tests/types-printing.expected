@@ -1,0 +1,8 @@
+Point(1, 2)
+Point(-3, 4)
+Line(Point(0, 0), Point(1, 1))
+Red
+Named(bob, 200, 1.5, true, (), Red)
+Wrapper(Red)
+Point(1, 2) and Line(Point(0, 0), Point(0, 0)) and Red
+Point(9, 2)

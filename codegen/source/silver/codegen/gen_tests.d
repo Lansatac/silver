@@ -828,3 +828,43 @@ def main(): Unit {
     ir.should.contain(`load i8, ptr @"main.limit"`);
     ir.should.not.contain(`@"main.nothing"`);
 }
+
+@("an interpolated string joins all its parts in one buffer")
+unittest
+{
+    auto ir = generateSource(`def f(x: Int, y: Float): String => "a{x}b{y}c"
+def main(): Unit => printl(f(1, 2.0))`);
+    ir.count("call ptr @silver_alloc").should.equal(1);
+    ir.count("call void @llvm.memcpy").should.equal(5);
+}
+
+@("a hole holding only a String shares its buffer, which can't be observed")
+unittest
+{
+    auto ir = generateSource(`def f(x: String): String => "{x}"
+def main(): Unit => printl(f("a"))`);
+    ir.should.not.contain("silver_alloc");
+}
+
+@("a type's formatter is generated once, for each type formatted, and print uses it")
+unittest
+{
+    auto ir = generateSource(`type Inner(x: Int)
+type Outer(a: Inner, b: Inner)
+type Unused(x: Int)
+def main(): Unit {
+    printl(Outer(Inner(1), Inner(2)))
+    printl("{Outer(Inner(3), Inner(4))}")
+}`);
+    ir.count(`define private { ptr, i64 } @"main.Outer_format"`).should.equal(1);
+    ir.count(`define private { ptr, i64 } @"main.Inner_format"`).should.equal(1);
+    ir.should.not.contain("Unused_format");
+    ir.should.contain("silver_printl_string");
+}
+
+@("a call with a Never argument isn't emitted, since it's never reached")
+unittest
+{
+    auto ir = generateSource("def spin(): Never { return spin() }\ndef main(): Unit => printl(spin())");
+    ir.should.not.contain("@silver_printl");
+}

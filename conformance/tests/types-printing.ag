@@ -1,0 +1,22 @@
+type Point(x: Int, y: Int)
+type Line(from: Point, to: Point)
+type Red
+type Named(name: String, small: UInt8, ratio: Float, ok: Bool, nothing: Unit, color: Red)
+type Wrapper(inner: Red)
+
+def origin(): Point => Point(0, 0)
+
+def main(): Unit {
+    printl(Point(1, 2))
+    print(Point(-3, 4))
+    printl("")
+    printl(Line(origin(), Point(1, 1)))
+    printl(Red)
+    printl(Named("bob", 200, 1.5, true, (), Red))
+    printl(Wrapper(Red))
+    printl("{Point(1, 2)} and {Line(origin(), origin())} and {Red}")
+
+    mutable val p = Point(1, 2)
+    p.x = 9
+    printl("{p}")
+}

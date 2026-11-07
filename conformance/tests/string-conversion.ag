@@ -1,0 +1,10 @@
+type Point(x: Int, y: Int)
+
+def main(): Unit {
+    val small: UInt8 = 200
+    printl(String(1) ~ "|" ~ String(-1) ~ "|" ~ String(small))
+    printl(String(1.5) ~ "|" ~ String(true) ~ "|" ~ String(()))
+    printl(String("text") ~ "|" ~ String(Point(1, 2)))
+    printl(String(1 + 1) == "2")
+    printl(String(String(7)))
+}

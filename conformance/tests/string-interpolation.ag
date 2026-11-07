@@ -1,0 +1,68 @@
+import std.math
+
+val answer: Int = 42
+val version_: String = "v{answer}.{1 + 1}"
+val flags: String = "{true} {1.5} {()} {"text"} {255}"
+
+type Point(x: Int, y: Int)
+
+def double_(x: Int): Int => x * 2
+
+def describe(p: Point): String => "({p.x}, {p.y})"
+
+def noisy(label: String, value: Int): Int {
+    printl("evaluating {label}")
+    value
+}
+
+def early(stop: Bool): String {
+    val text = "before {if stop { return "returned" } else 1} after"
+    text
+}
+
+def spin(): Never { return spin() }
+
+def main(): Unit {
+    val name = "Silver"
+    val small: UInt8 = 200
+    val negative: Int8 = -5
+    val big: UInt = 18446744073709551615
+
+    printl("Hello, {name}!")
+    printl("{name}")
+    printl("{name}{name}")
+    printl("  spaces  {name}  kept  ")
+    printl("{ name }")
+    printl("{small} {negative} {big} {1} {-1}")
+    printl("{1.5} {2.0 / 4.0} {true} {false} {()}")
+    printl("sum: {1 + 2 * 3}, call: {double_(4)}, member: {std.math.pi > 3.0}")
+    printl("if: {if small > 100 => "big" else "small"}")
+    printl("block: { { val a = 2; a * 3 } }")
+    printl("nested: {"inner {name} {"deep {1}"}"}")
+    printl("concat: " ~ "{name}" ~ "!")
+    printl("\{literal\} and } alone, \{{name}\}")
+    printl("tab\there, quote \"{name}\", newline next\n{name}")
+    printl("nul: {"a\0b" == "a\0b"}")
+    printl("{answer} {version_} {flags}")
+    printl("{"{name}" == "Silver"} {"b{1}" > "a{2}"}")
+    printl(describe(Point(1, 2)))
+
+    mutable val i = 0
+    mutable val text = ""
+    while i < 3 {
+        text = "{text}{i},"
+        i += 1
+    }
+    printl(text)
+
+    printl("order: {noisy("first", 1)} {noisy("second", 2)}")
+    printl(early(false))
+    printl(early(true))
+    if false {
+        printl("{spin()}")
+        printl(String(spin()))
+        printl(spin())
+    }
+    val unused = "{noisy("unused", 3)}"
+    printl(unused)
+}

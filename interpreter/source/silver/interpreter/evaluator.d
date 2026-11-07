@@ -363,8 +363,12 @@ class Evaluator
     }
 
     /// `UInt8(x)`. A value that doesn't fit panics, as does NaN; a Float is truncated first.
+    /// `String(x)` formats it as `print` would.
     private Variant convert(Variant value, Type target)
     {
+        import std.conv : to;
+
+        if (target == analysis.types.string_) return Variant(value.to!string);
         if (target == analysis.types.float_)
         {
             if (value.peek!double) return value;
@@ -480,6 +484,18 @@ class Evaluator
     private Variant evaluate(const StringLiteral ast, Environment variables)
     {
         return makeValue(ast.value);
+    }
+
+    private Variant evaluate(const InterpolatedString ast, Environment variables)
+    {
+        import std.conv : to;
+
+        string text;
+        foreach (part; ast.parts)
+        {
+            text ~= evaluate(part, variables).to!string;
+        }
+        return Variant(text);
     }
 
     private Variant evaluate(const Identifier ast, Environment variables)

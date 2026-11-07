@@ -1,0 +1,27 @@
+Hello, Silver!
+Silver
+SilverSilver
+  spaces  Silver  kept  
+Silver
+200 -5 18446744073709551615 1 -1
+1.5 0.5 true false ()
+sum: 7, call: 8, member: true
+if: big
+block: 6
+nested: inner Silver deep 1
+concat: Silver!
+{literal} and } alone, {Silver}
+tab	here, quote "Silver", newline next
+Silver
+nul: true
+42 v42.2 true 1.5 () text 255
+true true
+(1, 2)
+0,1,2,
+evaluating first
+evaluating second
+order: 1 2
+before 1 after
+returned
+evaluating unused
+3

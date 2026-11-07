@@ -35,6 +35,21 @@ package final class ConstantFailure : Exception
     }
 }
 
+/// `value` as a string hole shows it, the same way the backends format it at runtime.
+package string formatValue(const ConstValue value)
+{
+    import std.conv : to;
+
+    return value.match!(
+        (const ConstInt v) => v.value.to!string,
+        (const ConstUInt v) => v.value.to!string,
+        (const bool v) => v.to!string,
+        (const double v) => v.to!string,
+        (const string v) => v,
+        (const ConstUnit _) => "()",
+    );
+}
+
 /// `lhs op rhs` for two values of one type, which sema has checked. `op` isn't `&&` or `||`,
 /// which short-circuit, so their caller decides whether there's a `rhs`. `info` describes the
 /// type when it's an integer.

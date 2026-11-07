@@ -173,6 +173,7 @@ private final class TypeChecker
             (const IntLiteral _) => true,
             (const FloatLiteral _) => true,
             (const StringLiteral _) => true,
+            (const InterpolatedString interpolated) => interpolated.parts.all!(p => requireConstantExpr(p)),
             (const UnitLiteral _) => true,
             (const UnaryExpr unary) => requireConstantExpr(*unary.operand),
             (const BinaryExpr binary) => requireConstantExpr(*binary.left) && requireConstantExpr(*binary.right),
@@ -229,6 +230,12 @@ private final class TypeChecker
                 evaluateNamedConstants(*binary.left);
                 evaluateNamedConstants(*binary.right);
             },
+            (const InterpolatedString interpolated) {
+                foreach (part; interpolated.parts)
+                {
+                    evaluateNamedConstants(part);
+                }
+            },
             (const Identifier _) => evaluateNamedConstant(expr),
             (const MemberAccess _) => evaluateNamedConstant(expr),
             (_) {},
@@ -275,6 +282,7 @@ private final class TypeChecker
                 string text = literal.value;
                 return boxedConstant(ConstValue(text));
             },
+            (const InterpolatedString interpolated) => interpolatedConstantValue(interpolated),
             (const UnitLiteral _) => boxedConstant(ConstValue(ConstUnit())),
             (const IntLiteral literal) => integerLiteralValue(expr, literal),
             (const Identifier _) => namedConstantValue(expr),
@@ -283,6 +291,18 @@ private final class TypeChecker
             (const BinaryExpr binary) => binaryConstantValue(expr, binary),
             (_) => assert(0, "requireConstantExpr rejected everything else"),
         );
+    }
+
+    private const(ConstValue)* interpolatedConstantValue(const InterpolatedString interpolated)
+    {
+        string text;
+        foreach (part; interpolated.parts)
+        {
+            auto value = constantValue(part);
+            if (value is null) return null;
+            text ~= formatValue(*value);
+        }
+        return boxedConstant(ConstValue(text));
     }
 
     private static const(ConstValue)* boxedConstant(ConstValue value)
@@ -570,6 +590,7 @@ private final class TypeChecker
             },
             (const FloatLiteral _) => _types.float_,
             (const StringLiteral _) => _types.string_,
+            (const InterpolatedString interpolated) => synthesizeInterpolated(interpolated, ctx),
             (const UnaryExpr unary) => synthesizeUnary(unary, expr.span, ctx),
             (const BinaryExpr binary) => synthesizeBinary(binary, expr.span, ctx),
             (const CallExpr call) => expr.id in _resolutions.conversions
@@ -584,6 +605,16 @@ private final class TypeChecker
         );
         _exprTypes[expr.id] = type;
         return type;
+    }
+
+    /// A hole takes whatever `print` does, so its type needs no check of its own.
+    private Type synthesizeInterpolated(const InterpolatedString interpolated, BodyContext ctx)
+    {
+        foreach (part; interpolated.parts)
+        {
+            synthesize(part, ctx);
+        }
+        return _types.string_;
     }
 
     private bool isNumeric(Type t)
@@ -604,7 +635,7 @@ private final class TypeChecker
     }
 
     /// `UInt8(x)`: a literal is checked against the target where it's written, and any other
-    /// number at runtime, where one that doesn't fit panics.
+    /// number at runtime, where one that doesn't fit panics. `String(x)` takes whatever `print` does.
     private Type synthesizeConversion(const CallExpr call, Type target, Span span, BodyContext ctx)
     {
         _exprTypes[call.callee.id] = target;
@@ -615,11 +646,17 @@ private final class TypeChecker
                 synthesize(arg, ctx);
             }
             _collector.reportError(DiagnosticCode.WrongArgumentCount, span,
-                "`%s` converts one number, got %s arguments".format(_types.describe(target), call.args.length));
+                "`%s` converts one %s, got %s arguments".format(_types.describe(target),
+                    target == _types.string_ ? "value" : "number", call.args.length));
             return target;
         }
 
         auto arg = call.args[0];
+        if (target == _types.string_)
+        {
+            synthesize(arg, ctx);
+            return target;
+        }
         if (isIntLiteral(arg))
         {
             check(arg, target, ctx);

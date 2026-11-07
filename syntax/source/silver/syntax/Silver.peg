@@ -133,11 +133,15 @@ Silver:
 
     BooleanLiteral      <- TRUE / FALSE
 
-    # Single line only. Unknown escapes are rejected, so `\(` or `\{` stays free for interpolation.
+    # Single line only. Unknown escapes are rejected, so they stay free for later.
     StringLiteral       <- doublequote StringPart* doublequote
-    StringPart          <- StringText / EscapeSequence
-    StringText          <~ (!doublequote !backslash !eol .)+
-    EscapeSequence      <~ backslash (doublequote / backslash / [nrt0])
+    StringPart          <- StringText / EscapeSequence / StringHole
+    StringText          <~ (!doublequote !backslash !eol !'{' .)+
+    EscapeSequence      <~ backslash (doublequote / backslash / [nrt0{}])
+    # Not `<`, which would also skip the text's own spaces around the hole. The expression is
+    # required, but lowering can say so better than a parse error could; the braces are kept
+    # so an empty hole still matches text, as in ListLiteral.
+    StringHole          <- '{' :Spacing Expression? :Spacing '}'
 
     NumberLiteral       <-  ScientificLiteral
                           / HexaLiteral

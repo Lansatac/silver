@@ -355,6 +355,12 @@ private final class Indexer
         }
         e.kind.match!(
             (const Identifier _) { index.uses[e.span.start] = e.id; },
+            (const InterpolatedString s) {
+                foreach (part; s.parts)
+                {
+                    visit(part);
+                }
+            },
             (const UnaryExpr u) => visit(u.operand),
             (const BinaryExpr b) { visit(b.left); visit(b.right); },
             (const CallExpr c) {
