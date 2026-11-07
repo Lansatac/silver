@@ -7,29 +7,29 @@ version (unittest) import fluent.asserts;
 
 version (unittest)
 {
-    import silver.ast : DiagnosticCode, formatDiagnostic, Program, SourceContext;
+    import silver.ast : DiagnosticCode, formatDiagnostic, SourceContext;
     import silver.loader : load, standardLibraryPath;
+    import silver.sema : analyze;
 
-    /// Loads `source` as the module `file`, throwing on a parse error and
-    /// failing on any error the loader reports.
-    Program loadProgram(string source, string file = "test", string[] importPaths = [])
+    /// Runs `source` as the driver does, failing on anything the loader or sema reports.
+    string runChecked(string source, string[] importPaths)
     {
         import std.algorithm : map;
         import std.array : join;
 
         auto context = new SourceContext;
-        auto program = load(source, file, importPaths, context);
+        auto program = load(source, "test", importPaths, context);
+        auto analysis = analyze(program, context.collector);
         assert(!context.collector.hasErrors, context.collector.errors
-                .map!(d => formatDiagnostic(d, context.sources)).join("
-"));
-        return program;
+                .map!(d => formatDiagnostic(d, context.sources)).join("\n"));
+        auto evaluator = new Evaluator(program, analysis);
+        evaluator.run();
+        return evaluator.output;
     }
 
     string runProgram(string source)
     {
-        auto evaluator = new Evaluator(loadProgram(source, "test", [standardLibraryPath()]), null);
-        evaluator.run();
-        return evaluator.output;
+        return runChecked(source, [standardLibraryPath()]);
     }
 
     /// Runs `source` with `files` (path to text) as modules on an import path,
@@ -52,9 +52,7 @@ version (unittest)
             auto header = text.startsWith("module ") ? "" : "module " ~ fileName.stripExtension.replace("/", ".") ~ "\n";
             write(path, header ~ text);
         }
-        auto evaluator = new Evaluator(loadProgram(source, "test", [directory, standardLibraryPath()]), null);
-        evaluator.run();
-        return evaluator.output;
+        return runChecked(source, [directory, standardLibraryPath()]);
     }
 
     /// Runs `body` as the body of the entry module's `main`.
@@ -129,7 +127,7 @@ unittest
 @("If Statements - false")
 unittest
 {
-    runMain("val a = 1
+    runMain("mutable val a = 1
      if false {
         a = 2
      }
@@ -168,22 +166,6 @@ unittest
      print(i)").should.equal("3");
 }
 
-@("While condition must be a boolean")
-unittest
-{
-    runMain("while 1 { }").should.throwException!RuntimeError.withMessage(
-        "While condition must be a boolean");
-}
-
-@("Block scope - inner declaration does not leak")
-unittest
-{
-    runMain("if true {
-        val b = 2
-     }
-     print(b)").should.throwException!RuntimeError.withMessage("Variable 'b' not found");
-}
-
 @("Block scope - assignment updates outer variable")
 unittest
 {
@@ -196,23 +178,17 @@ unittest
      print(a)").should.equal("3");
 }
 
-@("Block scope - shadowing")
+@("Block scope - sibling blocks can use the same name")
 unittest
 {
-    runMain("val a = 1
+    runMain("if true {
+        val a = 1
+        print(a)
+     }
      if true {
         val a = 2
         print(a)
-     }
-     print(a)").should.equal("21");
-}
-
-@("Block scope - duplicate declaration in same scope")
-unittest
-{
-    runMain("val a = 1
-     val a = 2").should.throwException!RuntimeError.withMessage(
-        "Duplicate declaration of variable a");
+     }").should.equal("12");
 }
 
 @("Call function")
@@ -236,73 +212,24 @@ def main(): Unit {
 }").should.equal("3");
 }
 
-@("Function sees variables from where it was defined")
-unittest
-{
-    runMain("val x = 1
-     def f() : Int => x + 1
-     print(f())").should.equal("2");
-}
-
-@("Function does not see caller's variables")
-unittest
-{
-    runMain("val x = 1
-     def show() : Int => x
-     def caller() : Int {
-        val x = 2
-        show()
-     }
-     print(caller())").should.equal("1");
-}
-
-@("Function locals do not leak")
-unittest
-{
-    runProgram("def f() : Int {
-        val local = 1
-        local
-     }
-def main(): Unit {
-     f()
-     print(local)
-}").should.throwException!RuntimeError.withMessage("Variable 'local' not found");
-}
-
-@("Wrong argument count")
-unittest
-{
-    runProgram("def f(a : Int) : Int => a
-def main(): Unit {
-     print(f())
-}").should.throwException!RuntimeError.withMessage("f expects 1 arguments, got 0");
-}
-
-@("val cannot be reassigned")
-unittest
-{
-    runMain("val a = 1
-     a = 2").should.throwException!RuntimeError.withMessage("Cannot assign to val 'a'. Declare as 'mutable val' to reassign it.");
-}
-
 @("Runtime errors report their Silver source location")
 unittest
 {
-    auto source = "def main(): Unit {\n    val a = 1\n    a = 2\n}";
+    auto source = "def main(): Unit {\n    val a = 0\n    printl(1 / a)\n}";
     auto context = new SourceContext;
-    auto program = load(source, "test.ag", [], context);
-    auto evaluator = new Evaluator(program, null);
+    auto program = load(source, "test.ag", [standardLibraryPath()], context);
+    auto evaluator = new Evaluator(program, analyze(program, context.collector));
     try
     {
         evaluator.run();
-        assert(false, "Expected assignment to val to fail");
+        assert(false, "Expected dividing by zero to fail");
     }
     catch (RuntimeError e)
     {
         e.diagnostic.span.file.should.equal("test.ag");
         context.sources.locate(e.diagnostic.span).line.should.equal(3);
-        e.diagnostic.code.should.equal(DiagnosticCode.AssignToImmutable);
-        e.msg.should.equal("Cannot assign to val 'a'. Declare as 'mutable val' to reassign it.");
+        e.diagnostic.code.should.equal(DiagnosticCode.DivisionByZero);
+        e.msg.should.equal("Division by zero");
     }
 }
 
@@ -336,27 +263,6 @@ unittest
     runProgram("native def missing() : Unit
 def main(): Unit {}").should.throwException!RuntimeError.withMessage(
         "No native binding for missing");
-}
-
-@("Native function argument count is checked")
-unittest
-{
-    runMain("print()").should.throwException!RuntimeError.withMessage(
-        "print expects 1 arguments, got 0");
-}
-
-@("A module without main is an error")
-unittest
-{
-    runProgram("def f() : Unit => ()").should.throwException!RuntimeError.withMessage(
-        "the program must define `def main(): Unit` in one of its modules");
-}
-
-@("main must take no parameters")
-unittest
-{
-    runProgram("def main(args : Int) : Unit => ()").should.throwException!RuntimeError.withMessage(
-        "`main` must take no parameters");
 }
 
 @("Functions can be declared after main")
@@ -403,35 +309,6 @@ def main(): Unit => printl(f())", ["a.ag": "def f(): Int => 1"]).should.equal("2
 ");
 }
 
-@("A local variable hides a module path")
-unittest
-{
-    runWithModules("import a
-def main(): Unit {
-    val a = 3
-    printl(a.f())
-}", ["a.ag": "def f(): Int => 1"]).should.throwException!RuntimeError.withMessage(
-        "3 has no member f");
-}
-
-@("An import shadows the prelude")
-unittest
-{
-    runWithModules("import a
-def main(): Unit => print(1)", ["a.ag": "def print(value: Int): Unit => printl(value + 1)"])
-        .should.equal("2
-");
-}
-
-@("A name defined by two imports is ambiguous where it's used")
-unittest
-{
-    runWithModules("import a
-import b
-def main(): Unit => printl(f())", ["a.ag": "def f(): Int => 1", "b.ag": "def f(): Int => 2"])
-        .should.throwException!RuntimeError.withMessage("'f' is ambiguous: it's defined in a, b");
-}
-
 @("Importing two modules that define the same name is fine if it's only used qualified")
 unittest
 {
@@ -442,7 +319,7 @@ def main(): Unit => printl(a.f() + b.f())", ["a.ag": "def f(): Int => 1", "b.ag"
 ");
 }
 
-@("Imports aren't visible to the importing module's importers")
+@("An imported module can use its own imports")
 unittest
 {
     auto files = ["a.ag": "import b
@@ -450,12 +327,6 @@ def g(): Int => f()", "b.ag": "def f(): Int => 1"];
     runWithModules("import a
 def main(): Unit => printl(g())", files).should.equal("1
 ");
-    runWithModules("import a
-def main(): Unit => printl(f())", files).should.throwException!RuntimeError.withMessage(
-        "Variable 'f' not found");
-    runWithModules("import a
-def main(): Unit => printl(b.f())", files).should.throwException!RuntimeError.withMessage(
-        "Variable 'b' not found");
 }
 
 @("Modules in an import cycle can call each other")
@@ -471,52 +342,10 @@ def g(n: Int): Int => a.f(n)",
 ");
 }
 
-@("A module path is not a value")
-unittest
-{
-    auto files = ["a/b.ag": "def f(): Int => 1"];
-    runWithModules("import a.b
-def main(): Unit => printl(a.b)", files).should.throwException!RuntimeError.withMessage(
-        "Module path 'a.b' is not a value");
-    runWithModules("import a.b
-def main(): Unit => printl(a)", files).should.throwException!RuntimeError.withMessage(
-        "Module path 'a' is not a value");
-}
-
-@("A path through a module reports the missing part")
-unittest
-{
-    auto files = ["a/b.ag": "def f(): Int => 1"];
-    runWithModules("import a.b
-def main(): Unit => printl(a.c.f())", files).should.throwException!RuntimeError.withMessage(
-        "Module path 'a' has no member 'c'");
-    runWithModules("import a.b
-def main(): Unit => printl(a.b.g())", files).should.throwException!RuntimeError.withMessage(
-        "Module a.b has no member g");
-}
-
-@("An imported name can't be assigned")
-unittest
-{
-    runWithModules("import a
-def main(): Unit {
-    f = 1
-}", ["a.ag": "def f(): Int => 1"]).should.throwException!RuntimeError.withMessage(
-        "Cannot assign to imported 'f'");
-}
-
 @("main can be in a module the starting file imports")
 unittest
 {
     runWithModules("import app", ["app.ag": "def main(): Unit => printl(1)"]).should.equal("1\n");
-}
-
-@("A program with main in two modules is an error")
-unittest
-{
-    runWithModules("import a\ndef main(): Unit => ()", ["a.ag": "def main(): Unit => ()"])
-        .should.throwException!RuntimeError.withMessage(
-            "`main` is defined in more than one module: a, test");
 }
 
 @("A string literal prints without quotes, with escapes decoded")

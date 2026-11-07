@@ -33,7 +33,6 @@ enum DiagnosticCode : string
     TypeMismatch = "T0001",
     NotCallable = "T0002",
     WrongArgumentCount = "T0003",
-    ConditionNotBool = "T0004",
     InvalidOperand = "T0005",
     UnknownMember = "T0006",
     LiteralOutOfRange = "T0007",

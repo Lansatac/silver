@@ -1,9 +1,8 @@
 module silver.interpreter.values;
 
 import std.variant : Variant;
-import silver.ast : DiagnosticCode, FunctionDecl, TypeDecl;
+import silver.ast : FunctionDecl, TypeDecl;
 import silver.interpreter.environment : Environment;
-import silver.interpreter.errors : CodedException;
 
 /// The runtime value of `()`, e.g. a block that doesn't end in an expression.
 struct Unit
@@ -15,7 +14,7 @@ struct Unit
 }
 
 /// The D implementation behind a `native def`. Arguments are already
-/// evaluated and their count checked against the declaration.
+/// evaluated, and sema has checked them against the declaration.
 alias NativeFunction = Variant delegate(Variant[] args);
 
 class Function
@@ -95,8 +94,6 @@ class Instance
 
     private size_t indexOf(string name)
     {
-        import std.format : format;
-
         foreach (i, field; constructor.declaration.fields)
         {
             if (field.name == name)
@@ -104,7 +101,7 @@ class Instance
                 return i;
             }
         }
-        throw new CodedException(DiagnosticCode.UnknownMember, "%s has no member %s".format(constructor, name));
+        assert(0, "sema reports an unknown field");
     }
 
     override string toString()
@@ -171,13 +168,9 @@ class ModuleValue
     /// Deliberately does not search parent environments.
     Variant member(string memberName)
     {
-        import std.format : format;
-
-        if (auto value = memberName in environment.variables)
-        {
-            return *value;
-        }
-        throw new CodedException(DiagnosticCode.UnknownModuleMember, "Module %s has no member %s".format(name, memberName));
+        auto value = memberName in environment.variables;
+        assert(value !is null, "sema reports an unknown module member");
+        return *value;
     }
 
     override string toString() const

@@ -1,17 +1,13 @@
 module silver.interpreter.environment;
 
-import std.format : format;
 import std.variant : Variant;
-import silver.ast : DiagnosticCode;
-import silver.interpreter.errors : CodedException;
 import silver.interpreter.values : ModuleValue;
 
-/// One scope's variables, chained to the scope it's nested in.
+/// One scope's variables, chained to the scope it's nested in. Sema has already checked every
+/// declaration and assignment, so a lookup that fails here is a bug.
 class Environment
 {
     Variant[string] variables;
-    /// Names declared with `val`, which can't be reassigned.
-    bool[string] immutables;
     Environment parent;
 
     this(Environment parent = null)
@@ -19,46 +15,21 @@ class Environment
         this.parent = parent;
     }
 
-    void defineVariable(string name, Variant value, bool mutable = true)
+    void defineVariable(string name, Variant value)
     {
-        if (name in variables)
-        {
-            throw new CodedException(DiagnosticCode.DuplicateDeclaration, "Duplicate declaration of variable %s".format(name));
-        }
+        assert(name !in variables, "sema reports a duplicate declaration");
         variables[name] = value;
-        if (!mutable)
-        {
-            immutables[name] = true;
-        }
     }
 
     void setVariable(string name, Variant value)
     {
         if (name in variables)
         {
-            if (name in immutables)
-            {
-                throw new CodedException(DiagnosticCode.AssignToImmutable, "Cannot assign to val '%s'. Declare as 'mutable val' to reassign it.".format(name));
-            }
             variables[name] = value;
+            return;
         }
-        else if (parent !is null)
-        {
-            parent.setVariable(name, value);
-        }
-        else
-        {
-            throw new CodedException(DiagnosticCode.UnknownName, "Variable '%s' not found".format(name));
-        }
-    }
-
-    Variant resolveVariable(string name)
-    {
-        if (auto value = find(name))
-        {
-            return *value;
-        }
-        throw new CodedException(DiagnosticCode.UnknownName, "Variable '%s' not found".format(name));
+        assert(parent !is null, "sema only lets a local be assigned");
+        parent.setVariable(name, value);
     }
 
     /// The variable `name` in this scope or an enclosing one, or null.
@@ -72,55 +43,25 @@ class Environment
     }
 }
 
-/// The names a module gets from its imports and then the prelude, searched after the
+/// The names a module gets from its imports, the prelude among them, searched after the
 /// module's own definitions. Each module has its own, so imports aren't transitive.
 class ImportScope : Environment
 {
     /// By dotted name.
     ModuleValue[string] modules;
-    /// Searched after every import, so an import can shadow the prelude. Null for the prelude itself.
-    Environment prelude;
 
-    this(Environment prelude)
-    {
-        super(null);
-        this.prelude = prelude;
-    }
-
-    /// Throws: if more than one imported module defines `name`.
     override Variant* find(string name)
     {
-        import std.algorithm : sort;
-        import std.array : join;
-
         Variant* found;
-        string[] owners;
-        foreach (moduleName, imported; modules)
+        foreach (imported; modules)
         {
             if (auto value = name in imported.environment.variables)
             {
+                assert(found is null, "sema reports a name that's ambiguous between imports");
                 found = value;
-                owners ~= moduleName;
             }
         }
-        if (owners.length > 1)
-        {
-            throw new CodedException(DiagnosticCode.AmbiguousName, "'%s' is ambiguous: it's defined in %s".format(name, owners.sort.join(", ")));
-        }
-        if (found is null && prelude !is null)
-        {
-            found = name in prelude.variables;
-        }
         return found;
-    }
-
-    override void setVariable(string name, Variant value)
-    {
-        if (find(name) !is null)
-        {
-            throw new CodedException(DiagnosticCode.InvalidAssignmentTarget, "Cannot assign to imported '%s'".format(name));
-        }
-        throw new CodedException(DiagnosticCode.UnknownName, "Variable '%s' not found".format(name));
     }
 
     /// The import scope that `environment`'s lookups end in.

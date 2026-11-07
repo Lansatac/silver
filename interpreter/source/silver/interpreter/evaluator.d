@@ -36,18 +36,16 @@ class Evaluator
         return outputText;
     }
 
-    /// `analysis` is null only for programs that skip sema, like the interpreter's own tests.
-    /// Integer literals in those programs stay Int, even where a Float is expected.
+    /// `analysis` is sema's result for `program`, which must have no errors. What sema rejects
+    /// isn't checked again here, so only panics and missing native bindings fail at runtime.
     nothrow this(Program program, const Analysis analysis, bool useStdOut = false)
+    in (analysis !is null)
     {
         this.program = program;
         this.analysis = analysis;
         this.useStdOut = useStdOut;
     }
 
-    /// Names every module can see without importing them, loaded from prelude.ag.
-    /// Every module's ImportScope searches it last.
-    private Environment prelude;
     /// Every module run so far, by dotted name, so each runs once however often it's imported.
     private ModuleValue[string] modules;
     /// Implementations for `native def`s, by function name.
@@ -56,43 +54,23 @@ class Evaluator
     void run()
     {
         bindNatives();
-        prelude = new Environment(new ImportScope(null));
-        modules["prelude"] = new ModuleValue("prelude", prelude);
+        auto prelude = new ModuleValue("prelude", new Environment(new ImportScope));
+        modules["prelude"] = prelude;
         auto preludeModule = program.modules.get("prelude", null);
         if (preludeModule !is null)
         {
-            execute(*preludeModule, prelude);
+            execute(*preludeModule, prelude.environment);
         }
         callMain();
     }
 
     /// Runs the module that defines `main`, which runs everything it imports, then calls `main`.
-    /// Sema reports a program without exactly one `main`; this repeats the check for programs
-    /// that skip sema, like the interpreter's own tests.
     private void callMain()
     {
-        import std.algorithm : map;
-        import std.array : join;
-
         auto mains = mainFunctions(program);
-        if (mains.length == 0)
-        {
-            throw runtimeError(Span.init, new CodedException(DiagnosticCode.MissingMain,
-                "the program must define `def main(): Unit` in one of its modules"));
-        }
-        if (mains.length > 1)
-        {
-            throw runtimeError(mains[1].nameSpan, new CodedException(DiagnosticCode.MultipleMains,
-                "`main` is defined in more than one module: " ~ mains.map!(m => m.moduleName).join(", ")));
-        }
+        assert(mains.length == 1, "sema reports a program without exactly one `main`");
         auto environment = moduleValue(mains[0].moduleName).environment;
-        auto entry = environment.variables["main"];
-        auto main = entry.get!Function;
-        if (main.declaration.params.length > 0)
-        {
-            throw runtimeError(main.declaration.nameSpan, new CodedException(DiagnosticCode.MainInvalidDefinition, "`main` must take no parameters"));
-        }
-        call(entry, [], environment);
+        call(environment.variables["main"], [], environment);
     }
 
     private void execute(const Module ast, Environment variables)
@@ -125,15 +103,6 @@ class Evaluator
         {
             ast.kind.match!(s => execute(s, variables));
         }
-        catch (ReturnSignal signal)
-        {
-            if (!signal.located)
-            {
-                signal.span = ast.span;
-                signal.located = true;
-            }
-            throw signal;
-        }
         catch (RuntimeError e)
         {
             throw e;
@@ -146,7 +115,7 @@ class Evaluator
 
     private void execute(const VarDecl ast, Environment variables)
     {
-        variables.defineVariable(ast.name, evaluate(ast.value, variables), ast.mutable);
+        variables.defineVariable(ast.name, evaluate(ast.value, variables));
     }
 
     private void execute(const AssignStmt ast, Environment variables)
@@ -164,9 +133,7 @@ class Evaluator
                 auto updated = withField(evaluate(*m.object, variables), m.member, value);
                 assign(*m.object, updated, variables);
             },
-            (_) {
-                throw new CodedException(DiagnosticCode.InvalidAssignmentTarget, "PH: Can only assign to a variable or field");
-            });
+            (_) { assert(0, "sema only lets a variable or field be assigned"); });
     }
 
     private void bindNatives()
@@ -253,10 +220,6 @@ class Evaluator
     /// Sema has already evaluated it, so nothing here depends on the order modules run in.
     private void execute(const ConstDecl ast, Environment variables)
     {
-        if (analysis is null)
-        {
-            throw new CodedException(DiagnosticCode.InternalError, "A top-level constant needs sema to evaluate it");
-        }
         auto type = analysis.typeOf(ast.id);
         auto value = analysis.valueOf(ast.id).match!(
             (const ConstInt v) => integerValue(v.value, type),
@@ -266,7 +229,7 @@ class Evaluator
             (string v) => Variant(v),
             (const ConstUnit _) => Variant(Unit()),
         );
-        variables.defineVariable(ast.name, value, false);
+        variables.defineVariable(ast.name, value);
     }
 
     /// `value` as the D type holding Silver's `type`.
@@ -304,7 +267,9 @@ class Evaluator
         {
             throw new CodedException(DiagnosticCode.InternalError, "Module %s was not loaded".format(name));
         }
-        auto value = new ModuleValue(name, new Environment(new ImportScope(prelude)));
+        auto imports = new ImportScope;
+        imports.modules["prelude"] = modules["prelude"];
+        auto value = new ModuleValue(name, new Environment(imports));
         // Recorded before running, so an import cycle gets this module back instead of recursing.
         modules[name] = value;
         execute(*loaded, value.environment);
@@ -325,12 +290,9 @@ class Evaluator
                 (const CallExpr call) => evaluateCall(call, ast.id, variables),
                 (const BinaryExpr binary) => evaluateBinary(binary, ast.id, variables),
                 s => evaluate(s, variables));
-            if (analysis !is null)
+            if (auto option = analysis.promotionOf(ast.id))
             {
-                if (auto option = analysis.promotionOf(ast.id))
-                {
-                    return promote(value, analysis.typeOf(ast.id), *option);
-                }
+                return promote(value, analysis.typeOf(ast.id), *option);
             }
             return value;
         }
@@ -401,7 +363,7 @@ class Evaluator
     /// could vanish, so the statement was skipped without any error.
     private Variant evaluateCall(const CallExpr call, Id!Expr id, Environment variables)
     {
-        if (analysis !is null && analysis.isConversion(id))
+        if (analysis.isConversion(id))
         {
             return convert(evaluate(call.args[0], variables), analysis.typeOf(id));
         }
@@ -411,8 +373,6 @@ class Evaluator
     /// Sema gives an integer literal the type expected of it, as in `half(3)`.
     private Variant intLiteralValue(const IntLiteral literal, Id!Expr id)
     {
-        if (analysis is null) return Variant(cast(long) literal.value);
-
         auto type = analysis.typeOf(id);
         if (type == analysis.types.float_) return Variant(cast(double) literal.value);
         auto info = analysis.types.integerOf(type);
@@ -566,11 +526,9 @@ class Evaluator
 
     private Variant evaluate(const Identifier ast, Environment variables)
     {
-        if (auto value = variables.find(ast.name))
-        {
-            return *value;
-        }
-        return resolveModulePath([ast.name], variables);
+        auto value = variables.find(ast.name);
+        assert(value !is null, "sema reports a name that isn't in scope");
+        return *value;
     }
 
     private Variant evaluate(const UnaryExpr ast, Environment variables)
@@ -632,10 +590,6 @@ class Evaluator
     private class ReturnSignal : Throwable
     {
         Variant value;
-        /// Where the `return` is, for the error if it escapes to top level.
-        /// Filled in by the enclosing execute(Stmt).
-        Span span;
-        bool located;
 
         this(Variant value)
         {
@@ -651,29 +605,11 @@ class Evaluator
 
     private Variant call(Variant callee, Variant[] args, Environment variables)
     {
-        import std.format : format;
-
         if (auto constructor = callee.peek!Constructor)
         {
-            auto declaration = (*constructor).declaration;
-            if (args.length != declaration.fields.length)
-            {
-                throw new CodedException(DiagnosticCode.WrongArgumentCount, "%s expects %s arguments, got %s".format(
-                        declaration.name, declaration.fields.length, args.length));
-            }
             return Variant(new Instance(*constructor, args));
         }
-        if (!callee.convertsTo!Function)
-        {
-            throw new CodedException(DiagnosticCode.NotCallable, "%s is not a function".format(callee));
-        }
         auto fn = callee.get!Function;
-        if (args.length != fn.declaration.params.length)
-        {
-            throw new CodedException(DiagnosticCode.WrongArgumentCount, "%s expects %s arguments, got %s".format(
-                    fn.declaration.name, fn.declaration.params.length, args.length));
-        }
-
         if (fn.native !is null)
         {
             return fn.native(args);
@@ -690,7 +626,7 @@ class Evaluator
         {
             auto value = evaluate(*fn.declaration.body, functionEnv);
             // Whatever the body ended in, a Unit function's value is dropped.
-            if (analysis !is null && analysis.signatureOf(fn.declaration.id).ret == analysis.types.unit)
+            if (analysis.signatureOf(fn.declaration.id).ret == analysis.types.unit)
             {
                 return Variant(Unit());
             }
@@ -705,7 +641,6 @@ class Evaluator
     private Variant evaluate(const MemberAccess ast, Environment variables)
     {
         // A chain like `std.math.pow` whose first name isn't a variable is a module path.
-        // Variables win, so a local `std` hides every module under std.
         auto base = dottedPath(*ast.object);
         if (base !is null && variables.find(base[0]) is null)
         {
@@ -716,23 +651,12 @@ class Evaluator
 
     private static Variant member(Variant object, string name)
     {
-        return instanceWithMember(object, name).field(name);
+        return object.get!Instance.field(name);
     }
 
     private static Variant withField(Variant object, string name, Variant value)
     {
-        return Variant(instanceWithMember(object, name).withField(name, value));
-    }
-
-    private static Instance instanceWithMember(Variant object, string name)
-    {
-        import std.format : format;
-
-        if (auto instance = object.peek!Instance)
-        {
-            return *instance;
-        }
-        throw new CodedException(DiagnosticCode.UnknownMember, "%s has no member %s".format(object, name));
+        return Variant(object.get!Instance.withField(name, value));
     }
 
     /// `a.b.c` as ["a", "b", "c"], or null if the chain doesn't start with an identifier.
@@ -748,12 +672,10 @@ class Evaluator
     }
 
     /// Looks `path` up as an imported module's member: the longest prefix that's an imported
-    /// module, then members within it. A path that names only a module, or part of one, is an error.
+    /// module, then members within it.
     private Variant resolveModulePath(string[] path, Environment variables)
     {
-        import std.algorithm : any, startsWith;
         import std.array : join;
-        import std.format : format;
 
         auto imports = ImportScope.of(variables);
         foreach_reverse (length; 1 .. path.length)
@@ -768,25 +690,12 @@ class Evaluator
                 return value;
             }
         }
-
-        foreach_reverse (length; 1 .. path.length + 1)
-        {
-            auto prefix = path[0 .. length].join(".");
-            if (imports.modules.byKey.any!(m => m == prefix || m.startsWith(prefix ~ ".")))
-            {
-                if (length == path.length)
-                {
-                    throw new CodedException(DiagnosticCode.ModuleIsNotAValue, "Module path '%s' is not a value".format(prefix));
-                }
-                throw new CodedException(DiagnosticCode.UnknownModuleMember, "Module path '%s' has no member '%s'".format(prefix, path[length]));
-            }
-        }
-        throw new CodedException(DiagnosticCode.UnknownName, "Variable '%s' not found".format(path[0]));
+        assert(0, "sema resolves every module path");
     }
 
     private Variant evaluate(const WhileExpr ast, Environment variables)
     {
-        while (evaluateCondition(*ast.condition, variables, "While"))
+        while (evaluate(*ast.condition, variables).get!bool)
         {
             evaluate(*ast.body, variables);
         }
@@ -799,7 +708,7 @@ class Evaluator
         bool taken;
         if (ast.binding is null)
         {
-            taken = evaluateCondition(*ast.condition, variables, "If");
+            taken = evaluate(*ast.condition, variables).get!bool;
         }
         else
         {
@@ -808,7 +717,7 @@ class Evaluator
             if (taken)
             {
                 trueScope = new Environment(variables);
-                trueScope.defineVariable(ast.binding.name, option.payload, false);
+                trueScope.defineVariable(ast.binding.name, option.payload);
             }
         }
 
@@ -820,16 +729,6 @@ class Evaluator
         }
         if (ast.falseBody !is null) return evaluate(*ast.falseBody, variables);
         return Variant(Unit());
-    }
-
-    private bool evaluateCondition(const Expr condition, Environment variables, string construct)
-    {
-        auto value = evaluate(condition, variables);
-        if (!value.convertsTo!bool)
-        {
-            throw new CodedException(DiagnosticCode.ConditionNotBool, construct ~ " condition must be a boolean");
-        }
-        return value.get!bool;
     }
 
     private Variant evaluate(const BlockExpr ast, Environment variables)
@@ -852,13 +751,11 @@ class Evaluator
     }
 
     /// Numbers are unwrapped first: Variant's own operators compute two longs as ulong.
-    /// Int and Float only meet in programs that skipped sema, where an integer literal beside
-    /// a Float hasn't been adapted, so a mixed pair is Float arithmetic.
     private Variant operate(BinaryOp operator, Variant lhs, Variant rhs)
     {
-        if (lhs.peek!double || rhs.peek!double)
+        if (auto left = lhs.peek!double)
         {
-            return operate(operator, lhs.get!double, rhs.get!double);
+            return operate(operator, *left, rhs.get!double);
         }
         foreach (T; IntegerTypes)
         {
@@ -867,12 +764,11 @@ class Evaluator
                 return operateInteger(operator, *left, rhs.get!T);
             }
         }
-        auto leftString = lhs.peek!string;
-        auto rightString = rhs.peek!string;
-        if (leftString && rightString)
+        if (auto left = lhs.peek!string)
         {
-            if (operator == BinaryOp.Concat) return Variant(*leftString ~ *rightString);
-            return compare(operator, *leftString, *rightString);
+            auto right = rhs.get!string;
+            if (operator == BinaryOp.Concat) return Variant(*left ~ right);
+            return compare(operator, *left, right);
         }
         switch (operator)
         {
@@ -881,10 +777,7 @@ class Evaluator
         case BinaryOp.NotEqual:
             return Variant(!valuesEqual(lhs, rhs));
         default:
-            import std.format : format;
-
-            throw new CodedException(DiagnosticCode.InvalidOperand,
-                "Unsupported operator %s for type %s".format(operator, lhs.type));
+            assert(0, "sema checked the operator against the operands' type");
         }
     }
 
@@ -996,14 +889,8 @@ class Evaluator
             return Variant(lhs > rhs);
         case BinaryOp.GreaterEqual:
             return Variant(lhs >= rhs);
-        case BinaryOp.And:
-        case BinaryOp.Or:
-            assert(0, "and/or short-circuit in evaluate(BinaryExpr)");
         default:
-            import std.format : format;
-
-            throw new CodedException(DiagnosticCode.InvalidOperand,
-                "Unsupported operator %s for %s".format(operator, T.stringof));
+            assert(0, "sema checked the operator against the operands' type, and and/or short-circuit earlier");
         }
     }
 
@@ -1064,10 +951,6 @@ class Evaluator
                 }
             }
         }
-
-        import std.conv : to;
-
-        throw new CodedException(DiagnosticCode.InvalidOperand,
-            "Unsupported unary operator " ~ operator.to!string ~ " for type " ~ value.type.to!string);
+        assert(0, "sema checked the operator against the operand's type");
     }
 }
