@@ -1,0 +1,10 @@
+type T(a: ((Int?)?)?)
+def main(): Unit {
+    val x: (((Int?)?)?)? = 1
+    printl(x)
+    printl(T(1))
+    printl(T(None))
+    printl(T(Some(None)))
+    printl(T(Some(Some(None))))
+    printl(x == 1)
+}

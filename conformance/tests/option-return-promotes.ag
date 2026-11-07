@@ -1,0 +1,8 @@
+def a(): Int? { return 1 }
+def b(): UInt8? { return 200 }
+def c(): (String?)? { return "x" }
+def d(): Unit? { return () }
+def e(): Unit? { return }
+def main(): Unit {
+    printl(a()); printl(b()); printl(c()); printl(d()); printl(e())
+}

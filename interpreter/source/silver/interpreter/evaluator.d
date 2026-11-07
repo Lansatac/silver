@@ -175,7 +175,11 @@ class Evaluator
 
         nativeBindings["print"] = (Variant[] args) => print(args[0], false);
         nativeBindings["printl"] = (Variant[] args) => print(args[0], true);
-        nativeBindings["read"] = (Variant[] args) => Variant(readln());
+        nativeBindings["read"] = (Variant[] args) {
+            auto line = readln();
+            if (line.length == 0) return Variant(OptionValue.none());
+            return Variant(OptionValue.some(Variant(line)));
+        };
         bindNumericNatives();
     }
 
@@ -316,10 +320,19 @@ class Evaluator
     {
         try
         {
-            return ast.kind.match!(
+            auto value = ast.kind.match!(
                 (const IntLiteral literal) => intLiteralValue(literal, ast.id),
                 (const CallExpr call) => evaluateCall(call, ast.id, variables),
+                (const BinaryExpr binary) => evaluateBinary(binary, ast.id, variables),
                 s => evaluate(s, variables));
+            if (analysis !is null)
+            {
+                if (auto option = analysis.promotionOf(ast.id))
+                {
+                    return promote(value, analysis.typeOf(ast.id), *option);
+                }
+            }
+            return value;
         }
         catch (RuntimeError e)
         {
@@ -329,6 +342,59 @@ class Evaluator
         {
             throw runtimeError(ast.span, e);
         }
+    }
+
+    /// `value`, of type `from`, as the option `to`. A `None` is the outermost one, however deep
+    /// `to` is, and anything else gets one `Some` for each level between the types.
+    private Variant promote(Variant value, Type from, Type to)
+    {
+        if (from == to || from == analysis.types.none) return value;
+        return Variant(OptionValue.some(promote(value, from, analysis.types.optionInner(to))));
+    }
+
+    private Variant evaluate(const SomeExpr ast, Environment variables)
+    {
+        return Variant(OptionValue.some(evaluate(*ast.value, variables)));
+    }
+
+    private Variant evaluate(const NoneLiteral ast, Environment variables)
+    {
+        return Variant(OptionValue.none());
+    }
+
+    private Variant evaluate(const PropagateExpr ast, Environment variables)
+    {
+        auto option = evaluate(*ast.operand, variables).get!OptionValue;
+        if (!option.present) throw new ReturnSignal(Variant(OptionValue.none()));
+        return option.payload;
+    }
+
+    /// A field that's already an option isn't wrapped again. Only such a field holds an OptionValue.
+    private Variant evaluate(const SafeMemberAccess ast, Environment variables)
+    {
+        auto option = evaluate(*ast.object, variables).get!OptionValue;
+        if (!option.present) return Variant(OptionValue.none());
+
+        auto field = member(option.payload, ast.member);
+        if (field.peek!OptionValue) return field;
+        return Variant(OptionValue.some(field));
+    }
+
+    /// `a ?? b`: `a` itself where the result is an option of the same type, and otherwise its
+    /// payload. `b` is only evaluated when `a` is `None`.
+    private Variant evaluateCoalesce(const BinaryExpr ast, Id!Expr id, Environment variables)
+    {
+        auto left = evaluate(*ast.left, variables);
+        auto option = left.get!OptionValue;
+        if (!option.present) return evaluate(*ast.right, variables);
+        if (analysis.typeOf(id) == analysis.typeOf(ast.left.id)) return left;
+        return option.payload;
+    }
+
+    private Variant evaluateBinary(const BinaryExpr ast, Id!Expr id, Environment variables)
+    {
+        if (ast.op == BinaryOp.Coalesce) return evaluateCoalesce(ast, id, variables);
+        return evaluate(ast, variables);
     }
 
     /// `if`, not `?:`: with dmd 2.113, an exception thrown from a `?:` that produces a Variant
@@ -622,7 +688,13 @@ class Evaluator
 
         try
         {
-            return evaluate(*fn.declaration.body, functionEnv);
+            auto value = evaluate(*fn.declaration.body, functionEnv);
+            // Whatever the body ended in, a Unit function's value is dropped.
+            if (analysis !is null && analysis.signatureOf(fn.declaration.id).ret == analysis.types.unit)
+            {
+                return Variant(Unit());
+            }
+            return value;
         }
         catch (ReturnSignal signal)
         {
@@ -723,14 +795,30 @@ class Evaluator
 
     private Variant evaluate(const IfExpr ast, Environment variables)
     {
-        if (evaluateCondition(*ast.condition, variables, "If"))
+        auto trueScope = variables;
+        bool taken;
+        if (ast.binding is null)
         {
-            return evaluate(*ast.trueBody, variables);
+            taken = evaluateCondition(*ast.condition, variables, "If");
         }
-        else if (ast.falseBody !is null)
+        else
         {
-            return evaluate(*ast.falseBody, variables);
+            auto option = evaluate(ast.binding.value, variables).get!OptionValue;
+            taken = option.present;
+            if (taken)
+            {
+                trueScope = new Environment(variables);
+                trueScope.defineVariable(ast.binding.name, option.payload, false);
+            }
         }
+
+        if (taken)
+        {
+            auto value = evaluate(*ast.trueBody, trueScope);
+            if (ast.falseBody is null) return Variant(Unit());
+            return value;
+        }
+        if (ast.falseBody !is null) return evaluate(*ast.falseBody, variables);
         return Variant(Unit());
     }
 
@@ -807,6 +895,13 @@ class Evaluator
         if (auto left = lhs.peek!Instance)
         {
             return (*left).fieldsEqual(rhs.get!Instance, (a, b) => operate(BinaryOp.Equal, a, b).get!bool);
+        }
+        if (auto left = lhs.peek!OptionValue)
+        {
+            auto right = rhs.get!OptionValue;
+            if (left.present != right.present) return false;
+            if (!left.present) return true;
+            return operate(BinaryOp.Equal, left.payload, right.payload).get!bool;
         }
         return lhs == rhs;
     }
@@ -904,8 +999,6 @@ class Evaluator
         case BinaryOp.And:
         case BinaryOp.Or:
             assert(0, "and/or short-circuit in evaluate(BinaryExpr)");
-        case BinaryOp.Coalesce:
-            throw new CodedException(DiagnosticCode.InternalError, "Coalesce operator not implemented");
         default:
             import std.format : format;
 

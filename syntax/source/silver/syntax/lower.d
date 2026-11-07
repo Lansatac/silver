@@ -1,6 +1,7 @@
 module silver.syntax.lower;
 
 import std.format : format;
+import std.sumtype : match;
 import pegged.grammar : ParseTree;
 import silver.ast;
 import silver.syntax.parse : ParseException;
@@ -97,16 +98,26 @@ private final class Lowering
         case "Silver.ValueDeclaration":
             // `Identifier TypeAnnotation? '=' Expression` once the keywords are discarded.
             auto name = cst[0].matches[0];
-            if (cst.children[$ - 1].name != "Silver.Expression")
-            {
-                // `mutable val x: Int?` with no initializer
-                throw new Exception("lower: declaration without an initializer not supported yet");
-            }
-            auto expr = convertExpression(cst.children[$ - 1]);
             TypeExpr* typeExpr = null;
             if (cst[1].name == "Silver.TypeAnnotation")
             {
                 typeExpr = boxed(convertTypeExpression(cst[1]));
+            }
+            Expr expr;
+            if (cst.children[$ - 1].name == "Silver.Expression")
+            {
+                expr = convertExpression(cst.children[$ - 1]);
+            }
+            else
+            {
+                // `mutable val x: Int?` with no initializer
+                auto isOption = typeExpr.kind.match!((const OptionType _) => true, _ => false);
+                if (!isOption)
+                {
+                    throw new ParseException(Diagnostic(DiagnosticCode.ParseError, spanOf(cst[0], file),
+                        "`%s` needs an initializer; only an option type defaults to `None`".format(name), Severity.Error));
+                }
+                expr = Expr(ids.next!Expr, spanOf(cst, file), ExprKind(NoneLiteral()));
             }
             auto mutable = cst.name == "Silver.VariableDeclaration";
             return Stmt(spanOf(cst, file), StmtKind(VarDecl(ids.next!VarDecl, name, spanOf(cst[0], file), expr, typeExpr, mutable)));
@@ -274,6 +285,7 @@ private final class Lowering
         case "Silver.BinaryLiteral":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(integerLiteral(cst.matches[0][2 .. $], 2)));
         case "Silver.TypeName":
+            if (cst.matches[0] == "None") return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(NoneLiteral()));
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(Identifier(cst.matches[0])));
         default:
             break;
@@ -363,10 +375,23 @@ private final class Lowering
     private Expr convertIfExpression(ParseTree cst)
     {
         cst.validateNodeIs("Silver.IfExpression");
-        auto condition = convertExpression(cst[0]);
+        Expr* condition = null;
+        VarDecl* binding = null;
+        if (cst[0].name == "Silver.IfBinding")
+        {
+            // `Identifier Expression` once the keyword and `=` are discarded.
+            auto head = cst[0];
+            binding = boxed(VarDecl(ids.next!VarDecl, head[0].matches[0], spanOf(head[0], file),
+                convertExpression(head[1]), null, false));
+        }
+        else
+        {
+            condition = boxed(convertExpression(cst[0]));
+        }
         auto thenBranch = convertExpression(cst[1]);
         Expr* elseBranch = cst.children.length > 2 ? boxed(convertExpression(cst[2])) : null;
-        return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(IfExpr(boxed(condition), boxed(thenBranch), elseBranch)));
+        return Expr(ids.next!Expr, spanOf(cst, file),
+            ExprKind(IfExpr(condition, boxed(thenBranch), elseBranch, binding)));
     }
 
     /// Applies one postfix operation (a call or member access) to `lhs`.
@@ -382,9 +407,15 @@ private final class Lowering
                 argument.validateNodeIs("Silver.Argument");
                 args ~= convertExpression(argument[0]);
             }
+            auto isSome = lhs.kind.match!((const Identifier callee) => callee.name == "Some", _ => false);
+            if (isSome && args.length == 1) return Expr(ids.next!Expr, span, ExprKind(SomeExpr(boxed(args[0]))));
             return Expr(ids.next!Expr, span, ExprKind(CallExpr(boxed(lhs), args)));
         case "Silver.MemberAccess":
             return Expr(ids.next!Expr, span, ExprKind(MemberAccess(boxed(lhs), op.matches[0])));
+        case "Silver.SafeMemberAccess":
+            return Expr(ids.next!Expr, span, ExprKind(SafeMemberAccess(boxed(lhs), op.matches[0])));
+        case "Silver.PropagateNone":
+            return Expr(ids.next!Expr, span, ExprKind(PropagateExpr(boxed(lhs))));
         default:
             throw new Exception("Expected call or member access, got '%s'".format(op.name));
         }
@@ -675,6 +706,18 @@ unittest
     assert(endOf(`"a // b" `) == 8);
     assert(endOf(`"a \" b" `) == 8);
     assert(endOf("{\n  x\n}\n") == 7);
+}
+
+@("only an option type can leave out a mutable val's initializer")
+unittest
+{
+    import std.exception : collectException;
+    import silver.syntax.parse : parse;
+
+    auto error = collectException!ParseException(parse("def f(): Unit {\n    mutable val x: Int\n}", "test", new NodeIds));
+    assert(error !is null);
+    assert(error.diagnostic.code == DiagnosticCode.ParseError);
+    assert(collectException!ParseException(parse("def f(): Unit {\n    mutable val x: Int?\n}", "test", new NodeIds)) is null);
 }
 
 @("node spans exclude the spacing after them")

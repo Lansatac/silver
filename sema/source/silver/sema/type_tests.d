@@ -24,6 +24,7 @@ private string shape(TypeTable table, Type type)
     return table[type].match!(
         (const Primitive p) => p.kind.to!string,
         (const OptionData _) => "Option",
+        (const NoneType _) => "None",
         (const FunctionData f) => "Function/" ~ f.params.length.to!string,
         (const NominalData _) => "Nominal",
         (const ErrorType _) => "Error",

@@ -1,0 +1,55 @@
+type Point(x: Int, y: Int)
+type Node(value: Int, next: Node?)
+
+def main(): Unit {
+    val rank: Int? = 3
+    val none: Int? = None
+    printl(rank == 3)
+    printl(3 == rank)
+    printl(rank != 3)
+    printl(rank == 4)
+    printl(rank == None)
+    printl(None == rank)
+    printl(none == None)
+    printl(none != None)
+    printl(rank == Some(3))
+    printl(Some(3) == rank)
+    printl(rank == none)
+    printl(none == rank)
+
+    val small: UInt8? = 200
+    printl(small == 200)
+    printl(small == Some(200))
+
+    val text: String? = "a"
+    printl(text == "a")
+    printl(text == "b")
+    printl(text == None)
+
+    val nothing: Unit? = ()
+    printl(nothing == ())
+    printl(nothing == None)
+
+    // Payloads compare the way the type does
+    val point: Point? = Point(1, 2)
+    printl(point == Point(1, 2))
+    printl(point == Point(1, 3))
+    printl(Node(1, Node(2, None)) == Node(1, Node(2, None)))
+    printl(Node(1, Node(2, None)) == Node(1, Node(3, None)))
+    printl(Node(1, None) == Node(1, Node(2, None)))
+
+    val nan = 0.0 / 0.0
+    val floating: Float? = nan
+    printl(floating == floating)
+    printl(floating != floating)
+
+    // Nesting keeps the difference
+    val outer: (Int?)? = None
+    val innerNone: (Int?)? = Some(None)
+    val one: (Int?)? = Some(Some(1))
+    printl(outer == innerNone)
+    printl(innerNone == innerNone)
+    printl(one == 1)
+    printl(innerNone == none)
+    printl(outer == None)
+}

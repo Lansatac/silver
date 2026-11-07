@@ -1,0 +1,90 @@
+type Box(value: Int?, label: String?)
+type Link(value: Int, next: Link?)
+
+val limit: UInt8 = 200
+
+def pick(c: Bool): Int? => if c => 1 else None
+def wrapped(x: Int): Int? => x
+def nothing(): Int? { return None }
+def nested(): (Int?)? => None
+def takes(x: Int?, y: Float?): Unit {
+    printl(x)
+    printl(y)
+}
+
+def main(): Unit {
+    // Literals adapt before they're wrapped
+    val a: UInt8? = 255
+    val b: Int? = -1
+    val c: Float? = 2
+    val d: (Int?)? = 7
+    val e: Bool? = true
+    val f: String? = "text"
+    val g: Unit? = ()
+    printl(a)
+    printl(b)
+    printl(c)
+    printl(d)
+    printl(e)
+    printl(f)
+    printl(g)
+
+    // No collapsing
+    val none1: (Int?)? = None
+    val none2: (Int?)? = Some(None)
+    val some2: (Int?)? = Some(Some(1))
+    printl(none1)
+    printl(none2)
+    printl(some2)
+    printl(Some(Some(1)))
+    printl(nested())
+
+    // Arguments, returns, fields and assignment all promote
+    takes(1, 2)
+    takes(None, None)
+    printl(pick(true))
+    printl(pick(false))
+    printl(wrapped(3))
+    printl(nothing())
+    printl(Box(1, "one"))
+    printl(Box(None, None))
+    printl(Link(1, Link(2, None)))
+
+    mutable val m: Int? = 1
+    m = None
+    printl(m)
+    m = 2
+    printl(m)
+    m = Some(3)
+    printl(m)
+
+    mutable val box = Box(None, None)
+    box.value = 4
+    printl(box)
+
+    // Arms and block values, with and without an annotation
+    val arm1 = if a == None => Some(1) else None
+    val arm2 = if a != None => 2 else None
+    val arm3 = if a != None => None else Some(3)
+    val arm4: Int? = if a == None => 1 else { 2 }
+    val arm5: UInt8? = { val unused = 1; 9 }
+    val arm6: Unit? = { val unused = 1 }
+    val arm7: Unit? = if a == None { val unused = 1 }
+    printl(arm1)
+    printl(arm2)
+    printl(arm3)
+    printl(arm4)
+    printl(arm5)
+    printl(arm6)
+    printl(arm7)
+
+    // Strings and holes format the same way
+    printl("{a} and {none1} and {Box(1, None)}")
+    printl(String(Some("x")))
+    printl(String(m))
+    print(m)
+    printl("")
+    printl(Some(()))
+    printl(Some(limit))
+    printl(Some(1.5))
+}

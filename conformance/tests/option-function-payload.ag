@@ -1,0 +1,17 @@
+def inc(x: Int): Int => x + 1
+type Holder(f: ((Int) -> Int)?)
+def apply(g: ((Int) -> Int)?, x: Int): Int {
+    if val h = g => h(x) else x
+}
+def maybeFn(): ((Int) -> Int)? => inc
+def giveNone(x: Int): Int? => if x > 0 => x else None
+def callThrough(f: (Int) -> Int?, x: Int): Int? => f(x)
+def main(): Unit {
+    printl(apply(inc, 1))
+    printl(apply(None, 1))
+    printl(callThrough(giveNone, 3))
+    printl(callThrough(giveNone, -3))
+    val held = Holder(inc)
+    if val f = held.f => printl(f(9))
+    printl((maybeFn() ?? inc)(1))
+}

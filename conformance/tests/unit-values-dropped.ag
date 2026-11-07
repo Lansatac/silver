@@ -1,0 +1,38 @@
+def number(): Int => 5
+
+def viaBlock(): Unit {
+    number()
+}
+
+def viaExpression(): Unit => number()
+
+def viaIf(c: Bool): Unit {
+    if c {
+        1
+    } else {
+        "text"
+    }
+}
+
+def viaNone(): Unit => None
+
+def main(): Unit {
+    // The caller sees (), whatever the body ended in
+    printl(viaBlock())
+    printl(viaExpression())
+    printl(viaIf(true))
+    printl(viaIf(false))
+    printl(viaNone())
+
+    mutable val i = 0
+    while i < 2 {
+        i += 1
+        number()
+    }
+    printl(i)
+
+    printl(if true => 1)
+    printl(if false => 1)
+    val dropped = if true => "text"
+    printl(dropped)
+}

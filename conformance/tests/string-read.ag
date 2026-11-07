@@ -1,9 +1,9 @@
 val tag: String = "line: "
 
 def main(): Unit {
-    val first = read()
-    val second = read()
-    val third = read()
+    val first = read() ?? "missing"
+    val second = read() ?? "missing"
+    val third = read() ?? "missing"
 
     print(tag ~ first)
     print(second ~ tag ~ first)
@@ -12,14 +12,17 @@ def main(): Unit {
     printl(second > "é")
     printl(second < third)
     print("[" ~ third ~ "]")
+    printl("")
 
-    // The input ran out: an empty string, which concatenates and compares like any other
+    // The input ran out
     val end = read()
-    printl(end == "")
-    printl(end ~ "end")
-    printl("" ~ end == end)
-    printl(end < first)
-    printl(end ~ end == "")
-    print(end)
-    printl("done")
+    printl(end == None)
+    printl(end)
+    printl(end ?? "fallback")
+    if val text = end {
+        printl(text)
+    } else {
+        printl("done")
+    }
+    printl(read())
 }

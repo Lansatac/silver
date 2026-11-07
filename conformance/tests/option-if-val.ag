@@ -1,0 +1,68 @@
+type Point(x: Int, y: Int)
+
+def describe(x: Int?): String => if val n = x => "got {n}" else "nothing"
+
+def sum(a: Int?, b: Int?): Int {
+    if val x = a {
+        if val y = b {
+            return x + y
+        }
+        return x
+    }
+    0
+}
+
+def main(): Unit {
+    printl(describe(1))
+    printl(describe(None))
+    printl(sum(1, 2))
+    printl(sum(1, None))
+    printl(sum(None, 2))
+
+    // No else
+    val maybe: String? = "text"
+    if val s = maybe {
+        printl(s)
+    }
+    if val s = maybe ?? None => printl(s ~ "!")
+
+    // An if val in an else-if chain, and the same name in sibling branches
+    val none: Int? = None
+    val value = if val n = none {
+        n
+    } else if val n = Some(5) {
+        n + 1
+    } else {
+        0
+    }
+    printl(value)
+
+    // A user type, a nested option, and the kinds without an operand
+    val point: Point? = Point(1, 2)
+    if val p = point => printl(p.x + p.y)
+    val nested: (Int?)? = Some(None)
+    if val inner = nested {
+        printl(inner)
+        printl(inner ?? 9)
+    }
+    val nothing: Unit? = ()
+    if val u = nothing {
+        printl(u)
+    }
+
+    // Runs once per evaluation, in a loop
+    mutable val i = 0
+    while i < 3 {
+        val current: Int? = if i == 1 => None else i
+        if val c = current {
+            printl(c)
+        } else {
+            printl("skipped")
+        }
+        i += 1
+    }
+
+    // Its value is promoted like any other if's
+    val joined = if val n = none => n else None
+    printl(joined)
+}

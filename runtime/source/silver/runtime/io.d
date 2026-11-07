@@ -25,19 +25,21 @@ void silver_printl_bool(bool value) { output(value.to!string, true); }
 void silver_printl_string(const(char)* data, size_t length) { output(data[0 .. length], true); }
 void silver_printl_unit() { output("()", true); }
 
-/// A line from stdin including its newline, or "" at end of input. `readln` returns GC memory,
+/// A line from stdin including its newline, or false at end of input. `readln` returns GC memory,
 /// which the caller's stack slots keep alive.
-void silver_read(const(char)** data, size_t* length)
+bool silver_read(const(char)** data, size_t* length)
 {
     try
     {
         auto line = readln();
         *data = line.ptr;
         *length = line.length;
+        return line.length > 0;
     }
     catch (Exception e)
     {
         panic("couldn't read input: " ~ e.msg);
+        return false;
     }
 }
 

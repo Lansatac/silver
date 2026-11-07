@@ -5,9 +5,9 @@ true
 true
 false
 true
-[the last has no newline]true
-end
+[the last has no newline]
 true
-true
-true
+None
+fallback
 done
+None

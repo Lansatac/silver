@@ -1,0 +1,49 @@
+def present(): Int? => 1
+def absent(): Int? => None
+
+def fallback(tag: String): Int {
+    printl("evaluated " ~ tag)
+    2
+}
+
+def early(x: Int?): Int {
+    val value = x ?? { return -1 }
+    value + 1
+}
+
+def main(): Unit {
+    printl(present() ?? 9)
+    printl(absent() ?? 9)
+    val small: UInt8? = None
+    printl(small ?? 200)
+    val pi: Float? = None
+    printl(pi ?? 3)
+
+    // The right side only runs when it's needed
+    printl(present() ?? fallback("present"))
+    printl(absent() ?? fallback("absent"))
+
+    // An option on the right keeps the option
+    printl(absent() ?? Some(3))
+    printl(absent() ?? None)
+    printl(present() ?? None)
+    printl(absent() ?? present())
+
+    // Right-associative, and looser than arithmetic
+    printl(absent() ?? absent() ?? 5)
+    printl(absent() ?? 1 + 2)
+    printl(absent() ?? 1 == 1)
+
+    // Exiting from the right side
+    printl(early(1))
+    printl(early(None))
+
+    // Works on a Unit option, in statement position
+    val nothing: Unit? = None
+    printl(nothing ?? ())
+
+    val nested: (Int?)? = Some(None)
+    val inner: Int? = 3
+    printl(nested ?? inner)
+    printl(nested ?? Some(inner))
+}

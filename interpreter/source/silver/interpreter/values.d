@@ -117,6 +117,44 @@ class Instance
     }
 }
 
+/// A value of an option type, which is never a D null. Like an Instance it never changes.
+final class OptionValue
+{
+    private bool _present;
+    private Variant _payload;
+
+    private this(bool present, Variant payload)
+    {
+        _present = present;
+        _payload = payload;
+    }
+
+    static OptionValue some(Variant payload)
+    {
+        return new OptionValue(true, payload);
+    }
+
+    static OptionValue none()
+    {
+        return new OptionValue(false, Variant.init);
+    }
+
+    bool present()
+    {
+        return _present;
+    }
+
+    Variant payload()
+    {
+        return _payload;
+    }
+
+    override string toString()
+    {
+        return _present ? "Some(" ~ _payload.toString() ~ ")" : "None";
+    }
+}
+
 /// A loaded module. Not a Silver value: `std.math` is resolved by name, never evaluated.
 class ModuleValue
 {

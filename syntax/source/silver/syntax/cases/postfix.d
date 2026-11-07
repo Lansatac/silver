@@ -30,12 +30,11 @@ immutable Case[] indexing = [
     accepts("a = [1, 2][0]"),
 ];
 
-/// Grammar only: SafeMemberAccess and PropagateNone aren't lowered yet.
 immutable Case[] optionalChaining = [
-    accepts("a = b?.c"),
-    accepts("a = b?.c?.d ?? 0"),
-    accepts("a = b?.c()"),
-    accepts("a = b?"),
-    accepts("a = b?.c? + 1"),
-    accepts("a = f()? ?? 0"),
+    parsesAs("a = b?.c", "(assign a (?. b c))"),
+    parsesAs("a = b?.c?.d ?? 0", "(assign a (Coalesce (?. (?. b c) d) 0))"),
+    parsesAs("a = b?.c()", "(assign a (call (?. b c)))"),
+    parsesAs("a = b?", "(assign a (? b))"),
+    parsesAs("a = b?.c? + 1", "(assign a (Add (? (?. b c)) 1))"),
+    parsesAs("a = f()? ?? 0", "(assign a (Coalesce (? (call f)) 0))"),
 ];

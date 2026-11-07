@@ -22,6 +22,7 @@ package struct Typing
     FieldInfo[][Id!TypeDecl] fields;
     size_t[Id!Expr] fieldIndexes;
     ConstValue[Id!ConstDecl] constants;
+    Type[Id!Expr] promotions;
 }
 
 /// Where the checker is inside a function body. Passed by value, so a nested body (a lambda)
@@ -51,6 +52,8 @@ private final class TypeChecker
     private Type[Id!TypeDecl] _nominalTypes;
     private FieldInfo[][Id!TypeDecl] _fields;
     private size_t[Id!Expr] _fieldIndexes;
+    /// Where a value becomes an option, by the option type it's wrapped into.
+    private Type[Id!Expr] _promotions;
     /// Every integer literal. A literal's type can change after it's first seen, as it adapts
     /// to where it's used, so ranges are checked once all the bodies have been.
     private const(Expr)[] _intLiterals;
@@ -132,7 +135,7 @@ private final class TypeChecker
             }
         }
 
-        return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes, _constants);
+        return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes, _constants, _promotions);
     }
 
     private void declareConstant(const ConstDecl constant)
@@ -422,11 +425,31 @@ private final class TypeChecker
     {
         return type.kind.match!(
             (const NamedType _) => resolveNamedType(type),
-            (const OptionType option) => _types.option(resolveType(*option.inner)),
+            (const OptionType option) => optionOf(resolveType(*option.inner), type.span),
             (const FunctionType func) => _types.function_(
                 func.params.map!(p => resolveType(p)).array, resolveType(*func.returnType)),
             (const UnitType _) => _types.unit,
         );
+    }
+
+    /// The option holding `inner`, or `error` (reported at `span`) if there can't be one.
+    private Type optionOf(Type inner, Span span)
+    {
+        if (inner == _types.error) return inner;
+        if (inner == _types.none) return reportUntypedNone(span);
+        if (inner == _types.any)
+        {
+            _collector.reportError(DiagnosticCode.InvalidOptionPayload, span, "An option can't hold `Any`");
+            return _types.error;
+        }
+        return _types.option(inner);
+    }
+
+    private Type reportUntypedNone(Span span)
+    {
+        _collector.reportError(DiagnosticCode.UntypedNone, span,
+            "This `None` has no type to take here; annotate one, as in `val x: Int? = None`");
+        return _types.error;
     }
 
     private Type resolveNamedType(const TypeExpr typeExpr)
@@ -501,7 +524,42 @@ private final class TypeChecker
     private void checkBody(const Expr body, Type returnType)
     {
         auto ctx = BodyContext(returnType);
-        check(body, returnType, ctx);
+        if (returnType == _types.unit)
+        {
+            checkDiscarded(body, ctx);
+        }
+        else
+        {
+            check(body, returnType, ctx);
+        }
+    }
+
+    /// Checks an expression whose value lands where Unit is expected, so any type will do and
+    /// the value is dropped: a Unit function's body, a `while` body, an `if` without an `else`.
+    /// That reaches through blocks and `if` arms, so `if c => 1 else "a"` needs no common type.
+    private Type checkDiscarded(const Expr expr, BodyContext ctx)
+    {
+        Type dropped(Type type) => type == _types.never ? type : _types.unit;
+
+        auto type = expr.kind.match!(
+            (const BlockExpr block) {
+                foreach (stmt; block.statements)
+                {
+                    checkStmt(stmt, ctx);
+                }
+                return block.value is null ? valuelessBlockType(block) : dropped(checkDiscarded(*block.value, ctx));
+            },
+            (const IfExpr if_) {
+                if (if_.falseBody is null) return synthesizeIf(if_, expr.span, ctx);
+                checkIfHead(if_, ctx);
+                auto thenType = checkDiscarded(*if_.trueBody, ctx);
+                auto elseType = checkDiscarded(*if_.falseBody, ctx);
+                return thenType == _types.never && elseType == _types.never ? _types.never : _types.unit;
+            },
+            (_) => synthesize(expr, ctx),
+        );
+        _exprTypes[expr.id] = type;
+        return type;
     }
 
     private void checkStmt(const Stmt stmt, BodyContext ctx)
@@ -510,7 +568,8 @@ private final class TypeChecker
             (const VarDecl var) {
                 if (var.type is null)
                 {
-                    _symbolTypes[SymbolId(var.id)] = synthesize(var.value, ctx);
+                    auto type = synthesize(var.value, ctx);
+                    _symbolTypes[SymbolId(var.id)] = type == _types.none ? reportUntypedNone(var.value.span) : type;
                 }
                 else
                 {
@@ -602,9 +661,66 @@ private final class TypeChecker
             (const BlockExpr block) => synthesizeBlock(block, expr.span, ctx),
             (const UnitLiteral _) => _types.unit,
             (const Identifier _) => synthesizeIdentifier(expr),
+            (const SomeExpr some) => optionOf(synthesize(*some.value, ctx), some.value.span),
+            (const NoneLiteral _) => _types.none,
+            (const PropagateExpr propagate) => synthesizePropagate(propagate, expr.span, ctx),
+            (const SafeMemberAccess access) => synthesizeSafeMember(expr, access, ctx),
         );
         _exprTypes[expr.id] = type;
         return type;
+    }
+
+    /// `x?`, which returns `None` from the enclosing function, so that has to return an option.
+    private Type synthesizePropagate(const PropagateExpr propagate, Span span, BodyContext ctx)
+    {
+        auto operandType = synthesize(*propagate.operand, ctx);
+        if (operandType == _types.error) return operandType;
+        if (operandType == _types.none) return reportUntypedNone(propagate.operand.span);
+        if (!_types.isOption(operandType))
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, propagate.operand.span,
+                "`?` needs an option, got `%s`".format(_types.describe(operandType)));
+            return _types.error;
+        }
+        if (!_types.isOption(ctx.returnType))
+        {
+            _collector.reportError(DiagnosticCode.InvalidPropagation, span,
+                "`?` returns `None` when there's no value, but this function returns `%s`"
+                    .format(_types.describe(ctx.returnType)));
+        }
+        return _types.optionInner(operandType);
+    }
+
+    /// `a?.b`. A field that's already an option isn't wrapped again, which is what makes
+    /// `a?.b?.c` one flat option: each `?.` works on the option the one before it produced.
+    private Type synthesizeSafeMember(const Expr expr, const SafeMemberAccess access, BodyContext ctx)
+    {
+        auto objectType = synthesize(*access.object, ctx);
+        if (objectType == _types.error) return objectType;
+        if (objectType == _types.none) return reportUntypedNone(access.object.span);
+        if (!_types.isOption(objectType))
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, access.object.span,
+                "`?.` needs an option, got `%s`; a field of any other value is read with `.`"
+                    .format(_types.describe(objectType)));
+            return _types.error;
+        }
+
+        auto fields = _types[_types.optionInner(objectType)].match!(
+            (const NominalData nominal) => _fields[nominal.decl],
+            (_) => FieldInfo[].init,
+        );
+        foreach (i, field; fields)
+        {
+            if (field.name == access.member)
+            {
+                _fieldIndexes[expr.id] = i;
+                return _types.isOption(field.type) ? field.type : _types.option(field.type);
+            }
+        }
+        _collector.reportError(DiagnosticCode.UnknownMember, expr.span,
+            "Type `%s` has no member named `%s`".format(_types.describe(objectType), access.member));
+        return _types.error;
     }
 
     /// A hole takes whatever `print` does, so its type needs no check of its own.
@@ -612,7 +728,7 @@ private final class TypeChecker
     {
         foreach (part; interpolated.parts)
         {
-            synthesize(part, ctx);
+            if (synthesize(part, ctx) == _types.none) reportUntypedNone(part.span);
         }
         return _types.string_;
     }
@@ -654,7 +770,7 @@ private final class TypeChecker
         auto arg = call.args[0];
         if (target == _types.string_)
         {
-            synthesize(arg, ctx);
+            if (synthesize(arg, ctx) == _types.none) reportUntypedNone(arg.span);
             return target;
         }
         if (isIntLiteral(arg))
@@ -689,6 +805,7 @@ private final class TypeChecker
             (const OptionData option) => isComparable(option.inner, visited),
             (const FunctionData _) => false,
             (const NominalData nominal) => _fields[nominal.decl].all!(f => isComparable(f.type, visited)),
+            (const NoneType _) => true,
             (const ErrorType _) => true,
         );
     }
@@ -735,10 +852,91 @@ private final class TypeChecker
         }
     }
 
+    /// `Some(x)` or `None`, written out, which takes its type from what it's checked against.
+    private bool isOptionSyntax(const Expr expr)
+    {
+        return expr.kind.match!(
+            (const SomeExpr _) => true,
+            (const NoneLiteral _) => true,
+            _ => false,
+        );
+    }
+
+    /// `a ?? b`. A `b` that's written as an option, or has `a`'s type, keeps the option, and
+    /// anything else has to fit `T`, so the result is `T` and the fallback is never missing.
+    private Type synthesizeCoalesce(const BinaryExpr binary, BodyContext ctx)
+    {
+        auto optionType = synthesize(*binary.left, ctx);
+        if (!_types.isOption(optionType))
+        {
+            synthesize(*binary.right, ctx);
+            if (optionType == _types.error) return optionType;
+            if (optionType == _types.none) return reportUntypedNone(binary.left.span);
+            _collector.reportError(DiagnosticCode.InvalidOperand, binary.left.span,
+                "`??` needs an option on its left, got `%s`".format(_types.describe(optionType)));
+            return _types.error;
+        }
+
+        auto inner = _types.optionInner(optionType);
+        if (isOptionSyntax(*binary.right))
+        {
+            check(*binary.right, optionType, ctx);
+            return optionType;
+        }
+        auto rightType = synthesize(*binary.right, ctx);
+        if (rightType == inner) return inner;
+        if (_types.isOption(rightType) || rightType == _types.none)
+        {
+            coerce(*binary.right, rightType, optionType);
+            return optionType;
+        }
+        coerce(*binary.right, rightType, inner);
+        return inner;
+    }
+
+    /// Synthesizes both sides of `==` or `!=`. A side written as `Some` or `None` is checked
+    /// against the other one, whichever side it's on, so `x == Some(1)` adapts the literal.
+    private void synthesizeCompared(const BinaryExpr binary, out Type leftType, out Type rightType, BodyContext ctx)
+    {
+        if (isOptionSyntax(*binary.left) && !isOptionSyntax(*binary.right))
+        {
+            rightType = synthesize(*binary.right, ctx);
+            leftType = _types.isOption(rightType) ? check(*binary.left, rightType, ctx) : synthesize(*binary.left, ctx);
+            return;
+        }
+        leftType = synthesize(*binary.left, ctx);
+        rightType = _types.isOption(leftType) && isOptionSyntax(*binary.right)
+            ? check(*binary.right, leftType, ctx)
+            : synthesize(*binary.right, ctx);
+    }
+
+    /// Whether `expr`, of type `type`, can become the option `option`.
+    private bool promotes(const Expr expr, Type type, Type option)
+    {
+        if (!_types.isOption(option) || _types.isOption(type) && !isAssignable(type, option)) return false;
+        return isAssignable(type, option) || (isIntLiteral(expr) && isNumeric(innermost(option)));
+    }
+
+    private Type innermost(Type option)
+    {
+        while (_types.isOption(option)) option = _types.optionInner(option);
+        return option;
+    }
+
     private Type synthesizeBinary(const BinaryExpr binary, Span span, BodyContext ctx)
     {
-        auto leftType = synthesize(*binary.left, ctx);
-        auto rightType = synthesize(*binary.right, ctx);
+        if (binary.op == BinaryOp.Coalesce) return synthesizeCoalesce(binary, ctx);
+
+        Type leftType, rightType;
+        if (binary.op == BinaryOp.Equal || binary.op == BinaryOp.NotEqual)
+        {
+            synthesizeCompared(binary, leftType, rightType, ctx);
+        }
+        else
+        {
+            leftType = synthesize(*binary.left, ctx);
+            rightType = synthesize(*binary.right, ctx);
+        }
         if (leftType == _types.error || rightType == _types.error) return _types.error;
         // An integer literal takes the type of the number beside it, so `x * 2` and `x == 0` work.
         // Not a Float beside an integer-only operator, or the error would blame the literal.
@@ -845,6 +1043,15 @@ private final class TypeChecker
                 return _types.bool_;
             case BinaryOp.Equal:
             case BinaryOp.NotEqual:
+                if (leftType == _types.none && rightType == _types.none) return reportUntypedNone(binary.left.span);
+                if (leftType != rightType && promotes(*binary.right, rightType, leftType))
+                {
+                    rightType = coerce(*binary.right, rightType, leftType);
+                }
+                else if (leftType != rightType && promotes(*binary.left, leftType, rightType))
+                {
+                    leftType = coerce(*binary.left, leftType, rightType);
+                }
                 if (leftType != rightType)
                 {
                     _collector.reportError(DiagnosticCode.InvalidOperand, span,
@@ -859,8 +1066,7 @@ private final class TypeChecker
                 }
                 return _types.bool_;
             case BinaryOp.Coalesce:
-                _collector.reportError(DiagnosticCode.InternalError, span, "`??` isn't supported yet");
-                return _types.error;
+                assert(0, "handled above");
         }
     }
 
@@ -968,22 +1174,57 @@ private final class TypeChecker
     {
         auto condType = synthesize(*while_.condition, ctx);
         requireAssignable(condType, _types.bool_, while_.condition.span);
-        check(*while_.body, _types.unit, ctx);
+        checkDiscarded(*while_.body, ctx);
         return _types.unit;
+    }
+
+    /// The condition, or the binding of an `if val`.
+    private void checkIfHead(const IfExpr if_, BodyContext ctx)
+    {
+        if (if_.binding is null)
+        {
+            auto condType = synthesize(*if_.condition, ctx);
+            requireAssignable(condType, _types.bool_, if_.condition.span);
+            return;
+        }
+
+        auto initializer = if_.binding.value;
+        auto optionType = synthesize(initializer, ctx);
+        auto payload = _types.error;
+        if (_types.isOption(optionType))
+        {
+            payload = _types.optionInner(optionType);
+        }
+        else if (optionType == _types.none)
+        {
+            reportUntypedNone(initializer.span);
+        }
+        else if (optionType != _types.error)
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, initializer.span,
+                "`if val` needs an option, got `%s`".format(_types.describe(optionType)));
+        }
+        _symbolTypes[SymbolId(if_.binding.id)] = payload;
     }
 
     private Type synthesizeIf(const IfExpr if_, Span span, BodyContext ctx)
     {
-        auto condType = synthesize(*if_.condition, ctx);
-        requireAssignable(condType, _types.bool_, if_.condition.span);
-        auto thenType = synthesize(*if_.trueBody, ctx);
-        if (if_.falseBody !is null)
+        checkIfHead(if_, ctx);
+        if (if_.falseBody is null)
         {
-            auto elseType = synthesize(*if_.falseBody, ctx);
-            return join(thenType, elseType, span);
+            checkDiscarded(*if_.trueBody, ctx);
+            return _types.unit;
         }
 
-        return _types.unit;
+        auto thenType = synthesize(*if_.trueBody, ctx);
+        auto elseType = synthesize(*if_.falseBody, ctx);
+        auto joined = join(thenType, elseType, span);
+        if (joined != _types.error)
+        {
+            coerce(*if_.trueBody, thenType, joined);
+            coerce(*if_.falseBody, elseType, joined);
+        }
+        return joined;
     }
 
     /// The type that both `a` and `b` fit, or `error` (reported at `span`) if there isn't one.
@@ -994,7 +1235,9 @@ private final class TypeChecker
         if (b == _types.never) return a;
         if (isAssignable(a, b)) return b;
         if (isAssignable(b, a)) return a;
-        
+        if (a == _types.none) return optionOf(b, span);
+        if (b == _types.none) return optionOf(a, span);
+
         _collector.reportError(DiagnosticCode.TypeMismatch, span,
             "Branches have different types `%s` and `%s`".format(_types.describe(a), _types.describe(b)));
         return _types.error;
@@ -1045,30 +1288,60 @@ private final class TypeChecker
 
     private Type check(const Expr expr, Type expected, BodyContext ctx)
     {
-        // A number is passed down, so that a literal adapts in an `if` arm or as a block's value too.
-        if (isNumeric(expected))
+        // A number or option is passed down, so that a literal adapts, and a value is promoted,
+        // in an `if` arm or as a block's value too.
+        auto isOption = _types.isOption(expected);
+        if (isNumeric(expected) || isOption)
         {
             auto passedDown = expr.kind.match!(
                 (const IfExpr if_) => if_.falseBody !is null,
                 (const BlockExpr _) => true,
+                (const SomeExpr _) => isOption,
                 _ => false,
             );
             if (passedDown)
             {
                 auto type = expr.kind.match!(
                     (const IfExpr if_) => checkIf(if_, expected, ctx),
-                    (const BlockExpr block) => checkBlock(block, expected, expr.span, ctx),
-                    (_) => assert(0, "only ifs and blocks are passed down"),
+                    (const BlockExpr block) => checkBlock(expr, block, expected, ctx),
+                    (const SomeExpr some) {
+                        check(*some.value, _types.optionInner(expected), ctx);
+                        return expected;
+                    },
+                    (_) => assert(0, "only ifs, blocks and Some are passed down"),
                 );
                 _exprTypes[expr.id] = type;
                 return type;
             }
         }
 
-        auto type = synthesize(expr, ctx);
+        return coerce(expr, synthesize(expr, ctx), expected);
+    }
+
+    /// Fits `expr`, already found to have type `type`, to `expected`: a literal adapts and a
+    /// value that isn't an option yet is promoted, and anything else has to be assignable.
+    private Type coerce(const Expr expr, Type type, Type expected)
+    {
         if (isNumeric(expected) && isIntLiteral(expr))
         {
             return adaptLiteral(expr, expected);
+        }
+        if (_types.isOption(expected))
+        {
+            if (isIntLiteral(expr) && isNumeric(innermost(expected)))
+            {
+                type = adaptLiteral(expr, innermost(expected));
+            }
+            auto hasValue = type != _types.error && type != _types.never;
+            if (hasValue && type != expected && isAssignable(type, expected))
+            {
+                _promotions[expr.id] = expected;
+                return expected;
+            }
+        }
+        else if (type == _types.none && expected == _types.any)
+        {
+            return reportUntypedNone(expr.span);
         }
         requireAssignable(type, expected, expr.span);
         return type;
@@ -1076,14 +1349,13 @@ private final class TypeChecker
 
     private Type checkIf(const IfExpr if_, Type expected, BodyContext ctx)
     {
-        auto condType = synthesize(*if_.condition, ctx);
-        requireAssignable(condType, _types.bool_, if_.condition.span);
+        checkIfHead(if_, ctx);
         auto thenType = check(*if_.trueBody, expected, ctx);
         auto elseType = check(*if_.falseBody, expected, ctx);
         return thenType == _types.never && elseType == _types.never ? _types.never : expected;
     }
 
-    private Type checkBlock(const BlockExpr block, Type expected, Span span, BodyContext ctx)
+    private Type checkBlock(const Expr expr, const BlockExpr block, Type expected, BodyContext ctx)
     {
         foreach (stmt; block.statements)
         {
@@ -1094,9 +1366,10 @@ private final class TypeChecker
             auto type = check(*block.value, expected, ctx);
             return type == _types.never ? type : expected;
         }
+        // A Unit block expected to be a `Unit?` is promoted, so its own type stays Unit.
         auto type = valuelessBlockType(block);
-        requireAssignable(type, expected, span);
-        return type == _types.never ? type : expected;
+        coerce(expr, type, expected);
+        return type;
     }
 
     /// An integer literal, possibly signed: the only integer that takes the type expected of it.
@@ -1127,6 +1400,7 @@ private final class TypeChecker
         if (from == to) return true;
         if (from == _types.error || to == _types.error) return true;  // already reported
         if (from == _types.never) return true;                         // no value ever arrives
+        if (from == _types.none) return _types.isOption(to);
         if (to == _types.any) return true;                             // print's placeholder
         // T -> T?
         return _types[to].match!(

@@ -12,6 +12,9 @@ final class TypeTable
 
     Type error, never, unit, bool_, int_, float_, string_, any;
     Type int8, int16, int32, uint8, uint16, uint32, uint_;
+    /// The type of a bare `None`, assignable to every option. No value keeps it: each one is
+    /// promoted to the option it lands in.
+    Type none;
 
     this()
     {
@@ -30,6 +33,7 @@ final class TypeTable
         float_ = registerTypeData(TypeData(Primitive(Primitive.Kind.Float)));
         string_ = registerTypeData(TypeData(Primitive(Primitive.Kind.String)));
         any = registerTypeData(TypeData(Primitive(Primitive.Kind.Any)));
+        none = registerTypeData(TypeData(NoneType()));
     }
 
     private TypeData[int] _types;
@@ -69,6 +73,20 @@ final class TypeTable
         return _types[t.index];
     }
 
+    bool isOption(Type t) const
+    {
+        return _types[t.index].match!((const OptionData _) => true, _ => false);
+    }
+
+    /// The `T` of the option type `t`.
+    Type optionInner(Type t) const
+    {
+        return _types[t.index].match!(
+            (const OptionData o) => o.inner,
+            (_) => assert(0, "not an option type"),
+        );
+    }
+
     bool isInteger(Type t) const
     {
         return _types[t.index].match!(
@@ -93,11 +111,23 @@ final class TypeTable
         import std.algorithm : map;
         return _types[t.index].match!(
             (const Primitive p) => p.kind.text,
-            (const OptionData o) => describe(o.inner) ~ "?",
+            (const OptionData o) => describeOptionInner(o.inner) ~ "?",
+            (const NoneType _) => "None",
             (const FunctionData f) => "(" ~ f.params.map!(p => describe(p)).join(", ") ~ ") -> " ~ describe(f.ret),
             (const NominalData nd) => _nominalNames[nd.decl],
             (const ErrorType e) => "Error",
         );
+    }
+
+    /// `Int??` doesn't parse and `(Int) -> Int?` returns an option, so these need parentheses.
+    private string describeOptionInner(Type inner) const
+    {
+        auto needsParens = _types[inner.index].match!(
+            (const OptionData _) => true,
+            (const FunctionData _) => true,
+            _ => false,
+        );
+        return needsParens ? "(" ~ describe(inner) ~ ")" : describe(inner);
     }
 }
 
@@ -173,8 +203,12 @@ struct NominalData
     Id!TypeDecl decl;
 }
 
+struct NoneType
+{
+}
+
 struct ErrorType
 {
 }
 
-alias TypeData = SumType!(Primitive, OptionData, FunctionData, NominalData, ErrorType);
+alias TypeData = SumType!(Primitive, OptionData, NoneType, FunctionData, NominalData, ErrorType);

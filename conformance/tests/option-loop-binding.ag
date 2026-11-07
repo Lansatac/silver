@@ -1,0 +1,17 @@
+def next(i: Int): Int? => if i < 3 => i + 1 else None
+def main(): Unit {
+    mutable val current: Int? = 0
+    while current != None {
+        if val c = current {
+            printl(c)
+            current = next(c)
+        }
+    }
+    mutable val total = 0
+    mutable val i = 0
+    while i < 3 {
+        if val v = next(i) { total += v }
+        i += 1
+    }
+    printl(total)
+}

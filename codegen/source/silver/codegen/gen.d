@@ -123,6 +123,9 @@ final class FunctionState
 
     /// The function's LLVM return type, `void` for Unit and Never.
     string returnType;
+    /// The function's Silver return type. Only functions from source have one, and only they
+    /// can hold a postfix `?`.
+    Type declaredReturn;
 
     private int _nextTemp;
     private int[string] _slotNameCounts;
@@ -368,6 +371,7 @@ final class Generator
         auto signature = _analysis.signatureOf(function_.id);
         auto returnType = llvmReturnType(signature.ret);
         _function.returnType = returnType;
+        _function.declaredReturn = signature.ret;
         auto mangledName = mangledNames[function_.id];
         auto params = emitParams(function_.params);
 
@@ -415,7 +419,138 @@ final class Generator
         return typedOperands(types, operands);
     }
 
+    /// `expr`'s value, wrapped into the option sema found it lands in, if any.
     Fragment emitExpr(const Expr expr)
+    {
+        auto value = emitUnpromoted(expr);
+        if (auto option = _analysis.promotionOf(expr.id))
+        {
+            return emitPromotion(value, _analysis.typeOf(expr.id), *option);
+        }
+        return value;
+    }
+
+    /// `value`, of type `from`, as the option `to`. A `None` is the outermost one, however deep
+    /// `to` is, and anything else gets one `Some` for each level between the types.
+    Fragment emitPromotion(Fragment value, Type from, Type to)
+    {
+        if (from == to) return value;
+        if (from == _analysis.types.none) return value.then(Fragment.constant(noneConstant(to)));
+
+        auto payload = emitPromotion(value, from, _analysis.types.optionInner(to));
+        return payload.then(wrapSome(to, payload.value));
+    }
+
+    /// Whether values of `type` have an operand. Unit has one value and Never has none, so
+    /// neither needs one, and an option of either has no payload.
+    bool hasOperand(Type type)
+    {
+        return type != _analysis.types.unit && type != _analysis.types.never && type != _analysis.types.none;
+    }
+
+    string optionLayout(Type inner)
+    {
+        return hasOperand(inner) ? "{ i1, %s }".format(llvmType(inner)) : "{ i1 }";
+    }
+
+    string noneConstant(Type option)
+    {
+        auto inner = _analysis.types.optionInner(option);
+        return hasOperand(inner) ? "{ i1 false, %s undef }".format(llvmType(inner)) : "{ i1 false }";
+    }
+
+    /// The option `option` holding `payload`, which is null when the evaluation that was to
+    /// produce it never comes back.
+    Fragment wrapSome(Type option, string payload)
+    {
+        auto inner = _analysis.types.optionInner(option);
+        if (!hasOperand(inner)) return Fragment.constant("{ i1 true }");
+
+        auto result = _function.newTemp();
+        auto type = llvmType(inner);
+        return Fragment.instruction("%s = insertvalue { i1, %s } { i1 true, %s undef }, %s %s, 1".format(
+            result, type, type, type, payload is null ? "undef" : payload), result);
+    }
+
+    /// Whether the operand `value`, of the option type `option`, holds a value.
+    Fragment optionTag(Type option, string value)
+    {
+        auto result = _function.newTemp();
+        return Fragment.instruction("%s = extractvalue %s %s, 0".format(result, llvmType(option), value), result);
+    }
+
+    /// What the operand `value`, of the option type `option`, holds. Only valid once its tag has
+    /// been found true. An option of Unit or Never has no operand for it.
+    Fragment optionPayload(Type option, string value)
+    {
+        if (!hasOperand(_analysis.types.optionInner(option))) return Fragment.init;
+
+        auto result = _function.newTemp();
+        return Fragment.instruction("%s = extractvalue %s %s, 1".format(result, llvmType(option), value), result);
+    }
+
+    Fragment emitSome(const Expr expr, const SomeExpr some)
+    {
+        auto value = emitExpr(*some.value);
+        return value.then(wrapSome(_analysis.typeOf(expr.id), value.value));
+    }
+
+    /// The payload of `x?`, after returning `None` if there isn't one.
+    Fragment emitPropagate(const PropagateExpr propagate)
+    {
+        auto option = _analysis.typeOf(propagate.operand.id);
+        auto operand = emitExpr(*propagate.operand);
+        auto tag = optionTag(option, operand.value);
+        auto noneLabel = _function.newLabel("propagate.none");
+        auto someLabel = _function.newLabel("propagate.some");
+        return operand
+            .then(tag)
+            .then(Fragment.branch(tag.value, someLabel, noneLabel))
+            .then(Fragment.label(noneLabel))
+            .then(Fragment.instruction(returnInstruction(noneConstant(_function.declaredReturn))))
+            .then(Fragment.label(someLabel))
+            .then(optionPayload(option, operand.value));
+    }
+
+    /// `a?.b`: reads the field only when there's a value to read it from.
+    Fragment emitSafeMember(const Expr expr, const SafeMemberAccess access)
+    {
+        auto option = _analysis.typeOf(access.object.id);
+        auto type = _analysis.types[_analysis.types.optionInner(option)].match!(
+            (const NominalData nominal) => nominal.decl,
+            (_) => assert(0, "sema only finds fields on a declared type"),
+        );
+        if (!hasLayout(type)) return unsupported(expr.span, "types with `Any` or `Never` fields");
+
+        auto result = _analysis.typeOf(expr.id);
+        auto index = _analysis.fieldIndexOf(expr.id);
+        auto fieldType = _analysis.fieldsOf(type)[index].type;
+        auto object = emitExpr(*access.object);
+        auto tag = optionTag(option, object.value);
+        auto payload = optionPayload(option, object.value);
+
+        Fragment field;
+        if (fieldType != _analysis.types.unit)
+        {
+            auto pointer = fieldPointer(llvmStruct(type), payload.value, llvmFieldIndex(type, index));
+            field = pointer.then(load(llvmType(fieldType), pointer.value));
+        }
+        auto wrapped = fieldType == result ? field : field.then(wrapSome(result, field.value));
+        return emitConditional(object.then(tag), llvmType(result), payload.then(wrapped),
+            Fragment.constant(noneConstant(result)), "safe");
+    }
+
+    /// `a ?? b`, which evaluates `b` only when `a` is `None`. The result is `a` itself when it's
+    /// an option of the same type, and otherwise `a`'s payload.
+    Fragment emitCoalesce(const Expr expr, Type option, Fragment lhs, Fragment rhs)
+    {
+        auto result = _analysis.typeOf(expr.id);
+        auto tag = optionTag(option, lhs.value);
+        auto taken = result == option ? Fragment.constant(lhs.value) : optionPayload(option, lhs.value);
+        return emitConditional(lhs.then(tag), hasOperand(result) ? llvmType(result) : null, taken, rhs, "coalesce");
+    }
+
+    Fragment emitUnpromoted(const Expr expr)
     {
         return expr.kind.match!(
             (const BoolLiteral literal) => Fragment.constant(literal.value ? "true" : "false"),
@@ -435,6 +570,11 @@ final class Generator
             (const WhileExpr while_) => emitWhile(while_),
             (const IfExpr if_) => emitIfExpr(expr, if_),
             (const BlockExpr block) => emitBlock(block),
+            (const SomeExpr some) => emitSome(expr, some),
+            // Dropped where nothing promotes it, and a promotion doesn't read the operand.
+            (const NoneLiteral _) => Fragment.init,
+            (const PropagateExpr propagate) => emitPropagate(propagate),
+            (const SafeMemberAccess access) => emitSafeMember(expr, access),
         );
     }
 
@@ -594,6 +734,13 @@ final class Generator
                 }
                 return emitCall(stringLayout, "@\"%s\"".format(typeFormatters[nominal.decl]), "ptr " ~ value);
             },
+            (const OptionData option) {
+                auto payload = optionPayload(type, value);
+                auto inner = emitFormat(option.inner, payload.value, span);
+                auto some = payload.then(inner).then(emitConcat(
+                    [emitStringLiteral("Some(").value, inner.value, emitStringLiteral(")").value]));
+                return emitConditional(optionTag(type, value), stringLayout, some, emitStringLiteral("None"), "format");
+            },
             (_) => unsupported(span, "formatting a value of type `%s`".format(types.describe(type))),
         );
     }
@@ -671,6 +818,31 @@ final class Generator
             .then(buildString(data.value, length.value));
     }
 
+    /// A call to the runtime function `name`, which hands back a String the same way and
+    /// returns whether there is one. Without one, the parts it left unset are never read.
+    Fragment callRuntimeForOptionalString(string name, string[] operands)
+    {
+        auto dataSlot = _function.newTemp();
+        auto lengthSlot = _function.newTemp();
+        auto slots = Fragment(["  %s = alloca ptr".format(dataSlot), "  %s = alloca i64".format(lengthSlot)]);
+        auto present = callRuntime(name, operands ~ [dataSlot, lengthSlot]);
+        auto data = load("ptr", dataSlot);
+        auto length = load("i64", lengthSlot);
+        auto text = buildString(data.value, length.value);
+
+        auto layout = optionLayout(_analysis.types.string_);
+        auto tagged = _function.newTemp();
+        auto whole = _function.newTemp();
+        return slots
+            .then(present)
+            .then(data)
+            .then(length)
+            .then(text)
+            .then(Fragment.instruction("%s = insertvalue %s undef, i1 %s, 0".format(tagged, layout, present.value)))
+            .then(Fragment.instruction("%s = insertvalue %s %s, %s %s, 1".format(
+                whole, layout, tagged, stringLayout, text.value), whole));
+    }
+
     /// The body of an LLVM `c"..."`: printable ASCII as is, every other byte as `\XX`.
     static string llvmStringBytes(string text)
     {
@@ -699,7 +871,7 @@ final class Generator
             },
             (const Id!Param param) => Fragment.constant(_function.params[param]),
             (const Id!VarDecl decl) {
-                if (_analysis.typeOf(decl) == _analysis.types.unit) return Fragment.init;
+                if (!hasOperand(_analysis.typeOf(decl))) return Fragment.init;
                 return load(llvmType(_analysis.typeOf(decl)), _function.slots[decl]);
                 },
             (const Id!Module module_) {
@@ -724,9 +896,11 @@ final class Generator
     {
         auto lhs = emitExpr(*binary.left);
         auto rhs = emitExpr(*binary.right);
-        auto type = _analysis.typeOf(binary.left.id);
+        auto type = _analysis.valueTypeOf(binary.left.id);
         switch(binary.op)
         {
+            case BinaryOp.Coalesce:
+                return emitCoalesce(expr, type, lhs, rhs);
             case BinaryOp.And:
                 return emitConditional(lhs, "i1",
                     rhs, Fragment.constant("false"), "and");
@@ -929,11 +1103,35 @@ final class Generator
     Fragment emitIfExpr(const Expr expr, const IfExpr if_)
     {
         auto type = _analysis.typeOf(expr.id);
-        auto hasValue = type != _analysis.types.unit && type != _analysis.types.never;
-        return emitConditional(emitExpr(*if_.condition), hasValue ? llvmType(type) : null,
-            emitExpr(*if_.trueBody),
-            if_.falseBody is null ? Fragment.init : emitExpr(*if_.falseBody),
-            "if");
+        auto resultType = hasOperand(type) ? llvmType(type) : null;
+        auto elseArm = if_.falseBody is null ? Fragment.init : emitExpr(*if_.falseBody);
+        if (if_.binding is null)
+        {
+            return emitConditional(emitExpr(*if_.condition), resultType, emitExpr(*if_.trueBody), elseArm, "if");
+        }
+
+        auto option = _analysis.typeOf(if_.binding.value.id);
+        auto initializer = emitExpr(if_.binding.value);
+        auto tag = optionTag(option, initializer.value);
+        // Before the branch is generated, since that's what reads the binding's slot.
+        auto bound = emitIfBinding(*if_.binding, option, initializer.value);
+        return emitConditional(initializer.then(tag), resultType, bound.then(emitExpr(*if_.trueBody)), elseArm, "if");
+    }
+
+    /// Stores the payload of the option `value` in the slot for `binding`. Unit and Never have
+    /// no operand, so there's nothing to store, as with any other local of those types.
+    Fragment emitIfBinding(const VarDecl binding, Type option, string value)
+    {
+        auto inner = _analysis.types.optionInner(option);
+        if (!hasOperand(inner)) return Fragment.init;
+
+        auto type = llvmType(inner);
+        auto slot = _function.newSlot(binding.name);
+        _function.slots[binding.id] = slot;
+        auto payload = optionPayload(option, value);
+        return Fragment(["  %s = alloca %s".format(slot, type)])
+            .then(payload)
+            .then(Fragment.store(type, payload.value, slot));
     }
 
     /// `condition ? thenArm : elseArm`, evaluating only the arm taken. A null `resultType`
@@ -1024,9 +1222,28 @@ final class Generator
                 return emitCall("i1", "@\"%s\"".format(typeEqualities[nominal.decl]),
                     "ptr %s, ptr %s".format(lhs, rhs));
             },
-            (const OptionData _) => unsupported(span, "comparing options"),
+            (const OptionData option) => emitOptionEquals(type, option.inner, lhs, rhs, span),
             (_) => assert(0, "sema only allows comparing comparable types"),
         );
+    }
+
+    /// Tags first, then payloads, which are only there to compare when both tags are true.
+    Fragment emitOptionEquals(Type type, Type inner, string lhs, string rhs, Span span)
+    {
+        auto leftTag = optionTag(type, lhs);
+        auto rightTag = optionTag(type, rhs);
+        auto sameTag = _function.newTemp();
+        auto tags = leftTag.then(rightTag)
+            .then(Fragment.instruction("%s = icmp eq i1 %s, %s".format(sameTag, leftTag.value, rightTag.value), sameTag));
+        if (!hasOperand(inner)) return tags;
+
+        auto leftPayload = optionPayload(type, lhs);
+        auto rightPayload = optionPayload(type, rhs);
+        auto payloads = leftPayload.then(rightPayload)
+            .then(emitEquals(inner, leftPayload.value, rightPayload.value, span));
+        auto whenSame = emitConditional(Fragment.constant(leftTag.value), "i1", payloads,
+            Fragment.constant("true"), "option.some");
+        return emitConditional(tags, "i1", whenSame, Fragment.constant("false"), "option.same");
     }
 
     /// The function comparing two values of `type`, field by field, stopping at the first
@@ -1194,7 +1411,7 @@ final class Generator
             auto value = emitExpr(arg);
             auto argType = _analysis.typeOf(arg.id);
             auto isAny = params[i] == _analysis.types.any;
-            auto formatted = isAny && isNominal(argType);
+            auto formatted = isAny && (isNominal(argType) || _analysis.types.isOption(argType));
             if (isAny && _analysis.types.isInteger(argType))
             {
                 value = value.then(widenForRuntime(argType, value.value));
@@ -1222,9 +1439,14 @@ final class Generator
         auto name = runtimeNameFor(native, call, expr.span);
         if (name is null) return evaluated.withValue("undef");
         auto arguments = operands.filter!(o => o !is null).array;
-        if (_analysis.signatureOf(native.id).ret == _analysis.types.string_)
+        auto returned = _analysis.signatureOf(native.id).ret;
+        if (returned == _analysis.types.string_)
         {
             return evaluated.then(callRuntimeForString(name, arguments));
+        }
+        if (_analysis.types.isOption(returned) && _analysis.types.optionInner(returned) == _analysis.types.string_)
+        {
+            return evaluated.then(callRuntimeForOptionalString(name, arguments));
         }
         return evaluated.then(callRuntime(name, arguments));
     }
@@ -1269,8 +1491,9 @@ final class Generator
         if (_analysis.types.isInteger(type)) return _analysis.types.integerOf(type).signed ? "int" : "uint";
         return _analysis.types[type].match!(
             (const Primitive p) => p.kind.to!string.toLower,
-            // emitNativeCall has formatted it.
+            // emitNativeCall has formatted these.
             (const NominalData _) => "string",
+            (const OptionData _) => "string",
             (_) => cast(string) null,
         );
     }
@@ -1417,9 +1640,10 @@ final class Generator
     {
         return _analysis.types[t].match!(
             (const Primitive p) => primitiveName (p),
-            (const OptionData _) => "ptr",//placeholder
+            (const OptionData o) => optionLayout(o.inner),
             (const FunctionData f) => "ptr",
             (const NominalData nd) => "ptr",
+            (const NoneType _) => assert(0, "every None that has a value is promoted"),
             (const ErrorType _) {
                 _collector.reportError(DiagnosticCode.InternalError, Span.init, "Unknown type!");
                 return "UNKNOWN";
@@ -1432,9 +1656,10 @@ final class Generator
     {
         return _analysis.types[t].match!(
             (const Primitive p) => primitiveReturnName (p),
-            (const OptionData _) => "ptr",//placeholder
+            (const OptionData o) => optionLayout(o.inner),
             (const FunctionData f) => "ptr",
             (const NominalData nd) => "ptr",
+            (const NoneType _) => assert(0, "no function returns a bare None"),
             (const ErrorType _) {
                 _collector.reportError(DiagnosticCode.InternalError, Span.init, "Unknown type!");
                 return "UNKNOWN";

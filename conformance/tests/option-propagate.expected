@@ -1,0 +1,33 @@
+Some(4)
+None
+Some(3)
+None
+None
+twice
+Some(1)
+twice
+None
+twice
+None
+Some(Some(1))
+None
+still here
+Some(())
+None
+Some(Inner(1, Some(tag)))
+None
+Some(())
+None
+Some(Inner(1, Some(tag)))
+None
+Some(1)
+None
+None
+Some(tag)
+None
+Some(2)
+None
+-1
+true
+made
+Some(5)

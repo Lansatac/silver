@@ -264,10 +264,10 @@ private final class NameResolver
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan,
                             "'%s' is already declared in this module".format(type.name));
                     }
-                    else if (universal.resolveLocalType(type.name) !is null)
+                    else if (universal.resolveLocalType(type.name) !is null || type.name == "Some" || type.name == "None")
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan,
-                            "'%s' is a built-in type".format(type.name));
+                            "'%s' is a built-in name".format(type.name));
                     }
                     else
                     {
@@ -568,8 +568,21 @@ private final class NameResolver
                 resolveExpr(*binary.right, scopeTable);
             },
             (const IfExpr ifExpr) {
-                resolveExpr(*ifExpr.condition, scopeTable);
-                resolveExpr(*ifExpr.trueBody, scopeTable);
+                auto trueScope = scopeTable;
+                if (ifExpr.binding is null)
+                {
+                    resolveExpr(*ifExpr.condition, scopeTable);
+                }
+                else
+                {
+                    // The initializer can't see the binding, and only the true branch can.
+                    resolveExpr(ifExpr.binding.value, scopeTable);
+                    _declarations.locals[ifExpr.binding.id] = ifExpr.binding;
+                    trueScope = new Scope(scopeTable);
+                    declareLocal(ifExpr.binding.name, ifExpr.binding.nameSpan, SymbolId(ifExpr.binding.id), trueScope,
+                        DiagnosticCode.DuplicateDeclaration, "'%s' is already declared in this scope");
+                }
+                resolveExpr(*ifExpr.trueBody, trueScope);
                 if (ifExpr.falseBody !is null)
                 {
                     resolveExpr(*ifExpr.falseBody, scopeTable);
@@ -590,6 +603,10 @@ private final class NameResolver
                 }
             },
             (const UnitLiteral _) {},
+            (const SomeExpr some) => resolveExpr(*some.value, scopeTable),
+            (const NoneLiteral _) {},
+            (const PropagateExpr propagate) => resolveExpr(*propagate.operand, scopeTable),
+            (const SafeMemberAccess access) => resolveExpr(*access.object, scopeTable),
         );
     }
 
@@ -652,7 +669,9 @@ private final class NameResolver
         {
             return *path;
         }
-        _collector.reportError(DiagnosticCode.UnknownName, expr.span, "Unknown name '%s'".format(name));
+        _collector.reportError(DiagnosticCode.UnknownName, expr.span, name == "Some"
+            ? "`Some` takes exactly one value, and can't be used as a function"
+            : "Unknown name '%s'".format(name));
         return Path(Path.Kind.Error);
     }
 

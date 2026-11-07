@@ -1,0 +1,38 @@
+def f(x: Bool): Int? {
+    val v: Int? = if x => 1 else { return None }
+    v
+}
+def g(x: Int?): Int {
+    if val y = x {
+        return y
+    } else {
+        return 0
+    }
+}
+def h(x: Int?): Int => if val y = x { return y } else 7
+def main(): Unit {
+    printl(f(true))
+    printl(f(false))
+    printl(g(1))
+    printl(g(None))
+    printl(h(1))
+    printl(h(None))
+    mainTwo()
+}
+def viaCoalesce(x: Int?, y: Int?): Int? {
+    val a = (if val v = x => Some(v) else None) ?? (y ?? 9)
+    val b: Int? = a
+    b
+}
+def viaLet(c: Bool): String? {
+    val s = if c { "yes" } else { return None }
+    "{s}!"
+}
+def mainTwo(): Unit {
+    printl(viaCoalesce(1, 2))
+    printl(viaCoalesce(None, 2))
+    printl(viaCoalesce(None, None))
+    printl(viaLet(true))
+    printl(viaLet(false))
+    printl("{viaLet(true) ?? "none"} {1 + (Some(2) ?? 0)}")
+}

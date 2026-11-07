@@ -1,0 +1,77 @@
+type Inner(value: Int, tag: String?)
+type Outer(inner: Inner?, unit: Unit, plain: Inner)
+type Node(value: Int, next: Node?)
+
+def double(x: Int?): Int? {
+    val value = x?
+    value * 2
+}
+
+def add(a: Int?, b: Int?): Int? => a? + b?
+
+def twice(x: (Int?)?): Int? {
+    printl("twice")
+    val inner = x?
+    inner?
+}
+
+def first(x: Int?): (Int?)? {
+    val value = x?
+    Some(Some(value))
+}
+
+def checked(x: Int?): Unit? {
+    x?
+    printl("still here")
+    ()
+}
+
+def main(): Unit {
+    printl(double(2))
+    printl(double(None))
+    printl(add(1, 2))
+    printl(add(None, 2))
+    printl(add(1, None))
+    printl(twice(Some(Some(1))))
+    printl(twice(Some(None)))
+    printl(twice(None))
+    printl(first(1))
+    printl(first(None))
+    printl(checked(1))
+    printl(checked(None))
+
+    val inner = Inner(1, "tag")
+    val full: Outer? = Outer(inner, (), inner)
+    val empty: Outer? = None
+    val hollow: Outer? = Outer(None, (), Inner(2, None))
+
+    printl(full?.plain)
+    printl(empty?.plain)
+    printl(full?.unit)
+    printl(empty?.unit)
+
+    // A field that's already an option stays one option deep
+    printl(full?.inner)
+    printl(empty?.inner)
+
+    // A chain is one flat option, and stops at the first None
+    printl(full?.inner?.value)
+    printl(empty?.inner?.value)
+    printl(hollow?.inner?.value)
+    printl(full?.inner?.tag)
+    printl(hollow?.plain?.tag)
+
+    val list: Node? = Node(1, Node(2, None))
+    printl(list?.next?.value)
+    printl(list?.next?.next?.value)
+    printl(list?.next?.next?.next?.value ?? -1)
+    printl(list?.value == 1)
+
+    // The object is evaluated once
+    printl(make()?.value)
+}
+
+def make(): Node? {
+    printl("made")
+    Node(5, None)
+}

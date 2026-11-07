@@ -425,7 +425,7 @@ unittest
         i = i + 1
     }
 }`);
-    ir.should.contain("declare void @silver_read(ptr, ptr)");
+    ir.should.contain("declare i1 @silver_read(ptr, ptr)");
     auto firstBlock = ir.indexOf("while.cond");
     ir.indexOf("alloca ptr").should.be.lessThan(firstBlock);
     ir.indexOf("alloca i64").should.be.lessThan(firstBlock);
@@ -730,19 +730,13 @@ def main(): Unit {
     ir.count("phi i1").should.equal(3);
 }
 
-@("codegen reports comparing options, even inside a type that contains itself")
+@("codegen lays an option out as its tag and payload, with no payload for Unit")
 unittest
 {
-    enum message = "comparing options";
-    codegenErrors(`def same(a: Int?, b: Int?): Bool => a == b
+    auto ir = generateSource(`def f(a: Int?, b: String?, c: Unit?, d: (Int?)?): Unit => ()
 
-def main(): Unit => ()`).should.contain(message);
-
-    codegenErrors(`type Node(n: Int, next: Node?)
-
-def same(a: Node, b: Node): Bool => a == b
-
-def main(): Unit => ()`).should.contain(message);
+def main(): Unit => ()`);
+    ir.should.contain(`@"main.f"({ i1, i64 } %a.arg, { i1, { ptr, i64 } } %b.arg, { i1 } %c.arg, { i1, { i1, i64 } } %d.arg)`);
 }
 
 @("codegen checks Int division for zero, panicking with the source location")

@@ -19,6 +19,15 @@ immutable Case[] ifs = [
     parsesAs("if true => f() else g()", "(if true (call f) (call g))"),
     parsesAs("if a {}\nif a => b", ["(if a (block))", "(if a b)"]),
 
+    // Binding an option's payload
+    parsesAs("if val x = a => x else 0", "(if (val x a) x 0)"),
+    parsesAs("if val x = f() { x }", "(if (val x (call f)) (block => x))"),
+    parsesAs("if val x = a { x } else if val y = b { y }",
+        "(if (val x a) (block => x) (if (val y b) (block => y)))"),
+    parsesAs("if val x = a ?? b => x", "(if (val x (Coalesce a b)) x)"),
+    rejects("if val X = a => 1"),
+    rejects("if mutable val x = a => 1"),
+
     // As an expression
     parsesAs("a = if b => 1 else 2", "(assign a (if b 1 2))"),
     parsesAs("a = if b => 1 else if c => 2 else 3", "(assign a (if b 1 (if c 2 3)))"),

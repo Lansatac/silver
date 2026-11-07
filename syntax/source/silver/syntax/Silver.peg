@@ -69,13 +69,14 @@ Silver:
 
     WhileExpression      < :WHILE Expression Block
 
-    IfExpression         < :IF Expression IfBranch (Sep? :ELSE ElseBranch)?
+    IfExpression         < :IF (IfBinding / Expression) IfBranch (Sep? :ELSE ElseBranch)?
+    IfBinding            < :VAL Identifier :'=' Expression
     IfBranch             < :'=>' Sep? Expression / Block
     ElseBranch           < Block / Expression
 
     OrExpression         < AndExpression (OrOperator AndExpression)*
     AndExpression        < EqExpression (AndOperator EqExpression)*
-    EqExpression         < RelationalExpression ((EqOperator) RelationalExpression)*
+    EqExpression         < RelationalExpression (EqOperator RelationalExpression)?
     RelationalExpression < CoalesceExpression (RelationalOperator CoalesceExpression)?
     CoalesceExpression   < BitOrExpression (CoalesceOperator CoalesceExpression)?
     BitOrExpression      < BitXorExpression (BitOrOperator BitXorExpression)*

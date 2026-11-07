@@ -49,9 +49,8 @@ immutable Case[] declarations = [
     rejects("val a: point = 1"),
 ];
 
-/// Grammar only: a declaration without an initializer isn't lowered yet.
 immutable Case[] uninitializedDeclarations = [
-    accepts("mutable val a: Int?"), // defaults to None
+    parsesAs("mutable val a: Int?", "(mutable val a: Int? None)"),
 ];
 
 /// Types print as they're written, with parentheses only where they change the meaning.

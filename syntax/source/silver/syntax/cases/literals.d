@@ -65,11 +65,12 @@ immutable Case[] radixLiterals = [
     parsesAs("a = 18446744073709551615", "(assign a 18446744073709551615)"),
 ];
 
-/// Grammar only: `Some` and `None` don't have their own AST nodes yet.
 immutable Case[] constructors = [
-    accepts("a = None"),
-    accepts("a = Some(1)"),
-    accepts("a = Some(Some(1))"),
+    parsesAs("a = None", "(assign a None)"),
+    parsesAs("a = Some(1)", "(assign a (Some 1))"),
+    parsesAs("a = Some(Some(1))", "(assign a (Some (Some 1)))"),
+    // Only one argument makes it a Some; sema reports the rest
+    parsesAs("a = Some(1, 2)", "(assign a (call Some 1 2))"),
 ];
 
 /// Grammar only: CollectionLiteral isn't lowered yet.

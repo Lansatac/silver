@@ -18,6 +18,9 @@ immutable Case[] operators = [
     parsesAs("a = b > c", "(assign a (Greater b c))"),
     parsesAs("a = b >= c", "(assign a (GreaterEqual b c))"),
     rejects("a = b < c < d"), // comparisons don't chain
+    rejects("a = b == c == d"),
+    rejects("a = b != c == d"),
+    parsesAs("a = (b == c) == d", "(assign a (Equal (Equal b c) d))"),
 
     parsesAs("a = b ?? 0", "(assign a (Coalesce b 0))"),
 

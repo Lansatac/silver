@@ -1,0 +1,7 @@
+Some(Red)
+true
+false
+Pair(Some(x), Some(Some(Red)))
+Pair(None, None)
+true
+dflt

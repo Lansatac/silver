@@ -1,0 +1,6 @@
+Some(Some(Some(Some(1))))
+T(Some(Some(Some(1))))
+T(None)
+T(Some(None))
+T(Some(Some(None)))
+true

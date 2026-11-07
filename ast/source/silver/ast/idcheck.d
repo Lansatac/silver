@@ -148,7 +148,15 @@ private final class IdCheck
             },
             (const MemberAccess m) => visit(m.object),
             (const WhileExpr w) { visit(w.condition); visit(w.body); },
-            (const IfExpr i) { visit(i.condition); visit(i.trueBody); visit(i.falseBody); },
+            (const IfExpr i) {
+                if (i.binding !is null) visit(*i.binding, i.binding.nameSpan);
+                visit(i.condition);
+                visit(i.trueBody);
+                visit(i.falseBody);
+            },
+            (const SomeExpr s) => visit(s.value),
+            (const PropagateExpr p) => visit(p.operand),
+            (const SafeMemberAccess m) => visit(m.object),
             (const BlockExpr b) {
                 foreach (s; b.statements)
                 {

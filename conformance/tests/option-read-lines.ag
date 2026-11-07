@@ -1,0 +1,10 @@
+def main(): Unit {
+    mutable val line = read()
+    mutable val count = 0
+    while line != None {
+        printl(line)
+        count += 1
+        line = read()
+    }
+    printl(count)
+}

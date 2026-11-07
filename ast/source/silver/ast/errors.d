@@ -40,6 +40,9 @@ enum DiagnosticCode : string
     NonConstantInitializer = "T0008",
     ConstantCycle = "T0009",
     ConstantEvaluationFailed = "T0010",
+    UntypedNone = "T0011",
+    InvalidPropagation = "T0012",
+    InvalidOptionPayload = "T0013",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

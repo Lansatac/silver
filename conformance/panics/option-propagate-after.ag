@@ -1,0 +1,11 @@
+def run(x: Int?): Int? {
+    printl("before")
+    val value = x?
+    printl("after")
+    value / 0
+}
+
+def main(): Unit {
+    printl(run(None))
+    printl(run(1))
+}

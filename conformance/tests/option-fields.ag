@@ -1,0 +1,15 @@
+type Red
+type Pair(a: String?, b: (Red?)?)
+def main(): Unit {
+    val r: Red? = Red
+    printl(r)
+    printl(r == Red)
+    printl(r == None)
+    mutable val p = Pair("x", Red)
+    printl(p)
+    p.b = None
+    p.a = None
+    printl(p)
+    printl(p == Pair(None, None))
+    printl(p.a ?? "dflt")
+}

@@ -68,6 +68,20 @@ final class Analysis
         return typeOf(SymbolId(constant));
     }
 
+    /// The option type `expr`'s value is wrapped into after it's evaluated, or null if it isn't.
+    /// `typeOf(expr)` stays the type before wrapping.
+    const(Type)* promotionOf(Id!Expr expr) const
+    {
+        return expr in _typing.promotions;
+    }
+
+    /// The type of the value `expr` hands to whatever uses it: `typeOf`, after any promotion.
+    Type valueTypeOf(Id!Expr expr) const
+    {
+        if (auto option = promotionOf(expr)) return *option;
+        return typeOf(expr);
+    }
+
     /// What `constant` evaluated to. An analysis with no errors has one for every constant.
     const(ConstValue) valueOf(Id!ConstDecl constant) const
     {

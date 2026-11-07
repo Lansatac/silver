@@ -109,7 +109,8 @@ struct Expr
 }
 
 alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, InterpolatedString, Identifier,
-    UnaryExpr, BinaryExpr, CallExpr, MemberAccess, WhileExpr, IfExpr, BlockExpr, UnitLiteral);
+    UnaryExpr, BinaryExpr, CallExpr, MemberAccess, WhileExpr, IfExpr, BlockExpr, UnitLiteral,
+    SomeExpr, NoneLiteral, PropagateExpr, SafeMemberAccess);
 
 /// `()`, the only value of type Unit.
 struct UnitLiteral
@@ -215,13 +216,40 @@ struct MemberAccess
     string member;
 }
 
+/// `Some(x)`.
+struct SomeExpr
+{
+    Expr* value;
+}
+
+/// `None`.
+struct NoneLiteral
+{
+}
+
+/// `x?`: `x`'s payload, or a `None` returned from the enclosing function.
+struct PropagateExpr
+{
+    Expr* operand;
+}
+
+/// `object?.member`.
+struct SafeMemberAccess
+{
+    Expr* object;
+    string member;
+}
+
 /// `if c => a else b` or `if c { ... } else { ... }`.
 /// `falseBody` is null when there's no else, and the if's value is then ().
+/// `if val x = opt ...` sets `binding` instead of `condition`: its value is the option, and
+/// `x` is in scope only in `trueBody`.
 struct IfExpr
 {
     Expr* condition;
     Expr* trueBody;
     Expr* falseBody;
+    VarDecl* binding;
 }
 
 /// `while c { ... }`, whose value is `()`.
@@ -258,12 +286,21 @@ string printExpr(const Expr e)
         (const CallExpr c) => format("(call %s%s)", printExpr(*c.callee), c.args.map!(a => " " ~ printExpr(a)).join),
         (const MemberAccess m) => format("(. %s %s)", printExpr(*m.object), m.member),
         (const WhileExpr w) => format("(while %s %s)", printExpr(*w.condition), printExpr(*w.body)),
-        (const IfExpr i) => i.falseBody is null
-            ? format("(if %s %s)", printExpr(*i.condition), printExpr(*i.trueBody))
-            : format("(if %s %s %s)", printExpr(*i.condition), printExpr(*i.trueBody), printExpr(*i.falseBody)),
+        (const IfExpr i) {
+            auto head = i.binding is null
+                ? printExpr(*i.condition)
+                : format("(val %s %s)", i.binding.name, printExpr(i.binding.value));
+            return i.falseBody is null
+                ? format("(if %s %s)", head, printExpr(*i.trueBody))
+                : format("(if %s %s %s)", head, printExpr(*i.trueBody), printExpr(*i.falseBody));
+        },
         (const BlockExpr b) => format("(block%s%s)", b.statements.map!(s => " " ~ printStmt(s)).join,
             b.value is null ? "" : " => " ~ printExpr(*b.value)),
         (const UnitLiteral u) => "()",
+        (const SomeExpr s) => format("(Some %s)", printExpr(*s.value)),
+        (const NoneLiteral _) => "None",
+        (const PropagateExpr p) => format("(? %s)", printExpr(*p.operand)),
+        (const SafeMemberAccess m) => format("(?. %s %s)", printExpr(*m.object), m.member),
     );
 }
 

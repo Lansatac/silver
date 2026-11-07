@@ -1,0 +1,10 @@
+def f(): Int? => None
+def main(): Unit {
+    None
+    Some(1)
+    f()
+    if true => None else None
+    if true => Some(1) else None
+    { None }
+    printl("ok")
+}

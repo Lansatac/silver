@@ -1,0 +1,28 @@
+type Point(x: Int)
+
+def main(): Unit {
+    mutable val a: Int?
+    printl(a)
+    a = 1
+    printl(a)
+
+    mutable val b: Point?
+    printl(b?.x)
+    b = Point(2)
+    printl(b?.x)
+
+    mutable val c: (String?)?
+    printl(c)
+    mutable val d: Unit?
+    printl(d == None)
+
+    // Each iteration starts over
+    mutable val i = 0
+    while i < 2 {
+        mutable val fresh: Int?
+        printl(fresh)
+        fresh = i
+        printl(fresh)
+        i += 1
+    }
+}

@@ -346,11 +346,210 @@ unittest
     analyzedMain(`printl(1 || true)`).shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
 }
 
-@("type checking reports ?? as unsupported for now")
+// Options
+
+@("type checking gives Some and None the option they're used as")
 unittest
 {
-    analyzedMain("val maybe: Int? = 1\n    printl(maybe ?? 0)")
-        .shouldReport(DiagnosticCode.InternalError, At("maybe", 2));
+    auto a = analyzedMain(`val m: UInt8? = 1
+    val joined = if true => Some(1) else None
+    val promoted = if true => 1 else None
+    val nested: (Int?)? = Some(None)`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("if true => Some(1) else None", "Int?");
+    a.shouldHaveType("if true => 1 else None", "Int?");
+}
+
+@("type checking reports a None with no option to take its type from")
+unittest
+{
+    analyzedMain("val x = None").shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+    analyzedMain("val x = if true => None else None").shouldReport(DiagnosticCode.UntypedNone, At("if", 1));
+    analyzedMain("printl(None)").shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+    analyzedMain(`val s = "{None}"`).shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+    analyzedMain("val s = String(None)").shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+    analyzedMain("val s = Some(None)").shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+    analyzedMain("printl(None == None)").shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+    analyzedMain("printl(None ?? 1)").shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+    analyzedMain("if val x = None { }").shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+    analyzedMain("val x: Int = None").shouldReport(DiagnosticCode.TypeMismatch, At("None", 1));
+}
+
+@("type checking checks a literal against the option's payload")
+unittest
+{
+    analyzedMain("val x: UInt8? = 300").shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
+    analyzedMain("val x: UInt8? = Some(300)").shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
+    analyzedMain("val x: UInt8? = -1").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1", 1));
+    analyzedMain("val x: (UInt8?)? = 300").shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
+    analyzedMain(`val x: String? = 1`).shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+    analyzedMain(`val x: Int? = Some("a")`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
+    analyzedMain(`val x: Int? = Some(Some(1))`).shouldReport(DiagnosticCode.TypeMismatch, At("Some(1)", 1));
+}
+
+@("name resolution reserves Some and None")
+unittest
+{
+    analyzed("type None\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("None", 1));
+    analyzed("type Some(x: Int)\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("Some", 1));
+    analyzedMain("val f = Some").shouldReport(DiagnosticCode.UnknownName, At("Some", 1));
+    analyzedMain("val x = Some(1, 2)").shouldReport(DiagnosticCode.UnknownName, At("Some", 1));
+}
+
+@("type checking rejects an option of Any")
+unittest
+{
+    analyzed("def f(x: Any?): Unit => ()\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidOptionPayload, At("Any?", 1));
+}
+
+@("type checking needs an option on the left of ?? and a fitting value on the right")
+unittest
+{
+    analyzedMain("printl(1 ?? 2)").shouldReport(DiagnosticCode.InvalidOperand, At("1", 1));
+    analyzedMain(`val x: Int? = 1
+    printl(x ?? "a")`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
+    analyzedMain(`val x: Int? = 1
+    val y: String? = "a"
+    printl(x ?? y)`).shouldReport(DiagnosticCode.TypeMismatch, At("y", 2));
+    analyzedMain("val x: UInt8? = 1\n    printl(x ?? 300)").shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
+}
+
+@("type checking gives ?? the payload's type unless the right side is an option")
+unittest
+{
+    auto a = analyzedMain(`val x: Int? = 1
+    val nested: (Int?)? = 1
+    val y = x ?? 0
+    val z = x ?? None
+    val w = x ?? x
+    val u = nested ?? x`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("x ?? 0", "Int");
+    a.shouldHaveType("x ?? None", "Int?");
+    a.shouldHaveType("x ?? x", "Int?");
+    a.shouldHaveType("nested ?? x", "Int?");
+}
+
+@("if val binds the payload in the true branch only, and needs an option")
+unittest
+{
+    auto a = analyzedMain(`val x: Int? = 1
+    if val y = x {
+        val z = y
+        printl(z + 1)
+    }`);
+    a.shouldHaveNoDiagnostics();
+    analyzedMain(`if val y = 1 { }`).shouldReport(DiagnosticCode.InvalidOperand, At("1", 1));
+    analyzedMain(`val x: Int? = 1
+    if val y = x { } else { printl(y) }`).shouldReport(DiagnosticCode.UnknownName, At("y", 2));
+    analyzedMain(`val x: Int? = 1
+    if val y = x { }
+    printl(y)`).shouldReport(DiagnosticCode.UnknownName, At("y", 2));
+    analyzedMain(`val x: Int? = 1
+    if val x = x { }`).shouldReport(DiagnosticCode.ShadowedDeclaration, At("x", 2));
+    analyzedMain(`val x: Int? = 1
+    if val y = x {
+        y = 2
+    }`).shouldReport(DiagnosticCode.AssignToImmutable, At("y", 2));
+}
+
+@("type checking compares an option with its payload, but doesn't order it")
+unittest
+{
+    analyzedMain(`val x: UInt8? = 1
+    printl(x == 2)
+    printl(2 == x)
+    printl(x == None)
+    printl(None == x)
+    printl(x == Some(2))
+    printl(Some(2) == x)
+    printl(Some(1) == None)`).shouldHaveNoDiagnostics();
+
+    analyzedMain(`val x: Int? = 1
+    printl(x == "a")`).shouldReport(DiagnosticCode.InvalidOperand, At(`x == "a"`, 1));
+    analyzedMain(`val x: Int? = 1
+    printl(x < 2)`).shouldReport(DiagnosticCode.InvalidOperand, At("x", 2));
+    analyzedMain(`val x: UInt8? = 1
+    printl(x == 300)`).shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
+    analyzedMain("printl(3 == None)").shouldReport(DiagnosticCode.InvalidOperand, At("3 == None", 1));
+    analyzed("def f(a: () -> Int, b: (() -> Int)?): Bool => b == a\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("b == a", 1));
+}
+
+@("postfix ? needs an option, in a function that returns one")
+unittest
+{
+    analyzed("def f(x: Int?): Int? => Some(x? + 1)\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
+    analyzed("def f(x: Int?): Int => x?\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidPropagation, At("x?", 1));
+    analyzed("def f(x: Int): Int? => x?\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("x", 2));
+}
+
+@("?. reads a field of an option, staying one option deep")
+unittest
+{
+    enum types = "type Inner(n: Int)\ntype Outer(i: Inner?, plain: Inner)\n";
+    auto a = analyzed(types ~ `def main(): Unit {
+    val o: Outer? = None
+    val p = o?.plain
+    val i = o?.i
+    val n = o?.i?.n
+}`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("o?.plain", "Inner?");
+    a.shouldHaveType("o?.i", "Inner?");
+    a.shouldHaveType("o?.i?.n", "Int?");
+
+    analyzed(types ~ "def f(o: Outer): Inner => o?.plain\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("o", 2));
+    analyzed(types ~ "def f(o: Outer?): Int? => o?.nope\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.UnknownMember, At("o?.nope", 1));
+    analyzed(types ~ "def f(o: Outer?): Inner => o.plain\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.UnknownMember, At("o.plain", 1));
+    analyzed(types ~ "def main(): Unit {\n    mutable val o: Outer?\n    o?.plain = Inner(1)\n}")
+        .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("o?.plain", 1));
+}
+
+@("options can't be top-level constants or built from them")
+unittest
+{
+    analyzed("val x: Int = None ?? 1\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.NonConstantInitializer, At("None", 1));
+    analyzed("val x: Int = Some(1) ?? 1\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.NonConstantInitializer, At("Some(1)", 1));
+    analyzed("val y: Int = 1\nval x: Int = y ?? 1\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("y", 2));
+}
+
+// Values dropped where Unit is expected
+
+@("type checking drops a block's value where Unit is expected")
+unittest
+{
+    analyzed(`def number(): Int => 1
+def a(): Unit { number() }
+def b(): Unit => number()
+def c(x: Bool): Unit {
+    if x { 1 } else { "text" }
+}
+def d(x: Bool): Unit {
+    if x => number()
+    while x { number() }
+}
+def main(): Unit => ()`).shouldHaveNoDiagnostics();
+}
+
+@("type checking still needs Unit where nothing's a block's value")
+unittest
+{
+    analyzed("def number(): Int => 1\ndef main(): Unit {\n    val x: Unit = number()\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("number()", 2));
+    analyzed("def main(): Unit {\n    return 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+    analyzed(`def main(): Unit {
+    val x: Unit = { 1 }
+}`).shouldReport(DiagnosticCode.TypeMismatch, At("{ 1 }", 1));
 }
 
 // If, while, blocks, and Never
