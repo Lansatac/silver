@@ -490,6 +490,29 @@ def main(): Unit {
     run.output.should.equal("2\nbees!\nnone\n");
 }
 
+@("codegen loops with for through a counter slot, continuing at the step and breaking to the end")
+unittest
+{
+    auto source = "def main(): Unit {\n    for i in 0..4 {\n        if i == 1 {\n            continue\n        }\n"
+        ~ "        if i == 3 {\n            break\n        }\n        printl(i)\n    }\n"
+        ~ "    val bytes: [UInt8] = [7, 8]\n    for b in bytes {\n        printl(b)\n    }\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("%.for.addr = alloca i64");
+    ir.should.contain("store i64 0, ptr %.for.addr");
+    ir.should.contain("icmp slt i64");
+    ir.should.contain("br label %for.step.2");
+    ir.should.contain("br label %for.end.3");
+    // An array is walked by position, whatever its element type.
+    ir.should.contain("%.for.1.addr = alloca i64");
+    ir.should.contain("icmp ult i64");
+    ir.should.contain("%b.addr = alloca i8");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("0\n2\n7\n8\n");
+}
+
 @("codegen loops with while, re-evaluating the condition each time round")
 unittest
 {

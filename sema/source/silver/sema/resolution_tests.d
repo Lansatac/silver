@@ -335,6 +335,7 @@ private final class Indexer
             (const ExprStmt e) => visit(e.expr),
             (const ReturnStmt r) => visit(r.value),
             (const FunctionDecl f) => visit(f),
+            (_) {},
         );
     }
 
@@ -380,6 +381,12 @@ private final class Indexer
                 visit(ma.object);
             },
             (const WhileExpr w) { visit(w.condition); visit(w.body); },
+            (const ForExpr f) {
+                index.declarations[f.binding.nameSpan.start] = SymbolId(f.binding.id);
+                visit(f.binding.value);
+                visit(f.body);
+            },
+            (const RangeExpr r) { visit(r.start); visit(r.end); },
             (const IfExpr i) { visit(i.condition); visit(i.trueBody); visit(i.falseBody); },
             (const BlockExpr b) {
                 foreach (s; b.statements)

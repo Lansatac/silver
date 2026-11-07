@@ -116,7 +116,7 @@ struct Expr
 }
 
 alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, InterpolatedString, Identifier,
-    UnaryExpr, BinaryExpr, CallExpr, MemberAccess, WhileExpr, IfExpr, BlockExpr, UnitLiteral,
+    UnaryExpr, BinaryExpr, CallExpr, MemberAccess, WhileExpr, ForExpr, IfExpr, BlockExpr, UnitLiteral,
     SomeExpr, NoneLiteral, PropagateExpr, SafeMemberAccess, ArrayLiteral, MapLiteral, IndexExpr, RangeExpr);
 
 /// `()`, the only value of type Unit.
@@ -270,7 +270,7 @@ struct IndexExpr
     Expr* index;
 }
 
-/// `start..end`, half open. Only a slice takes one for now.
+/// `start..end`, half open. Only a slice or a `for` takes one for now.
 struct RangeExpr
 {
     Expr* start;
@@ -308,6 +308,14 @@ struct WhileExpr
     VarDecl* binding;
 }
 
+/// `for x in xs { ... }`, whose value is `()`. `binding`'s value is what's looped over, an array or
+/// a RangeExpr, evaluated once before the loop, and `x` is in scope only in `body`.
+struct ForExpr
+{
+    VarDecl* binding;
+    Expr* body;
+}
+
 /// `{ statements }`, which has its own scope. `value` is the last statement when
 /// that's an expression, and null otherwise, in which case the block's value is ().
 struct BlockExpr
@@ -337,6 +345,7 @@ string printExpr(const Expr e)
         (const WhileExpr w) => format("(while %s %s)", w.binding is null
             ? printExpr(*w.condition)
             : format("(val %s %s)", w.binding.name, printExpr(w.binding.value)), printExpr(*w.body)),
+        (const ForExpr f) => format("(for %s %s %s)", f.binding.name, printExpr(f.binding.value), printExpr(*f.body)),
         (const IfExpr i) {
             auto head = i.binding is null
                 ? printExpr(*i.condition)
@@ -387,7 +396,7 @@ struct Stmt
     StmtKind kind;
 }
 
-alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, FunctionDecl, ReturnStmt);
+alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, FunctionDecl, ReturnStmt, BreakStmt, ContinueStmt);
 
 /// The name of a VarDecl that binds nothing: its value is evaluated and dropped, and no name is
 /// declared, so any number of them can share a scope.
@@ -485,6 +494,16 @@ struct ReturnStmt
     Expr value;
 }
 
+/// `break`, which ends the innermost loop whose body holds it.
+struct BreakStmt
+{
+}
+
+/// `continue`, which starts the next iteration of the innermost loop whose body holds it.
+struct ContinueStmt
+{
+}
+
 string printModule(const Module m)
 {
     import std.format : format;
@@ -528,6 +547,8 @@ string printStmt(const Stmt s)
         (const AssignStmt a) => format("(assign %s %s)", printExpr(a.target), printExpr(a.value)),
         (const FunctionDecl f) => printFunctionDecl(f),
         (const ReturnStmt r) => format("(return %s)", printExpr(r.value)),
+        (const BreakStmt _) => "(break)",
+        (const ContinueStmt _) => "(continue)",
     );
 }
 

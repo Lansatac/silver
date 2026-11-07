@@ -29,6 +29,7 @@ enum DiagnosticCode : string
     DuplicateField = "S0015",
     MissingConstantType = "S0016",
     InvalidConstantType = "S0017",
+    JumpOutsideLoop = "S0018",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",

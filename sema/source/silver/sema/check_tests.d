@@ -1822,6 +1822,106 @@ unittest
     while val x = x { }`).shouldReport(DiagnosticCode.ShadowedDeclaration, At("x", 2));
 }
 
+@("for takes an array, binding its elements, and its binding is only in scope in the body")
+unittest
+{
+    auto a = analyzedMain(`val xs: [Int?] = [1, None]
+    for x in xs {
+        print(x)
+    }
+    for x in ["a"] {
+        print(x)
+    }
+    for y in [[1]] {
+        print(y)
+    }
+    val u = for z in xs { z }
+    print(u)`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("x", 2, "Int?");
+    a.shouldHaveType("x", 4, "String");
+    a.shouldHaveType("y", 2, "[Int]");
+    a.shouldHaveType("u", 2, "Unit");
+
+    analyzedMain(`for x in 1 { }`).shouldReport(DiagnosticCode.InvalidOperand, At("1", 1));
+    analyzedMain(`for c in "abc" { }`).shouldReport(DiagnosticCode.InvalidOperand, At(`"abc"`, 1));
+    analyzedMain(`val o: [Int]? = None
+    for x in o { }`).shouldReport(DiagnosticCode.InvalidOperand, At("o", 2));
+    analyzedMain(`for x in [] { }`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
+    analyzedMain(`for x in [1] { }
+    print(x)`).shouldReport(DiagnosticCode.UnknownName, At("x", 2));
+    analyzedMain(`val x = [1]
+    for x in x { }`).shouldReport(DiagnosticCode.ShadowedDeclaration, At("x", 2));
+    analyzedMain(`for x in [1] {
+        val x = 2
+    }`).shouldReport(DiagnosticCode.ShadowedDeclaration, At("x", 2));
+    analyzedMain(`for x in [1] {
+        x = 2
+    }`).shouldReport(DiagnosticCode.AssignToImmutable, At("x", 2));
+    analyzedMain(`for _ in [1] { }
+    for _ in [2] { }`).shouldHaveNoDiagnostics();
+}
+
+@("a for range takes integers of one type, and a literal adapts to the number beside it")
+unittest
+{
+    auto a = analyzedMain(`val small: UInt8 = 3
+    for i in 0..small {
+        print(i)
+    }
+    for j in small..10 {
+        print(j)
+    }
+    for k in 0..3 {
+        print(k)
+    }`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("i", 2, "UInt8");
+    a.shouldHaveType("j", 2, "UInt8");
+    a.shouldHaveType("k", 2, "Int");
+    a.shouldHaveType("0", 1, "UInt8");
+
+    analyzedMain(`for i in 0.0..1.0 { }`).shouldReport(DiagnosticCode.InvalidOperand, At("0.0..1.0", 1));
+    analyzedMain(`for i in "a".."b" { }`).shouldReport(DiagnosticCode.InvalidOperand, At(`"a".."b"`, 1));
+    analyzedMain(`val a: Int8 = 1
+    val b: Int16 = 2
+    for i in a..b { }`).shouldReport(DiagnosticCode.TypeMismatch, At("a..b", 1));
+    analyzedMain(`val a: UInt8 = 1
+    for i in a..300 { }`).shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
+    analyzedMain(`val r = 0..3`).shouldReport(DiagnosticCode.NotSupportedYet, At("0..3", 1));
+    analyzedMain(`for i in { 0..3 } { }`).shouldReport(DiagnosticCode.NotSupportedYet, At("0..3", 1));
+}
+
+@("break and continue need the body of a loop, and have type Never")
+unittest
+{
+    analyzedMain(`while true {
+        break
+        continue
+    }
+    for x in [1] {
+        if x == 1 { continue }
+        val y: Int = if x == 2 { 1 } else { break }
+        print(y)
+    }`).shouldHaveNoDiagnostics();
+
+    analyzedMain(`break`).shouldReport(DiagnosticCode.JumpOutsideLoop, At("break", 1));
+    analyzedMain(`continue`).shouldReport(DiagnosticCode.JumpOutsideLoop, At("continue", 1));
+    analyzedMain(`if true { break }`).shouldReport(DiagnosticCode.JumpOutsideLoop, At("break", 1));
+
+    // A condition and what a `for` loops over are outside the loop's body.
+    analyzedMain(`while { break
+        true } { }`).shouldReport(DiagnosticCode.JumpOutsideLoop, At("break", 1));
+    analyzedMain(`for x in { continue
+        [1] } { }`).shouldReport(DiagnosticCode.JumpOutsideLoop, At("continue", 1));
+    analyzedMain(`for i in 0..{ break
+        3 } { }`).shouldReport(DiagnosticCode.JumpOutsideLoop, At("break", 1));
+    analyzedMain(`while true {
+        while { break
+            true } { }
+    }`).shouldHaveNoDiagnostics();
+}
+
 @("a non-final expression statement that isn't Unit is an error")
 unittest
 {

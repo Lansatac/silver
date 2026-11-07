@@ -119,6 +119,14 @@ private final class IdCheck
         visit(r.value);
     }
 
+    void visit(const BreakStmt b, Span span)
+    {
+    }
+
+    void visit(const ContinueStmt c, Span span)
+    {
+    }
+
     void visit(const(Expr)* e)
     {
         if (e !is null)
@@ -151,6 +159,10 @@ private final class IdCheck
                 if (w.binding !is null) visit(*w.binding, w.binding.nameSpan);
                 visit(w.condition);
                 visit(w.body);
+            },
+            (const ForExpr f) {
+                visit(*f.binding, f.binding.nameSpan);
+                visit(f.body);
             },
             (const IfExpr i) {
                 if (i.binding !is null) visit(*i.binding, i.binding.nameSpan);

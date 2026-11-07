@@ -1,0 +1,87 @@
+def noisy(name: String, value: Int): Int {
+    printl(name)
+    return value
+}
+
+def main(): Unit {
+    for i in 0..3 {
+        printl(i)
+    }
+
+    // A range whose start isn't below its end is empty.
+    for i in 0..0 {
+        printl("equal")
+    }
+    for i in 5..0 {
+        printl("reversed")
+    }
+    val n = 0
+    for i in 0..n - 1 {
+        printl("negative")
+    }
+
+    // Negative bounds, and bounds that are expressions.
+    for i in -2..0 {
+        printl(i)
+    }
+    val m = 2
+    for i in m * 2..m + 3 {
+        printl(i)
+    }
+
+    // Each bound is evaluated once, start first.
+    for i in noisy("start", 0)..noisy("end", 2) {
+        printl(i)
+    }
+
+    // Changing a variable named in a bound doesn't change the range.
+    mutable val limit = 2
+    for i in 0..limit {
+        limit += 10
+        printl(i)
+    }
+    printl(limit)
+
+    // Values have the type of the bounds, and the top of a type doesn't overflow.
+    val low: UInt8 = 253
+    val high: UInt8 = 255
+    for b in low..high {
+        val same: UInt8 = b
+        printl(same)
+    }
+    val lowest: Int8 = -128
+    for b in lowest..-126 {
+        printl(b)
+    }
+    val big: Int = 9223372036854775806
+    for i in big..9223372036854775807 {
+        printl(i)
+    }
+    val huge: UInt = 18446744073709551614
+    for i in huge..18446744073709551615 {
+        printl(i)
+    }
+
+    // An unsigned range compares as unsigned, past the top of the signed type.
+    val above: UInt = 9223372036854775807
+    for i in above..9223372036854775809 {
+        printl(i)
+    }
+
+    // Indexing through a range.
+    val xs = ["a", "b"]
+    for i in 0..length(xs) {
+        printl("{i}: {xs[i]}")
+    }
+
+    for _ in 0..2 {
+        printl("twice")
+    }
+
+    // Nested loops share no state.
+    for i in 0..2 {
+        for j in 0..i + 1 {
+            printl("{i} {j}")
+        }
+    }
+}

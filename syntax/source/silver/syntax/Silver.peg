@@ -24,6 +24,8 @@ Silver:
                             / FunctionDeclaration
                             / NativeFunctionDeclaration
                             / ReturnStatement
+                            / BreakStatement
+                            / ContinueStatement
                             / DiscardStatement
                             / AssignmentStatement
                             / ExpressionStatement
@@ -57,6 +59,8 @@ Silver:
 
     # The value is optional so `return` alone returns ()
     ReturnStatement      < RETURN Expression?
+    BreakStatement       < BREAK
+    ContinueStatement    < CONTINUE
 
     TypeDeclaration      < :TYPE Nl? TypeName Fields?
     # The parens are kept so `type M()` still has a node, which sema rejects in favor of `type M`
@@ -76,8 +80,9 @@ Silver:
     TypePath             <- (ValueName '.')* TypeName
     TypeArguments        < :'<' Nl? Type (Nl? :',' Nl? Type)* Nl? :'>'
 
-    Expression           < WhileExpression / IfExpression / OrExpression
+    Expression           < ForExpression / WhileExpression / IfExpression / OrExpression
 
+    ForExpression        < :FOR Nl? BindingName Nl? :IN Nl? Expression Nl? Block
     WhileExpression      < :WHILE Nl? (OptionBinding / Expression) Nl? Block
 
     IfExpression         < :IF Nl? (OptionBinding / Expression) Nl? IfBranch (Nl? :ELSE Nl? ElseBranch)?
@@ -179,6 +184,10 @@ Silver:
     TYPE                <- Kword("type")
     NATIVE              <- Kword("native")
     WHILE               <- Kword("while")
+    FOR                 <- Kword("for")
+    IN                  <- Kword("in")
+    BREAK               <- Kword("break")
+    CONTINUE            <- Kword("continue")
     IF                  <- Kword("if")
     ELSE                <- Kword("else")
     TRUE                <- Kword("true")
@@ -186,13 +195,12 @@ Silver:
     RETURN              <- Kword("return")
     IMPORT              <- Kword("import")
     MODULE              <- Kword("module")
-    # Reserved for `for` and sum types, so no program can come to depend on them as names
-    IN                  <- Kword("in")
+    # Reserved for sum types, so no program can come to depend on them as names
     MATCH               <- Kword("match")
     ALIAS               <- Kword("alias")
     UNDERSCORE          <- Kword("_")
 
-    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / WHILE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / UNDERSCORE
+    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / UNDERSCORE
     IdentChar           <- [a-zA-Z0-9_]
     Identifier          <- !Keyword ValueName
 

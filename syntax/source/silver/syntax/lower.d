@@ -150,6 +150,10 @@ private final class Lowering
             auto value = cst.children.length > 1
                 ? convertExpression(cst[1]) : Expr(ids.next!Expr, spanOf(cst, file), ExprKind(UnitLiteral()));
             return Stmt(spanOf(cst, file), StmtKind(ReturnStmt(value)));
+        case "Silver.BreakStatement":
+            return Stmt(spanOf(cst, file), StmtKind(BreakStmt()));
+        case "Silver.ContinueStatement":
+            return Stmt(spanOf(cst, file), StmtKind(ContinueStmt()));
         case "Silver.ExpressionStatement":
             return Stmt(spanOf(cst, file), StmtKind(ExprStmt(convertExpression(cst[0]))));
         default:
@@ -233,6 +237,8 @@ private final class Lowering
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(UnitLiteral()));
         case "Silver.WhileExpression":
             return convertWhileExpression(cst);
+        case "Silver.ForExpression":
+            return convertForExpression(cst);
         case "Silver.IfExpression":
             return convertIfExpression(cst);
         case "Silver.RelationalExpression":
@@ -427,6 +433,16 @@ private final class Lowering
         }
         auto body = convertExpression(cst[1]);
         return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(WhileExpr(condition, boxed(body), binding)));
+    }
+
+    /// `BindingName Expression Block` once the keywords are discarded.
+    private Expr convertForExpression(ParseTree cst)
+    {
+        cst.validateNodeIs("Silver.ForExpression");
+        auto binding = boxed(VarDecl(ids.next!VarDecl, cst[0].matches[0], spanOf(cst[0], file),
+            convertExpression(cst[1]), null, false));
+        auto body = convertExpression(cst[2]);
+        return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(ForExpr(binding, boxed(body))));
     }
 
     /// `IF Expression IfBranch (ELSE ElseBranch)?`. An else-if is just an

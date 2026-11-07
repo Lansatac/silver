@@ -1,0 +1,7 @@
+def main(): Unit {
+    val xs = [1, 2]
+    for i in 0..3 {
+        printl(xs[i])
+    }
+    printl("unreachable")
+}

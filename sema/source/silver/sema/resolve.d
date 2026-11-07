@@ -515,6 +515,8 @@ private final class NameResolver
             (const ReturnStmt returnStmt) {
                 resolveExpr(returnStmt.value, scopeTable);
             },
+            (const BreakStmt _) {},
+            (const ContinueStmt _) {},
             (const FunctionDecl funcDecl) {
                 _collector.reportError(DiagnosticCode.InternalError, funcDecl.nameSpan,
                     "Nested function declarations are not supported yet");
@@ -579,7 +581,7 @@ private final class NameResolver
                 }
                 else
                 {
-                    trueScope = declareOptionBinding(*ifExpr.binding, ifExpr.binding, scopeTable);
+                    trueScope = declareHeadBinding(*ifExpr.binding, ifExpr.binding, scopeTable);
                 }
                 resolveExpr(*ifExpr.trueBody, trueScope);
                 if (ifExpr.falseBody !is null)
@@ -595,9 +597,13 @@ private final class NameResolver
                 }
                 else
                 {
-                    bodyScope = declareOptionBinding(*whileExpr.binding, whileExpr.binding, scopeTable);
+                    bodyScope = declareHeadBinding(*whileExpr.binding, whileExpr.binding, scopeTable);
                 }
                 resolveExpr(*whileExpr.body, bodyScope);
+            },
+            (const ForExpr forExpr) {
+                auto bodyScope = declareHeadBinding(*forExpr.binding, forExpr.binding, scopeTable);
+                resolveExpr(*forExpr.body, bodyScope);
             },
             (const BoolLiteral _) {},
             (const IntLiteral _) {},
@@ -638,9 +644,9 @@ private final class NameResolver
         );
     }
 
-    /// The scope holding an `if val` or `while val` binding, which only its body sees: the
+    /// The scope holding an `if val`, `while val` or `for` binding, which only its body sees: the
     /// initializer can't.
-    private Scope declareOptionBinding(const VarDecl binding, const(VarDecl)* pointer, Scope scopeTable)
+    private Scope declareHeadBinding(const VarDecl binding, const(VarDecl)* pointer, Scope scopeTable)
     {
         resolveExpr(binding.value, scopeTable);
         _declarations.locals[binding.id] = pointer;

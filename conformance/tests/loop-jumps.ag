@@ -1,0 +1,138 @@
+def indexOf(xs: [Int], wanted: Int): Int? {
+    mutable val found: Int? = None
+    mutable val i = 0
+    for x in xs {
+        if x == wanted {
+            found = i
+            break
+        }
+        i += 1
+    }
+    return found
+}
+
+def main(): Unit {
+    // `break` and `continue` in `for`.
+    for x in [1, 2, 3, 4, 5] {
+        if x == 2 {
+            continue
+        }
+        if x == 4 {
+            break
+        }
+        printl(x)
+    }
+    for i in 0..10 {
+        if i % 2 == 0 {
+            continue
+        }
+        if i > 5 {
+            break
+        }
+        printl(i)
+    }
+    printl(indexOf([5, 6, 7], 6))
+    printl(indexOf([5, 6, 7], 8))
+
+    // `continue` in `for` still moves on, so this ends.
+    mutable val visits = 0
+    for i in 0..3 {
+        visits += 1
+        continue
+    }
+    printl(visits)
+
+    // In `while`, `continue` goes back to the condition.
+    mutable val i = 0
+    while i < 5 {
+        i += 1
+        if i == 2 {
+            continue
+        }
+        if i == 4 {
+            break
+        }
+        printl(i)
+    }
+    while true {
+        break
+    }
+
+    // In `while val`, the initializer is evaluated again, and `break` leaves its binding behind.
+    mutable val next: Int? = 3
+    while val n = next {
+        next = if n == 0 => None else n - 1
+        if n == 2 {
+            continue
+        }
+        if n == 1 {
+            break
+        }
+        printl(n)
+    }
+    printl(next)
+
+    // Only the innermost loop is affected.
+    for a in 0..3 {
+        for b in 0..3 {
+            if b == 1 {
+                break
+            }
+            printl("{a} {b}")
+        }
+        mutable val c = 0
+        while true {
+            c += 1
+            if c > a {
+                break
+            }
+        }
+        if a == 1 {
+            continue
+        }
+        printl("after {a}")
+    }
+
+    // A jump has type Never, so it fits where a value is wanted.
+    for x in [1, 0, 2] {
+        val y: Int = if x == 0 { continue } else { x * 10 }
+        printl(y)
+    }
+    for o in [Some(1), None, Some(2)] {
+        val v = o ?? { break }
+        printl(v)
+    }
+
+    // The jump belongs to the loop whose body holds it, not one whose condition or array holds it.
+    mutable val outer = 0
+    while outer < 3 {
+        outer += 1
+        for x in {
+            if outer == 2 {
+                continue
+            }
+            [outer]
+        } {
+            printl(x)
+        }
+        while {
+            if outer == 3 {
+                break
+            }
+            false
+        } {
+        }
+        printl("end of {outer}")
+    }
+
+    // Code after a jump is never run, and the loop's slots still work next time round.
+    for x in [1, 2] {
+        val before = x * 2
+        if before > 0 {
+            continue
+            printl("skipped")
+        }
+        printl("skipped too")
+    }
+    printl("done")
+}

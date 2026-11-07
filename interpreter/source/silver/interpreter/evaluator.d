@@ -406,7 +406,7 @@ class Evaluator
 
     private Variant evaluate(const RangeExpr ast, Environment variables)
     {
-        assert(0, "sema only allows a range as a slice's index");
+        assert(0, "sema only allows a range as a slice's index or in a `for`, which read its bounds");
     }
 
     private Variant evaluate(const IndexExpr ast, Environment variables)
@@ -675,6 +675,51 @@ class Evaluator
         throw new ReturnSignal(evaluate(r.value, env));
     }
 
+    /// Thrown by `break` and `continue` and caught by the running loop's `runLoopBody`.
+    private class BreakSignal : Throwable
+    {
+        this()
+        {
+            super("break outside of a loop");
+        }
+    }
+
+    private class ContinueSignal : Throwable
+    {
+        this()
+        {
+            super("continue outside of a loop");
+        }
+    }
+
+    private void execute(const BreakStmt, Environment)
+    {
+        throw new BreakSignal();
+    }
+
+    private void execute(const ContinueStmt, Environment)
+    {
+        throw new ContinueSignal();
+    }
+
+    /// Runs a loop's body once, and returns whether the loop goes on. Only the body is covered, so
+    /// a `break` in a condition belongs to any loop around this one.
+    private bool runLoopBody(const Expr body, Environment bodyScope)
+    {
+        try
+        {
+            evaluate(body, bodyScope);
+        }
+        catch (ContinueSignal)
+        {
+        }
+        catch (BreakSignal)
+        {
+            return false;
+        }
+        return true;
+    }
+
     private Variant call(Variant callee, Variant[] args, Environment variables)
     {
         if (auto constructor = callee.peek!Constructor)
@@ -781,9 +826,46 @@ class Evaluator
                 bodyScope = new Environment(variables);
                 bodyScope.defineVariable(ast.binding.name, option.payload);
             }
-            evaluate(*ast.body, bodyScope);
+            if (!runLoopBody(*ast.body, bodyScope)) break;
         }
         return Variant(Unit());
+    }
+
+    private Variant evaluate(const ForExpr ast, Environment variables)
+    {
+        bool iterate(Variant value)
+        {
+            auto bodyScope = new Environment(variables);
+            bodyScope.defineVariable(ast.binding.name, value);
+            return runLoopBody(*ast.body, bodyScope);
+        }
+
+        auto range = asRange(&ast.binding.value);
+        if (range is null)
+        {
+            foreach (element; evaluate(ast.binding.value, variables).get!ArrayValue.elements)
+            {
+                if (!iterate(element)) break;
+            }
+            return Variant(Unit());
+        }
+
+        auto start = evaluate(*range.start, variables);
+        auto end = evaluate(*range.end, variables);
+        foreach (T; IntegerTypes)
+        {
+            if (auto first = start.peek!T)
+            {
+                auto last = end.get!T;
+                // `i` stays below `last` until the step that ends the loop, so this can't overflow.
+                for (T i = *first; i < last; i++)
+                {
+                    if (!iterate(Variant(i))) break;
+                }
+                return Variant(Unit());
+            }
+        }
+        assert(0, "sema requires integer bounds");
     }
 
     private Variant evaluate(const IfExpr ast, Environment variables)

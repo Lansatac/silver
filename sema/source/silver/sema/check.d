@@ -33,6 +33,8 @@ private struct BodyContext
 {
     /// What `return` checks against: the innermost enclosing function's return type.
     Type returnType;
+    /// Whether this is in the body of a loop, so `break` and `continue` have one to act on.
+    bool inLoop;
 }
 
 struct FieldInfo { string name; Type type; }
@@ -649,7 +651,16 @@ private final class TypeChecker
             (const ReturnStmt ret) {
                 check(ret.value, ctx.returnType, ctx);
             },
+            (const BreakStmt _) => requireLoop("break", stmt.span, ctx),
+            (const ContinueStmt _) => requireLoop("continue", stmt.span, ctx),
         );
+    }
+
+    private void requireLoop(string keyword, Span span, BodyContext ctx)
+    {
+        if (ctx.inLoop) return;
+        _collector.reportError(DiagnosticCode.JumpOutsideLoop, span,
+            "`%s` needs to be in the body of a loop".format(keyword));
     }
 
     /// Reports `target` unless it's a mutable binding or a chain of fields rooted at one.
@@ -723,6 +734,7 @@ private final class TypeChecker
                     : synthesizeCall(call, expr.span, ctx),
             (const MemberAccess member) => synthesizeMemberAccess(expr, member, ctx),
             (const WhileExpr while_) => synthesizeWhile(while_, expr.span, ctx),
+            (const ForExpr for_) => synthesizeFor(for_, ctx),
             (const IfExpr if_) => synthesizeIf(if_, expr.span, ctx),
             (const BlockExpr block) => synthesizeBlock(block, expr.span, ctx),
             (const UnitLiteral _) => _types.unit,
@@ -800,7 +812,7 @@ private final class TypeChecker
     {
         synthesize(*range.start, ctx);
         synthesize(*range.end, ctx);
-        _collector.reportError(DiagnosticCode.NotSupportedYet, span, "A range can only be used to slice an array for now");
+        _collector.reportError(DiagnosticCode.NotSupportedYet, span, "A range can only slice an array or be looped over by `for` for now");
         return _types.error;
     }
 
@@ -1441,8 +1453,64 @@ private final class TypeChecker
         {
             checkOptionBinding(*while_.binding, "while val", ctx);
         }
-        checkDiscarded(*while_.body, ctx);
+        checkLoopBody(*while_.body, ctx);
         return _types.unit;
+    }
+
+    private Type synthesizeFor(const ForExpr for_, BodyContext ctx)
+    {
+        auto iterable = &for_.binding.value;
+        auto range = asRange(iterable);
+        _symbolTypes[SymbolId(for_.binding.id)] = range is null
+            ? synthesizeForArray(*iterable, ctx)
+            : synthesizeForRange(*iterable, *range, ctx);
+        checkLoopBody(*for_.body, ctx);
+        return _types.unit;
+    }
+
+    /// The element type of what a `for` loops over, which isn't a range.
+    private Type synthesizeForArray(const Expr iterable, BodyContext ctx)
+    {
+        auto type = requireTyped(synthesize(iterable, ctx), iterable.span);
+        if (_types.isArray(type)) return _types.arrayElement(type);
+        if (type == _types.error || type == _types.never) return type;
+        _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span,
+            "`for` needs an array or a range, got `%s`".format(_types.describe(type)));
+        return _types.error;
+    }
+
+    /// The type of a `for` range's bounds, which is also its own type and that of each value.
+    /// Only integers count, and a literal takes the type of the number beside it.
+    private Type synthesizeForRange(const Expr expr, const RangeExpr range, BodyContext ctx)
+    {
+        auto startType = synthesize(*range.start, ctx);
+        auto endType = synthesize(*range.end, ctx);
+        if (_types.isInteger(startType) && isIntLiteral(*range.end) && !isIntLiteral(*range.start))
+        {
+            endType = adaptLiteral(*range.end, startType);
+        }
+        else if (_types.isInteger(endType) && isIntLiteral(*range.start) && !isIntLiteral(*range.end))
+        {
+            startType = adaptLiteral(*range.start, endType);
+        }
+
+        auto type = join(startType, endType, expr.span, "Range bounds");
+        if (type != _types.error && type != _types.never && !_types.isInteger(type))
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, expr.span,
+                "`for` needs a range of integers, got `%s`".format(_types.describe(type)));
+            type = _types.error;
+        }
+        _exprTypes[expr.id] = type;
+        return type;
+    }
+
+    /// `break` and `continue` act on the loop whose body holds them, so a condition or what a
+    /// `for` loops over isn't part of this and they belong to any loop around it.
+    private void checkLoopBody(const Expr body, BodyContext ctx)
+    {
+        ctx.inLoop = true;
+        checkDiscarded(body, ctx);
     }
 
     /// The condition, or the binding of an `if val`.
@@ -1541,6 +1609,8 @@ private final class TypeChecker
     {
         return stmt.kind.match!(
             (const ReturnStmt _) => true,
+            (const BreakStmt _) => true,
+            (const ContinueStmt _) => true,
             (const ExprStmt e) => _exprTypes.get(e.expr.id, _types.error) == _types.never,
             _ => false,
         );

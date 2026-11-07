@@ -115,9 +115,19 @@ struct Fragment
     }
 }
 
+/// Where `break` and `continue` go in one loop.
+struct LoopTargets
+{
+    string breakLabel;
+    string continueLabel;
+}
+
 /// Names that are unique within one function. A fresh one per function.
 final class FunctionState
 {
+    /// The loops whose body is being generated, innermost last.
+    LoopTargets[] loops;
+
     string[Id!Param] params;
     /// Each local's stack slot.
     string[Id!VarDecl] slots;
@@ -594,6 +604,7 @@ final class Generator
             (const CallExpr call) => emitFunctionCall(call, expr),
             (const MemberAccess access) => emitMemberAccess(access, expr),
             (const WhileExpr while_) => emitWhile(while_),
+            (const ForExpr for_) => emitFor(for_),
             (const IfExpr if_) => emitIfExpr(expr, if_),
             (const BlockExpr block) => emitBlock(block),
             (const SomeExpr some) => emitSome(expr, some),
@@ -604,7 +615,7 @@ final class Generator
             (const ArrayLiteral literal) => emitArrayLiteral(expr, literal),
             (const MapLiteral _) => assert(0, "sema rejects maps"),
             (const IndexExpr index) => emitIndex(expr, index),
-            (const RangeExpr _) => assert(0, "sema only allows a range as a slice's index"),
+            (const RangeExpr _) => assert(0, "sema only allows a range as a slice's index or in a `for`, which read its bounds"),
         );
     }
 
@@ -1455,13 +1466,18 @@ final class Generator
         auto inner = _analysis.types.optionInner(option);
         if (!hasOperand(inner) || binding.name == discardName) return Fragment.init;
 
-        auto type = llvmType(inner);
+        return emitBindingStore(binding, inner, optionPayload(option, value));
+    }
+
+    /// `value`, stored in a new slot for `binding`, which holds a `type` with an operand.
+    Fragment emitBindingStore(const VarDecl binding, Type type, Fragment value)
+    {
+        auto layout = llvmType(type);
         auto slot = _function.newSlot(binding.name);
         _function.slots[binding.id] = slot;
-        auto payload = optionPayload(option, value);
-        return Fragment(["  %s = alloca %s".format(slot, type)])
-            .then(payload)
-            .then(Fragment.store(type, payload.value, slot));
+        return Fragment(["  %s = alloca %s".format(slot, layout)])
+            .then(value)
+            .then(Fragment.store(layout, value.value, slot));
     }
 
     /// `condition ? thenArm : elseArm`, evaluating only the arm taken. A null `resultType`
@@ -1523,7 +1539,92 @@ final class Generator
             .then(Fragment.branch(condition.value, bodyLabel, endLabel))
             .then(Fragment.label(bodyLabel))
             .then(bound)
-            .then(emitExpr(*while_.body))
+            .then(emitLoopBody(*while_.body, LoopTargets(endLabel, condLabel)))
+            .then(Fragment.jump(condLabel))
+            .then(Fragment.label(endLabel));
+    }
+
+    /// Only the body sees `targets`, so a `break` in a condition belongs to any loop around this one.
+    Fragment emitLoopBody(const Expr body, LoopTargets targets)
+    {
+        _function.loops ~= targets;
+        scope (exit) _function.loops = _function.loops[0 .. $ - 1];
+        return emitExpr(body);
+    }
+
+    /// Unit-valued. Bounds or an array are evaluated once, before the loop. A counter in its own
+    /// slot walks a range's values or an array's positions. It's tested before each iteration and
+    /// stays below the end until the step that finishes, so that step can't overflow, and a range
+    /// whose start isn't below its end doesn't run.
+    Fragment emitFor(const ForExpr for_)
+    {
+        auto binding = for_.binding;
+        auto elementType = _analysis.typeOf(binding.id);
+        auto range = asRange(&binding.value);
+
+        Fragment setup;
+        SliceParts parts;
+        string counterType = "i64";
+        string initial = "0";
+        string end;
+        string less = "icmp ult";
+        if (range !is null)
+        {
+            auto start = emitExpr(*range.start);
+            auto stop = emitExpr(*range.end);
+            setup = start.then(stop);
+            if (start.value is null || stop.value is null) return setup.withValue(null);
+            counterType = llvmType(elementType);
+            initial = start.value;
+            end = stop.value;
+            less = llBinaryOp(BinaryOp.Less, elementType);
+        }
+        else
+        {
+            auto array = emitExpr(binding.value);
+            if (array.value is null) return array.withValue(null);
+            parts = sliceParts(array.value);
+            setup = array.then(parts.code);
+            end = parts.length;
+        }
+
+        auto condLabel = _function.newLabel("for.cond");
+        auto bodyLabel = _function.newLabel("for.body");
+        auto stepLabel = _function.newLabel("for.step");
+        auto endLabel = _function.newLabel("for.end");
+
+        auto counter = _function.newSlot(".for");
+        auto current = load(counterType, counter);
+        auto more = _function.newTemp();
+
+        // Before the body is generated, since that's what reads the binding's slot.
+        Fragment bound;
+        if (hasOperand(elementType) && binding.name != discardName)
+        {
+            bound = emitBindingStore(*binding, elementType, range !is null
+                ? Fragment.constant(current.value)
+                : loadElement(llvmType(elementType), parts, current.value));
+        }
+        auto loopBody = emitLoopBody(*for_.body, LoopTargets(endLabel, stepLabel));
+
+        auto stepped = load(counterType, counter);
+        auto next = _function.newTemp();
+        return setup
+            .then(Fragment(["  %s = alloca %s".format(counter, counterType)]))
+            .then(Fragment.store(counterType, initial, counter))
+            .then(Fragment.jump(condLabel))
+            .then(Fragment.label(condLabel))
+            .then(current)
+            .then(Fragment.instruction("%s = %s %s %s, %s".format(more, less, counterType, current.value, end)))
+            .then(Fragment.branch(more, bodyLabel, endLabel))
+            .then(Fragment.label(bodyLabel))
+            .then(bound)
+            .then(loopBody)
+            .then(Fragment.jump(stepLabel))
+            .then(Fragment.label(stepLabel))
+            .then(stepped)
+            .then(Fragment.instruction("%s = add %s %s, 1".format(next, counterType, stepped.value)))
+            .then(Fragment.store(counterType, next, counter))
             .then(Fragment.jump(condLabel))
             .then(Fragment.label(endLabel));
     }
@@ -1911,7 +2012,15 @@ final class Generator
             (const ExprStmt exprStmt) => emitExpr(exprStmt.expr).withValue(null),
             (const FunctionDecl function_) => unsupported(statement.span, "nested functions").withValue(null),
             (const ReturnStmt return_) => emitReturn(return_),
+            (const BreakStmt _) => emitJumpOut(_function.loops[$ - 1].breakLabel),
+            (const ContinueStmt _) => emitJumpOut(_function.loops[$ - 1].continueLabel),
         );
+    }
+
+    /// A jump, then a fresh block for whatever follows it, which LLVM drops as unreachable.
+    Fragment emitJumpOut(string target)
+    {
+        return Fragment.jump(target).then(Fragment.label(_function.newLabel("dead")));
     }
 
     /// `ret`, then a fresh block for whatever follows it, which LLVM drops as unreachable.
