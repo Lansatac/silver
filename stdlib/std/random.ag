@@ -1,5 +1,7 @@
 module std.random
 
+import std.time
+
 type Rng(state: UInt64)
 
 val golden: UInt64 = 0x9E3779B97F4A7C15
