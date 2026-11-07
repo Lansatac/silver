@@ -1,0 +1,38 @@
+val first: String = "sil"
+val second: String = "ver"
+val name: String = first ~ second
+val framed: String = "<" ~ name ~ ">"
+val empty: String = "" ~ ""
+val nul: String = "a\0" ~ "b"
+
+val less: Bool = "a" < "b"
+val notLess: Bool = "b" < "a"
+val prefix: Bool = name < framed ~ "x"
+val shorter: Bool = "app" < "apple"
+val atMost: Bool = name <= first ~ second
+val atLeast: Bool = name >= "z"
+val greater: Bool = "é" > "z"
+val same: Bool = name == "silver"
+val differ: Bool = nul != "a\0c"
+
+def main(): Unit {
+    printl(name)
+    printl(framed)
+    printl(empty == "")
+    printl(nul == "a\0" ~ "b")
+    printl(name ~ framed)
+
+    printl(less)
+    printl(notLess)
+    printl(prefix)
+    printl(shorter)
+    printl(atMost)
+    printl(atLeast)
+    printl(greater)
+    printl(same)
+    printl(differ)
+
+    // A constant and the same operation at runtime agree
+    printl(greater == ("é" > "z"))
+    printl(name == first ~ second)
+}

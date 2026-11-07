@@ -20,6 +20,10 @@ immutable Case[] operators = [
     rejects("a = b < c < d"), // comparisons don't chain
 
     parsesAs("a = b ?? 0", "(assign a (Coalesce b 0))"),
+
+    parsesAs("a = b ~ c", "(assign a (Concat b c))"),
+    parsesAs("a = b ~ ~c", "(assign a (Concat b (BitNot c)))"),
+    parsesAs("a = ~b ~ c", "(assign a (Concat (BitNot b) c))"),
 ];
 
 immutable Case[] precedence = [
@@ -38,6 +42,13 @@ immutable Case[] precedence = [
     // Coalesce sits between addition and comparison
     parsesAs("val x = a ?? b + 1 < c ?? d ?? e",
         "(val x (Less (Coalesce a (Add b 1)) (Coalesce c (Coalesce d e))))"),
+
+    // Concatenation is additive and left-associative
+    parsesAs("val x = a ~ b ~ c", "(val x (Concat (Concat a b) c))"),
+    parsesAs("val x = a + b ~ c - d", "(val x (Subtract (Concat (Add a b) c) d))"),
+    parsesAs("val x = a * b ~ c", "(val x (Concat (Multiply a b) c))"),
+    parsesAs("val x = a ~ b << c", "(val x (ShiftLeft (Concat a b) c))"),
+    parsesAs("val x = a ~ b < c ~ d", "(val x (Less (Concat a b) (Concat c d)))"),
 
     // Bit operators bind tighter than comparison, from loose to tight: | ^ & shifts
     parsesAs("val x = a & b == c", "(val x (Equal (BitAnd a b) c))"),

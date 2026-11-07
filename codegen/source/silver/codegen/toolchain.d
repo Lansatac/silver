@@ -193,11 +193,11 @@ unittest
     auto irPath = buildPath(directory, "main.ll");
     auto exePath = executablePath(buildPath(directory, "main"));
     write(irPath, `
-        @.str = private unnamed_addr constant [3 x i8] c"hi\00"
+        @.str = private unnamed_addr constant [2 x i8] c"hi"
         declare void @silver_printl_int(i64)
         declare void @silver_printl_float(double)
         declare void @silver_printl_bool(i1 zeroext)
-        declare void @silver_print_string(ptr)
+        declare void @silver_print_string(ptr, i64)
         declare void @silver_printl_unit()
         declare ptr @silver_alloc(i64)
 
@@ -209,7 +209,7 @@ unittest
           call void @silver_printl_int(i64 %n)
           call void @silver_printl_float(double 2.5)
           call void @silver_printl_bool(i1 zeroext false)
-          call void @silver_print_string(ptr @.str)
+          call void @silver_print_string(ptr @.str, i64 2)
           call void @silver_printl_unit()
           ret void
         }

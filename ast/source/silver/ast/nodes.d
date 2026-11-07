@@ -170,6 +170,7 @@ enum BinaryOp
     Greater = ">",
     GreaterEqual = ">=",
     Coalesce = "??",
+    Concat = "~",
 }
 
 enum UnaryOp

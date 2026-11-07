@@ -6,7 +6,6 @@ module silver.runtime.io;
 
 import std.conv : to;
 import std.stdio : readln, stdout;
-import std.string : fromStringz, toStringz;
 
 import silver.runtime.panic : panic;
 
@@ -16,22 +15,25 @@ void silver_print_int(long value) { output(value.to!string, false); }
 void silver_print_uint(ulong value) { output(value.to!string, false); }
 void silver_print_float(double value) { output(value.to!string, false); }
 void silver_print_bool(bool value) { output(value.to!string, false); }
-void silver_print_string(const(char)* value) { output(value.fromStringz, false); }
+void silver_print_string(const(char)* data, size_t length) { output(data[0 .. length], false); }
 void silver_print_unit() { output("()", false); }
 
 void silver_printl_int(long value) { output(value.to!string, true); }
 void silver_printl_uint(ulong value) { output(value.to!string, true); }
 void silver_printl_float(double value) { output(value.to!string, true); }
 void silver_printl_bool(bool value) { output(value.to!string, true); }
-void silver_printl_string(const(char)* value) { output(value.fromStringz, true); }
+void silver_printl_string(const(char)* data, size_t length) { output(data[0 .. length], true); }
 void silver_printl_unit() { output("()", true); }
 
-/// A line from stdin including its newline, or "" at end of input.
-const(char)* silver_read()
+/// A line from stdin including its newline, or "" at end of input. `readln` returns GC memory,
+/// which the caller's stack slots keep alive.
+void silver_read(const(char)** data, size_t* length)
 {
     try
     {
-        return readln().toStringz;
+        auto line = readln();
+        *data = line.ptr;
+        *length = line.length;
     }
     catch (Exception e)
     {

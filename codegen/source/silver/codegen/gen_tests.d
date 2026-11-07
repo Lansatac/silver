@@ -328,7 +328,7 @@ unittest
     run.output.should.equal("-1\n0\n1\ntrue\n10\n");
 }
 
-@("codegen emits string literals as NUL-terminated globals, escaping what c\"...\" can't hold")
+@("codegen emits string literals as unterminated globals, escaping what c\"...\" can't hold")
 unittest
 {
     import silver.codegen.gen : Generator;
@@ -339,12 +339,124 @@ unittest
 
     auto source = "def main(): Unit {\n    printl(" ~ `"café \"ok\""` ~ ")\n}";
     auto ir = generateSource(source);
-    ir.should.contain(`@.str.0 = private unnamed_addr constant [11 x i8] c"caf\C3\A9 \22ok\22\00"`);
-    ir.should.contain("call void @silver_printl_string(ptr @.str.0)");
+    ir.should.contain(`@.str.0 = private unnamed_addr constant [10 x i8] c"caf\C3\A9 \22ok\22"`);
+    ir.should.contain("extractvalue { ptr, i64 } { ptr @.str.0, i64 10 }, 0");
+    ir.should.contain("call void @silver_printl_string(ptr %.t0, i64 %.t1)");
 
     Run run;
     if (!compileAndRun(source, run)) return;
     run.output.should.equal("café \"ok\"\n");
+}
+
+@("codegen keeps the NUL terminator for the panic messages it passes as C strings")
+unittest
+{
+    auto ir = generateSource(`def main(): Unit {
+    printl("x")
+    printl(1 / 0)
+}`);
+    ir.should.contain(`[1 x i8] c"x"`);
+    ir.should.contain(`Division by zero\00"`);
+}
+
+@("codegen prints and compares strings by length, not up to a NUL")
+unittest
+{
+    auto source = `def main(): Unit {
+    printl("a\0b")
+    printl("a\0b" == "a\0c")
+    printl("a\0" < "a\0b")
+}`;
+    generateSource(source).should.contain(`[3 x i8] c"a\00b"`);
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("a\0b\nfalse\ntrue\n");
+}
+
+@("codegen concatenates into a new buffer with no runtime call but the allocation")
+unittest
+{
+    auto source = `def join(a: String, b: String): String => a ~ b
+def main(): Unit {
+    printl(join("ab", "c") ~ "é" ~ "")
+    printl("" ~ "")
+}`;
+    auto ir = generateSource(source);
+    ir.should.contain("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)");
+    ir.should.contain("define { ptr, i64 } @\"main.join\"({ ptr, i64 } %a.arg, { ptr, i64 } %b.arg)");
+    ir.should.contain("call ptr @silver_alloc(i64 ");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("abcé\n\n");
+}
+
+@("codegen orders strings by the sign of the runtime's comparison")
+unittest
+{
+    auto source = `def main(): Unit {
+    printl("a" < "b")
+    printl("a" <= "b")
+    printl("a" > "b")
+    printl("a" >= "b")
+    printl("z" < "é")
+    printl("a" < "aa")
+}`;
+    auto ir = generateSource(source);
+    ir.should.contain("declare i32 @silver_string_compare(ptr, i64, ptr, i64)");
+    foreach (predicate; ["slt", "sle", "sgt", "sge"])
+    {
+        ir.should.contain("icmp " ~ predicate ~ " i32 ");
+    }
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("true\ntrue\nfalse\nfalse\ntrue\ntrue\n");
+}
+
+@("codegen takes what `read` returns through two stack slots, hoisted out of any loop")
+unittest
+{
+    auto ir = generateSource(`def main(): Unit {
+    mutable val i = 0
+    while i < 2 {
+        printl(read())
+        i = i + 1
+    }
+}`);
+    ir.should.contain("declare void @silver_read(ptr, ptr)");
+    auto firstBlock = ir.indexOf("while.cond");
+    ir.indexOf("alloca ptr").should.be.lessThan(firstBlock);
+    ir.indexOf("alloca i64").should.be.lessThan(firstBlock);
+}
+
+@("codegen joins an arm's value from the block its local's initializer ended in")
+unittest
+{
+    Run run;
+    if (!compileAndRun(`def count(wanted: Bool, n: Int): Int {
+    if wanted {
+        val next = n + 1
+        next
+    } else {
+        0
+    }
+}
+def word(wanted: Bool, plural: Bool): String {
+    if wanted {
+        val text = if plural => "bees" else "bee"
+        text ~ "!"
+    } else {
+        "none"
+    }
+}
+def main(): Unit {
+    printl(count(true, 1))
+    printl(word(true, true))
+    printl(word(false, true))
+}`, run)) return;
+    run.output.should.equal("2\nbees!\nnone\n");
 }
 
 @("codegen loops with while, re-evaluating the condition each time round")
@@ -612,7 +724,7 @@ unittest
 def main(): Unit {
     printl(Named("a", 1, 1.5, ()) == Named("a", 1, 1.5, ()))
 }`);
-    ir.should.contain("silver_string_equals");
+    ir.should.contain("silver_string_compare");
     ir.should.contain("icmp eq i64");
     ir.should.contain("fcmp oeq double");
     ir.count("phi i1").should.equal(3);
@@ -711,7 +823,8 @@ def main(): Unit {
     printl(nothing)
 }`);
     ir.should.contain(`@"main.limit" = private unnamed_addr constant i8 255`);
-    ir.should.contain(`@"main.name" = private unnamed_addr constant ptr @.str.`);
+    ir.should.contain(`@"main.name" = private unnamed_addr constant { ptr, i64 } { ptr @.str.`);
+    ir.should.contain(`load { ptr, i64 }, ptr @"main.name"`);
     ir.should.contain(`load i8, ptr @"main.limit"`);
     ir.should.not.contain(`@"main.nothing"`);
 }

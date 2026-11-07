@@ -5,12 +5,13 @@
 /// boundary as:
 ///
 ///   Int -> long -> i64          Bool -> bool -> i1 zeroext
-///   Float -> double -> double   String -> const(char)* -> ptr (NUL-terminated for now)
+///   Float -> double -> double   String -> (const(char)*, size_t) -> ptr, i64 (no terminator)
 ///   Unit -> no argument, `void` return
 ///
-/// Composite values (strings with a length, Option, closures) should cross as separate
-/// scalars or a pointer, never as a struct by value: hand-written IR doesn't get the
-/// platform's struct-passing rules applied, and the two sides would silently disagree.
+/// Composite values (String, Option, closures) cross as separate scalars or a pointer, never
+/// as a struct by value: hand-written IR doesn't get the platform's struct-passing rules
+/// applied, and the two sides would silently disagree. A String is returned through two
+/// out-pointers, for the same reason.
 ///
 /// D exceptions mustn't unwind through Silver frames, which have no unwind info, so every
 /// `extern(C)` function is `nothrow` and turns failures into `silver_panic`.

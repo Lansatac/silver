@@ -763,6 +763,13 @@ class Evaluator
                 return operateInteger(operator, *left, rhs.get!T);
             }
         }
+        auto leftString = lhs.peek!string;
+        auto rightString = rhs.peek!string;
+        if (leftString && rightString)
+        {
+            if (operator == BinaryOp.Concat) return Variant(*leftString ~ *rightString);
+            return compare(operator, *leftString, *rightString);
+        }
         switch (operator)
         {
         case BinaryOp.Equal:

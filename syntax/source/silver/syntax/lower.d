@@ -522,6 +522,8 @@ private final class Lowering
             return BinaryOp.GreaterEqual;
         case "??":
             return BinaryOp.Coalesce;
+        case "~":
+            return BinaryOp.Concat;
         default:
             throw new Exception("Unknown binary operator '%s'".format(op));
         }

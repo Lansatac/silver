@@ -591,6 +591,18 @@ private final class TypeChecker
         return _types.isInteger(t) || t == _types.float_;
     }
 
+    private bool isOrdered(Type t)
+    {
+        return isNumeric(t) || t == _types.string_;
+    }
+
+    /// What `~` joins. Arrays belong here too, and `~` will then also need to `join` the two
+    /// sides' types and adapt their literals.
+    private bool isConcatenable(Type t)
+    {
+        return t == _types.string_;
+    }
+
     /// `UInt8(x)`: a literal is checked against the target where it's written, and any other
     /// number at runtime, where one that doesn't fit panics.
     private Type synthesizeConversion(const CallExpr call, Type target, Span span, BodyContext ctx)
@@ -760,23 +772,35 @@ private final class TypeChecker
             case BinaryOp.LessEqual:
             case BinaryOp.Greater:
             case BinaryOp.GreaterEqual:
-                if (!isNumeric(leftType))  {
+                if (!isOrdered(leftType))  {
                     _collector.reportError(DiagnosticCode.InvalidOperand, binary.left.span,
-                        "`%s` needs a number, got `%s`".format(binary.op, _types.describe(leftType)));
+                        "`%s` needs a number or a String, got `%s`".format(cast(string) binary.op, _types.describe(leftType)));
                     return _types.error;
                 }
-                if (!isNumeric(rightType)) {
+                if (!isOrdered(rightType)) {
                     _collector.reportError(DiagnosticCode.InvalidOperand, binary.right.span,
-                        "`%s` needs a number, got `%s`".format(binary.op, _types.describe(rightType)));
+                        "`%s` needs a number or a String, got `%s`".format(cast(string) binary.op, _types.describe(rightType)));
                     return _types.error;
                 }
                 if (leftType != rightType)
                 {
                     _collector.reportError(DiagnosticCode.InvalidOperand, span,
-                        "`%s` can't compare `%s` and `%s`".format(binary.op, _types.describe(leftType), _types.describe(rightType)));
+                        "`%s` can't compare `%s` and `%s`".format(cast(string) binary.op, _types.describe(leftType), _types.describe(rightType)));
                     return _types.error;
                 }
                 return _types.bool_;
+            case BinaryOp.Concat:
+                if (!isConcatenable(leftType))  {
+                    _collector.reportError(DiagnosticCode.InvalidOperand, binary.left.span,
+                        "`~` needs a String, got `%s`".format(_types.describe(leftType)));
+                    return _types.error;
+                }
+                if (!isConcatenable(rightType)) {
+                    _collector.reportError(DiagnosticCode.InvalidOperand, binary.right.span,
+                        "`~` needs a String, got `%s`".format(_types.describe(rightType)));
+                    return _types.error;
+                }
+                return leftType;
             case BinaryOp.And:
             case BinaryOp.Or:
                 requireAssignable(leftType, _types.bool_, binary.left.span);

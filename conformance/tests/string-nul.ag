@@ -1,0 +1,11 @@
+// A NUL is a byte like any other: printed, compared and counted, with nothing after it lost.
+def main(): Unit {
+    printl("a\0b")
+    printl("a\0b" == "a\0c")
+    printl("a\0b" != "a\0c")
+    printl("a\0b" == "a\0b")
+    printl("a\0" == "a")
+    printl("a\0b" < "a\0c")
+    printl("a" < "a\0")
+    printl("a\0" ~ "b\0c")
+}

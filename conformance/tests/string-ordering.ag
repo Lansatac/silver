@@ -1,0 +1,46 @@
+def ordering(a: String, b: String): Unit {
+    print(a < b)
+    print(" ")
+    print(a <= b)
+    print(" ")
+    print(a > b)
+    print(" ")
+    print(a >= b)
+    print(" ")
+    print(a == b)
+    print(" ")
+    printl(a != b)
+}
+
+def main(): Unit {
+    // Decided by a byte
+    ordering("apple", "banana")
+    ordering("banana", "apple")
+    ordering("same", "same")
+
+    // One is a prefix of the other, so the shorter sorts first
+    ordering("app", "apple")
+    ordering("apple", "app")
+    ordering("", "a")
+    ordering("a", "")
+    ordering("", "")
+
+    // Length alone doesn't decide
+    ordering("b", "aaaa")
+
+    // Bytes are unsigned: a lead byte above 0x7F sorts after all of ASCII
+    ordering("z", "é")
+    ordering("é", "z")
+    // Byte order is code point order: U+00E9 < U+20AC < U+1F600
+    ordering("é", "€")
+    ordering("€", "😀")
+    ordering("😀", "é")
+    // A shared multi-byte prefix
+    ordering("é", "éa")
+
+    // Built at runtime, compared by contents rather than by address
+    ordering("a" ~ "b", "ab")
+    ordering("a" ~ "b", "a" ~ "c")
+
+    printl(if "a" < "b" => "less" else "not less")
+}

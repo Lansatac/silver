@@ -12,6 +12,9 @@ import silver.codegen.runtime_bindings;
 import silver.sema;
 import std.regex;
 
+/// A String's IR type: its bytes, with no terminator, and how many there are.
+enum stringLayout = "{ ptr, i64 }";
+
 /// The code for one expression and the operand holding its value. Fragments are values:
 /// an expression's fragment is built from its children's, and the parent decides where
 /// each one goes. Evaluation order is the order they're sequenced with `then`. A fragment
@@ -453,13 +456,104 @@ final class Generator
         return "0x%016X".format(*cast(ulong*) &value);
     }
 
-    /// A NUL-terminated private global; the operand is its address.
+    /// A String constant over a private global.
     Fragment emitStringLiteral(string text)
     {
+        return Fragment.constant("{ ptr %s, i64 %s }".format(emitBytesGlobal(text), text.length));
+    }
+
+    /// A NUL-terminated private global, for `silver_panic`; the operand is its address.
+    Fragment emitCString(string text)
+    {
+        return Fragment.constant(emitBytesGlobal(text ~ "\0"));
+    }
+
+    private string emitBytesGlobal(string bytes)
+    {
         auto name = "@.str.%s".format(_strings.length);
-        _strings ~= "%s = private unnamed_addr constant [%s x i8] c\"%s\\00\"".format(
-            name, text.length + 1, llvmStringBytes(text));
-        return Fragment.constant(name);
+        _strings ~= "%s = private unnamed_addr constant [%s x i8] c\"%s\"".format(
+            name, bytes.length, llvmStringBytes(bytes));
+        return name;
+    }
+
+    private struct StringParts
+    {
+        Fragment code;
+        string data;
+        string length;
+    }
+
+    /// The String operand `value` taken apart, as the runtime's boundary wants it.
+    StringParts stringParts(string value)
+    {
+        auto data = _function.newTemp();
+        auto length = _function.newTemp();
+        auto code = Fragment.instruction("%s = extractvalue %s %s, 0".format(data, stringLayout, value))
+            .then(Fragment.instruction("%s = extractvalue %s %s, 1".format(length, stringLayout, value)));
+        return StringParts(code, data, length);
+    }
+
+    /// A String from its parts.
+    Fragment buildString(string data, string length)
+    {
+        auto partial = _function.newTemp();
+        auto whole = _function.newTemp();
+        return Fragment.instruction("%s = insertvalue %s undef, ptr %s, 0".format(partial, stringLayout, data))
+            .then(Fragment.instruction("%s = insertvalue %s %s, i64 %s, 1".format(whole, stringLayout, partial, length), whole));
+    }
+
+    /// `lhs ~ rhs` in a new buffer. The sum needs no check: each length is the size of a buffer
+    /// that exists, so each is below 2^63 and together they fit `silver_alloc`'s unsigned size.
+    Fragment emitConcat(string lhs, string rhs)
+    {
+        enum memcpy = "llvm.memcpy.p0.p0.i64";
+        useIntrinsic("declare void @" ~ memcpy ~ "(ptr, ptr, i64, i1)");
+
+        auto left = stringParts(lhs);
+        auto right = stringParts(rhs);
+        auto total = _function.newTemp();
+        auto sum = Fragment.instruction("%s = add i64 %s, %s".format(total, left.length, right.length));
+        auto buffer = callRuntime("silver_alloc", [total]);
+        auto tail = _function.newTemp();
+        return left.code
+            .then(right.code)
+            .then(sum)
+            .then(buffer)
+            .then(Fragment.instruction("call void @%s(ptr %s, ptr %s, i64 %s, i1 false)".format(
+                memcpy, buffer.value, left.data, left.length)))
+            .then(Fragment.instruction("%s = getelementptr i8, ptr %s, i64 %s".format(tail, buffer.value, left.length)))
+            .then(Fragment.instruction("call void @%s(ptr %s, ptr %s, i64 %s, i1 false)".format(
+                memcpy, tail, right.data, right.length)))
+            .then(buildString(buffer.value, total));
+    }
+
+    /// `lhs op rhs` for a comparison of two Strings, from the sign of the runtime's answer.
+    Fragment emitStringComparison(BinaryOp op, string lhs, string rhs)
+    {
+        auto left = stringParts(lhs);
+        auto right = stringParts(rhs);
+        auto order = callRuntime("silver_string_compare", [left.data, left.length, right.data, right.length]);
+        auto result = _function.newTemp();
+        return left.code
+            .then(right.code)
+            .then(order)
+            .then(Fragment.instruction("%s = %s i32 %s, 0".format(
+                result, llBinaryOp(op, _analysis.types.int_), order.value), result));
+    }
+
+    /// A call to the runtime function `name`, which hands back a String through two out-pointers.
+    Fragment callRuntimeForString(string name, string[] operands)
+    {
+        auto dataSlot = _function.newTemp();
+        auto lengthSlot = _function.newTemp();
+        auto slots = Fragment(["  %s = alloca ptr".format(dataSlot), "  %s = alloca i64".format(lengthSlot)]);
+        auto data = load("ptr", dataSlot);
+        auto length = load("i64", lengthSlot);
+        return slots
+            .then(callRuntime(name, operands ~ [dataSlot, lengthSlot]))
+            .then(data)
+            .then(length)
+            .then(buildString(data.value, length.value));
     }
 
     /// The body of an LLVM `c"..."`: printable ASCII as is, every other byte as `\XX`.
@@ -533,6 +627,14 @@ final class Generator
             case BinaryOp.NotEqual:
                 if (comparesWithInstruction(type)) goto default;
                 return emitStructuralComparison(binary.op, type, lhs, rhs, expr.span);
+            case BinaryOp.Less:
+            case BinaryOp.LessEqual:
+            case BinaryOp.Greater:
+            case BinaryOp.GreaterEqual:
+                if (type != _analysis.types.string_) goto default;
+                return lhs.then(rhs).then(emitStringComparison(binary.op, lhs.value, rhs.value));
+            case BinaryOp.Concat:
+                return lhs.then(rhs).then(emitConcat(lhs.value, rhs.value));
             default:
                 auto llOp = llBinaryOp(binary.op, type);
                 if (llOp is null) return unsupported(expr.span, "`" ~ binary.op ~ "`");
@@ -612,7 +714,7 @@ final class Generator
     Fragment emitPanicIf(string condition, Span span, string message)
     {
         auto location = _sources.locate(span);
-        auto text = emitStringLiteral("%s(%s,%s): %s".format(span.file, location.line, location.column, message));
+        auto text = emitCString("%s(%s,%s): %s".format(span.file, location.line, location.column, message));
         auto panicLabel = _function.newLabel("panic");
         auto okLabel = _function.newLabel("ok");
         return Fragment.branch(condition, panicLabel, okLabel)
@@ -790,7 +892,7 @@ final class Generator
             return Fragment.instruction("%s = %s %s %s, %s".format(
                 result, llBinaryOp(BinaryOp.Equal, type), llvmType(type), lhs, rhs), result);
         }
-        if (type == _analysis.types.string_) return callRuntime("silver_string_equals", [lhs, rhs]);
+        if (type == _analysis.types.string_) return emitStringComparison(BinaryOp.Equal, lhs, rhs);
 
         return _analysis.types[type].match!(
             // Unit has one value and no operand. A Never operand means this is never reached.
@@ -880,7 +982,7 @@ final class Generator
 
     /// The LLVM opcode, with its predicate for comparisons, for `op` on two operands of
     /// `operandType`. Null when there is no single instruction: `&&`/`||` short-circuit,
-    /// `??` takes several, and String comparison can't be a pointer compare.
+    /// `??` and `~` take several, and comparing Strings goes through the runtime.
     string llBinaryOp(BinaryOp op, Type operandType)
     {
         if (operandType == _analysis.types.string_) return null;
@@ -912,6 +1014,7 @@ final class Generator
             case BinaryOp.And:
             case BinaryOp.Or:
             case BinaryOp.Coalesce:
+            case BinaryOp.Concat:
                 return null;
         }
     }
@@ -981,12 +1084,26 @@ final class Generator
                 value = value.then(castInstruction(opcode, llvmType(argType), value.value, "i64"));
             }
             evaluated = evaluated.then(value);
-            operands ~= value.value;
+            if (argType == _analysis.types.string_)
+            {
+                auto parts = stringParts(value.value);
+                evaluated = evaluated.then(parts.code);
+                operands ~= [parts.data, parts.length];
+            }
+            else
+            {
+                operands ~= value.value;
+            }
         }
 
         auto name = runtimeNameFor(native, call, expr.span);
         if (name is null) return evaluated.withValue("undef");
-        return evaluated.then(callRuntime(name, operands.filter!(o => o !is null).array));
+        auto arguments = operands.filter!(o => o !is null).array;
+        if (_analysis.signatureOf(native.id).ret == _analysis.types.string_)
+        {
+            return evaluated.then(callRuntimeForString(name, arguments));
+        }
+        return evaluated.then(callRuntime(name, arguments));
     }
 
 
@@ -1093,7 +1210,8 @@ final class Generator
         return Fragment(
             value.allocas ~ "  %s = alloca %s".format(slot, type),
             value.code ~ "  store %s %s, ptr %s".format(type, value.value, slot),
-            null);
+            null,
+            value.endBlock);
     }
 
     /// A store to the target. Reads are always fresh loads, so later uses see it.
@@ -1200,7 +1318,7 @@ final class Generator
             case Primitive.Kind.Int32:
             case Primitive.Kind.UInt32: return "i32";
             case Primitive.Kind.Float: return "double";
-            case Primitive.Kind.String: return "ptr";
+            case Primitive.Kind.String: return stringLayout;
 
             case Primitive.kind.Never:
             case Primitive.kind.Unit:
@@ -1223,7 +1341,7 @@ final class Generator
             case Primitive.Kind.Int32:
             case Primitive.Kind.UInt32: return "i32";
             case Primitive.Kind.Float: return "double";
-            case Primitive.Kind.String: return "ptr";
+            case Primitive.Kind.String: return stringLayout;
 
             case Primitive.kind.Never:
             case Primitive.kind.Unit:

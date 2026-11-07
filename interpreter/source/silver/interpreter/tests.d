@@ -535,6 +535,35 @@ unittest
     printl(a != "gold")`).should.equal("true\ntrue\n");
 }
 
+@("Strings keep the bytes after a NUL")
+unittest
+{
+    runMain(`printl("a\0b" == "a\0c")
+    print("a\0b")`).should.equal("false\na\0b");
+}
+
+@("Strings concatenate with ~")
+unittest
+{
+    evaluateExpression(`"a" ~ "b" ~ "c"`).should.equal("abc");
+    evaluateExpression(`"" ~ "x"`).should.equal("x");
+    evaluateExpression(`"x" ~ ""`).should.equal("x");
+    evaluateExpression(`"caf" ~ "é"`).should.equal("café");
+}
+
+@("Strings order by unsigned bytes, then by length")
+unittest
+{
+    evaluateExpression(`"a" < "b"`).should.equal("true");
+    evaluateExpression(`"b" <= "a"`).should.equal("false");
+    evaluateExpression(`"a" > "b"`).should.equal("false");
+    evaluateExpression(`"a" >= "a"`).should.equal("true");
+    evaluateExpression(`"app" < "apple"`).should.equal("true");
+    evaluateExpression(`"" < "a"`).should.equal("true");
+    evaluateExpression(`"z" < "é"`).should.equal("true");
+    evaluateExpression(`"a\0" > "a"`).should.equal("true");
+}
+
 @("Strings can be passed to and returned from functions")
 unittest
 {

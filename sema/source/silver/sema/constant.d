@@ -46,7 +46,7 @@ package ConstValue binaryValue(BinaryOp op, const ConstValue lhs, const ConstVal
         (const ConstUInt l) => integerBinary(op, l.value, rhs.get!(const ConstUInt).value, info),
         (const bool l) => equality!bool(op, l, rhs.get!(const bool)),
         (const double l) => floatBinary(op, l, rhs.get!(const double)),
-        (const string l) => equality!string(op, l, rhs.get!(const string)),
+        (const string l) => stringBinary(op, l, rhs.get!(const string)),
         (const ConstUnit _) => equality!bool(op, true, true),
     );
 }
@@ -209,6 +209,12 @@ private ConstValue floatBinary(BinaryOp op, double lhs, double rhs)
     default:
         return comparison!double(op, lhs, rhs);
     }
+}
+
+private ConstValue stringBinary(BinaryOp op, string lhs, string rhs)
+{
+    if (op == BinaryOp.Concat) return ConstValue(lhs ~ rhs);
+    return comparison!string(op, lhs, rhs);
 }
 
 private ConstValue comparison(T)(BinaryOp op, T lhs, T rhs)

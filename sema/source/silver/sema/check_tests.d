@@ -294,6 +294,50 @@ unittest
     a.shouldHaveNoDiagnostics();
 }
 
+@("type checking gives `~` on Strings the type String, and comparing Strings the type Bool")
+unittest
+{
+    auto a = analyzedMain(`val joined = "a" ~ "b"
+    val lt = "a" < "b"
+    val le = "a" <= "b"
+    val gt = "a" > "b"
+    val ge = "a" >= "b"`);
+    a.shouldHaveType(`"a" ~ "b"`, "String");
+    a.shouldHaveType(`"a" < "b"`, "Bool");
+    a.shouldHaveType(`"a" <= "b"`, "Bool");
+    a.shouldHaveType(`"a" > "b"`, "Bool");
+    a.shouldHaveType(`"a" >= "b"`, "Bool");
+    a.shouldHaveNoDiagnostics();
+}
+
+@("type checking reports `~` on anything but Strings, blaming the wrong operand")
+unittest
+{
+    analyzedMain(`printl(1 ~ 2)`).shouldReport(DiagnosticCode.InvalidOperand, At("1", 1));
+    analyzedMain(`printl("a" ~ 1)`).shouldReport(DiagnosticCode.InvalidOperand, At("1", 1));
+    analyzedMain(`printl(1 ~ "a")`).shouldReport(DiagnosticCode.InvalidOperand, At("1", 1));
+    analyzedMain(`printl(true ~ "a")`).shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
+    analyzedMain(`printl("a" ~ ())`).shouldReport(DiagnosticCode.InvalidOperand, At("()", 1));
+}
+
+@("type checking only orders two numbers or two Strings")
+unittest
+{
+    analyzedMain(`printl("a" < 1)`).shouldReport(DiagnosticCode.InvalidOperand, At(`"a"`, 1));
+    analyzedMain(`printl(1 >= "a")`).shouldReport(DiagnosticCode.InvalidOperand, At("1", 1));
+    analyzedMain(`printl("a" < true)`).shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
+    analyzedMain(`printl(true < "a")`).shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
+}
+
+@("operator diagnostics on Strings name the operator as it's written")
+unittest
+{
+    static string messageOf(const Analyzed a) => a.collector.diagnostics[0].message;
+    assert(messageOf(analyzedMain(`printl(1 ~ 2)`)) == "`~` needs a String, got `Int`");
+    assert(messageOf(analyzedMain(`printl("a" <= true)`)) == "`<=` needs a number or a String, got `Bool`");
+    assert(messageOf(analyzedMain(`printl("a" < 1.5)`)) == "`<` can't compare `String` and `Float`");
+}
+
 @("type checking reports equality between different types, and logic on non-Bools")
 unittest
 {
@@ -1117,6 +1161,39 @@ val n: Unit = ()`);
     a.shouldEvaluateTo("f", 1.5, "Float");
     a.shouldEvaluateTo("s", "text", "String");
     a.shouldEvaluateTo("n", ConstUnit(), "Unit");
+}
+
+@("a String constant can be built with `~`, keeping every byte")
+unittest
+{
+    auto a = analyzedConstants(`val first: String = "sil"
+val whole: String = first ~ "ver" ~ ""
+val nul: String = "a\0" ~ "b"
+val empty: String = "" ~ ""`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldEvaluateTo("whole", "silver", "String");
+    a.shouldEvaluateTo("nul", "a\0b", "String");
+    a.shouldEvaluateTo("empty", "", "String");
+}
+
+@("String constants compare by unsigned bytes, then length")
+unittest
+{
+    auto a = analyzedConstants(`val less: Bool = "a" < "b"
+val notLess: Bool = "b" < "a"
+val prefix: Bool = "app" < "apple"
+val atMost: Bool = "a" <= "a"
+val atLeast: Bool = "a" >= "b"
+val greater: Bool = "é" > "z"
+val nul: Bool = "a\0b" == "a\0c"`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldEvaluateTo("less", true, "Bool");
+    a.shouldEvaluateTo("notLess", false, "Bool");
+    a.shouldEvaluateTo("prefix", true, "Bool");
+    a.shouldEvaluateTo("atMost", true, "Bool");
+    a.shouldEvaluateTo("atLeast", false, "Bool");
+    a.shouldEvaluateTo("greater", true, "Bool");
+    a.shouldEvaluateTo("nul", false, "Bool");
 }
 
 @("a literal initializer adapts to the constant's type, and is range-checked against it")

@@ -1,0 +1,76 @@
+val prefix: String = "pre"
+val joined: String = prefix ~ "fix"
+
+type Box(label: String, count: Int)
+
+def greet(name: String): String => "hello, " ~ name
+
+def tag(wanted: Bool, nested: Bool): String {
+    if wanted {
+        val inner = if nested => "a" else "b"
+        inner ~ "!"
+    } else {
+        "none"
+    }
+}
+
+def loud(text: String): String {
+    return text ~ "!"
+}
+
+def main(): Unit {
+    printl("a" ~ "b")
+    printl("a" ~ "b" ~ "c")
+    printl("" ~ "")
+    printl("" ~ "x")
+    printl("x" ~ "")
+    printl(("" ~ "") == "")
+    printl(joined)
+    printl(prefix ~ joined)
+    printl(joined ~ prefix)
+    printl("café" ~ " ☕")
+
+    printl(greet("you"))
+    printl(loud(greet("me")))
+    printl(tag(true, true))
+    printl(tag(true, false))
+    printl(tag(false, true))
+
+    // A concatenation is its own value, unaffected by what it was built from
+    mutable val built = ""
+    mutable val i = 0
+    while i < 5 {
+        built = built ~ "ab"
+        i = i + 1
+    }
+    printl(built)
+    val kept = built
+    built = built ~ "c"
+    printl(kept)
+    printl(built)
+
+    val box = Box("a" ~ "b", 1)
+    printl(box.label ~ "c")
+    printl(box == Box("ab", 1))
+    printl(box == Box("a" ~ "c", 1))
+
+    // Stays alive through collections, on the stack and in a heap object
+    val garbage = "the same forty bytes, again and again..."
+    mutable val round = 0
+    while round < 50000 {
+        val discarded = garbage ~ garbage
+        round = round + 1
+    }
+    printl(built)
+    printl(box.label)
+
+    // Doubling past what a small allocation holds
+    mutable val long = "0123456789abcdef"
+    mutable val doublings = 0
+    while doublings < 16 {
+        long = long ~ long
+        doublings = doublings + 1
+    }
+    printl(long == long ~ "")
+    printl(long < long ~ "x")
+}

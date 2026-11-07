@@ -7,8 +7,8 @@ version (unittest)
     import std.conv : to;
     import std.file : dirEntries, exists, mkdirRecurse, readText, rmdirRecurse, SpanMode, tempDir, write;
     import std.path : baseName, buildNormalizedPath, buildPath, dirName, stripExtension;
-    import std.process : execute, thisProcessID;
-    import std.stdio : writeln;
+    import std.process : pipeProcess, Redirect, thisProcessID, wait;
+    import std.stdio : File, stdin, writeln;
     import std.string : lineSplitter, replace, startsWith, strip;
     import silver.ast : formatDiagnostic, Program, SourceContext;
     import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Toolchain;
@@ -29,6 +29,8 @@ version (unittest)
         string expected;
         /// The panic message, from `.panic`. Only `panics/` cases have one.
         string panicMessage;
+        /// The program's standard input, from `.stdin`. Null when the case has none.
+        string inputPath;
     }
 
     /// Every `*.ag` in `directory` under conformance/ with its `.expected` output, sorted by name.
@@ -43,7 +45,9 @@ version (unittest)
             assert(exists(expectedPath), "Missing expected output file for " ~ entry.name);
             auto panicPath = buildPath(casesDirectory, name ~ ".panic");
             auto panicMessage = exists(panicPath) ? readText(panicPath).strip : null;
-            result ~= Case(name, entry.name, readText(expectedPath).normalizeNewlines, panicMessage);
+            auto inputPath = buildPath(casesDirectory, name ~ ".stdin");
+            result ~= Case(name, entry.name, readText(expectedPath).normalizeNewlines, panicMessage,
+                exists(inputPath) ? inputPath : null);
         }
         assert(result.length > 0, "No conformance .ag files were found in " ~ directory);
         return result.sort!((a, b) => a.name < b.name).release;
@@ -139,9 +143,30 @@ version (unittest)
             return "linking failed (IR kept at " ~ irPath ~ "):\n" ~ linked.output;
         }
 
-        auto result = execute([exePath]);
-        run = CompiledRun(result.status, result.output.normalizeNewlines);
+        auto process = pipeProcess([exePath], Redirect.stdin | Redirect.stdout | Redirect.stderrToStdout);
+        if (c.inputPath !is null)
+        {
+            process.stdin.rawWrite(readText(c.inputPath).normalizeNewlines);
+        }
+        process.stdin.close();
+        auto output = process.stdout.byChunk(4096).join;
+        auto status = wait(process.pid);
+        run = CompiledRun(status, (cast(string) output).normalizeNewlines);
         return null;
+    }
+
+    /// Runs `evaluator` with `c`'s input as standard input.
+    void runWithInput(Case c, Evaluator evaluator)
+    {
+        if (c.inputPath is null)
+        {
+            evaluator.run();
+            return;
+        }
+        auto original = stdin;
+        stdin = File(c.inputPath, "r");
+        scope (exit) stdin = original;
+        evaluator.run();
     }
 
     /// Compiles and runs `c`, and returns why its output didn't match, or null if it did.
@@ -195,7 +220,7 @@ version (unittest)
         auto evaluator = new Evaluator(program, analysis);
         try
         {
-            evaluator.run();
+            runWithInput(c, evaluator);
         }
         catch (DiagnosticException e)
         {
@@ -224,7 +249,7 @@ version (unittest)
         auto evaluator = new Evaluator(program, analysis);
         try
         {
-            evaluator.run();
+            runWithInput(c, evaluator);
         }
         catch (DiagnosticException e)
         {
