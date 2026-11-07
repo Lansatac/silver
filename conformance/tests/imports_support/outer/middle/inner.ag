@@ -1,0 +1,8 @@
+module imports_support.outer.middle.inner
+
+type Point(x: Int, y: Int)
+type Marker
+
+val limit: Int = 7
+
+def origin(): Point => Point(0, 0)

@@ -673,6 +673,35 @@ unittest
     a.shouldReport(DiagnosticCode.UnknownModuleMember, At("std", 2));
 }
 
+@("name resolution finds a module through a part of its path that isn't imported, below one that is")
+unittest
+{
+    auto files = ["a.ag": "module a\ndef g(): Int => 1", "a/b/c.ag": "module a.b.c\ndef f(): Int => 2"];
+    enum imports = "import a\nimport a.b.c\n";
+
+    auto a = analyzed(imports ~ "def main(): Unit => printl(a.b.c.f() + a.g())", files);
+    a.shouldResolve(At("f", 1), At("f", 1, "a.b.c"));
+    a.shouldResolveToModule(At("c", 2), "a.b.c");
+    a.shouldResolve(At("g", 1), At("g", 1, "a"));
+    a.shouldHaveNoDiagnostics();
+
+    analyzed(imports ~ "def main(): Unit => printl(a.b)", files)
+        .shouldReport(DiagnosticCode.ModuleIsNotAValue, At("a", 3));
+    analyzed(imports ~ "def main(): Unit => printl(a.b.nope)", files)
+        .shouldReport(DiagnosticCode.UnknownName, At("a", 3));
+    analyzed(imports ~ "def main(): Unit => printl(a.x.c.f())", files)
+        .shouldReport(DiagnosticCode.UnknownModuleMember, At("a", 3));
+}
+
+@("name resolution prefers a module's declaration over a part of an imported module's path")
+unittest
+{
+    auto a = analyzed("import a\nimport a.b.c\ndef main(): Unit => printl(a.b())",
+        ["a.ag": "module a\ndef b(): Int => 1", "a/b/c.ag": "module a.b.c\ndef f(): Int => 2"]);
+    a.shouldResolve(At("b", 2), At("b", 1, "a"));
+    a.shouldHaveNoDiagnostics();
+}
+
 @("name resolution reports a nested function as unsupported")
 unittest
 {

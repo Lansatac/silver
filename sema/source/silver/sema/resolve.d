@@ -695,6 +695,11 @@ private final class NameResolver
                 _resolutions[expr.id] = *symbol;
                 return Path(Path.Kind.Value);
             }
+            // `a.b` on the way to `a.b.c`, when `a` and `a.b.c` are imported but `a.b` isn't.
+            if (auto path = modulePath(expr, nested, scopeTable))
+            {
+                return *path;
+            }
             _collector.reportError(DiagnosticCode.UnknownModuleMember, expr.span,
                 "Module '%s' has no '%s'".format(object.name, access.member));
             return Path(Path.Kind.Error);

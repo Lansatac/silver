@@ -1,0 +1,3 @@
+module imports_support.outer
+
+def top(): Int => 9

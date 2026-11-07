@@ -1,0 +1,11 @@
+import imports_support.outer
+import imports_support.outer.middle.inner
+
+def main(): Unit {
+    printl(imports_support.outer.top())
+    printl(imports_support.outer.middle.inner.limit)
+    printl(imports_support.outer.middle.inner.origin().x)
+    printl(imports_support.outer.middle.inner.Point(1, 2))
+    printl(imports_support.outer.middle.inner.Marker)
+    printl(top() + limit)
+}
