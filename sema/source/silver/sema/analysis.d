@@ -139,6 +139,20 @@ final class Analysis
         return (call in _resolution.conversions) !is null;
     }
 
+    /// Whether `call` is the prelude's `length`, which reads an array's length. Sema types it
+    /// until generics can, so it isn't a call to anything.
+    bool isArrayLength(Id!Expr call) const
+    {
+        return (call in _typing.arrayLengths) !is null;
+    }
+
+    /// The operands of the `~` chain `concat` heads, flattened, so that `a ~ b ~ c` is one
+    /// allocation. The `~`s nested inside it are only reached through this.
+    const(Expr)[] concatOperands(Id!Expr concat) const
+    {
+        return _typing.concatOperands[concat];
+    }
+
     /// The fields of `type`, in declaration order.
     const(FieldInfo)[] fieldsOf(Id!TypeDecl type) const
     {

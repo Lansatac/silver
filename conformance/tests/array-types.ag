@@ -1,0 +1,46 @@
+def bytes(): [UInt8] => [1, 2]
+def maybe(c: Bool): [UInt8]? => if c => [1] else None
+def empties(): [[Int]] => [[], []]
+def twice(x: Int): Int => x * 2
+def thrice(x: Int): Int => x * 3
+
+def exits(): Int {
+    val never = [{ return 7 }]
+    printl(never)
+    return 0
+}
+
+def main(): Unit {
+    // Literals adapt through if arms and block values, and through options.
+    val a: [UInt8] = if length(bytes()) == 2 => [1] else [2]
+    printl(a)
+    val b: [UInt8] = { [255] }
+    printl(b)
+    val c: [UInt8]? = [255]
+    printl(c)
+    val d: [Int?]? = []
+    printl(d)
+    val e: [Float]? = [1] ~ [2]
+    printl(e)
+    printl(maybe(true))
+    printl(maybe(false) ?? [9])
+    printl(maybe(false) ?? [])
+    printl(empties())
+
+    // Elements join, promoting where they have to.
+    printl([Some(1), None])
+    printl([1, Some(2)])
+    printl([None, Some(2)])
+    printl([[], [1]])
+    printl([[1], []])
+    val f: [[Int?]] = [[1], [None]]
+    printl(f)
+
+    // Function values have a layout like any other.
+    val fs = [twice, thrice]
+    printl(fs[1](2))
+    val typed: [(Int) -> Int] = [twice]
+    printl(typed[0](4))
+
+    printl(exits())
+}

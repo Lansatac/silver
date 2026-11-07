@@ -5,13 +5,12 @@ version (unittest):
 import silver.syntax.parse_tests.helpers;
 import silver.syntax.cases;
 
-// Not yet handled by lower, so grammar only for now: collectionLiterals, indexing.
 mixin AstCases!(
-    layout, comments,
-    literals, stringLiterals, radixLiterals, constructors,
+    layout, continuations, comments,
+    literals, stringLiterals, radixLiterals, constructors, collectionLiterals,
     operators, precedence, associativity,
-    postfix, optionalChaining,
+    postfix, indexing, optionalChaining,
     ifs, blocks, loops,
-    assignments, declarations, uninitializedDeclarations, typeAnnotations, constantDeclarations, moduleDeclarations, imports,
+    discards, assignments, declarations, uninitializedDeclarations, typeAnnotations, constantDeclarations, moduleDeclarations, imports,
     functions, typeDeclarations, typeConstruction,
 );

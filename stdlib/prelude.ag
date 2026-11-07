@@ -5,3 +5,5 @@ native def print(value: Any): Unit
 native def printl(value: Any): Unit
 // Reads a line from input, including its newline, or `None` at the end of input.
 native def read(): String?
+// How many elements an array has. Sema requires an array here, until generics can say so.
+native def length(values: Any): Int

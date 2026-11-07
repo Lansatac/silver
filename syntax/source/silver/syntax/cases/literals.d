@@ -75,8 +75,8 @@ immutable Case[] constructors = [
 
 /// Grammar only: CollectionLiteral isn't lowered yet.
 immutable Case[] collectionLiterals = [
-    accepts("a = []"),
-    accepts("a = [1]"),
+    parsesAs("a = []", "(assign a (array))"),
+    parsesAs("a = [1]", "(assign a (array 1))"),
     accepts("a = [1, 2, 3]"),
     accepts("a = [1, 2, 3,]"),
     accepts("a = [[1, 2], [3]]"),
@@ -84,8 +84,8 @@ immutable Case[] collectionLiterals = [
     rejects("a = [,]"),
     rejects("a = [1 2]"),
 
-    accepts("a = [:]"),
-    accepts("a = [1: 2]"),
+    parsesAs("a = [:]", "(assign a (map))"),
+    parsesAs("a = [1: 2]", "(assign a (map (1 2)))"),
     accepts("a = [1: 2, 3: 4]"),
     accepts("a = [1: 2, 3: 4,]"),
     accepts("a = [k: [1, 2], j: []]"),

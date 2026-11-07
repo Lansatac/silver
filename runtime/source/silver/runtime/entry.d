@@ -7,6 +7,7 @@
 ///   Int -> long -> i64          Bool -> bool -> i1 zeroext
 ///   Float -> double -> double   String -> (const(char)*, size_t) -> ptr, i64 (no terminator)
 ///   Unit -> no argument, `void` return
+///   [T] -> (T*, size_t) -> ptr, i64
 ///
 /// Composite values (String, Option, closures) cross as separate scalars or a pointer, never
 /// as a struct by value: hand-written IR doesn't get the platform's struct-passing rules

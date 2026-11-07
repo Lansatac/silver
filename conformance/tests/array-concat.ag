@@ -1,0 +1,51 @@
+type Box(items: [String])
+
+def noisy(name: String, xs: [Int]): [Int] {
+    printl(name)
+    return xs
+}
+
+def main(): Unit {
+    val a = [1, 2]
+    val b = [3]
+    printl(a ~ b)
+    printl(a ~ b ~ a)
+    printl(a ~ (b ~ a))
+    printl(a ~ [])
+    printl([] ~ a)
+    printl(a ~ [] ~ b)
+    printl([9] ~ a ~ [8])
+    printl(a)
+    printl(b)
+
+    // Operands run in order, however the chain is grouped.
+    printl(noisy("one", [1]) ~ noisy("two", [2]) ~ noisy("three", [3]))
+    printl(noisy("four", [4]) ~ (noisy("five", [5]) ~ noisy("six", [6])))
+
+    // Literals adapt on either side.
+    val bytes: [UInt8] = [255]
+    printl(bytes ~ [1])
+    printl([1] ~ bytes)
+    printl([1] ~ [2] ~ bytes)
+    val options: [Int?] = [None]
+    printl(options ~ [1])
+    printl([1] ~ options)
+    val typed: [UInt8] = [1] ~ [2] ~ []
+    printl(typed)
+
+    // Element sizes other than a word.
+    val strings = ["a"] ~ ["b", "c"]
+    printl(strings)
+    printl([[1]] ~ [[2], []])
+    printl([Some(1)] ~ [None])
+    printl([1.5] ~ [2.5])
+    printl([true] ~ [false, true])
+    val boxes = [Box(["x"])] ~ [Box([])]
+    printl(boxes)
+
+    // Strings get the same chain.
+    val s = "a"
+    printl(s ~ "b" ~ s ~ "c")
+    printl("" ~ "")
+    printl("" ~ s)
+}

@@ -121,6 +121,10 @@ private final class Lowering
             }
             auto mutable = cst.name == "Silver.VariableDeclaration";
             return Stmt(spanOf(cst, file), StmtKind(VarDecl(ids.next!VarDecl, name, spanOf(cst[0], file), expr, typeExpr, mutable)));
+        case "Silver.DiscardStatement":
+            auto discarded = convertExpression(cst[0]);
+            return Stmt(spanOf(cst, file), StmtKind(VarDecl(ids.next!VarDecl, discardName,
+                Span(file, cst.begin, cst.begin + discardName.length), discarded, null, false)));
         case "Silver.AssignmentStatement":
             // The target is a Postfix, so `a.b = 1` keeps its member access.
             cst[0].validateNodeIs("Silver.AssignTarget");
@@ -132,7 +136,8 @@ private final class Lowering
                 // `a += 1` becomes `a = a + 1`, so nothing past lowering sees compound assignment.
                 // The target is lowered again rather than copied, so the read gets its own IDs.
                 auto read = convertExpression(cst[0][0]);
-                auto binary = BinaryExpr(toBinaryOp(op[0 .. $ - 1]), boxed(read), boxed(expr));
+                auto binaryOp = op == "~=" ? BinaryOp.Append : toBinaryOp(op[0 .. $ - 1]);
+                auto binary = BinaryExpr(binaryOp, boxed(read), boxed(expr));
                 expr = Expr(ids.next!Expr, Span(file, target.span.start, expr.span.end), ExprKind(binary));
             }
             return Stmt(spanOf(cst, file), StmtKind(AssignStmt(target, expr)));
@@ -172,6 +177,9 @@ private final class Lowering
                 return base;
             }
             return TypeExpr(ids.next!TypeExpr, spanOf(cst, file), TypeExprKind(OptionType(boxed(base))));
+        case "Silver.ArrayType":
+            return TypeExpr(ids.next!TypeExpr, spanOf(cst, file),
+                TypeExprKind(ArrayType(boxed(convertTypeExpression(cst[0])))));
         case "Silver.NamedType":
             // `TypePath TypeArguments?`. TypePath's children are just the names, without the '.'s.
             cst[0].validateNodeIs("Silver.TypePath");
@@ -207,7 +215,18 @@ private final class Lowering
         case "Silver.NumberLiteral":
         case "Silver.IfBranch":
         case "Silver.ElseBranch":
+        case "Silver.CollectionLiteral":
             return convertExpression(cst[0]);
+        case "Silver.ListLiteral":
+            return convertListLiteral(cst);
+        case "Silver.MapLiteral":
+            return convertMapLiteral(cst);
+        case "Silver.RangeExpression":
+            if (cst.children.length == 1) return convertExpression(cst[0]);
+            auto rangeStart = convertExpression(cst[0]);
+            auto rangeEnd = convertExpression(cst[1]);
+            return Expr(ids.next!Expr, Span(file, rangeStart.span.start, rangeEnd.span.end),
+                ExprKind(RangeExpr(boxed(rangeStart), boxed(rangeEnd))));
         case "Silver.Block":
             return convertBlock(cst);
         case "Silver.UnitLiteral":
@@ -361,13 +380,53 @@ private final class Lowering
         }
     }
 
-    // WhileExpression      < :WHILE Expression Block
+    private Expr convertListLiteral(ParseTree cst)
+    {
+        Expr[] elements;
+        foreach (element; cst.children)
+        {
+            elements ~= convertExpression(element);
+        }
+        return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(ArrayLiteral(elements)));
+    }
+
+    private Expr convertMapLiteral(ParseTree cst)
+    {
+        Expr[] keys;
+        Expr[] values;
+        foreach (entry; cst.children)
+        {
+            entry.validateNodeIs("Silver.MapEntry");
+            keys ~= convertExpression(entry[0]);
+            values ~= convertExpression(entry[1]);
+        }
+        return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(MapLiteral(keys, values)));
+    }
+
+    /// `Identifier Expression` once the keyword and `=` are discarded.
+    private VarDecl* convertOptionBinding(ParseTree cst)
+    {
+        cst.validateNodeIs("Silver.OptionBinding");
+        return boxed(VarDecl(ids.next!VarDecl, cst[0].matches[0], spanOf(cst[0], file),
+            convertExpression(cst[1]), null, false));
+    }
+
+    // WhileExpression      < :WHILE (OptionBinding / Expression) Block
     private Expr convertWhileExpression(ParseTree cst)
     {
         cst.validateNodeIs("Silver.WhileExpression");
-        auto condition = convertExpression(cst[0]);
+        Expr* condition = null;
+        VarDecl* binding = null;
+        if (cst[0].name == "Silver.OptionBinding")
+        {
+            binding = convertOptionBinding(cst[0]);
+        }
+        else
+        {
+            condition = boxed(convertExpression(cst[0]));
+        }
         auto body = convertExpression(cst[1]);
-        return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(WhileExpr(boxed(condition), boxed(body))));
+        return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(WhileExpr(condition, boxed(body), binding)));
     }
 
     /// `IF Expression IfBranch (ELSE ElseBranch)?`. An else-if is just an
@@ -377,12 +436,9 @@ private final class Lowering
         cst.validateNodeIs("Silver.IfExpression");
         Expr* condition = null;
         VarDecl* binding = null;
-        if (cst[0].name == "Silver.IfBinding")
+        if (cst[0].name == "Silver.OptionBinding")
         {
-            // `Identifier Expression` once the keyword and `=` are discarded.
-            auto head = cst[0];
-            binding = boxed(VarDecl(ids.next!VarDecl, head[0].matches[0], spanOf(head[0], file),
-                convertExpression(head[1]), null, false));
+            binding = convertOptionBinding(cst[0]);
         }
         else
         {
@@ -416,6 +472,8 @@ private final class Lowering
             return Expr(ids.next!Expr, span, ExprKind(SafeMemberAccess(boxed(lhs), op.matches[0])));
         case "Silver.PropagateNone":
             return Expr(ids.next!Expr, span, ExprKind(PropagateExpr(boxed(lhs))));
+        case "Silver.IndexArgs":
+            return Expr(ids.next!Expr, span, ExprKind(IndexExpr(boxed(lhs), boxed(convertExpression(op[0])))));
         default:
             throw new Exception("Expected call or member access, got '%s'".format(op.name));
         }

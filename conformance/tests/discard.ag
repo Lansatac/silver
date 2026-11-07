@@ -1,0 +1,48 @@
+def noisy(name: String): Int {
+    printl(name)
+    return 1
+}
+
+def firstTwo(): String? {
+    _ = read()?
+    val second = read()?
+    Some(second)
+}
+
+def stopsEarly(x: Int?): Unit? {
+    _ = x?
+    printl("present")
+    ()
+}
+
+def main(): Unit {
+    // The value is still evaluated, and any number of them can share a scope.
+    _ = noisy("a")
+    _ = noisy("b")
+    val _ = noisy("c")
+    val _: Int = noisy("d")
+
+    // Whatever the type, including those with nothing to give them one.
+    _ = "text"
+    _ = [1, 2]
+    _ = ()
+    _ = None
+    _ = []
+    _ = if true => None else None
+    val _: UInt8 = 255
+
+    printl(firstTwo())
+    printl(stopsEarly(1))
+    printl(stopsEarly(None))
+
+    // In an option binding, only the tag matters.
+    val some: Int? = 1
+    val none: Int? = None
+    printl(if val _ = some => "some" else "none")
+    printl(if val _ = none => "some" else "none")
+    mutable val lines = 0
+    while val _ = read() {
+        lines += 1
+    }
+    printl(lines)
+}

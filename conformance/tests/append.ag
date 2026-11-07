@@ -1,0 +1,149 @@
+type Log(lines: [String], text: String)
+
+def tag(s: String): String {
+    printl("tag " ~ s)
+    return s
+}
+
+def main(): Unit {
+    // Accumulating far enough to outgrow the buffer many times.
+    mutable val xs: [Int] = []
+    mutable val i = 0
+    while i < 20000 {
+        xs ~= [i]
+        i += 1
+    }
+    printl(length(xs))
+    printl(xs[0] + xs[19999])
+    mutable val check = 0
+    i = 0
+    while i < 20000 {
+        if xs[i] != i { check += 1 }
+        i += 1
+    }
+    printl(check)
+
+    // Nothing can see a write: the frontier belongs to whichever value appends first.
+    mutable val a = [1, 2]
+    a ~= [3]
+    val b = a
+    a ~= [4]
+    mutable val c = b
+    c ~= [5]
+    printl(a)
+    printl(b)
+    printl(c)
+
+    // The two aliases share the frontier, so the second one copies and neither sees the other.
+    mutable val base: [Int] = []
+    base ~= [1, 2, 3]
+    mutable val left = base
+    mutable val right = base
+    left ~= [10]
+    right ~= [20]
+    printl(left)
+    printl(right)
+    printl(base)
+
+    // A slice ending at the frontier extends in place without touching what's before it, and one
+    // ending before it has to copy, or it would write over elements other values hold.
+    mutable val whole: [Int] = []
+    whole ~= [1, 2, 3, 4]
+    mutable val tail = whole[2..4]
+    tail ~= [5]
+    mutable val middle = whole[1..2]
+    middle ~= [9]
+    printl(whole)
+    printl(tail)
+    printl(middle)
+
+    // Likewise an empty slice, including one at the very end of its buffer.
+    mutable val atEnd = whole[4..4]
+    atEnd ~= [7]
+    mutable val atStart = whole[0..0]
+    atStart ~= [8]
+    printl(atEnd)
+    printl(atStart)
+    printl(whole)
+
+    // `~` uses the frontier too, and must not disturb anything either.
+    mutable val grown: [Int] = []
+    grown ~= [1]
+    val one = grown ~ [2]
+    val other = grown ~ [3]
+    printl(one)
+    printl(other)
+    printl(grown)
+
+    // Appending a value to itself, in place or not.
+    mutable val self = [1, 2]
+    self ~= self
+    self ~= self
+    printl(self)
+    mutable val selfSlice: [Int] = []
+    selfSlice ~= [1, 2, 3]
+    selfSlice ~= selfSlice[0..2]
+    printl(selfSlice)
+
+    // Nothing to add, and a literal's elements reading the array they're going into.
+    mutable val same = [1]
+    same ~= []
+    printl(same)
+    same ~= [same[0] + 1, length(same)]
+    printl(same)
+
+    // Sizes other than a word, including elements with no operand.
+    mutable val bytes: [UInt8] = [1]
+    bytes ~= [255]
+    printl(bytes)
+    mutable val options: [Int?] = []
+    options ~= [1, None]
+    printl(options)
+    mutable val strings: [String] = []
+    strings ~= ["a"]
+    strings ~= ["b", "c"]
+    printl(strings)
+    mutable val nested: [[Int]] = []
+    nested ~= [[1], []]
+    nested ~= [nested[0] ~ [2]]
+    printl(nested)
+    mutable val units: [Unit] = []
+    units ~= [()]
+    units ~= units
+    printl(units)
+
+    // Strings from every source: a literal, a format, a hole, a concat.
+    mutable val s = "lit"
+    s ~= "-more"
+    printl(s)
+    val before = s
+    s ~= "!"
+    printl(before)
+    printl(s)
+    mutable val formatted = String(42)
+    formatted ~= "x"
+    printl(formatted)
+    mutable val hole = "{1}{2}"
+    hole ~= "z"
+    printl(hole)
+    mutable val joined = s ~ "?"
+    joined ~= "."
+    printl(joined)
+    mutable val text = ""
+    i = 0
+    while i < 5000 {
+        text ~= "ab"
+        i += 1
+    }
+    printl(String(1) ~ text == "1" ~ text)
+    // NUL is an ordinary byte, and a string that looks like a header is only text.
+    mutable val odd = "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+    odd ~= "a"
+    printl(odd == "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0a")
+
+    // Through a field, by rebuilding, and with the right side evaluated once.
+    mutable val log = Log([], "")
+    log.lines ~= [tag("a")]
+    log.text ~= tag("b")
+    printl(log)
+}

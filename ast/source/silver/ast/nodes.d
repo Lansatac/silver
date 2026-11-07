@@ -50,6 +50,12 @@ struct OptionType
     TypeExpr* inner;
 }
 
+/// `[T]`.
+struct ArrayType
+{
+    TypeExpr* element;
+}
+
 /// `Int`, `math.Vector`, `List<Int>`; `path` is the dotted name split into parts.
 struct NamedType
 {
@@ -70,7 +76,7 @@ struct UnitType
 {
 }
 
-alias TypeExprKind = SumType!(OptionType, NamedType, FunctionType, UnitType);
+alias TypeExprKind = SumType!(OptionType, ArrayType, NamedType, FunctionType, UnitType);
 
 /// Prints a type the way it's written in source.
 string printTypeExpr(const TypeExpr t)
@@ -80,6 +86,7 @@ string printTypeExpr(const TypeExpr t)
 
     return t.kind.match!(
         (const OptionType o) => printOptionInner(*o.inner) ~ "?",
+        (const ArrayType a) => "[" ~ printTypeExpr(*a.element) ~ "]",
         (const NamedType n) => n.path.join(".")
             ~ (n.args.length > 0 ? "<" ~ n.args.map!printTypeExpr.join(", ") ~ ">" : ""),
         (const FunctionType f) => "(" ~ f.params.map!printTypeExpr.join(", ") ~ ") -> "
@@ -110,7 +117,7 @@ struct Expr
 
 alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, InterpolatedString, Identifier,
     UnaryExpr, BinaryExpr, CallExpr, MemberAccess, WhileExpr, IfExpr, BlockExpr, UnitLiteral,
-    SomeExpr, NoneLiteral, PropagateExpr, SafeMemberAccess);
+    SomeExpr, NoneLiteral, PropagateExpr, SafeMemberAccess, ArrayLiteral, MapLiteral, IndexExpr, RangeExpr);
 
 /// `()`, the only value of type Unit.
 struct UnitLiteral
@@ -179,6 +186,9 @@ enum BinaryOp
     GreaterEqual = ">=",
     Coalesce = "??",
     Concat = "~",
+    /// `xs ~= ys` lowers to `xs = xs ~= ys`: a `~` that may leave room to grow, and only ever
+    /// appears as the value of that assignment.
+    Append = "~=",
 }
 
 enum UnaryOp
@@ -240,6 +250,42 @@ struct SafeMemberAccess
     string member;
 }
 
+/// `[a, b]`.
+struct ArrayLiteral
+{
+    Expr[] elements;
+}
+
+/// `[k: v]`, whose entries are `keys[i]: values[i]`. Sema rejects it until generics.
+struct MapLiteral
+{
+    Expr[] keys;
+    Expr[] values;
+}
+
+/// `object[index]`, or a slice when `index` is a RangeExpr.
+struct IndexExpr
+{
+    Expr* object;
+    Expr* index;
+}
+
+/// `start..end`, half open. Only a slice takes one for now.
+struct RangeExpr
+{
+    Expr* start;
+    Expr* end;
+}
+
+/// The range `expr` is, or null if it's anything else.
+const(RangeExpr)* asRange(const(Expr)* expr)
+{
+    return (*expr).kind.match!(
+        (ref const RangeExpr range) => &range,
+        (_) => cast(const(RangeExpr)*) null,
+    );
+}
+
 /// `if c => a else b` or `if c { ... } else { ... }`.
 /// `falseBody` is null when there's no else, and the if's value is then ().
 /// `if val x = opt ...` sets `binding` instead of `condition`: its value is the option, and
@@ -253,10 +299,13 @@ struct IfExpr
 }
 
 /// `while c { ... }`, whose value is `()`.
+/// `while val x = opt { ... }` sets `binding` instead of `condition`: its value is evaluated before
+/// each iteration, the loop ends on `None`, and `x` is in scope only in `body`.
 struct WhileExpr
 {
     Expr* condition;
     Expr* body;
+    VarDecl* binding;
 }
 
 /// `{ statements }`, which has its own scope. `value` is the last statement when
@@ -285,7 +334,9 @@ string printExpr(const Expr e)
         (const UnaryExpr u) => format("(%s %s)", u.op, printExpr(*u.operand)),
         (const CallExpr c) => format("(call %s%s)", printExpr(*c.callee), c.args.map!(a => " " ~ printExpr(a)).join),
         (const MemberAccess m) => format("(. %s %s)", printExpr(*m.object), m.member),
-        (const WhileExpr w) => format("(while %s %s)", printExpr(*w.condition), printExpr(*w.body)),
+        (const WhileExpr w) => format("(while %s %s)", w.binding is null
+            ? printExpr(*w.condition)
+            : format("(val %s %s)", w.binding.name, printExpr(w.binding.value)), printExpr(*w.body)),
         (const IfExpr i) {
             auto head = i.binding is null
                 ? printExpr(*i.condition)
@@ -301,6 +352,17 @@ string printExpr(const Expr e)
         (const NoneLiteral _) => "None",
         (const PropagateExpr p) => format("(? %s)", printExpr(*p.operand)),
         (const SafeMemberAccess m) => format("(?. %s %s)", printExpr(*m.object), m.member),
+        (const ArrayLiteral a) => format("(array%s)", a.elements.map!(e => " " ~ printExpr(e)).join),
+        (const MapLiteral m) {
+            string entries;
+            foreach (i, key; m.keys)
+            {
+                entries ~= format(" (%s %s)", printExpr(key), printExpr(m.values[i]));
+            }
+            return "(map" ~ entries ~ ")";
+        },
+        (const IndexExpr i) => format("(index %s %s)", printExpr(*i.object), printExpr(*i.index)),
+        (const RangeExpr r) => format("(.. %s %s)", printExpr(*r.start), printExpr(*r.end)),
     );
 }
 
@@ -326,6 +388,10 @@ struct Stmt
 }
 
 alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, FunctionDecl, ReturnStmt);
+
+/// The name of a VarDecl that binds nothing: its value is evaluated and dropped, and no name is
+/// declared, so any number of them can share a scope.
+enum discardName = "_";
 
 struct VarDecl
 {

@@ -6,11 +6,11 @@ import silver.syntax.grammar_tests.helpers;
 import silver.syntax.cases;
 
 mixin GrammarCases!(
-    layout, comments,
+    layout, continuations, comments,
     literals, stringLiterals, radixLiterals, constructors, collectionLiterals,
     operators, precedence, associativity,
     postfix, indexing, optionalChaining,
     ifs, blocks, loops,
-    assignments, declarations, uninitializedDeclarations, typeAnnotations, constantDeclarations, moduleDeclarations, imports,
+    discards, assignments, declarations, uninitializedDeclarations, typeAnnotations, constantDeclarations, moduleDeclarations, imports,
     functions, typeDeclarations, typeConstruction,
 );

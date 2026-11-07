@@ -115,7 +115,8 @@ class Evaluator
 
     private void execute(const VarDecl ast, Environment variables)
     {
-        variables.defineVariable(ast.name, evaluate(ast.value, variables));
+        auto value = evaluate(ast.value, variables);
+        if (ast.name != discardName) variables.defineVariable(ast.name, value);
     }
 
     private void execute(const AssignStmt ast, Environment variables)
@@ -147,6 +148,7 @@ class Evaluator
             if (line.length == 0) return Variant(OptionValue.none());
             return Variant(OptionValue.some(Variant(line)));
         };
+        nativeBindings["length"] = (Variant[] args) => Variant(cast(long) args[0].get!ArrayValue.elements.length);
         bindNumericNatives();
     }
 
@@ -307,10 +309,11 @@ class Evaluator
     }
 
     /// `value`, of type `from`, as the option `to`. A `None` is the outermost one, however deep
-    /// `to` is, and anything else gets one `Some` for each level between the types.
+    /// `to` is, and anything else gets one `Some` for each level between the types. A `[]` taking
+    /// on an array type stays as it is.
     private Variant promote(Variant value, Type from, Type to)
     {
-        if (from == to || from == analysis.types.none) return value;
+        if (from == to || from == analysis.types.none || !analysis.types.isOption(to)) return value;
         return Variant(OptionValue.some(promote(value, from, analysis.types.optionInner(to))));
     }
 
@@ -356,7 +359,76 @@ class Evaluator
     private Variant evaluateBinary(const BinaryExpr ast, Id!Expr id, Environment variables)
     {
         if (ast.op == BinaryOp.Coalesce) return evaluateCoalesce(ast, id, variables);
+        if (ast.op == BinaryOp.Concat) return evaluateConcat(id, variables);
         return evaluate(ast, variables);
+    }
+
+    /// A `~` chain, every operand evaluated in order and then joined at once.
+    private Variant evaluateConcat(Id!Expr id, Environment variables)
+    {
+        Variant[] operands;
+        foreach (operand; analysis.concatOperands(id))
+        {
+            operands ~= evaluate(operand, variables);
+        }
+
+        if (operands[0].peek!string)
+        {
+            string text;
+            foreach (operand; operands)
+            {
+                text ~= operand.get!string;
+            }
+            return Variant(text);
+        }
+        Variant[] elements;
+        foreach (operand; operands)
+        {
+            elements ~= operand.get!ArrayValue.elements;
+        }
+        return Variant(new ArrayValue(elements));
+    }
+
+    private Variant evaluate(const ArrayLiteral ast, Environment variables)
+    {
+        Variant[] elements;
+        foreach (element; ast.elements)
+        {
+            elements ~= evaluate(element, variables);
+        }
+        return Variant(new ArrayValue(elements));
+    }
+
+    private Variant evaluate(const MapLiteral ast, Environment variables)
+    {
+        assert(0, "sema rejects maps");
+    }
+
+    private Variant evaluate(const RangeExpr ast, Environment variables)
+    {
+        assert(0, "sema only allows a range as a slice's index");
+    }
+
+    private Variant evaluate(const IndexExpr ast, Environment variables)
+    {
+        auto elements = evaluate(*ast.object, variables).get!ArrayValue.elements;
+        if (auto range = asRange(ast.index))
+        {
+            auto start = evaluate(*range.start, variables).get!long;
+            auto end = evaluate(*range.end, variables).get!long;
+            if (start < 0 || start > end || end > elements.length)
+            {
+                throw new CodedException(DiagnosticCode.IndexOutOfRange, "Slice is out of range");
+            }
+            return Variant(new ArrayValue(elements[cast(size_t) start .. cast(size_t) end]));
+        }
+
+        auto position = evaluate(*ast.index, variables).get!long;
+        if (position < 0 || position >= elements.length)
+        {
+            throw new CodedException(DiagnosticCode.IndexOutOfRange, "Index is out of range");
+        }
+        return elements[cast(size_t) position];
     }
 
     /// `if`, not `?:`: with dmd 2.113, an exception thrown from a `?:` that produces a Variant
@@ -695,9 +767,21 @@ class Evaluator
 
     private Variant evaluate(const WhileExpr ast, Environment variables)
     {
-        while (evaluate(*ast.condition, variables).get!bool)
+        while (true)
         {
-            evaluate(*ast.body, variables);
+            auto bodyScope = variables;
+            if (ast.binding is null)
+            {
+                if (!evaluate(*ast.condition, variables).get!bool) break;
+            }
+            else
+            {
+                auto option = evaluate(ast.binding.value, variables).get!OptionValue;
+                if (!option.present) break;
+                bodyScope = new Environment(variables);
+                bodyScope.defineVariable(ast.binding.name, option.payload);
+            }
+            evaluate(*ast.body, bodyScope);
         }
         return Variant(Unit());
     }
@@ -767,8 +851,19 @@ class Evaluator
         if (auto left = lhs.peek!string)
         {
             auto right = rhs.get!string;
-            if (operator == BinaryOp.Concat) return Variant(*left ~ right);
+            if (operator == BinaryOp.Append)
+            {
+                auto text = *left;
+                text ~= right;
+                return Variant(text);
+            }
             return compare(operator, *left, right);
+        }
+        if (operator == BinaryOp.Append)
+        {
+            auto elements = lhs.get!ArrayValue.elements;
+            elements ~= rhs.get!ArrayValue.elements;
+            return Variant(new ArrayValue(elements));
         }
         switch (operator)
         {
@@ -795,6 +890,16 @@ class Evaluator
             if (left.present != right.present) return false;
             if (!left.present) return true;
             return operate(BinaryOp.Equal, left.payload, right.payload).get!bool;
+        }
+        if (auto left = lhs.peek!ArrayValue)
+        {
+            auto right = rhs.get!ArrayValue;
+            if (left.elements.length != right.elements.length) return false;
+            foreach (i, element; left.elements)
+            {
+                if (!operate(BinaryOp.Equal, element, right.elements[i]).get!bool) return false;
+            }
+            return true;
         }
         return lhs == rhs;
     }

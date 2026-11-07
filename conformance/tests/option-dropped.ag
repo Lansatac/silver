@@ -1,10 +1,22 @@
 def f(): Int? => None
+def bareNone(): Unit => None
+def bareSome(): Unit => Some(1)
+def call(): Unit => f()
+def arms(): Unit => if true => None else None
+def someArms(): Unit { if true => Some(1) else None }
+def inBlock(): Unit { { None } }
 def main(): Unit {
-    None
-    Some(1)
-    f()
-    if true => None else None
-    if true => Some(1) else None
-    { None }
+    bareNone()
+    bareSome()
+    call()
+    arms()
+    someArms()
+    inBlock()
+    if true { None }
+    mutable val i = 0
+    while i < 1 {
+        i += 1
+        f()
+    }
     printl("ok")
 }

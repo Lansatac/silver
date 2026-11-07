@@ -1,0 +1,52 @@
+def below(i: Int, limit: Int): Int? => if i < limit => i else None
+
+type Node(value: Int, next: Node?)
+
+def units(i: Int): Unit? => if i < 2 => Some(()) else None
+
+def firstOver(limit: Int): Int {
+    mutable val i = 0
+    while val v = below(i, 100) {
+        if v > limit { return v }
+        i += 1
+    }
+    return -1
+}
+
+def main(): Unit {
+    // The initializer runs before every iteration, and the loop ends on None.
+    mutable val i = 0
+    while val v = below(i, 3) {
+        printl(v)
+        i += 1
+    }
+    printl(i)
+
+    // The binding is fresh each time, and the same name is free again after the loop.
+    mutable val list: Node? = Node(1, Node(2, Node(3, None)))
+    mutable val total = 0
+    while val node = list {
+        total += node.value
+        list = node.next
+    }
+    printl(total)
+    while val node = list { printl(node) }
+
+    // A nested option unwraps one level.
+    mutable val n = 0
+    mutable val nested: (Int?)? = Some(Some(1))
+    while val inner = nested {
+        printl(inner)
+        nested = if n == 0 => Some(None) else None
+        n += 1
+    }
+
+    // No operand to bind, as with any other Unit local.
+    mutable val u = 0
+    while val unit = units(u) {
+        u += 1
+    }
+    printl(u)
+
+    printl(firstOver(5))
+}

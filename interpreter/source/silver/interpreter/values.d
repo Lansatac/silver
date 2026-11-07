@@ -152,6 +152,26 @@ final class OptionValue
     }
 }
 
+/// A value of an array type: a slice of a D array. Like an Instance it never changes, and appending
+/// is safe to share, since D only extends a slice in place when it ends where its buffer's used part does.
+final class ArrayValue
+{
+    Variant[] elements;
+
+    this(Variant[] elements)
+    {
+        this.elements = elements;
+    }
+
+    override string toString()
+    {
+        import std.algorithm : map;
+        import std.array : join;
+
+        return "[" ~ elements.map!(e => e.toString()).join(", ") ~ "]";
+    }
+}
+
 /// A loaded module. Not a Silver value: `std.math` is resolved by name, never evaluated.
 class ModuleValue
 {

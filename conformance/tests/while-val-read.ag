@@ -1,0 +1,15 @@
+def main(): Unit {
+    mutable val lines = ""
+    mutable val all: [String] = []
+    while val line = read() {
+        // A line from input is a heap String the runtime made, so it can be appended to.
+        mutable val marked = line
+        marked ~= "!"
+        lines ~= marked
+        all ~= [line]
+        print(marked)
+    }
+    printl(length(all))
+    print(lines)
+    print(all[1])
+}

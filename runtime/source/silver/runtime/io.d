@@ -7,6 +7,7 @@ module silver.runtime.io;
 import std.conv : to;
 import std.stdio : readln, stdout;
 
+import silver.runtime.buffer : newString;
 import silver.runtime.panic : panic;
 
 extern (C) nothrow:
@@ -25,15 +26,14 @@ void silver_printl_bool(bool value) { output(value.to!string, true); }
 void silver_printl_string(const(char)* data, size_t length) { output(data[0 .. length], true); }
 void silver_printl_unit() { output("()", true); }
 
-/// A line from stdin including its newline, or false at end of input. `readln` returns GC memory,
-/// which the caller's stack slots keep alive.
+/// A line from stdin including its newline, or false at end of input. The line is copied into a
+/// buffer (see `silver.runtime.buffer`), since every String on the heap must be in one.
 bool silver_read(const(char)** data, size_t* length)
 {
     try
     {
         auto line = readln();
-        *data = line.ptr;
-        *length = line.length;
+        newString(line, data, length);
         return line.length > 0;
     }
     catch (Exception e)

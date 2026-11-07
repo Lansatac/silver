@@ -4,6 +4,20 @@ version (unittest):
 
 import silver.syntax.cases.core;
 
+immutable Case[] discards = [
+    parsesAs("_ = f()", "(val _ (call f))"),
+    parsesAs("_ = f()?", "(val _ (? (call f)))"),
+    parsesAs("_ =\n    1", "(val _ 1)"),
+    parsesAs("_\n    = 1", "(val _ 1)"),
+    parsesAs("val _ = f()", "(val _ (call f))"),
+    parsesAs("val _: Int = 1", "(val _: Int 1)"),
+    parsesAs("if val _ = a => 1 else 2", "(if (val _ a) 1 2)"),
+    parsesAs("while val _ = a { 1 }", "(while (val _ a) (block => 1))"),
+    // Only `_` itself is reserved.
+    parsesAs("val _a = 1", "(val _a 1)"),
+    parsesAs("_a = 1", "(assign _a 1)"),
+];
+
 immutable Case[] assignments = [
     parsesAs("a=b", "(assign a b)"),
 

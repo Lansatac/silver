@@ -1,0 +1,4 @@
+def main(): Unit {
+    val xs = [1, 2, 3]
+    printl(xs[2..1])
+}

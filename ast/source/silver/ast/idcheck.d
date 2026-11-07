@@ -147,7 +147,11 @@ private final class IdCheck
                 }
             },
             (const MemberAccess m) => visit(m.object),
-            (const WhileExpr w) { visit(w.condition); visit(w.body); },
+            (const WhileExpr w) {
+                if (w.binding !is null) visit(*w.binding, w.binding.nameSpan);
+                visit(w.condition);
+                visit(w.body);
+            },
             (const IfExpr i) {
                 if (i.binding !is null) visit(*i.binding, i.binding.nameSpan);
                 visit(i.condition);
@@ -157,6 +161,21 @@ private final class IdCheck
             (const SomeExpr s) => visit(s.value),
             (const PropagateExpr p) => visit(p.operand),
             (const SafeMemberAccess m) => visit(m.object),
+            (const ArrayLiteral a) {
+                foreach (element; a.elements)
+                {
+                    visit(element);
+                }
+            },
+            (const MapLiteral m) {
+                foreach (i, key; m.keys)
+                {
+                    visit(key);
+                    visit(m.values[i]);
+                }
+            },
+            (const IndexExpr i) { visit(i.object); visit(i.index); },
+            (const RangeExpr r) { visit(r.start); visit(r.end); },
             (const BlockExpr b) {
                 foreach (s; b.statements)
                 {
@@ -173,6 +192,7 @@ private final class IdCheck
         see(t.id, t.span);
         t.kind.match!(
             (const OptionType o) => visit(*o.inner),
+            (const ArrayType a) => visit(*a.element),
             (const NamedType n) {
                 foreach (arg; n.args)
                 {

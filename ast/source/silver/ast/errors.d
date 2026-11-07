@@ -42,6 +42,11 @@ enum DiagnosticCode : string
     UntypedNone = "T0011",
     InvalidPropagation = "T0012",
     InvalidOptionPayload = "T0013",
+    InvalidArrayElement = "T0014",
+    UntypedEmptyArray = "T0015",
+    /// Syntax with a decided future that sema can't give a meaning to yet.
+    NotSupportedYet = "T0016",
+    UnusedValue = "T0017",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",
@@ -50,6 +55,7 @@ enum DiagnosticCode : string
     InvalidConversion = "R0004",
     IntegerOverflow = "R0005",
     InvalidShift = "R0006",
+    IndexOutOfRange = "R0007",
 
     /// Something the implementation doesn't handle yet, or a broken invariant.
     InternalError = "I0001",

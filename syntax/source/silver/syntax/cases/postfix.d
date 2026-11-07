@@ -23,11 +23,20 @@ immutable Case[] postfix = [
 
 /// Grammar only: IndexArgs isn't lowered yet.
 immutable Case[] indexing = [
-    accepts("a = xs[0]"),
-    accepts("a = xs[i + 1][j]"),
-    accepts("a = m[k] ?? 0"),
-    accepts("xs[0] = 1"),
-    accepts("a = [1, 2][0]"),
+    parsesAs("a = xs[0]", "(assign a (index xs 0))"),
+    parsesAs("a = xs[i + 1][j]", "(assign a (index (index xs (Add i 1)) j))"),
+    parsesAs("a = m[k] ?? 0", "(assign a (Coalesce (index m k) 0))"),
+    parsesAs("xs[0] = 1", "(assign (index xs 0) 1)"),
+    parsesAs("a = [1, 2][0]", "(assign a (index (array 1 2) 0))"),
+    parsesAs("a = xs[1..2]", "(assign a (index xs (.. 1 2)))"),
+    parsesAs("a = xs[i + 1..n * 2]", "(assign a (index xs (.. (Add i 1) (Multiply n 2))))"),
+    parsesAs("a = xs[b.c..d.e]", "(assign a (index xs (.. (. b c) (. d e))))"),
+    parsesAs("a = xs[b?..c]", "(assign a (index xs (.. (? b) c)))"),
+    parsesAs("a = xs[b ?? 0..c]", "(assign a (index xs (.. (Coalesce b 0) c)))"),
+    parsesAs("a = xs[1.5..2]", "(assign a (index xs (.. 1.5 2)))"),
+    parsesAs("xs ~= [1]", "(assign xs (Append xs (array 1)))"),
+    parsesAs("a.b ~= c", "(assign (. a b) (Append (. a b) c))"),
+    parsesAs("a = b ~ c ~ d", "(assign a (Concat (Concat b c) d))"),
 ];
 
 immutable Case[] optionalChaining = [

@@ -1,5 +1,6 @@
-/// Every heap allocation generated code makes goes through here, so the allocator can
-/// change (to a collector of Silver's own, say) without touching codegen.
+/// Every heap allocation generated code makes for an object goes through here, and for a String
+/// or array through `silver.runtime.buffer`, so the allocator can change (to a collector of
+/// Silver's own, say) without touching codegen.
 module silver.runtime.memory;
 
 import core.memory : GC;

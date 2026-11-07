@@ -429,6 +429,7 @@ private final class NameResolver
                 _typeResolutions[type.id] = *resolvedType;
             },
             (const OptionType option) => resolveTypeExpr(*option.inner, current),
+            (const ArrayType array) => resolveTypeExpr(*array.element, current),
             (const FunctionType func) {
                 foreach (param; func.params)
                 {
@@ -498,8 +499,11 @@ private final class NameResolver
                 _declarations.locals[varDecl.id] = &varDecl;
                 if (varDecl.type !is null) resolveTypeExpr(*varDecl.type, scopeTable);
                 resolveExpr(varDecl.value, scopeTable);
-                declareLocal(varDecl.name, varDecl.nameSpan, SymbolId(varDecl.id), scopeTable,
-                    DiagnosticCode.DuplicateDeclaration, "'%s' is already declared in this scope");
+                if (varDecl.name != discardName)
+                {
+                    declareLocal(varDecl.name, varDecl.nameSpan, SymbolId(varDecl.id), scopeTable,
+                        DiagnosticCode.DuplicateDeclaration, "'%s' is already declared in this scope");
+                }
             },
             (const ExprStmt exprStmt) {
                 resolveExpr(exprStmt.expr, scopeTable);
@@ -575,12 +579,7 @@ private final class NameResolver
                 }
                 else
                 {
-                    // The initializer can't see the binding, and only the true branch can.
-                    resolveExpr(ifExpr.binding.value, scopeTable);
-                    _declarations.locals[ifExpr.binding.id] = ifExpr.binding;
-                    trueScope = new Scope(scopeTable);
-                    declareLocal(ifExpr.binding.name, ifExpr.binding.nameSpan, SymbolId(ifExpr.binding.id), trueScope,
-                        DiagnosticCode.DuplicateDeclaration, "'%s' is already declared in this scope");
+                    trueScope = declareOptionBinding(*ifExpr.binding, ifExpr.binding, scopeTable);
                 }
                 resolveExpr(*ifExpr.trueBody, trueScope);
                 if (ifExpr.falseBody !is null)
@@ -589,8 +588,16 @@ private final class NameResolver
                 }
             },
             (const WhileExpr whileExpr) {
-                resolveExpr(*whileExpr.condition, scopeTable);
-                resolveExpr(*whileExpr.body, scopeTable);
+                auto bodyScope = scopeTable;
+                if (whileExpr.binding is null)
+                {
+                    resolveExpr(*whileExpr.condition, scopeTable);
+                }
+                else
+                {
+                    bodyScope = declareOptionBinding(*whileExpr.binding, whileExpr.binding, scopeTable);
+                }
+                resolveExpr(*whileExpr.body, bodyScope);
             },
             (const BoolLiteral _) {},
             (const IntLiteral _) {},
@@ -607,7 +614,43 @@ private final class NameResolver
             (const NoneLiteral _) {},
             (const PropagateExpr propagate) => resolveExpr(*propagate.operand, scopeTable),
             (const SafeMemberAccess access) => resolveExpr(*access.object, scopeTable),
+            (const ArrayLiteral literal) {
+                foreach (element; literal.elements)
+                {
+                    resolveExpr(element, scopeTable);
+                }
+            },
+            (const MapLiteral literal) {
+                foreach (i, key; literal.keys)
+                {
+                    resolveExpr(key, scopeTable);
+                    resolveExpr(literal.values[i], scopeTable);
+                }
+            },
+            (const IndexExpr index) {
+                resolveExpr(*index.object, scopeTable);
+                resolveExpr(*index.index, scopeTable);
+            },
+            (const RangeExpr range) {
+                resolveExpr(*range.start, scopeTable);
+                resolveExpr(*range.end, scopeTable);
+            },
         );
+    }
+
+    /// The scope holding an `if val` or `while val` binding, which only its body sees: the
+    /// initializer can't.
+    private Scope declareOptionBinding(const VarDecl binding, const(VarDecl)* pointer, Scope scopeTable)
+    {
+        resolveExpr(binding.value, scopeTable);
+        _declarations.locals[binding.id] = pointer;
+        auto bindingScope = new Scope(scopeTable);
+        if (binding.name != discardName)
+        {
+            declareLocal(binding.name, binding.nameSpan, SymbolId(binding.id), bindingScope,
+                DiagnosticCode.DuplicateDeclaration, "'%s' is already declared in this scope");
+        }
+        return bindingScope;
     }
 
     private void requireValue(const Expr expr, Path path)

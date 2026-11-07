@@ -1,0 +1,25 @@
+def main(): Unit {
+    val xs = [10, 20, 30, 40]
+    printl(xs[1..3])
+    printl(xs[0..0])
+    printl(xs[4..4])
+    printl(xs[0..4])
+    printl(length(xs[1..3]))
+    printl(xs[1..4][1..3][0])
+
+    // Between arithmetic and comparison, and looser than ??.
+    val i = 1
+    printl(xs[i + 0..i * 3])
+    val missing: Int? = None
+    printl(xs[missing ?? 2..4])
+    val some: Int? = 1
+    printl(xs[some ?? 0..2])
+
+    // A slice can be taken of a literal or a call.
+    printl([1, 2, 3][1..3])
+
+    val strings = ["a", "b", "c"]
+    printl(strings[1..2])
+    val empty: [Int] = []
+    printl(empty[0..0])
+}

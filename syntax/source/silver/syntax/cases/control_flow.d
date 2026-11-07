@@ -74,6 +74,7 @@ immutable Case[] blocks = [
 ];
 
 immutable Case[] loops = [
+    parsesAs("while val x = f() { x }", "(while (val x (call f)) (block => x))"),
     parsesAs("while true { 1 }", "(while true (block => 1))"),
     parsesAs("while a() { b(); c() }", "(while (call a) (block (call b) => (call c)))"),
     parsesAs("while a() {\n        b()\n        c()\n    }", "(while (call a) (block (call b) => (call c)))"),

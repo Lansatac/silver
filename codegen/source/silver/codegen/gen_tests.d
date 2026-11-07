@@ -374,7 +374,7 @@ unittest
     run.output.should.equal("a\0b\nfalse\ntrue\n");
 }
 
-@("codegen concatenates into a new buffer with no runtime call but the allocation")
+@("codegen concatenates by making room through the runtime and copying the rest in")
 unittest
 {
     auto source = `def join(a: String, b: String): String => a ~ b
@@ -385,11 +385,42 @@ def main(): Unit {
     auto ir = generateSource(source);
     ir.should.contain("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)");
     ir.should.contain("define { ptr, i64 } @\"main.join\"({ ptr, i64 } %a.arg, { ptr, i64 } %b.arg)");
-    ir.should.contain("call ptr @silver_alloc(i64 ");
+    ir.should.contain("call void @silver_array_append(");
 
     Run run;
     if (!compileAndRun(source, run)) return;
     run.output.should.equal("abcé\n\n");
+}
+
+@("a ~ chain is one operation over all its operands, however it's grouped")
+unittest
+{
+    auto ir = generateSource(`def f(a: [Int], b: [Int], c: [Int]): [Int] => a ~ b ~ (c ~ a)
+def main(): Unit => printl(f([1], [2], [3]))`);
+    auto start = ir.indexOf(`define { ptr, i64 } @"main.f"`);
+    auto body = ir[start .. start + ir[start .. $].indexOf("\n}")];
+    body.count("call void @silver_array_append").should.equal(1);
+    body.count("call void @llvm.memcpy").should.equal(3);
+}
+
+@("~= leaves slack where ~ doesn't, and writes a literal's elements straight into the buffer")
+unittest
+{
+    auto ir = generateSource(`def f(a: [Int], b: [Int]): [Int] => a ~ b
+def g(a: [Int], x: Int): [Int] {
+    mutable val out = a
+    out ~= [x]
+    return out
+}
+def main(): Unit => printl(g(f([1], [2]), 3))`);
+    auto start = ir.indexOf(`define { ptr, i64 } @"main.g"`);
+    auto body = ir[start .. start + ir[start .. $].indexOf("\n}")];
+    body.should.contain("ptr null, i64 1, i64 ptrtoint");
+    body.should.contain("i1 zeroext true");
+    body.count("call void @silver_array_append").should.equal(1);
+    body.should.not.contain("llvm.memcpy");
+
+    ir.should.contain("i1 zeroext false");
 }
 
 @("codegen orders strings by the sign of the runtime's comparison")
@@ -828,8 +859,8 @@ unittest
 {
     auto ir = generateSource(`def f(x: Int, y: Float): String => "a{x}b{y}c"
 def main(): Unit => printl(f(1, 2.0))`);
-    ir.count("call ptr @silver_alloc").should.equal(1);
-    ir.count("call void @llvm.memcpy").should.equal(5);
+    ir.count("call void @silver_array_append").should.equal(1);
+    ir.count("call void @llvm.memcpy").should.equal(4);
 }
 
 @("a hole holding only a String shares its buffer, which can't be observed")
@@ -837,7 +868,7 @@ unittest
 {
     auto ir = generateSource(`def f(x: String): String => "{x}"
 def main(): Unit => printl(f("a"))`);
-    ir.should.not.contain("silver_alloc");
+    ir.should.not.contain("silver_array_append");
 }
 
 @("a type's formatter is generated once, for each type formatted, and print uses it")

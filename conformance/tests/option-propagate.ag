@@ -21,7 +21,7 @@ def first(x: Int?): (Int?)? {
 }
 
 def checked(x: Int?): Unit? {
-    x?
+    _ = x?
     printl("still here")
     ()
 }

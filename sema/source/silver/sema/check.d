@@ -23,6 +23,8 @@ package struct Typing
     size_t[Id!Expr] fieldIndexes;
     ConstValue[Id!ConstDecl] constants;
     Type[Id!Expr] promotions;
+    bool[Id!Expr] arrayLengths;
+    const(Expr)[][Id!Expr] concatOperands;
 }
 
 /// Where the checker is inside a function body. Passed by value, so a nested body (a lambda)
@@ -64,10 +66,28 @@ private final class TypeChecker
     /// True while a constant's dependencies are being evaluated, and false once they're done.
     private bool[Id!ConstDecl] _evaluating;
     private bool[Id!ConstDecl] _cycleReported;
+    /// The prelude's `length`, the one function sema types itself.
+    private Id!FunctionDecl _arrayLength;
+    private bool[Id!Expr] _arrayLengths;
+    private const(Expr)[][Id!Expr] _concatOperands;
 
     Typing checkProgram(const Program program)
     {
         auto programModules = program.sortedModules;
+        foreach (mod; programModules)
+        {
+            if (mod.name != "prelude") continue;
+            foreach (decl; mod.declarations)
+            {
+                decl.kind.match!(
+                    (const FunctionDecl f) {
+                        if (f.native && f.name == "length") _arrayLength = f.id;
+                    },
+                    (_) {},
+                );
+            }
+        }
+
         // phase 1: all declared types; phase 2: all signatures; phase 3: all bodies
         foreach (mod; programModules)
         {
@@ -135,7 +155,8 @@ private final class TypeChecker
             }
         }
 
-        return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes, _constants, _promotions);
+        return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes, _constants, _promotions,
+            _arrayLengths, _concatOperands);
     }
 
     private void declareConstant(const ConstDecl constant)
@@ -426,6 +447,7 @@ private final class TypeChecker
         return type.kind.match!(
             (const NamedType _) => resolveNamedType(type),
             (const OptionType option) => optionOf(resolveType(*option.inner), type.span),
+            (const ArrayType array) => arrayOf(resolveType(*array.element), type.span),
             (const FunctionType func) => _types.function_(
                 func.params.map!(p => resolveType(p)).array, resolveType(*func.returnType)),
             (const UnitType _) => _types.unit,
@@ -445,11 +467,38 @@ private final class TypeChecker
         return _types.option(inner);
     }
 
+    /// The array of `element`, or `error` (reported at `span`) if there can't be one.
+    private Type arrayOf(Type element, Span span)
+    {
+        if (element == _types.error) return element;
+        if (element == _types.any)
+        {
+            _collector.reportError(DiagnosticCode.InvalidArrayElement, span, "An array can't hold `Any`");
+            return _types.error;
+        }
+        return _types.array(element);
+    }
+
     private Type reportUntypedNone(Span span)
     {
         _collector.reportError(DiagnosticCode.UntypedNone, span,
             "This `None` has no type to take here; annotate one, as in `val x: Int? = None`");
         return _types.error;
+    }
+
+    private Type reportUntypedEmptyArray(Span span)
+    {
+        _collector.reportError(DiagnosticCode.UntypedEmptyArray, span,
+            "This `[]` has no type to take here; annotate one, as in `val x: [Int] = []`");
+        return _types.error;
+    }
+
+    /// Reports a value of `type` that nothing gives a type to, if it's one: a bare `None` or `[]`.
+    private Type requireTyped(Type type, Span span)
+    {
+        if (type == _types.none) return reportUntypedNone(span);
+        if (type == _types.emptyArray) return reportUntypedEmptyArray(span);
+        return type;
     }
 
     private Type resolveNamedType(const TypeExpr typeExpr)
@@ -568,8 +617,9 @@ private final class TypeChecker
             (const VarDecl var) {
                 if (var.type is null)
                 {
+                    // A discard keeps no value, so a `None` or `[]` needs no type to be dropped.
                     auto type = synthesize(var.value, ctx);
-                    _symbolTypes[SymbolId(var.id)] = type == _types.none ? reportUntypedNone(var.value.span) : type;
+                    _symbolTypes[SymbolId(var.id)] = var.name == discardName ? type : requireTyped(type, var.value.span);
                 }
                 else
                 {
@@ -583,8 +633,16 @@ private final class TypeChecker
                 if (lhsType != _types.error) checkAssignable(assign.target);
                 check(assign.value, lhsType, ctx);
             },
+            // Only a block's last expression is its value, so anything else here was dropped by
+            // mistake, as with `val y = x` and `-1` from a `- 1` that started a line.
             (const ExprStmt expr) {
-                synthesize(expr.expr, ctx);
+                auto type = synthesize(expr.expr, ctx);
+                if (type != _types.unit && type != _types.never && type != _types.error)
+                {
+                    _collector.reportError(DiagnosticCode.UnusedValue, expr.expr.span,
+                        "This value of type `%s` is unused; bind it with `val`, or drop it with `_ = ...`"
+                            .format(_types.describe(type)));
+                }
             },
             // Name resolution reports nested functions as unsupported.
             (const FunctionDecl _) {},
@@ -600,6 +658,10 @@ private final class TypeChecker
         target.kind.match!(
             (const Identifier _) => checkBindingMutable(target),
             (const MemberAccess access) => checkAssignable(*access.object),
+            (const IndexExpr _) {
+                _collector.reportError(DiagnosticCode.InvalidAssignmentTarget, target.span,
+                    "An array never changes, so its elements can't be assigned to; rebind the whole array");
+            },
             (_) => reportInvalidAssignment(target),
         );
     }
@@ -651,10 +713,14 @@ private final class TypeChecker
             (const StringLiteral _) => _types.string_,
             (const InterpolatedString interpolated) => synthesizeInterpolated(interpolated, ctx),
             (const UnaryExpr unary) => synthesizeUnary(unary, expr.span, ctx),
-            (const BinaryExpr binary) => synthesizeBinary(binary, expr.span, ctx),
+            (const BinaryExpr binary) => binary.op == BinaryOp.Concat || binary.op == BinaryOp.Append
+                ? synthesizeConcat(expr, binary, ctx)
+                : synthesizeBinary(binary, expr.span, ctx),
             (const CallExpr call) => expr.id in _resolutions.conversions
                 ? synthesizeConversion(call, builtinType(_resolutions.conversions[expr.id]), expr.span, ctx)
-                : synthesizeCall(call, expr.span, ctx),
+                : isArrayLengthName(*call.callee)
+                    ? synthesizeLength(expr, call, ctx)
+                    : synthesizeCall(call, expr.span, ctx),
             (const MemberAccess member) => synthesizeMemberAccess(expr, member, ctx),
             (const WhileExpr while_) => synthesizeWhile(while_, expr.span, ctx),
             (const IfExpr if_) => synthesizeIf(if_, expr.span, ctx),
@@ -665,17 +731,207 @@ private final class TypeChecker
             (const NoneLiteral _) => _types.none,
             (const PropagateExpr propagate) => synthesizePropagate(propagate, expr.span, ctx),
             (const SafeMemberAccess access) => synthesizeSafeMember(expr, access, ctx),
+            (const ArrayLiteral literal) => synthesizeArrayLiteral(literal, ctx),
+            (const MapLiteral literal) => synthesizeMapLiteral(literal, expr.span, ctx),
+            (const IndexExpr index) => synthesizeIndex(index, ctx),
+            (const RangeExpr range) => synthesizeBareRange(range, expr.span, ctx),
         );
         _exprTypes[expr.id] = type;
         return type;
     }
 
+    private Type synthesizeArrayLiteral(const ArrayLiteral literal, BodyContext ctx)
+    {
+        if (literal.elements.length == 0) return _types.emptyArray;
+
+        auto types = literal.elements.map!(e => synthesize(e, ctx)).array;
+        auto joined = types[0];
+        foreach (i, type; types[1 .. $])
+        {
+            joined = join(joined, type, literal.elements[i + 1].span, "Array elements");
+        }
+        joined = requireTyped(joined, literal.elements[0].span);
+        if (joined == _types.error) return joined;
+
+        foreach (i, element; literal.elements)
+        {
+            coerce(element, types[i], joined);
+        }
+        return arrayOf(joined, literal.elements[0].span);
+    }
+
+    private Type synthesizeMapLiteral(const MapLiteral literal, Span span, BodyContext ctx)
+    {
+        foreach (i, key; literal.keys)
+        {
+            synthesize(key, ctx);
+            synthesize(literal.values[i], ctx);
+        }
+        _collector.reportError(DiagnosticCode.NotSupportedYet, span, "Maps aren't supported yet");
+        return _types.error;
+    }
+
+    /// `xs[i]`, or `xs[a..b]`, whose range is part of the slice rather than a value.
+    private Type synthesizeIndex(const IndexExpr index, BodyContext ctx)
+    {
+        auto objectType = requireTyped(synthesize(*index.object, ctx), index.object.span);
+        auto range = asRange(index.index);
+        if (range is null)
+        {
+            check(*index.index, _types.int_, ctx);
+        }
+        else
+        {
+            check(*range.start, _types.int_, ctx);
+            check(*range.end, _types.int_, ctx);
+            _exprTypes[index.index.id] = objectType;
+        }
+        if (objectType == _types.error) return objectType;
+        if (!_types.isArray(objectType))
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, index.object.span,
+                "Only an array can be indexed, got `%s`".format(_types.describe(objectType)));
+            return _types.error;
+        }
+        return range is null ? _types.arrayElement(objectType) : objectType;
+    }
+
+    private Type synthesizeBareRange(const RangeExpr range, Span span, BodyContext ctx)
+    {
+        synthesize(*range.start, ctx);
+        synthesize(*range.end, ctx);
+        _collector.reportError(DiagnosticCode.NotSupportedYet, span, "A range can only be used to slice an array for now");
+        return _types.error;
+    }
+
+    private bool isArrayLengthName(const Expr callee)
+    {
+        if (!_arrayLength.isValid) return false;
+        if (auto symbol = callee.id in _resolutions.resolutions)
+        {
+            return (*symbol).match!((const Id!FunctionDecl f) => f == _arrayLength, _ => false);
+        }
+        return false;
+    }
+
+    private Type synthesizeLength(const Expr expr, const CallExpr call, BodyContext ctx)
+    {
+        _exprTypes[call.callee.id] = _symbolTypes[SymbolId(_arrayLength)];
+        if (call.args.length != 1)
+        {
+            foreach (arg; call.args)
+            {
+                synthesize(arg, ctx);
+            }
+            _collector.reportError(DiagnosticCode.WrongArgumentCount, expr.span,
+                "`length` takes one array, got %s arguments".format(call.args.length));
+            return _types.int_;
+        }
+
+        auto arg = call.args[0];
+        auto argType = requireTyped(synthesize(arg, ctx), arg.span);
+        if (argType != _types.error && !_types.isArray(argType))
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, arg.span,
+                "`length` needs an array, got `%s`".format(_types.describe(argType)));
+        }
+        _arrayLengths[expr.id] = true;
+        return _types.int_;
+    }
+
+    /// `length` is typed where it's called, since no function type can say what it takes.
+    private Type requireNotArrayLength(SymbolId symbol, Span span)
+    {
+        auto isLength = _arrayLength.isValid
+            && symbol.match!((const Id!FunctionDecl f) => f == _arrayLength, _ => false);
+        if (!isLength) return symbolType(symbol);
+        _collector.reportError(DiagnosticCode.NotSupportedYet, span, "`length` can only be called for now");
+        return _types.error;
+    }
+
+    /// An array literal, or a `~` of them: what takes its element type from what it's checked against.
+    private bool isArraySyntax(const Expr expr)
+    {
+        return expr.kind.match!(
+            (const ArrayLiteral _) => true,
+            (const BinaryExpr binary) => binary.op == BinaryOp.Concat
+                && isArraySyntax(*binary.left) && isArraySyntax(*binary.right),
+            _ => false,
+        );
+    }
+
+    private void recordConcat(const Expr expr, const BinaryExpr binary)
+    {
+        if (binary.op == BinaryOp.Concat)
+        {
+            _concatOperands[expr.id] = concatChain(*binary.left) ~ concatChain(*binary.right);
+        }
+    }
+
+    private const(Expr)[] concatChain(const Expr expr)
+    {
+        return expr.kind.match!(
+            (const BinaryExpr binary) => binary.op == BinaryOp.Concat
+                ? concatChain(*binary.left) ~ concatChain(*binary.right)
+                : [expr],
+            _ => [expr],
+        );
+    }
+
+    /// `a ~ b` or `a ~= b`. A side that's written as an array takes its element type from the other.
+    private Type synthesizeConcat(const Expr expr, const BinaryExpr binary, BodyContext ctx)
+    {
+        recordConcat(expr, binary);
+        Type leftType, rightType;
+        if (isArraySyntax(*binary.left) && !isArraySyntax(*binary.right))
+        {
+            rightType = synthesize(*binary.right, ctx);
+            leftType = _types.isArray(rightType) ? check(*binary.left, rightType, ctx) : synthesize(*binary.left, ctx);
+        }
+        else
+        {
+            leftType = synthesize(*binary.left, ctx);
+            rightType = _types.isArray(leftType) && isArraySyntax(*binary.right)
+                ? check(*binary.right, leftType, ctx)
+                : synthesize(*binary.right, ctx);
+        }
+        if (leftType == _types.error || rightType == _types.error) return _types.error;
+        if (leftType == _types.emptyArray && rightType == _types.emptyArray)
+        {
+            return reportUntypedEmptyArray(binary.left.span);
+        }
+
+        foreach (side, type; [leftType, rightType])
+        {
+            if (!isConcatenable(type))
+            {
+                _collector.reportError(DiagnosticCode.InvalidOperand, side == 0 ? binary.left.span : binary.right.span,
+                    "`%s` needs a String or an array, got `%s`".format(cast(string) binary.op, _types.describe(type)));
+                return _types.error;
+            }
+        }
+        if (leftType == rightType) return leftType;
+        if (isAssignable(leftType, rightType))
+        {
+            coerce(*binary.left, leftType, rightType);
+            return rightType;
+        }
+        if (isAssignable(rightType, leftType))
+        {
+            coerce(*binary.right, rightType, leftType);
+            return leftType;
+        }
+        _collector.reportError(DiagnosticCode.InvalidOperand, expr.span,
+            "`%s` can't combine `%s` and `%s`".format(cast(string) binary.op,
+                _types.describe(leftType), _types.describe(rightType)));
+        return _types.error;
+    }
+
     /// `x?`, which returns `None` from the enclosing function, so that has to return an option.
     private Type synthesizePropagate(const PropagateExpr propagate, Span span, BodyContext ctx)
     {
-        auto operandType = synthesize(*propagate.operand, ctx);
+        auto operandType = requireTyped(synthesize(*propagate.operand, ctx), propagate.operand.span);
         if (operandType == _types.error) return operandType;
-        if (operandType == _types.none) return reportUntypedNone(propagate.operand.span);
         if (!_types.isOption(operandType))
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, propagate.operand.span,
@@ -695,9 +951,8 @@ private final class TypeChecker
     /// `a?.b?.c` one flat option: each `?.` works on the option the one before it produced.
     private Type synthesizeSafeMember(const Expr expr, const SafeMemberAccess access, BodyContext ctx)
     {
-        auto objectType = synthesize(*access.object, ctx);
+        auto objectType = requireTyped(synthesize(*access.object, ctx), access.object.span);
         if (objectType == _types.error) return objectType;
-        if (objectType == _types.none) return reportUntypedNone(access.object.span);
         if (!_types.isOption(objectType))
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, access.object.span,
@@ -728,7 +983,7 @@ private final class TypeChecker
     {
         foreach (part; interpolated.parts)
         {
-            if (synthesize(part, ctx) == _types.none) reportUntypedNone(part.span);
+            requireTyped(synthesize(part, ctx), part.span);
         }
         return _types.string_;
     }
@@ -743,11 +998,10 @@ private final class TypeChecker
         return isNumeric(t) || t == _types.string_;
     }
 
-    /// What `~` joins. Arrays belong here too, and `~` will then also need to `join` the two
-    /// sides' types and adapt their literals.
+    /// What `~` joins.
     private bool isConcatenable(Type t)
     {
-        return t == _types.string_;
+        return t == _types.string_ || t == _types.emptyArray || _types.isArray(t);
     }
 
     /// `UInt8(x)`: a literal is checked against the target where it's written, and any other
@@ -770,7 +1024,7 @@ private final class TypeChecker
         auto arg = call.args[0];
         if (target == _types.string_)
         {
-            if (synthesize(arg, ctx) == _types.none) reportUntypedNone(arg.span);
+            requireTyped(synthesize(arg, ctx), arg.span);
             return target;
         }
         if (isIntLiteral(arg))
@@ -803,6 +1057,8 @@ private final class TypeChecker
         return _types[type].match!(
             (const Primitive primitive) => primitive.kind != Primitive.Kind.Any,
             (const OptionData option) => isComparable(option.inner, visited),
+            (const ArrayData array) => isComparable(array.element, visited),
+            (const EmptyArrayType _) => true,
             (const FunctionData _) => false,
             (const NominalData nominal) => _fields[nominal.decl].all!(f => isComparable(f.type, visited)),
             (const NoneType _) => true,
@@ -883,6 +1139,11 @@ private final class TypeChecker
             check(*binary.right, optionType, ctx);
             return optionType;
         }
+        if (isArraySyntax(*binary.right))
+        {
+            check(*binary.right, inner, ctx);
+            return inner;
+        }
         auto rightType = synthesize(*binary.right, ctx);
         if (rightType == inner) return inner;
         if (_types.isOption(rightType) || rightType == _types.none)
@@ -894,27 +1155,32 @@ private final class TypeChecker
         return inner;
     }
 
-    /// Synthesizes both sides of `==` or `!=`. A side written as `Some` or `None` is checked
-    /// against the other one, whichever side it's on, so `x == Some(1)` adapts the literal.
+    /// Synthesizes both sides of `==` or `!=`. A side written as `Some`, `None` or an array is
+    /// checked against the other one, whichever side it's on, so `x == Some(1)` adapts the literal.
     private void synthesizeCompared(const BinaryExpr binary, out Type leftType, out Type rightType, BodyContext ctx)
     {
-        if (isOptionSyntax(*binary.left) && !isOptionSyntax(*binary.right))
+        bool takesType(const Expr expr) => isOptionSyntax(expr) || isArraySyntax(expr);
+        bool givesType(Type type) => _types.isOption(type) || _types.isArray(type);
+
+        if (takesType(*binary.left) && !takesType(*binary.right))
         {
             rightType = synthesize(*binary.right, ctx);
-            leftType = _types.isOption(rightType) ? check(*binary.left, rightType, ctx) : synthesize(*binary.left, ctx);
+            leftType = givesType(rightType) ? check(*binary.left, rightType, ctx) : synthesize(*binary.left, ctx);
             return;
         }
         leftType = synthesize(*binary.left, ctx);
-        rightType = _types.isOption(leftType) && isOptionSyntax(*binary.right)
+        rightType = givesType(leftType) && takesType(*binary.right)
             ? check(*binary.right, leftType, ctx)
             : synthesize(*binary.right, ctx);
     }
 
-    /// Whether `expr`, of type `type`, can become the option `option`.
-    private bool promotes(const Expr expr, Type type, Type option)
+    /// Whether `expr`, of type `type`, can become `target` when compared with it: an option, or
+    /// the array a `[]` takes on.
+    private bool promotes(const Expr expr, Type type, Type target)
     {
-        if (!_types.isOption(option) || _types.isOption(type) && !isAssignable(type, option)) return false;
-        return isAssignable(type, option) || (isIntLiteral(expr) && isNumeric(innermost(option)));
+        if (type == _types.emptyArray && _types.isArray(target)) return true;
+        if (!_types.isOption(target) || _types.isOption(type) && !isAssignable(type, target)) return false;
+        return isAssignable(type, target) || (isIntLiteral(expr) && isNumeric(innermost(target)));
     }
 
     private Type innermost(Type option)
@@ -1024,18 +1290,6 @@ private final class TypeChecker
                     return _types.error;
                 }
                 return _types.bool_;
-            case BinaryOp.Concat:
-                if (!isConcatenable(leftType))  {
-                    _collector.reportError(DiagnosticCode.InvalidOperand, binary.left.span,
-                        "`~` needs a String, got `%s`".format(_types.describe(leftType)));
-                    return _types.error;
-                }
-                if (!isConcatenable(rightType)) {
-                    _collector.reportError(DiagnosticCode.InvalidOperand, binary.right.span,
-                        "`~` needs a String, got `%s`".format(_types.describe(rightType)));
-                    return _types.error;
-                }
-                return leftType;
             case BinaryOp.And:
             case BinaryOp.Or:
                 requireAssignable(leftType, _types.bool_, binary.left.span);
@@ -1044,6 +1298,10 @@ private final class TypeChecker
             case BinaryOp.Equal:
             case BinaryOp.NotEqual:
                 if (leftType == _types.none && rightType == _types.none) return reportUntypedNone(binary.left.span);
+                if (leftType == _types.emptyArray && rightType == _types.emptyArray)
+                {
+                    return reportUntypedEmptyArray(binary.left.span);
+                }
                 if (leftType != rightType && promotes(*binary.right, rightType, leftType))
                 {
                     rightType = coerce(*binary.right, rightType, leftType);
@@ -1066,6 +1324,8 @@ private final class TypeChecker
                 }
                 return _types.bool_;
             case BinaryOp.Coalesce:
+            case BinaryOp.Concat:
+            case BinaryOp.Append:
                 assert(0, "handled above");
         }
     }
@@ -1116,7 +1376,7 @@ private final class TypeChecker
         // `std.math.pow`: resolution already found the declaration.
         if (auto symbol = expr.id in _resolutions.resolutions)
         {
-            return symbolType(*symbol);   // the same lookup synthesizeIdentifier uses
+            return requireNotArrayLength(*symbol, expr.span);   // the same lookup synthesizeIdentifier uses
         }
         // `std.math.nope` or `std.nope`: resolution reported it.
         if (isModulePath(*member.object)) return _types.error;
@@ -1172,8 +1432,15 @@ private final class TypeChecker
 
     private Type synthesizeWhile(const WhileExpr while_, Span span, BodyContext ctx)
     {
-        auto condType = synthesize(*while_.condition, ctx);
-        requireAssignable(condType, _types.bool_, while_.condition.span);
+        if (while_.binding is null)
+        {
+            auto condType = synthesize(*while_.condition, ctx);
+            requireAssignable(condType, _types.bool_, while_.condition.span);
+        }
+        else
+        {
+            checkOptionBinding(*while_.binding, "while val", ctx);
+        }
         checkDiscarded(*while_.body, ctx);
         return _types.unit;
     }
@@ -1188,23 +1455,25 @@ private final class TypeChecker
             return;
         }
 
-        auto initializer = if_.binding.value;
-        auto optionType = synthesize(initializer, ctx);
+        checkOptionBinding(*if_.binding, "if val", ctx);
+    }
+
+    /// The binding of an `if val` or `while val`, which holds the payload of its initializer.
+    private void checkOptionBinding(const VarDecl binding, string keyword, BodyContext ctx)
+    {
+        auto initializer = binding.value;
+        auto optionType = requireTyped(synthesize(initializer, ctx), initializer.span);
         auto payload = _types.error;
         if (_types.isOption(optionType))
         {
             payload = _types.optionInner(optionType);
         }
-        else if (optionType == _types.none)
-        {
-            reportUntypedNone(initializer.span);
-        }
         else if (optionType != _types.error)
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, initializer.span,
-                "`if val` needs an option, got `%s`".format(_types.describe(optionType)));
+                "`%s` needs an option, got `%s`".format(keyword, _types.describe(optionType)));
         }
-        _symbolTypes[SymbolId(if_.binding.id)] = payload;
+        _symbolTypes[SymbolId(binding.id)] = payload;
     }
 
     private Type synthesizeIf(const IfExpr if_, Span span, BodyContext ctx)
@@ -1218,7 +1487,7 @@ private final class TypeChecker
 
         auto thenType = synthesize(*if_.trueBody, ctx);
         auto elseType = synthesize(*if_.falseBody, ctx);
-        auto joined = join(thenType, elseType, span);
+        auto joined = join(thenType, elseType, span, "Branches");
         if (joined != _types.error)
         {
             coerce(*if_.trueBody, thenType, joined);
@@ -1228,7 +1497,8 @@ private final class TypeChecker
     }
 
     /// The type that both `a` and `b` fit, or `error` (reported at `span`) if there isn't one.
-    private Type join(Type a, Type b, Span span)
+    /// `what` names the things that have these types, for the error.
+    private Type join(Type a, Type b, Span span, string what)
     {
         if (a == _types.error || b == _types.error) return _types.error;
         if (a == _types.never) return b;
@@ -1239,7 +1509,7 @@ private final class TypeChecker
         if (b == _types.none) return optionOf(a, span);
 
         _collector.reportError(DiagnosticCode.TypeMismatch, span,
-            "Branches have different types `%s` and `%s`".format(_types.describe(a), _types.describe(b)));
+            "%s have different types `%s` and `%s`".format(what, _types.describe(a), _types.describe(b)));
         return _types.error;
     }
 
@@ -1280,7 +1550,7 @@ private final class TypeChecker
     {
         if (auto symbol = expr.id in _resolutions.resolutions)
         {
-            return symbolType(*symbol);
+            return requireNotArrayLength(*symbol, expr.span);
         }
         // Name resolution couldn't find it and has already reported that.
         return _types.error;
@@ -1288,15 +1558,25 @@ private final class TypeChecker
 
     private Type check(const Expr expr, Type expected, BodyContext ctx)
     {
-        // A number or option is passed down, so that a literal adapts, and a value is promoted,
-        // in an `if` arm or as a block's value too.
+        // A number, option or array is passed down, so that a literal adapts, and a value is
+        // promoted, in an `if` arm or as a block's value too.
         auto isOption = _types.isOption(expected);
-        if (isNumeric(expected) || isOption)
+        auto isArray = _types.isArray(expected);
+        // An array written out against an option is checked against what it holds, then promoted.
+        if (isOption && isArraySyntax(expr))
+        {
+            check(expr, _types.optionInner(expected), ctx);
+            _promotions[expr.id] = expected;
+            return expected;
+        }
+        if (isNumeric(expected) || isOption || isArray)
         {
             auto passedDown = expr.kind.match!(
                 (const IfExpr if_) => if_.falseBody !is null,
                 (const BlockExpr _) => true,
                 (const SomeExpr _) => isOption,
+                (const ArrayLiteral _) => isArray,
+                (const BinaryExpr _) => isArray && isArraySyntax(expr),
                 _ => false,
             );
             if (passedDown)
@@ -1308,7 +1588,20 @@ private final class TypeChecker
                         check(*some.value, _types.optionInner(expected), ctx);
                         return expected;
                     },
-                    (_) => assert(0, "only ifs, blocks and Some are passed down"),
+                    (const ArrayLiteral literal) {
+                        foreach (element; literal.elements)
+                        {
+                            check(element, _types.arrayElement(expected), ctx);
+                        }
+                        return expected;
+                    },
+                    (const BinaryExpr binary) {
+                        recordConcat(expr, binary);
+                        check(*binary.left, expected, ctx);
+                        check(*binary.right, expected, ctx);
+                        return expected;
+                    },
+                    (_) => assert(0, "only ifs, blocks, Some and arrays are passed down"),
                 );
                 _exprTypes[expr.id] = type;
                 return type;
@@ -1339,9 +1632,14 @@ private final class TypeChecker
                 return expected;
             }
         }
-        else if (type == _types.none && expected == _types.any)
+        else if (expected == _types.any)
         {
-            return reportUntypedNone(expr.span);
+            type = requireTyped(type, expr.span);
+        }
+        else if (type == _types.emptyArray && _types.isArray(expected))
+        {
+            _promotions[expr.id] = expected;
+            return expected;
         }
         requireAssignable(type, expected, expr.span);
         return type;
@@ -1402,9 +1700,12 @@ private final class TypeChecker
         if (from == _types.never) return true;                         // no value ever arrives
         if (from == _types.none) return _types.isOption(to);
         if (to == _types.any) return true;                             // print's placeholder
-        // T -> T?
         return _types[to].match!(
+            // T -> T?
             (const OptionData o) => isAssignable(from, o.inner),
+            // Both have the layout of an array with no elements, so no conversion hides here.
+            (const ArrayData a) => from == _types.emptyArray
+                || (_types.isArray(from) && _types.arrayElement(from) == _types.never),
             _ => false,
         );
     }

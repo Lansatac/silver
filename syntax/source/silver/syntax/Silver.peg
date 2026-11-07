@@ -2,6 +2,12 @@ Silver:
     Module               < Sep? (ModuleDeclaration (Sep Declarations?)? / Declarations?) eoi
     Declarations         < Sep? Declaration (Sep Declaration)* Sep?
     Sep                  <: ((eol / ';') Spacing)+
+    # A newline is whitespace wherever the token before it can't end a statement or the one after
+    # it can't begin one. Spacing never holds one, so Nl is written at each of those places.
+    Nl                   <: (eol Spacing)+
+    # `-`, `~`, `!`, `(` and `[` can also begin a statement, so a leading one does.
+    LeadingNl            <: Nl &LeadingOperator
+    LeadingOperator      <- "&" / "|" / "==" / "!=" / "<" / ">" / "??" / ".." / "+" / "*" / "/" / "%" / "^"
 
     Declaration          <  (
                             / ImportStatement
@@ -18,29 +24,33 @@ Silver:
                             / FunctionDeclaration
                             / NativeFunctionDeclaration
                             / ReturnStatement
+                            / DiscardStatement
                             / AssignmentStatement
                             / ExpressionStatement
                             )
 
     QualifiedName        <- ValueName ('.' ValueName)*
 
-    ModuleDeclaration    < :MODULE QualifiedName
-    ImportStatement      < :IMPORT QualifiedName
+    ModuleDeclaration    < :MODULE Nl? QualifiedName
+    ImportStatement      < :IMPORT Nl? QualifiedName
 
     # The annotation is required, but sema can say so better than a parse error could
-    ConstantDeclaration  < :VAL Identifier TypeAnnotation? '=' Expression
-    ValueDeclaration     < :VAL Identifier TypeAnnotation? '=' Expression
-    VariableDeclaration  < :MUTABLE :VAL Identifier (TypeAnnotation ('=' Expression)? / '=' Expression)
+    ConstantDeclaration  < :VAL Nl? Identifier TypeAnnotation? Nl? '=' Nl? Expression
+    ValueDeclaration     < :VAL Nl? BindingName TypeAnnotation? Nl? '=' Nl? Expression
+    # `_ = x`, shorthand for `val _ = x`
+    DiscardStatement     < :UNDERSCORE Nl? :"=" !"=" Nl? Expression
+    BindingName          <- UNDERSCORE / Identifier
+    VariableDeclaration  < :MUTABLE Nl? :VAL Nl? Identifier (TypeAnnotation (Nl? '=' Nl? Expression)? / Nl? '=' Nl? Expression)
 
-    AssignmentStatement  < AssignTarget AssignOp Expression
-    AssignOp             < "+=" / "-=" / "*=" / "/=" / "^=" / "&+=" / "&-=" / "&*=" / "&=" / "|=" / "<<=" / ">>=" / "=" !"="
+    AssignmentStatement  < AssignTarget Nl? AssignOp Nl? Expression
+    AssignOp             < "+=" / "-=" / "*=" / "/=" / "^=" / "~=" / "&+=" / "&-=" / "&*=" / "&=" / "|=" / "<<=" / ">>=" / "=" !"="
 
     AssignTarget         < Postfix
 
-    FunctionDeclaration  < :DEF Identifier :'(' Params :')' TypeAnnotation (:'=>' Sep? Expression / Block)
+    FunctionDeclaration  < :DEF Nl? Identifier Nl? :'(' Nl? Params Nl? :')' TypeAnnotation Nl? (:'=>' Nl? Expression / Block)
 
-    NativeFunctionDeclaration < :NATIVE :DEF Identifier :'(' Params :')' TypeAnnotation
-    Params               < (Param (',' Param)*)?
+    NativeFunctionDeclaration < :NATIVE Nl? :DEF Nl? Identifier Nl? :'(' Nl? Params Nl? :')' TypeAnnotation
+    Params               < (Param (Nl? ',' Nl? Param)*)?
     Param                < Identifier TypeAnnotation
 
     Block                < '{' Sep? (Statement (Sep Statement)* Sep?)? '}'
@@ -48,57 +58,59 @@ Silver:
     # The value is optional so `return` alone returns ()
     ReturnStatement      < RETURN Expression?
 
-    TypeDeclaration      < :TYPE TypeName Fields?
+    TypeDeclaration      < :TYPE Nl? TypeName Fields?
     # The parens are kept so `type M()` still has a node, which sema rejects in favor of `type M`
-    Fields               < '(' Params ')'
+    Fields               < '(' Nl? Params Nl? ')'
 
     ExpressionStatement  < Expression
 
-    TypeAnnotation       < :':' Type
+    TypeAnnotation       < Nl? :':' Nl? Type
 
     Type                 <- BaseType OptionMark?
     OptionMark           <- "?"
-    BaseType             < FunctionType / UnitType / :'(' Type :')' / NamedType
-    FunctionType         < :'(' (Type (:',' Type)*)? :')' :"->" Type
-    UnitType             < '(' ')'
+    BaseType             < FunctionType / UnitType / ArrayType / :'(' Nl? Type Nl? :')' / NamedType
+    ArrayType            < :'[' Nl? Type Nl? :']'
+    FunctionType         < :'(' Nl? (Type (Nl? :',' Nl? Type)*)? Nl? :')' Nl? :"->" Nl? Type
+    UnitType             < '(' Nl? ')'
     NamedType            < TypePath TypeArguments?
     TypePath             <- (ValueName '.')* TypeName
-    TypeArguments        < :'<' Type (:',' Type)* :'>'
+    TypeArguments        < :'<' Nl? Type (Nl? :',' Nl? Type)* Nl? :'>'
 
     Expression           < WhileExpression / IfExpression / OrExpression
 
-    WhileExpression      < :WHILE Expression Block
+    WhileExpression      < :WHILE Nl? (OptionBinding / Expression) Nl? Block
 
-    IfExpression         < :IF (IfBinding / Expression) IfBranch (Sep? :ELSE ElseBranch)?
-    IfBinding            < :VAL Identifier :'=' Expression
-    IfBranch             < :'=>' Sep? Expression / Block
+    IfExpression         < :IF Nl? (OptionBinding / Expression) Nl? IfBranch (Nl? :ELSE Nl? ElseBranch)?
+    OptionBinding        < :VAL Nl? BindingName Nl? :'=' Nl? Expression
+    IfBranch             < :'=>' Nl? Expression / Block
     ElseBranch           < Block / Expression
 
-    OrExpression         < AndExpression (OrOperator AndExpression)*
-    AndExpression        < EqExpression (AndOperator EqExpression)*
-    EqExpression         < RelationalExpression (EqOperator RelationalExpression)?
-    RelationalExpression < CoalesceExpression (RelationalOperator CoalesceExpression)?
-    CoalesceExpression   < BitOrExpression (CoalesceOperator CoalesceExpression)?
-    BitOrExpression      < BitXorExpression (BitOrOperator BitXorExpression)*
-    BitXorExpression     < BitAndExpression (BitXorOperator BitAndExpression)*
-    BitAndExpression     < ShiftExpression (BitAndOperator ShiftExpression)*
-    ShiftExpression      < AdditionExpression (ShiftOperator AdditionExpression)*
-    AdditionExpression   < MultiplyExpression (AdditionOperator MultiplyExpression)*
-    MultiplyExpression   < Unary (MultiplyOperator Unary)*
-    Unary                < UnaryOperator? Postfix
+    OrExpression         < AndExpression (LeadingNl? OrOperator Nl? AndExpression)*
+    AndExpression        < EqExpression (LeadingNl? AndOperator Nl? EqExpression)*
+    EqExpression         < RelationalExpression (LeadingNl? EqOperator Nl? RelationalExpression)?
+    RelationalExpression < RangeExpression (LeadingNl? RelationalOperator Nl? RangeExpression)?
+    RangeExpression      < CoalesceExpression (LeadingNl? :".." Nl? CoalesceExpression)?
+    CoalesceExpression   < BitOrExpression (LeadingNl? CoalesceOperator Nl? CoalesceExpression)?
+    BitOrExpression      < BitXorExpression (LeadingNl? BitOrOperator Nl? BitXorExpression)*
+    BitXorExpression     < BitAndExpression (LeadingNl? BitXorOperator Nl? BitAndExpression)*
+    BitAndExpression     < ShiftExpression (LeadingNl? BitAndOperator Nl? ShiftExpression)*
+    ShiftExpression      < AdditionExpression (LeadingNl? ShiftOperator Nl? AdditionExpression)*
+    AdditionExpression   < MultiplyExpression (LeadingNl? AdditionOperator Nl? MultiplyExpression)*
+    MultiplyExpression   < Unary (LeadingNl? MultiplyOperator Nl? Unary)*
+    Unary                < (UnaryOperator Nl?)? Postfix
     UnaryOperator        < "-" / "!" / "~"
 
     Postfix              < Eval PostfixOp*
-    PostfixOp            < CallArgs / IndexArgs / SafeMemberAccess / MemberAccess / PropagateNone
-    MemberAccess         < :'.' identifier
-    SafeMemberAccess     < :"?." identifier
-    PropagateNone        <- "?" !("?" / ".")
-    IndexArgs            < :'[' Expression :']'
-    CallArgs             < '(' (Argument (:',' Argument)*)? ')'
+    PostfixOp            < CallArgs / IndexArgs / Nl? (SafeMemberAccess / MemberAccess / PropagateNone)
+    MemberAccess         < :'.' Nl? identifier
+    SafeMemberAccess     < :"?." Nl? identifier
+    PropagateNone        <- "?" !("?" / "." !".")
+    IndexArgs            < :'[' Nl? Expression Nl? :']'
+    CallArgs             < '(' Nl? (Argument (Nl? :',' Nl? Argument)* Nl?)? ')'
     Argument             < Expression
 
     Eval                 < UnitLiteral
-                         / :'(' Expression :')'
+                         / :'(' Nl? Expression Nl? :')'
                          / Block
                          / Literal
                          / CollectionLiteral
@@ -109,15 +121,15 @@ Silver:
                           / NumberLiteral
                           / StringLiteral
 
-    UnitLiteral          < '(' ')'
+    UnitLiteral          < '(' Nl? ')'
 
     # Map is tried first so `[:]` and `[k: v]` aren't read as lists
     CollectionLiteral   < MapLiteral / ListLiteral
     # Brackets are kept so empty literals still match text; decimateTree drops nodes that match nothing
-    ListLiteral         < '[' (Expression (:',' Expression)* :','?)? ']'
-    MapLiteral          < '[' ':' ']'
-                         / '[' MapEntry (:',' MapEntry)* :','? ']'
-    MapEntry            < Expression :':' Expression
+    ListLiteral         < '[' Nl? (Expression (Nl? :',' Nl? Expression)* (Nl? :',')? Nl?)? ']'
+    MapLiteral          < '[' Nl? ':' Nl? ']'
+                         / '[' Nl? MapEntry (Nl? :',' Nl? MapEntry)* (Nl? :',')? Nl? ']'
+    MapEntry            < Expression Nl? :':' Nl? Expression
 
     OrOperator          <  "||"
     AndOperator         < "&&"
@@ -174,8 +186,13 @@ Silver:
     RETURN              <- Kword("return")
     IMPORT              <- Kword("import")
     MODULE              <- Kword("module")
+    # Reserved for `for` and sum types, so no program can come to depend on them as names
+    IN                  <- Kword("in")
+    MATCH               <- Kword("match")
+    ALIAS               <- Kword("alias")
+    UNDERSCORE          <- Kword("_")
 
-    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / WHILE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE
+    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / WHILE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / UNDERSCORE
     IdentChar           <- [a-zA-Z0-9_]
     Identifier          <- !Keyword ValueName
 

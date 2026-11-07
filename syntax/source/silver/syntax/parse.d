@@ -53,6 +53,9 @@ def f(a: Int, b: List<Int?>): Int {
     x += 1
     a.b += f(x, 1)
     while x < 10 { x = x + 1 }
+    while val z = g() { x = xs[z] + ys[1..2][0] }
+    q ~= [[1], []]
+    val m = [1: 2]
     val y = if x == 1 { return } else if true => 2.5 else ()
     x = a.c ?? 0
     { a.c }

@@ -23,6 +23,8 @@ static immutable RuntimeFunction[string] runtime = [
 
     "silver_read":        RuntimeFunction("i1", ["ptr", "ptr"]),
     "silver_alloc":       RuntimeFunction("ptr",  ["i64"]),
+    "silver_array_append": RuntimeFunction("void", ["ptr", "i64", "ptr", "i64", "i64", "i1 zeroext", "ptr", "ptr"]),
+    "silver_array_format": RuntimeFunction("void", ["ptr", "i64", "ptr", "ptr"]),
 
     "silver_string_compare": RuntimeFunction("i32", ["ptr", "i64", "ptr", "i64"]),
     "silver_panic":       RuntimeFunction("void", ["ptr"], "noreturn"),

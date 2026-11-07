@@ -1,0 +1,103 @@
+type Point(x: Int, y: Int)
+type Holder(items: [Int], name: String)
+type Tree(value: Int, children: [Tree])
+
+def sum(xs: [Int]): Int {
+    mutable val total = 0
+    mutable val i = 0
+    while i < length(xs) {
+        total += xs[i]
+        i += 1
+    }
+    return total
+}
+
+def range(n: Int): [Int] {
+    mutable val out: [Int] = []
+    mutable val i = 0
+    while i < n {
+        out ~= [i]
+        i += 1
+    }
+    return out
+}
+
+def treeSum(t: Tree): Int {
+    mutable val total = t.value
+    mutable val i = 0
+    while i < length(t.children) {
+        total += treeSum(t.children[i])
+        i += 1
+    }
+    return total
+}
+
+def main(): Unit {
+    val xs = [1, 2, 3]
+    printl(xs)
+    printl(length(xs))
+    printl(xs[0] + xs[2])
+    printl(sum(xs))
+    printl(sum(range(5)))
+    printl([[1, 2], [3]][0][1])
+
+    // Each element is formatted as print would alone.
+    printl(["a", "b"])
+    printl([1.5, 2.5])
+    printl([true, false])
+    printl([Point(1, 2), Point(3, 4)])
+    printl([Some(1), None])
+    printl([[1], [], [2, 3]])
+    printl("holes: {xs} {[Some("x")]}")
+    printl(String(xs))
+    printl(Some([1]))
+
+    // Layouts differ, so these exercise element sizes.
+    val bytes: [UInt8] = [1, 255]
+    printl(bytes[1])
+    val shorts: [Int16] = [-1, 300]
+    printl(shorts)
+    val floats: [Float] = [1, 2]
+    printl(floats)
+    val options: [Int?] = [1, None, Some(3)]
+    printl(options[2])
+    printl(options)
+    val nested: [[UInt8]] = [[1], []]
+    printl(nested)
+
+    // Newlines are whitespace inside brackets.
+    val multiline = [
+        1, // one
+        2,
+        /* three */ 3 +
+            1,
+    ]
+    printl(multiline)
+
+    // Arrays go wherever other values do.
+    val holder = Holder([1, 2], "h")
+    printl(holder)
+    printl(holder.items[1])
+    mutable val changing = Holder([1], "c")
+    changing.items = changing.items ~ [2]
+    changing.items ~= [3]
+    printl(changing)
+    val maybe: [Int]? = [1, 2]
+    printl(maybe ?? [])
+    val tree = Tree(1, [Tree(2, []), Tree(3, [Tree(4, [])])])
+    printl(treeSum(tree))
+    printl(tree)
+    val chosen = if xs[0] == 1 => [1] else []
+    printl(chosen)
+    printl(if xs[0] == 2 => [1] else [])
+
+    // Unit has no operand, but an array of it still has a length.
+    val units = [(), ()]
+    printl(length(units))
+    printl(units)
+    printl(units[1])
+    printl(units ~ [()])
+    printl(units[0..1])
+    printl(units == [(), ()])
+    printl(units == [()])
+}

@@ -15,6 +15,9 @@ final class TypeTable
     /// The type of a bare `None`, assignable to every option. No value keeps it: each one is
     /// promoted to the option it lands in.
     Type none;
+    /// The type of a bare `[]`, assignable to every array. Its one use is as a promotion's source,
+    /// like `none`, but it has a layout: every array has the same one.
+    Type emptyArray;
 
     this()
     {
@@ -34,6 +37,7 @@ final class TypeTable
         string_ = registerTypeData(TypeData(Primitive(Primitive.Kind.String)));
         any = registerTypeData(TypeData(Primitive(Primitive.Kind.Any)));
         none = registerTypeData(TypeData(NoneType()));
+        emptyArray = registerTypeData(TypeData(EmptyArrayType()));
     }
 
     private TypeData[int] _types;
@@ -54,6 +58,11 @@ final class TypeTable
     Type option(Type inner)
     {
         return registerTypeData(TypeData(OptionData(inner)));
+    }
+
+    Type array(Type element)
+    {
+        return registerTypeData(TypeData(ArrayData(element)));
     }
 
     Type function_(const(Type)[] params, Type ret)
@@ -87,6 +96,20 @@ final class TypeTable
         );
     }
 
+    bool isArray(Type t) const
+    {
+        return _types[t.index].match!((const ArrayData _) => true, _ => false);
+    }
+
+    /// The `T` of the array type `t`.
+    Type arrayElement(Type t) const
+    {
+        return _types[t.index].match!(
+            (const ArrayData a) => a.element,
+            (_) => assert(0, "not an array type"),
+        );
+    }
+
     bool isInteger(Type t) const
     {
         return _types[t.index].match!(
@@ -113,6 +136,8 @@ final class TypeTable
             (const Primitive p) => p.kind.text,
             (const OptionData o) => describeOptionInner(o.inner) ~ "?",
             (const NoneType _) => "None",
+            (const ArrayData a) => "[" ~ describe(a.element) ~ "]",
+            (const EmptyArrayType _) => "[]",
             (const FunctionData f) => "(" ~ f.params.map!(p => describe(p)).join(", ") ~ ") -> " ~ describe(f.ret),
             (const NominalData nd) => _nominalNames[nd.decl],
             (const ErrorType e) => "Error",
@@ -207,8 +232,17 @@ struct NoneType
 {
 }
 
+struct ArrayData
+{
+    Type element;
+}
+
+struct EmptyArrayType
+{
+}
+
 struct ErrorType
 {
 }
 
-alias TypeData = SumType!(Primitive, OptionData, NoneType, FunctionData, NominalData, ErrorType);
+alias TypeData = SumType!(Primitive, OptionData, NoneType, ArrayData, EmptyArrayType, FunctionData, NominalData, ErrorType);

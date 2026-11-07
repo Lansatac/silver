@@ -1,0 +1,140 @@
+type Point(
+    x: Int,
+    y: Int
+)
+
+type Path(start: Point, end: Point)
+
+def add(
+    a: Int,
+    b: Int
+): Int =>
+    a + b
+
+def pick(c: Bool): Int
+{
+    if c
+    {
+        1
+    }
+    else
+    {
+        2
+    }
+}
+
+def choose(c: Bool): Int
+    => if c
+        => 10
+        else 20
+
+def main(): Unit {
+    // Trailing operators, and leading ones that can't begin a statement.
+    val a = 1 +
+        2
+    val b = 1
+        + 2
+        * 3
+    val c = 10 -
+        // a comment between the lines
+        1
+    printl(a)
+    printl(b)
+    printl(c)
+    printl(true
+        && false
+        || true)
+
+    // A leading `-` starts a statement, so this is a block's value and not a subtraction.
+    val d = 5
+    printl({
+        printl(d)
+        -1
+    })
+
+    // Chains.
+    val path = Path(Point(1, 2), Point(3, 4))
+    printl(path
+        .end
+        .y)
+    val maybe: Path? = path
+    printl(maybe
+        ?.start
+        ?.x)
+    val none: Int? = None
+    printl(none
+        ?? 7)
+    printl(none ??
+        8)
+
+    // Assignment, on either side of the operator.
+    mutable val e =
+        1
+    e
+        = 2
+    e +=
+        3
+    printl(e)
+    mutable val xs = [1]
+    xs
+        ~= [2]
+    xs ~=
+        [3]
+    printl(xs)
+
+    // Brackets.
+    val g = [
+        1, // one
+        /* two */ 2
+        , 3 +
+            4,
+    ]
+    printl(g)
+    printl(g[
+        0
+    ])
+    printl(g[0
+        ..1])
+    printl(add(
+        1,
+        2
+    ))
+    printl((
+        1
+        + 2
+    ))
+    printl(
+        [
+            [1],
+            [],
+        ]
+    )
+
+    // A block nested in brackets still separates statements.
+    printl(add({
+        val h = 1
+        h + 1
+    }, 2))
+
+    printl(pick(false))
+    printl(choose(true))
+
+    mutable val i = 0
+    while i < 2
+    {
+        i += 1
+    }
+    printl(i)
+    while val v = none
+    {
+        printl(v)
+    }
+    if val v = maybe
+    {
+        printl(v.start)
+    }
+    else
+    {
+        printl("none")
+    }
+}

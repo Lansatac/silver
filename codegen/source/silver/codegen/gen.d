@@ -12,8 +12,9 @@ import silver.codegen.runtime_bindings;
 import silver.sema;
 import std.regex;
 
-/// A String's IR type: its bytes, with no terminator, and how many there are.
-enum stringLayout = "{ ptr, i64 }";
+/// The IR type of a String (its bytes, with no terminator, and how many there are) and of an
+/// array (its first element, and how many there are).
+enum sliceLayout = "{ ptr, i64 }";
 
 /// The code for one expression and the operand holding its value. Fragments are values:
 /// an expression's fragment is built from its children's, and the parent decides where
@@ -177,6 +178,13 @@ final class Generator
     private PendingFormat[] _pendingFormats;
     private bool[Id!TypeDecl] _formatSeen;
 
+    /// The same for array types. Each gets a function looping over its elements.
+    private struct PendingArray { Type type; Span span; }
+    private PendingArray[] _pendingArrayEqualities;
+    private string[Type] _arrayEqualities;
+    private PendingArray[] _pendingArrayFormats;
+    private string[Type] _arrayFormatters;
+
     /// Runtime functions the program calls, in first-use order. Each gets one `declare`.
     private string[] _usedRuntime;
     private bool[string] _runtimeSeen;
@@ -200,17 +208,34 @@ final class Generator
         {
             modules ~= emitModule(module_);
         }
-        while (!_pendingEqualities.empty)
+        // Each of these can ask for more of the others, as a type and an array can hold each other.
+        while (!_pendingEqualities.empty || !_pendingFormats.empty
+            || !_pendingArrayEqualities.empty || !_pendingArrayFormats.empty)
         {
-            auto pending = _pendingEqualities.front;
-            _pendingEqualities.popFront();
-            modules ~= emitTypeEquality(pending);
-        }
-        while (!_pendingFormats.empty)
-        {
-            auto pending = _pendingFormats.front;
-            _pendingFormats.popFront();
-            modules ~= emitTypeFormatter(pending);
+            if (!_pendingEqualities.empty)
+            {
+                auto pending = _pendingEqualities.front;
+                _pendingEqualities.popFront();
+                modules ~= emitTypeEquality(pending);
+            }
+            else if (!_pendingFormats.empty)
+            {
+                auto pending = _pendingFormats.front;
+                _pendingFormats.popFront();
+                modules ~= emitTypeFormatter(pending);
+            }
+            else if (!_pendingArrayEqualities.empty)
+            {
+                auto pending = _pendingArrayEqualities.front;
+                _pendingArrayEqualities.popFront();
+                modules ~= emitArrayEquality(pending);
+            }
+            else
+            {
+                auto pending = _pendingArrayFormats.front;
+                _pendingArrayFormats.popFront();
+                modules ~= emitArrayFormatter(pending);
+            }
         }
 
         // After the modules, so every runtime call and string literal has been seen.
@@ -431,10 +456,11 @@ final class Generator
     }
 
     /// `value`, of type `from`, as the option `to`. A `None` is the outermost one, however deep
-    /// `to` is, and anything else gets one `Some` for each level between the types.
+    /// `to` is, and anything else gets one `Some` for each level between the types. A `[]` taking
+    /// on an array type stays as it is, since every array has the same layout.
     Fragment emitPromotion(Fragment value, Type from, Type to)
     {
-        if (from == to) return value;
+        if (from == to || !_analysis.types.isOption(to)) return value;
         if (from == _analysis.types.none) return value.then(Fragment.constant(noneConstant(to)));
 
         auto payload = emitPromotion(value, from, _analysis.types.optionInner(to));
@@ -575,7 +601,292 @@ final class Generator
             (const NoneLiteral _) => Fragment.init,
             (const PropagateExpr propagate) => emitPropagate(propagate),
             (const SafeMemberAccess access) => emitSafeMember(expr, access),
+            (const ArrayLiteral literal) => emitArrayLiteral(expr, literal),
+            (const MapLiteral _) => assert(0, "sema rejects maps"),
+            (const IndexExpr index) => emitIndex(expr, index),
+            (const RangeExpr _) => assert(0, "sema only allows a range as a slice's index"),
         );
+    }
+
+    /// What one element of an array of `array` is stored as, or null when it has no operand to
+    /// store, in which case the buffer is never read and only the length means anything.
+    string storedElement(Type array)
+    {
+        if (array == _analysis.types.emptyArray) return null;
+        auto element = _analysis.types.arrayElement(array);
+        return hasOperand(element) ? llvmType(element) : null;
+    }
+
+    /// The size of a `layout`, in bytes, as an `i64` operand.
+    static string sizeOperand(string layout)
+    {
+        return layout == "i8" ? "1" : "ptrtoint (ptr getelementptr (%s, ptr null, i32 1) to i64)".format(layout);
+    }
+
+    /// A call to the runtime's one way of making or extending a buffer: `(data, length)` followed
+    /// by `count` elements from `source`, or room for them if `source` is `null`. `grow` leaves
+    /// slack for further appends. The operand is the new String or array.
+    Fragment callAppend(string data, string length, string source, string count, string layout, bool grow)
+    {
+        return callRuntimeForString("silver_array_append",
+            [data, length, source, count, sizeOperand(layout), grow ? "true" : "false"]);
+    }
+
+    Fragment elementPointer(string layout, string data, string index)
+    {
+        auto pointer = _function.newTemp();
+        return Fragment.instruction("%s = getelementptr %s, ptr %s, i64 %s".format(pointer, layout, data, index), pointer);
+    }
+
+    /// Stores `operands` at `data` from element `start` on. A null operand comes from an
+    /// evaluation that never returns, so its store is never reached.
+    Fragment storeElements(string layout, string data, string start, string[] operands)
+    {
+        Fragment code;
+        foreach (i, operand; operands)
+        {
+            if (operand is null) continue;
+            auto index = _function.newTemp();
+            auto pointer = elementPointer(layout, data, index);
+            code = code.then(Fragment.instruction("%s = add i64 %s, %s".format(index, start, i)))
+                .then(pointer)
+                .then(Fragment.store(layout, operand, pointer.value));
+        }
+        return code;
+    }
+
+    Fragment emitArrayLiteral(const Expr expr, const ArrayLiteral literal)
+    {
+        if (literal.elements.length == 0) return Fragment.constant("{ ptr null, i64 0 }");
+
+        auto elements = literal.elements.map!(element => emitExpr(element)).array;
+        auto code = Fragment.sequence(elements);
+        auto count = elements.length.to!string;
+        auto layout = storedElement(_analysis.typeOf(expr.id));
+        if (layout is null) return code.then(Fragment.constant("{ ptr null, i64 %s }".format(count)));
+
+        auto buffer = callAppend("null", "0", "null", count, layout, false);
+        auto parts = sliceParts(buffer.value);
+        return code.then(buffer).then(parts.code)
+            .then(storeElements(layout, parts.data, "0", elements.map!(e => e.value).array))
+            .withValue(buffer.value);
+    }
+
+    /// `xs[i]`, or `xs[a..b]`. Both compare unsigned, so a negative number counts as too large.
+    Fragment emitIndex(const Expr expr, const IndexExpr index)
+    {
+        auto arrayType = _analysis.typeOf(index.object.id);
+        auto layout = storedElement(arrayType);
+        auto object = emitExpr(*index.object);
+        auto parts = sliceParts(object.value);
+        auto code = object.then(parts.code);
+        if (auto range = asRange(index.index))
+        {
+            return code.then(emitSlice(*range, layout, parts, expr.span));
+        }
+
+        auto position = emitExpr(*index.index);
+        // The index never returned, so nothing after it is reached.
+        if (position.value is null) return code.then(position).withValue(null);
+
+        auto outside = _function.newTemp();
+        code = code.then(position)
+            .then(Fragment.instruction("%s = icmp uge i64 %s, %s".format(outside, position.value, parts.length)))
+            .then(emitPanicIf(outside, expr.span, "Index is out of range"));
+        if (layout is null) return code.withValue(null);
+
+        auto pointer = elementPointer(layout, parts.data, position.value);
+        return code.then(pointer).then(load(layout, pointer.value));
+    }
+
+    Fragment emitSlice(const RangeExpr range, string layout, SliceParts parts, Span span)
+    {
+        auto start = emitExpr(*range.start);
+        auto end = emitExpr(*range.end);
+        auto code = start.then(end);
+        if (start.value is null || end.value is null) return code.withValue(null);
+
+        auto reversed = _function.newTemp();
+        auto tooLong = _function.newTemp();
+        auto outside = _function.newTemp();
+        auto length = _function.newTemp();
+        code = code
+            .then(Fragment.instruction("%s = icmp ugt i64 %s, %s".format(reversed, start.value, end.value)))
+            .then(Fragment.instruction("%s = icmp ugt i64 %s, %s".format(tooLong, end.value, parts.length)))
+            .then(Fragment.instruction("%s = or i1 %s, %s".format(outside, reversed, tooLong)))
+            .then(emitPanicIf(outside, span, "Slice is out of range"))
+            .then(Fragment.instruction("%s = sub i64 %s, %s".format(length, end.value, start.value)));
+        if (layout is null) return code.then(buildSlice("null", length));
+
+        auto pointer = elementPointer(layout, parts.data, start.value);
+        return code.then(pointer).then(buildSlice(pointer.value, length));
+    }
+
+    /// A `~` chain as one operation over all of its operands.
+    Fragment emitConcatChain(const Expr expr)
+    {
+        auto operands = _analysis.concatOperands(expr.id).map!(operand => emitExpr(operand)).array;
+        auto code = Fragment.sequence(operands);
+        auto values = operands.map!(operand => operand.value).array;
+        auto type = _analysis.typeOf(expr.id);
+        if (type == _analysis.types.string_) return code.then(emitConcat(values, "i8"));
+
+        auto layout = storedElement(type);
+        if (layout !is null) return code.then(emitConcat(values, layout));
+        return code.then(emitUnstoredConcat(values));
+    }
+
+    /// Arrays with nothing stored in them: only their lengths add up.
+    Fragment emitUnstoredConcat(string[] operands)
+    {
+        auto parts = operands.map!(operand => sliceParts(operand)).array;
+        auto code = Fragment.sequence(parts.map!(part => part.code).array);
+        auto total = parts[0].length;
+        foreach (part; parts[1 .. $])
+        {
+            auto sum = _function.newTemp();
+            code = code.then(Fragment.instruction("%s = add i64 %s, %s".format(sum, total, part.length)));
+            total = sum;
+        }
+        return code.then(buildSlice("null", total));
+    }
+
+    /// `xs ~= ys`. A literal's elements go straight into the buffer, with no temporary array.
+    /// They're evaluated first, so one that reads `xs` sees it as it was.
+    Fragment emitAppend(const Expr expr, const BinaryExpr binary)
+    {
+        auto type = _analysis.typeOf(expr.id);
+        auto layout = type == _analysis.types.string_ ? "i8" : storedElement(type);
+        auto lhs = emitExpr(*binary.left);
+        auto elements = (*binary.right).kind.match!(
+            (const ArrayLiteral literal) => literal.elements,
+            _ => (const(Expr)[]).init,
+        );
+        if (layout is null || elements.length == 0)
+        {
+            auto rhs = emitExpr(*binary.right);
+            auto code = lhs.then(rhs);
+            if (layout is null) return code.then(emitUnstoredConcat([lhs.value, rhs.value]));
+
+            auto left = sliceParts(lhs.value);
+            auto right = sliceParts(rhs.value);
+            return code.then(left.code).then(right.code)
+                .then(callAppend(left.data, left.length, right.data, right.length, layout, true));
+        }
+
+        auto values = elements.map!(element => emitExpr(element)).array;
+        auto left = sliceParts(lhs.value);
+        auto grown = callAppend(left.data, left.length, "null", values.length.to!string, layout, true);
+        auto parts = sliceParts(grown.value);
+        return lhs.then(Fragment.sequence(values)).then(left.code).then(grown).then(parts.code)
+            .then(storeElements(layout, parts.data, left.length, values.map!(v => v.value).array))
+            .withValue(grown.value);
+    }
+
+    /// A loop running `iteration` with each index below `length`, in order.
+    Fragment emitCountedLoop(string length, Fragment delegate(string index) iteration)
+    {
+        auto slot = _function.newSlot("index");
+        auto condLabel = _function.newLabel("loop.cond");
+        auto bodyLabel = _function.newLabel("loop.body");
+        auto endLabel = _function.newLabel("loop.end");
+        auto current = load("i64", slot);
+        auto more = _function.newTemp();
+        auto next = _function.newTemp();
+        return Fragment(["  %s = alloca i64".format(slot)])
+            .then(Fragment.store("i64", "0", slot))
+            .then(Fragment.jump(condLabel))
+            .then(Fragment.label(condLabel))
+            .then(current)
+            .then(Fragment.instruction("%s = icmp ult i64 %s, %s".format(more, current.value, length)))
+            .then(Fragment.branch(more, bodyLabel, endLabel))
+            .then(Fragment.label(bodyLabel))
+            .then(iteration(current.value))
+            .then(Fragment.instruction("%s = add i64 %s, 1".format(next, current.value)))
+            .then(Fragment.store("i64", next, slot))
+            .then(Fragment.jump(condLabel))
+            .then(Fragment.label(endLabel));
+    }
+
+    /// Element `index` of the slice `parts`: a load, or nothing when there's no operand for it.
+    Fragment loadElement(string layout, SliceParts parts, string index)
+    {
+        if (layout is null) return Fragment.init;
+        auto pointer = elementPointer(layout, parts.data, index);
+        return pointer.then(load(layout, pointer.value));
+    }
+
+    /// The function formatting an array as `[1, 2, 3]`: each element as `print` would show it
+    /// alone, collected so the runtime can join them in one buffer. Generated once per array type.
+    string emitArrayFormatter(PendingArray pending)
+    {
+        _function = new FunctionState;
+        _function.returnType = sliceLayout;
+
+        enum value = "%value.arg";
+        auto element = _analysis.types.arrayElement(pending.type);
+        auto layout = storedElement(pending.type);
+        auto parts = sliceParts(value);
+        auto size = _function.newTemp();
+        auto table = callRuntime("silver_alloc", [size]);
+
+        auto loop = emitCountedLoop(parts.length, (index) {
+            auto loaded = loadElement(layout, parts, index);
+            auto formatted = emitFormat(element, loaded.value, pending.span);
+            auto slot = elementPointer(sliceLayout, table.value, index);
+            return loaded.then(formatted).then(slot).then(Fragment.store(sliceLayout, formatted.value, slot.value));
+        });
+        auto body = parts.code
+            .then(Fragment.instruction("%s = mul i64 %s, %s".format(size, parts.length, sizeOperand(sliceLayout))))
+            .then(table)
+            .then(loop)
+            .then(callRuntimeForString("silver_array_format", [table.value, parts.length]));
+        auto lines = body.allocas ~ body.code ~ ("  " ~ returnInstruction(body.value));
+
+        return "define private %s @\"%s\"(%s %s) {\nentry:\n%s}\n".format(sliceLayout,
+            _arrayFormatters[pending.type], sliceLayout, value, lines.map!(line => line ~ "\n").join);
+    }
+
+    /// The function comparing two arrays: lengths, then elements until the first difference.
+    /// Generated once per array type.
+    string emitArrayEquality(PendingArray pending)
+    {
+        _function = new FunctionState;
+        _function.returnType = "i1";
+
+        enum leftArg = "%left.arg", rightArg = "%right.arg";
+        auto element = _analysis.types.arrayElement(pending.type);
+        auto layout = storedElement(pending.type);
+        auto left = sliceParts(leftArg);
+        auto right = sliceParts(rightArg);
+        auto sameLength = _function.newTemp();
+
+        Fragment returnFalseUnless(string condition)
+        {
+            auto differLabel = _function.newLabel("differ");
+            auto sameLabel = _function.newLabel("same");
+            return Fragment.branch(condition, sameLabel, differLabel)
+                .then(Fragment.label(differLabel))
+                .then(Fragment.instruction(returnInstruction("false")))
+                .then(Fragment.label(sameLabel));
+        }
+
+        auto body = left.code.then(right.code)
+            .then(Fragment.instruction("%s = icmp eq i64 %s, %s".format(sameLength, left.length, right.length)))
+            .then(returnFalseUnless(sameLength));
+        if (layout !is null)
+        {
+            body = body.then(emitCountedLoop(left.length, (index) {
+                auto leftElement = loadElement(layout, left, index);
+                auto rightElement = loadElement(layout, right, index);
+                auto equal = emitEquals(element, leftElement.value, rightElement.value, pending.span);
+                return leftElement.then(rightElement).then(equal).then(returnFalseUnless(equal.value));
+            }));
+        }
+        auto lines = body.allocas ~ body.code ~ ("  " ~ returnInstruction("true"));
+
+        return "define private i1 @\"%s\"(%s %s, %s %s) {\nentry:\n%s}\n".format(_arrayEqualities[pending.type],
+            sliceLayout, leftArg, sliceLayout, rightArg, lines.map!(line => line ~ "\n").join);
     }
 
     Fragment emitMemberAccess(const MemberAccess access, const Expr expr)
@@ -630,7 +941,7 @@ final class Generator
         return name;
     }
 
-    private struct StringParts
+    private struct SliceParts
     {
         Fragment code;
         string data;
@@ -638,58 +949,68 @@ final class Generator
     }
 
     /// The String operand `value` taken apart, as the runtime's boundary wants it.
-    StringParts stringParts(string value)
+    SliceParts sliceParts(string value)
     {
         auto data = _function.newTemp();
         auto length = _function.newTemp();
-        auto code = Fragment.instruction("%s = extractvalue %s %s, 0".format(data, stringLayout, value))
-            .then(Fragment.instruction("%s = extractvalue %s %s, 1".format(length, stringLayout, value)));
-        return StringParts(code, data, length);
+        auto code = Fragment.instruction("%s = extractvalue %s %s, 0".format(data, sliceLayout, value))
+            .then(Fragment.instruction("%s = extractvalue %s %s, 1".format(length, sliceLayout, value)));
+        return SliceParts(code, data, length);
     }
 
     /// A String from its parts.
-    Fragment buildString(string data, string length)
+    Fragment buildSlice(string data, string length)
     {
         auto partial = _function.newTemp();
         auto whole = _function.newTemp();
-        return Fragment.instruction("%s = insertvalue %s undef, ptr %s, 0".format(partial, stringLayout, data))
-            .then(Fragment.instruction("%s = insertvalue %s %s, i64 %s, 1".format(whole, stringLayout, partial, length), whole));
+        return Fragment.instruction("%s = insertvalue %s undef, ptr %s, 0".format(partial, sliceLayout, data))
+            .then(Fragment.instruction("%s = insertvalue %s %s, i64 %s, 1".format(whole, sliceLayout, partial, length), whole));
     }
 
-    /// The Strings `operands` joined in one new buffer, or the only one itself, since Strings
-    /// never change. The sum needs no check: each length is the size of a buffer that exists,
-    /// so with as few as a program can write they fit `silver_alloc`'s unsigned size.
-    Fragment emitConcat(string[] operands)
+    /// The Strings or arrays `operands`, whose elements are `layout`, joined, or the only one
+    /// itself, since they never change. Room for everything after the first is asked for in one
+    /// go, so it's one allocation, and none at all if the first is at its buffer's frontier with
+    /// room. The sums need no check: each length is that of a buffer that exists.
+    Fragment emitConcat(string[] operands, string layout = "i8")
     {
         if (operands.length == 1) return Fragment.constant(operands[0]);
 
         enum memcpy = "llvm.memcpy.p0.p0.i64";
         useIntrinsic("declare void @" ~ memcpy ~ "(ptr, ptr, i64, i1)");
 
-        auto parts = operands.map!(operand => stringParts(operand)).array;
+        auto parts = operands.map!(operand => sliceParts(operand)).array;
         auto code = Fragment.sequence(parts.map!(part => part.code).array);
-        auto total = parts[0].length;
-        foreach (part; parts[1 .. $])
+        auto rest = parts[1].length;
+        foreach (part; parts[2 .. $])
         {
             auto sum = _function.newTemp();
-            code = code.then(Fragment.instruction("%s = add i64 %s, %s".format(sum, total, part.length)));
-            total = sum;
+            code = code.then(Fragment.instruction("%s = add i64 %s, %s".format(sum, rest, part.length)));
+            rest = sum;
         }
 
-        auto buffer = callRuntime("silver_alloc", [total]);
-        code = code.then(buffer);
-        auto destination = buffer.value;
-        foreach (i, part; parts)
+        auto joined = callAppend(parts[0].data, parts[0].length, "null", rest, layout, false);
+        auto result = sliceParts(joined.value);
+        code = code.then(joined).then(result.code);
+        auto offset = parts[0].length;
+        foreach (part; parts[1 .. $])
         {
-            code = code.then(Fragment.instruction("call void @%s(ptr %s, ptr %s, i64 %s, i1 false)".format(
-                memcpy, destination, part.data, part.length)));
-            if (i + 1 == parts.length) break;
+            auto destination = elementPointer(layout, result.data, offset);
+            auto bytes = part.length;
+            code = code.then(destination);
+            if (layout != "i8")
+            {
+                bytes = _function.newTemp();
+                code = code.then(Fragment.instruction(
+                    "%s = mul i64 %s, %s".format(bytes, part.length, sizeOperand(layout))));
+            }
             auto next = _function.newTemp();
-            code = code.then(Fragment.instruction(
-                "%s = getelementptr i8, ptr %s, i64 %s".format(next, destination, part.length)));
-            destination = next;
+            code = code
+                .then(Fragment.instruction("call void @%s(ptr %s, ptr %s, i64 %s, i1 false)".format(
+                    memcpy, destination.value, part.data, bytes)))
+                .then(Fragment.instruction("%s = add i64 %s, %s".format(next, offset, part.length)));
+            offset = next;
         }
-        return code.then(buildString(buffer.value, total));
+        return code.withValue(joined.value);
     }
 
     /// Every part formatted as it's evaluated, then all of them joined at once.
@@ -732,14 +1053,22 @@ final class Generator
                     _formatSeen[nominal.decl] = true;
                     _pendingFormats ~= PendingFormat(nominal.decl, span);
                 }
-                return emitCall(stringLayout, "@\"%s\"".format(typeFormatters[nominal.decl]), "ptr " ~ value);
+                return emitCall(sliceLayout, "@\"%s\"".format(typeFormatters[nominal.decl]), "ptr " ~ value);
+            },
+            (const ArrayData _) {
+                if (type !in _arrayFormatters)
+                {
+                    _arrayFormatters[type] = ".array.format.%s".format(_arrayFormatters.length);
+                    _pendingArrayFormats ~= PendingArray(type, span);
+                }
+                return emitCall(sliceLayout, "@\"%s\"".format(_arrayFormatters[type]), sliceLayout ~ " " ~ value);
             },
             (const OptionData option) {
                 auto payload = optionPayload(type, value);
                 auto inner = emitFormat(option.inner, payload.value, span);
                 auto some = payload.then(inner).then(emitConcat(
                     [emitStringLiteral("Some(").value, inner.value, emitStringLiteral(")").value]));
-                return emitConditional(optionTag(type, value), stringLayout, some, emitStringLiteral("None"), "format");
+                return emitConditional(optionTag(type, value), sliceLayout, some, emitStringLiteral("None"), "format");
             },
             (_) => unsupported(span, "formatting a value of type `%s`".format(types.describe(type))),
         );
@@ -750,7 +1079,7 @@ final class Generator
     string emitTypeFormatter(PendingFormat pending)
     {
         _function = new FunctionState;
-        _function.returnType = stringLayout;
+        _function.returnType = sliceLayout;
 
         enum object = "%value.arg";
         auto type = pending.type;
@@ -785,15 +1114,15 @@ final class Generator
         }
         auto lines = body.allocas ~ body.code ~ ("  " ~ returnInstruction(body.value));
 
-        return "define private %s @\"%s\"(ptr %s) {\nentry:\n%s}\n".format(stringLayout,
+        return "define private %s @\"%s\"(ptr %s) {\nentry:\n%s}\n".format(sliceLayout,
             typeFormatters[type], object, lines.map!(line => line ~ "\n").join);
     }
 
     /// `lhs op rhs` for a comparison of two Strings, from the sign of the runtime's answer.
     Fragment emitStringComparison(BinaryOp op, string lhs, string rhs)
     {
-        auto left = stringParts(lhs);
-        auto right = stringParts(rhs);
+        auto left = sliceParts(lhs);
+        auto right = sliceParts(rhs);
         auto order = callRuntime("silver_string_compare", [left.data, left.length, right.data, right.length]);
         auto result = _function.newTemp();
         return left.code
@@ -815,7 +1144,7 @@ final class Generator
             .then(callRuntime(name, operands ~ [dataSlot, lengthSlot]))
             .then(data)
             .then(length)
-            .then(buildString(data.value, length.value));
+            .then(buildSlice(data.value, length.value));
     }
 
     /// A call to the runtime function `name`, which hands back a String the same way and
@@ -828,7 +1157,7 @@ final class Generator
         auto present = callRuntime(name, operands ~ [dataSlot, lengthSlot]);
         auto data = load("ptr", dataSlot);
         auto length = load("i64", lengthSlot);
-        auto text = buildString(data.value, length.value);
+        auto text = buildSlice(data.value, length.value);
 
         auto layout = optionLayout(_analysis.types.string_);
         auto tagged = _function.newTemp();
@@ -840,7 +1169,7 @@ final class Generator
             .then(text)
             .then(Fragment.instruction("%s = insertvalue %s undef, i1 %s, 0".format(tagged, layout, present.value)))
             .then(Fragment.instruction("%s = insertvalue %s %s, %s %s, 1".format(
-                whole, layout, tagged, stringLayout, text.value), whole));
+                whole, layout, tagged, sliceLayout, text.value), whole));
     }
 
     /// The body of an LLVM `c"..."`: printable ASCII as is, every other byte as `\XX`.
@@ -894,6 +1223,9 @@ final class Generator
 
     Fragment emitBinaryExpr(const BinaryExpr binary, const Expr expr)
     {
+        if (binary.op == BinaryOp.Concat) return emitConcatChain(expr);
+        if (binary.op == BinaryOp.Append) return emitAppend(expr, binary);
+
         auto lhs = emitExpr(*binary.left);
         auto rhs = emitExpr(*binary.right);
         auto type = _analysis.valueTypeOf(binary.left.id);
@@ -922,8 +1254,6 @@ final class Generator
             case BinaryOp.GreaterEqual:
                 if (type != _analysis.types.string_) goto default;
                 return lhs.then(rhs).then(emitStringComparison(binary.op, lhs.value, rhs.value));
-            case BinaryOp.Concat:
-                return lhs.then(rhs).then(emitConcat([lhs.value, rhs.value]));
             default:
                 auto llOp = llBinaryOp(binary.op, type);
                 if (llOp is null) return unsupported(expr.span, "`" ~ binary.op ~ "`");
@@ -1114,16 +1444,16 @@ final class Generator
         auto initializer = emitExpr(if_.binding.value);
         auto tag = optionTag(option, initializer.value);
         // Before the branch is generated, since that's what reads the binding's slot.
-        auto bound = emitIfBinding(*if_.binding, option, initializer.value);
+        auto bound = emitOptionBinding(*if_.binding, option, initializer.value);
         return emitConditional(initializer.then(tag), resultType, bound.then(emitExpr(*if_.trueBody)), elseArm, "if");
     }
 
     /// Stores the payload of the option `value` in the slot for `binding`. Unit and Never have
     /// no operand, so there's nothing to store, as with any other local of those types.
-    Fragment emitIfBinding(const VarDecl binding, Type option, string value)
+    Fragment emitOptionBinding(const VarDecl binding, Type option, string value)
     {
         auto inner = _analysis.types.optionInner(option);
-        if (!hasOperand(inner)) return Fragment.init;
+        if (!hasOperand(inner) || binding.name == discardName) return Fragment.init;
 
         auto type = llvmType(inner);
         auto slot = _function.newSlot(binding.name);
@@ -1166,18 +1496,33 @@ final class Generator
     }
 
     /// Unit-valued. The condition is re-evaluated before every iteration, so its code lives in
-    /// its own block, which the body jumps back to.
+    /// its own block, which the body jumps back to. In a `while val`, the condition is the
+    /// initializer's tag, and the body starts by storing the payload in the binding's slot.
     Fragment emitWhile(const WhileExpr while_)
     {
         auto condLabel = _function.newLabel("while.cond");
         auto bodyLabel = _function.newLabel("while.body");
         auto endLabel = _function.newLabel("while.end");
-        auto condition = emitExpr(*while_.condition);
+        Fragment condition;
+        Fragment bound;
+        if (while_.binding is null)
+        {
+            condition = emitExpr(*while_.condition);
+        }
+        else
+        {
+            auto option = _analysis.typeOf(while_.binding.value.id);
+            auto initializer = emitExpr(while_.binding.value);
+            condition = initializer.then(optionTag(option, initializer.value));
+            // Before the body is generated, since that's what reads the binding's slot.
+            bound = emitOptionBinding(*while_.binding, option, initializer.value);
+        }
         return Fragment.jump(condLabel)
             .then(Fragment.label(condLabel))
             .then(condition)
             .then(Fragment.branch(condition.value, bodyLabel, endLabel))
             .then(Fragment.label(bodyLabel))
+            .then(bound)
             .then(emitExpr(*while_.body))
             .then(Fragment.jump(condLabel))
             .then(Fragment.label(endLabel));
@@ -1223,6 +1568,15 @@ final class Generator
                     "ptr %s, ptr %s".format(lhs, rhs));
             },
             (const OptionData option) => emitOptionEquals(type, option.inner, lhs, rhs, span),
+            (const ArrayData _) {
+                if (type !in _arrayEqualities)
+                {
+                    _arrayEqualities[type] = ".array.eq.%s".format(_arrayEqualities.length);
+                    _pendingArrayEqualities ~= PendingArray(type, span);
+                }
+                return emitCall("i1", "@\"%s\"".format(_arrayEqualities[type]),
+                    "%s %s, %s %s".format(sliceLayout, lhs, sliceLayout, rhs));
+            },
             (_) => assert(0, "sema only allows comparing comparable types"),
         );
     }
@@ -1349,6 +1703,7 @@ final class Generator
             case BinaryOp.Or:
             case BinaryOp.Coalesce:
             case BinaryOp.Concat:
+            case BinaryOp.Append:
                 return null;
         }
     }
@@ -1358,6 +1713,12 @@ final class Generator
         if (_analysis.isConversion(expr.id))
         {
             return emitConversion(call.args[0], _analysis.typeOf(expr.id), expr.span);
+        }
+        if (_analysis.isArrayLength(expr.id))
+        {
+            auto array = emitExpr(call.args[0]);
+            auto parts = sliceParts(array.value);
+            return array.then(parts.code).withValue(parts.length);
         }
 
         if (auto type = _analysis.constructionOf(expr.id))
@@ -1411,7 +1772,8 @@ final class Generator
             auto value = emitExpr(arg);
             auto argType = _analysis.typeOf(arg.id);
             auto isAny = params[i] == _analysis.types.any;
-            auto formatted = isAny && (isNominal(argType) || _analysis.types.isOption(argType));
+            auto formatted = isAny && (isNominal(argType) || _analysis.types.isOption(argType)
+                || _analysis.types.isArray(argType));
             if (isAny && _analysis.types.isInteger(argType))
             {
                 value = value.then(widenForRuntime(argType, value.value));
@@ -1423,7 +1785,7 @@ final class Generator
             evaluated = evaluated.then(value);
             if (formatted || argType == _analysis.types.string_)
             {
-                auto parts = stringParts(value.value);
+                auto parts = sliceParts(value.value);
                 evaluated = evaluated.then(parts.code);
                 operands ~= [parts.data, parts.length];
             }
@@ -1494,6 +1856,7 @@ final class Generator
             // emitNativeCall has formatted these.
             (const NominalData _) => "string",
             (const OptionData _) => "string",
+            (const ArrayData _) => "string",
             (_) => cast(string) null,
         );
     }
@@ -1564,7 +1927,7 @@ final class Generator
     {
         auto value = emitExpr(var.value);
         // Unit has no operand, so a Unit local has no slot: only its initializer's effects remain.
-        if (value.value is null) return value.withValue(null);
+        if (value.value is null || var.name == discardName) return value.withValue(null);
         auto type = llvmType(_analysis.typeOf(var.id));
         auto slot = _function.newSlot(var.name);
         _function.slots[var.id] = slot;
@@ -1641,6 +2004,8 @@ final class Generator
         return _analysis.types[t].match!(
             (const Primitive p) => primitiveName (p),
             (const OptionData o) => optionLayout(o.inner),
+            (const ArrayData _) => sliceLayout,
+            (const EmptyArrayType _) => sliceLayout,
             (const FunctionData f) => "ptr",
             (const NominalData nd) => "ptr",
             (const NoneType _) => assert(0, "every None that has a value is promoted"),
@@ -1657,6 +2022,8 @@ final class Generator
         return _analysis.types[t].match!(
             (const Primitive p) => primitiveReturnName (p),
             (const OptionData o) => optionLayout(o.inner),
+            (const ArrayData _) => sliceLayout,
+            (const EmptyArrayType _) => sliceLayout,
             (const FunctionData f) => "ptr",
             (const NominalData nd) => "ptr",
             (const NoneType _) => assert(0, "no function returns a bare None"),
@@ -1681,7 +2048,7 @@ final class Generator
             case Primitive.Kind.Int32:
             case Primitive.Kind.UInt32: return "i32";
             case Primitive.Kind.Float: return "double";
-            case Primitive.Kind.String: return stringLayout;
+            case Primitive.Kind.String: return sliceLayout;
 
             case Primitive.kind.Never:
             case Primitive.kind.Unit:
@@ -1704,7 +2071,7 @@ final class Generator
             case Primitive.Kind.Int32:
             case Primitive.Kind.UInt32: return "i32";
             case Primitive.Kind.Float: return "double";
-            case Primitive.Kind.String: return stringLayout;
+            case Primitive.Kind.String: return sliceLayout;
 
             case Primitive.kind.Never:
             case Primitive.kind.Unit:

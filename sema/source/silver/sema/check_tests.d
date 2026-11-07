@@ -333,7 +333,7 @@ unittest
 unittest
 {
     static string messageOf(const Analyzed a) => a.collector.diagnostics[0].message;
-    assert(messageOf(analyzedMain(`printl(1 ~ 2)`)) == "`~` needs a String, got `Int`");
+    assert(messageOf(analyzedMain(`printl(1 ~ 2)`)) == "`~` needs a String or an array, got `Int`");
     assert(messageOf(analyzedMain(`printl("a" <= true)`)) == "`<=` needs a number or a String, got `Bool`");
     assert(messageOf(analyzedMain(`printl("a" < 1.5)`)) == "`<` can't compare `String` and `Float`");
 }
@@ -1685,4 +1685,197 @@ val text: String = "{name} v{major}.{1 + 1} {ratio} {ok} {nothing} {-1}"`);
     analyzed("def f(): Int => 1\n" ~ `val a: String = "{f()}"` ~ "\ndef main(): Unit => ()")
         .shouldReport(DiagnosticCode.NonConstantInitializer, At("f", 2));
     analyzedConstants(`val a: String = String(1)`).shouldReport(DiagnosticCode.NonConstantInitializer, At("String", 2));
+}
+
+@("an array literal takes its element type from what it's checked against, or joins its elements")
+unittest
+{
+    auto a = analyzedMain(`val bytes: [UInt8] = [1, 2]
+    val some = [Some(1), None]
+    val nested = [[], [1]]
+    val wrapped: [UInt8]? = [1]
+    val branch: [UInt8] = if true => [1] else []`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("bytes", 1), "[UInt8]");
+    a.shouldDeclareType(At("some", 1), "[Int?]");
+    a.shouldDeclareType(At("nested", 1), "[[Int]]");
+    a.shouldDeclareType(At("wrapped", 1), "[UInt8]?");
+
+    analyzedMain(`val x = [1, 2.0]`).shouldReport(DiagnosticCode.TypeMismatch, At("2.0", 1));
+    analyzedMain(`val x: [UInt8] = [256]`).shouldReport(DiagnosticCode.LiteralOutOfRange, At("256", 1));
+}
+
+@("a [] or [None] with nothing to take a type from says to annotate")
+unittest
+{
+    analyzedMain(`val x = []`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
+    analyzedMain(`print([])`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
+    analyzedMain(`print("{[]}")`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
+    analyzedMain(`print([] == [])`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
+    analyzedMain(`print([] ~ [])`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
+    analyzedMain(`print(length([]))`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
+    analyzedMain(`val x = [None]`).shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+}
+
+@("an array can't hold Any")
+unittest
+{
+    analyzed("def f(x: [Any]): Unit => ()\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidArrayElement, At("[Any]", 1));
+}
+
+@("indexing takes an Int and only applies to arrays, and a slice keeps the array's type")
+unittest
+{
+    auto a = analyzedMain(`val xs = ["a"]
+    val one = xs[0]
+    val some = xs[0..1]`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldTypeEveryExpression();
+    a.shouldDeclareType(At("one", 1), "String");
+    a.shouldDeclareType(At("some", 1), "[String]");
+
+    analyzedMain(`val i: UInt = 1
+    print([1][i])`).shouldReport(DiagnosticCode.TypeMismatch, At("i", 2));
+    analyzedMain(`val i: UInt = 1
+    print([1][0..i])`).shouldReport(DiagnosticCode.TypeMismatch, At("i", 2));
+    analyzedMain(`print("abc"[0])`).shouldReport(DiagnosticCode.InvalidOperand, At(`"abc"`, 1));
+    analyzedMain(`print(length("abc"))`).shouldReport(DiagnosticCode.InvalidOperand, At(`"abc"`, 1));
+}
+
+@("an array's elements can't be assigned, even on a mutable val")
+unittest
+{
+    analyzedMain(`mutable val xs = [1]
+    xs[0] = 2`).shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("xs[0]", 1));
+    analyzedMain(`mutable val xs = [1]
+    xs[0] += 2`).shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("xs[0]", 1));
+}
+
+@("~ joins two of the same array or String, and never takes a bare element")
+unittest
+{
+    auto a = analyzedMain(`val bytes: [UInt8] = [1]
+    val left = bytes ~ [2]
+    val right = [2] ~ bytes
+    val chain = [1] ~ [2] ~ bytes
+    val empty = bytes ~ []`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("left", 1), "[UInt8]");
+    a.shouldDeclareType(At("right", 1), "[UInt8]");
+    a.shouldDeclareType(At("chain", 1), "[UInt8]");
+    a.shouldDeclareType(At("empty", 1), "[UInt8]");
+
+    analyzedMain(`print([1] ~ 2)`).shouldReport(DiagnosticCode.InvalidOperand, At("2", 1));
+    analyzedMain(`print([[1]] ~ [1])`).shouldReport(DiagnosticCode.TypeMismatch, At("1", 2));
+    analyzedMain(`val a = [1]
+    val b = ["a"]
+    print(a ~ b)`).shouldReport(DiagnosticCode.InvalidOperand, At("a ~ b", 1));
+    analyzedMain(`print("a" ~ [1])`).shouldReport(DiagnosticCode.InvalidOperand, At(`"a" ~ [1]`, 1));
+}
+
+@("~= needs a mutable array or String, and the same type on the right")
+unittest
+{
+    analyzedMain(`mutable val xs: [UInt8] = []
+    xs ~= [255]
+    mutable val s = "a"
+    s ~= "b"`).shouldHaveNoDiagnostics();
+
+    analyzedMain(`val xs = [1]
+    xs ~= [2]`).shouldReport(DiagnosticCode.AssignToImmutable, At("xs", 2));
+    analyzedMain(`mutable val xs = [1]
+    xs ~= 2`).shouldReport(DiagnosticCode.InvalidOperand, At("2", 1));
+    analyzedMain(`mutable val x = 1
+    x ~= [2]`).shouldReport(DiagnosticCode.InvalidOperand, At("x", 2));
+}
+
+@("arrays compare when their elements do, and have no order")
+unittest
+{
+    analyzedMain(`val xs = [1]
+    print(xs == [1])
+    print([1] != xs)
+    print(xs == [])`).shouldHaveNoDiagnostics();
+    analyzedMain(`print([1] < [2])`).shouldReport(DiagnosticCode.InvalidOperand, At("[1]", 1));
+    analyzed("def f(): Unit => ()\ndef main(): Unit => print([f] == [f])")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("[f] == [f]", 1));
+}
+
+@("while val needs an option, and its binding is only in scope in the body")
+unittest
+{
+    auto a = analyzedMain(`val opt: String? = None
+    while val line = opt {
+        print(line)
+    }
+    while val line = opt { }`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("line", 2, "String");
+
+    analyzedMain(`while val x = 1 { }`).shouldReport(DiagnosticCode.InvalidOperand, At("1", 1));
+    analyzedMain(`while val x = None { }`).shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+    analyzedMain(`val o: Int? = None
+    while val x = o { }
+    print(x)`).shouldReport(DiagnosticCode.UnknownName, At("x", 2));
+    analyzedMain(`val x: Int? = None
+    while val x = x { }`).shouldReport(DiagnosticCode.ShadowedDeclaration, At("x", 2));
+}
+
+@("a non-final expression statement that isn't Unit is an error")
+unittest
+{
+    analyzedMain(`1
+    print(2)`).shouldReport(DiagnosticCode.UnusedValue, At("1", 1));
+    analyzed("def f(): Int => 1\ndef main(): Unit {\n    f()\n    print(2)\n}")
+        .shouldReport(DiagnosticCode.UnusedValue, At("f()", 2));
+    analyzedMain(`None
+    print(2)`).shouldReport(DiagnosticCode.UnusedValue, At("None", 1));
+    analyzedMain(`if true => 1 else 2
+    print(2)`).shouldReport(DiagnosticCode.UnusedValue, At("if true => 1 else 2", 1));
+    analyzedMain(`val x = 2
+    val y = x
+    - 1
+    print(y)`).shouldReport(DiagnosticCode.UnusedValue, At("- 1", 1));
+}
+
+@("a block's last expression is its value, and a Unit position still drops one")
+unittest
+{
+    analyzed(`def f(): Int => 1
+def g(): Unit { f() }
+def h(): Unit => f()
+def main(): Unit {
+    print(1)
+    if true { f() }
+    if true => print(1) else print(2)
+    while false { f() }
+    val a = { print(1); 1 }
+    f()
+}`).shouldHaveNoDiagnostics();
+    analyzed(`def f(): Int {
+    return 1
+}
+def g(x: Int?): Unit? {
+    { return None }
+    ()
+}
+def main(): Unit => ()`).shouldHaveNoDiagnostics();
+}
+
+@("a discard evaluates its value and declares nothing")
+unittest
+{
+    analyzedMain(`_ = 1
+    _ = 2
+    val _ = 3
+    val _ = None
+    _ = []
+    val _: UInt8 = 255`).shouldHaveNoDiagnostics();
+
+    // It still checks what's there.
+    analyzedMain(`val _: UInt8 = 256`).shouldReport(DiagnosticCode.LiteralOutOfRange, At("256", 1));
+    analyzedMain(`_ = nope`).shouldReport(DiagnosticCode.UnknownName, At("nope", 1));
+    analyzedMain(`_ = [None]`).shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+    analyzedMain(`while val _ = 1 { }`).shouldReport(DiagnosticCode.InvalidOperand, At("1", 1));
 }
