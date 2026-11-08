@@ -2,6 +2,7 @@ module std.random
 
 import std.time
 
+// SplitMix64.
 type Rng(state: UInt64)
 
 val golden: UInt64 = 0x9E3779B97F4A7C15
@@ -9,11 +10,26 @@ val golden: UInt64 = 0x9E3779B97F4A7C15
 def seeded(seed: UInt64): Rng => Rng(seed)
 def fromClock(): Rng => seeded(UInt64(nowNanos()))
 
-def next(rng: Rng): Rng => Rng(rng.state &+ golden)
-
-def value(rng: Rng): UInt64 {
+def next(mutable rng: Rng): UInt64 {
+    rng.state &+= golden
     val a = rng.state
     val b = (a ^ (a >> 30)) &* 0xBF58476D1CE4E5B9
     val c = (b ^ (b >> 27)) &* 0x94D049BB133111EB
     c ^ (c >> 31)
 }
+
+// Uniform in 0..bound.
+def nextInt(mutable rng: Rng, bound: Int): Int {
+    // Values below the threshold are redrawn, since taking them
+    // would make the low results slightly more likely.
+    val range = UInt64(bound)
+    val threshold = (0 &- range) % range
+    mutable val x = next(mutable rng)
+    while x < threshold {
+        x = next(mutable rng)
+    }
+    Int(x % range)
+}
+
+// A generator of its own for a callee that only consumes randomness, advancing `rng` once.
+def split(mutable rng: Rng): Rng => seeded(next(mutable rng))

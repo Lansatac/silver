@@ -1,0 +1,30 @@
+import std.random
+
+def main(): Unit {
+    // SplitMix64's published output for this seed.
+    mutable val rng = seeded(1234567)
+    printl(next(mutable rng))
+    printl(next(mutable rng))
+    printl(next(mutable rng))
+
+    // In range, and the same sequence from the same seed.
+    mutable val a = seeded(42)
+    mutable val b = seeded(42)
+    mutable val inRange = true
+    mutable val same = true
+    for _ in 0..1000 {
+        val x = nextInt(mutable a, 6)
+        inRange = inRange && x >= 0 && x < 6
+        same = same && x == nextInt(mutable b, 6)
+    }
+    printl(inRange)
+    printl(same)
+
+    // A bound of one has only one answer.
+    printl(nextInt(mutable a, 1))
+
+    // A split generator doesn't replay its parent.
+    mutable val parent = seeded(7)
+    mutable val child = split(mutable parent)
+    printl(next(mutable parent) != next(mutable child))
+}
