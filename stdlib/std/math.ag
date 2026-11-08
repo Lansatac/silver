@@ -76,9 +76,11 @@ def powInt(base: Int, exponent: Int): Int {
 }
 
 def factorial(n: Int): Int {
-    mutable val result = 1
-    if !(n == 0) {
-        result = n * factorial(n - 1)
+    if n < 0 {
+        panic("factorial of a negative number")
     }
-    result
+    match n {
+        0 => 1
+        _ => n * factorial(n - 1)
+    }
 }
