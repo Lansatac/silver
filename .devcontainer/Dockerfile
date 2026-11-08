@@ -1,4 +1,4 @@
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # clang/llvm/lld are the backend's toolchain (LLVM 18 on 24.04; `ptr` IR syntax needs 15+).
