@@ -62,4 +62,3 @@ A bare `x?` used only to exit early must be written `_ = x?`, like any unused va
 ## Current implementation
 
 - `Some` can't be passed as a function value.
-- `match` isn't available.

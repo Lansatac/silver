@@ -28,6 +28,8 @@ if isReady {
 val size = if val found = lookup(key) => found.size else 0
 ```
 
+`if val` also takes a constructor pattern, as a one-arm [`match`](user-types.md#match).
+
 ## while
 
 `while` takes a block, has value `()`, and drops the body's value.
@@ -77,7 +79,3 @@ A panic stops the program with a message. Integer overflow, an out-of-range inde
 ```silver
 val result = if isValid => compute() else panic("invalid state")
 ```
-
-## Current implementation
-
-`panic` isn't available.

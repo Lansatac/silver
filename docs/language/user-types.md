@@ -22,7 +22,7 @@ val x = p.x
 
 A declaration with an empty field list, `type T()`, is an error: write `type T`.
 
-A constructor can be used as a function value. Products are compared and printed structurally: `Point(1, 2)`. A type is comparable when all of its fields are.
+A constructor can be used as a function value, and its return type is the product itself even when a sum owns it. Products are compared and printed structurally: `Point(1, 2)`. A type is comparable when all of its fields are.
 
 ### Copying with changes
 
@@ -50,6 +50,10 @@ type Point = Point2D | Point3D      // over existing types
 ```
 
 A sum is nominal. Two sums with the same members are different types.
+
+A member can't be `Never` or the sum itself, and can't be listed twice. A bare name can only declare a marker in one sum of a module. To share a marker between sums, declare it on its own with `type Name`.
+
+A sum's name isn't a value, so only its members can be constructed.
 
 ### Owned and referenced members
 
@@ -81,7 +85,7 @@ A sum value has no field access or field assignment. A `mutable val` holding one
 
 ## match
 
-`match` is an expression. Each arm is `Pattern => Expression`, with arms separated by newlines.
+`match` is an expression. Each arm is `Pattern => Expression`, with arms separated by newlines, and the first arm whose pattern matches runs. `return`, `break` and `continue` are statements, so an arm using one needs a block: `_ => { return None }`.
 
 ```silver
 val area = match shape {
@@ -101,10 +105,13 @@ The patterns are:
 | `_` | anything |
 | a literal | that value |
 | `Some(p)`, `None` | options |
+| `(p, q)` | a tuple, with nested patterns |
 
-A match must be exhaustive over members, and the error names those missing. `Bool` is exhausted by `true` and `false`, while integer and string literals need a `_`. An unreachable arm is an error.
+A match must be exhaustive, and the error names what's missing, including through nested patterns and tuples. `Bool` is exhausted by `true` and `false`, while integer and string literals need a `_`. An unreachable arm is an error.
 
-`if val` is the one-arm form:
+Bindings are immutable and in scope only in their arm.
+
+`if val` is the one-arm form. It takes a constructor pattern, including `Some(p)` and `None`, and doesn't need to be exhaustive:
 
 ```silver
 val r = if val Circle(radius) = shape => radius else 0.0
@@ -118,5 +125,4 @@ val r = if val Circle(radius) = shape => radius else 0.0
 
 ## Current implementation
 
-- Sum types, `alias` and `match` aren't available. `match` and `alias` are reserved words.
-- Markers, products, field access and assignment, constructors as values, structural equality and printing, and `with` are available.
+- `alias` isn't available, though it's a reserved word.
