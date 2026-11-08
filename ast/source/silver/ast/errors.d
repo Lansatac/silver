@@ -48,6 +48,8 @@ enum DiagnosticCode : string
     /// Syntax with a decided future that sema can't give a meaning to yet.
     NotSupportedYet = "T0016",
     UnusedValue = "T0017",
+    InvalidTupleElement = "T0018",
+    PatternMismatch = "T0019",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

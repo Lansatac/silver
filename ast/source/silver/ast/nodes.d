@@ -76,7 +76,13 @@ struct UnitType
 {
 }
 
-alias TypeExprKind = SumType!(OptionType, ArrayType, NamedType, FunctionType, UnitType);
+/// `(Int, String)`, with at least two elements.
+struct TupleType
+{
+    TypeExpr[] elements;
+}
+
+alias TypeExprKind = SumType!(OptionType, ArrayType, NamedType, FunctionType, UnitType, TupleType);
 
 /// Prints a type the way it's written in source.
 string printTypeExpr(const TypeExpr t)
@@ -92,6 +98,7 @@ string printTypeExpr(const TypeExpr t)
         (const FunctionType f) => "(" ~ f.params.map!printTypeExpr.join(", ") ~ ") -> "
             ~ printTypeExpr(*f.returnType),
         (const UnitType u) => "()",
+        (const TupleType t) => "(" ~ t.elements.map!printTypeExpr.join(", ") ~ ")",
     );
 }
 
@@ -117,7 +124,8 @@ struct Expr
 
 alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, InterpolatedString, Identifier,
     UnaryExpr, BinaryExpr, CallExpr, MemberAccess, WhileExpr, ForExpr, IfExpr, BlockExpr, UnitLiteral,
-    SomeExpr, NoneLiteral, PropagateExpr, SafeMemberAccess, ArrayLiteral, MapLiteral, IndexExpr, RangeExpr);
+    SomeExpr, NoneLiteral, PropagateExpr, SafeMemberAccess, ArrayLiteral, MapLiteral, IndexExpr, RangeExpr,
+    TupleLiteral);
 
 /// `()`, the only value of type Unit.
 struct UnitLiteral
@@ -256,6 +264,12 @@ struct ArrayLiteral
     Expr[] elements;
 }
 
+/// `(a, b)`, with at least two elements.
+struct TupleLiteral
+{
+    Expr[] elements;
+}
+
 /// `[k: v]`, whose entries are `keys[i]: values[i]`. Sema rejects it until generics.
 struct MapLiteral
 {
@@ -372,6 +386,7 @@ string printExpr(const Expr e)
         },
         (const IndexExpr i) => format("(index %s %s)", printExpr(*i.object), printExpr(*i.index)),
         (const RangeExpr r) => format("(.. %s %s)", printExpr(*r.start), printExpr(*r.end)),
+        (const TupleLiteral t) => format("(tuple%s)", t.elements.map!(e => " " ~ printExpr(e)).join),
     );
 }
 
@@ -396,7 +411,8 @@ struct Stmt
     StmtKind kind;
 }
 
-alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, FunctionDecl, ReturnStmt, BreakStmt, ContinueStmt);
+alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, FunctionDecl, ReturnStmt, BreakStmt, ContinueStmt,
+    PatternDecl);
 
 /// The name of a VarDecl that binds nothing: its value is evaluated and dropped, and no name is
 /// declared, so any number of them can share a scope.
@@ -407,10 +423,49 @@ struct VarDecl
     Id!VarDecl id;
     string name;
     Span nameSpan;
+    /// Unused in a Pattern, where the binding holds the part of the PatternDecl's value at its place.
     Expr value;
     /// null when the type isn't annotated.
     TypeExpr* type;
     bool mutable;
+}
+
+/// `val (a, b) = value`, which takes `value` apart. Each binding is a VarDecl in `pattern`, which
+/// says whether it's mutable.
+struct PatternDecl
+{
+    Pattern pattern;
+    Expr value;
+}
+
+/// What a PatternDecl's value is taken apart by. Every pattern so far matches every value of its type.
+struct Pattern
+{
+    Span span;
+    PatternKind kind;
+}
+
+/// `(p, q)`, with at least two elements.
+struct TuplePattern
+{
+    Pattern[] elements;
+}
+
+alias PatternKind = SumType!(VarDecl, TuplePattern);
+
+/// The tuple literal `value` is when `pattern` takes it apart element by element, so each element is
+/// bound as its own `val` would be and no tuple is built; null when the whole value is taken apart.
+const(TupleLiteral)* elementwise(ref const Pattern pattern, ref const Expr value)
+{
+    auto count = pattern.kind.match!(
+        (ref const TuplePattern tuple) => tuple.elements.length,
+        _ => size_t(0),
+    );
+    if (count == 0) return null;
+    return value.kind.match!(
+        (ref const TupleLiteral literal) => literal.elements.length == count ? &literal : null,
+        _ => cast(const(TupleLiteral)*) null,
+    );
 }
 
 /// `target = value`. Lowering rewrites `a += 1` to `a = a + 1`.
@@ -549,6 +604,28 @@ string printStmt(const Stmt s)
         (const ReturnStmt r) => format("(return %s)", printExpr(r.value)),
         (const BreakStmt _) => "(break)",
         (const ContinueStmt _) => "(continue)",
+        (const PatternDecl p) => format("(%s %s %s)", isMutable(p.pattern) ? "mutable val" : "val",
+            printPattern(p.pattern), printExpr(p.value)),
+    );
+}
+
+/// Whether `pattern`'s bindings are mutable, which they all are or none are.
+private bool isMutable(const Pattern pattern)
+{
+    return pattern.kind.match!(
+        (const VarDecl v) => v.mutable,
+        (const TuplePattern t) => isMutable(t.elements[0]),
+    );
+}
+
+string printPattern(const Pattern pattern)
+{
+    import std.algorithm : map;
+    import std.array : join;
+
+    return pattern.kind.match!(
+        (const VarDecl v) => v.name ~ (v.type is null ? "" : ": " ~ printTypeExpr(*v.type)),
+        (const TuplePattern t) => "(" ~ t.elements.map!printPattern.join(", ") ~ ")",
     );
 }
 

@@ -70,6 +70,25 @@ final class TypeTable
         return registerTypeData(TypeData(FunctionData(params.idup, ret)));
     }
 
+    Type tuple(const(Type)[] elements)
+    {
+        return registerTypeData(TypeData(TupleData(elements.idup)));
+    }
+
+    bool isTuple(Type t) const
+    {
+        return _types[t.index].match!((const TupleData _) => true, _ => false);
+    }
+
+    /// The element types of the tuple type `t`.
+    immutable(Type)[] tupleElements(Type t) const
+    {
+        return _types[t.index].match!(
+            (const TupleData tuple) => tuple.elements,
+            (_) => assert(0, "not a tuple type"),
+        );
+    }
+
     /// The type declared by `decl`. `name` is only for `describe`, so it isn't part of the type's identity.
     Type nominal(const(Id!TypeDecl) decl, string name)
     {
@@ -139,6 +158,7 @@ final class TypeTable
             (const ArrayData a) => "[" ~ describe(a.element) ~ "]",
             (const EmptyArrayType _) => "[]",
             (const FunctionData f) => "(" ~ f.params.map!(p => describe(p)).join(", ") ~ ") -> " ~ describe(f.ret),
+            (const TupleData t) => "(" ~ t.elements.map!(e => describe(e)).join(", ") ~ ")",
             (const NominalData nd) => _nominalNames[nd.decl],
             (const ErrorType e) => "Error",
         );
@@ -223,6 +243,11 @@ struct FunctionData
     Type ret;
 }
 
+struct TupleData
+{
+    immutable(Type)[] elements;
+}
+
 struct NominalData
 {
     Id!TypeDecl decl;
@@ -245,4 +270,5 @@ struct ErrorType
 {
 }
 
-alias TypeData = SumType!(Primitive, OptionData, NoneType, ArrayData, EmptyArrayType, FunctionData, NominalData, ErrorType);
+alias TypeData = SumType!(Primitive, OptionData, NoneType, ArrayData, EmptyArrayType, FunctionData, NominalData, TupleData,
+    ErrorType);

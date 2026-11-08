@@ -119,6 +119,46 @@ class Evaluator
         if (ast.name != discardName) variables.defineVariable(ast.name, value);
     }
 
+    private void execute(const PatternDecl ast, Environment variables)
+    {
+        bindPattern(ast.pattern, ast.value, variables);
+    }
+
+    /// Binds each part of `value` as `pattern` takes it apart, as sema checked it: a tuple literal
+    /// element by element, and anything else evaluated whole first.
+    private void bindPattern(const Pattern pattern, const Expr value, Environment variables)
+    {
+        if (auto literal = elementwise(pattern, value))
+        {
+            auto parts = pattern.kind.match!(
+                (const TuplePattern tuple) => tuple.elements,
+                (_) => assert(0, "only a tuple pattern goes element by element"),
+            );
+            foreach (i, element; literal.elements)
+            {
+                bindPattern(parts[i], element, variables);
+            }
+            return;
+        }
+        bindValue(pattern, evaluate(value, variables), variables);
+    }
+
+    private void bindValue(const Pattern pattern, Variant value, Environment variables)
+    {
+        pattern.kind.match!(
+            (const VarDecl binding) {
+                if (binding.name != discardName) variables.defineVariable(binding.name, value);
+            },
+            (const TuplePattern tuple) {
+                auto parts = value.get!TupleValue.elements;
+                foreach (i, element; tuple.elements)
+                {
+                    bindValue(element, parts[i], variables);
+                }
+            },
+        );
+    }
+
     private void execute(const AssignStmt ast, Environment variables)
     {
         assign(ast.target, evaluate(ast.value, variables), variables);
@@ -397,6 +437,16 @@ class Evaluator
             elements ~= evaluate(element, variables);
         }
         return Variant(new ArrayValue(elements));
+    }
+
+    private Variant evaluate(const TupleLiteral ast, Environment variables)
+    {
+        Variant[] elements;
+        foreach (element; ast.elements)
+        {
+            elements ~= evaluate(element, variables);
+        }
+        return Variant(new TupleValue(elements));
     }
 
     private Variant evaluate(const MapLiteral ast, Environment variables)
@@ -972,6 +1022,15 @@ class Evaluator
             if (left.present != right.present) return false;
             if (!left.present) return true;
             return operate(BinaryOp.Equal, left.payload, right.payload).get!bool;
+        }
+        if (auto left = lhs.peek!TupleValue)
+        {
+            auto right = rhs.get!TupleValue;
+            foreach (i, element; left.elements)
+            {
+                if (!operate(BinaryOp.Equal, element, right.elements[i]).get!bool) return false;
+            }
+            return true;
         }
         if (auto left = lhs.peek!ArrayValue)
         {

@@ -198,3 +198,22 @@ class ModuleValue
         return name;
     }
 }
+
+/// A value of a tuple type. Like an Instance it never changes.
+final class TupleValue
+{
+    Variant[] elements;
+
+    this(Variant[] elements)
+    {
+        this.elements = elements;
+    }
+
+    override string toString()
+    {
+        import std.algorithm : map;
+        import std.array : join;
+
+        return "(" ~ elements.map!(e => e.toString()).join(", ") ~ ")";
+    }
+}

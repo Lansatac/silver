@@ -121,6 +121,11 @@ private final class Lowering
             }
             auto mutable = cst.name == "Silver.VariableDeclaration";
             return Stmt(spanOf(cst, file), StmtKind(VarDecl(ids.next!VarDecl, name, spanOf(cst[0], file), expr, typeExpr, mutable)));
+        case "Silver.PatternDeclaration":
+            // `MUTABLE? TuplePattern Expression` once `val` and `=` are discarded.
+            auto mutablePattern = cst[0].name == "Silver.MUTABLE";
+            auto pattern = convertPattern(cst[mutablePattern ? 1 : 0], mutablePattern);
+            return Stmt(spanOf(cst, file), StmtKind(PatternDecl(pattern, convertExpression(cst.children[$ - 1]))));
         case "Silver.DiscardStatement":
             auto discarded = convertExpression(cst[0]);
             return Stmt(spanOf(cst, file), StmtKind(VarDecl(ids.next!VarDecl, discardName,
@@ -161,8 +166,31 @@ private final class Lowering
         }
     }
 
-    /// `TypeAnnotation`, or any of the rules under `Type`.
-    /// `BaseType` and the parenthesized `( Type )` add no node of their own.
+    /// `TuplePattern`, or a `PatternElement` in one: a nested tuple, or a name with an optional type.
+    private Pattern convertPattern(ParseTree cst, bool mutable)
+    {
+        switch (cst.name)
+        {
+        case "Silver.PatternElement":
+            if (cst[0].name == "Silver.TuplePattern") return convertPattern(cst[0], mutable);
+            TypeExpr* type = cst.children.length > 1 ? boxed(convertTypeExpression(cst[1])) : null;
+            // A binding in a pattern has no value of its own; see VarDecl.value.
+            auto binding = VarDecl(ids.next!VarDecl, cst[0].matches[0], spanOf(cst[0], file), Expr.init, type, mutable);
+            return Pattern(spanOf(cst, file), PatternKind(binding));
+        case "Silver.TuplePattern":
+            Pattern[] elements;
+            foreach (element; cst.children)
+            {
+                elements ~= convertPattern(element, mutable);
+            }
+            return Pattern(spanOf(cst, file), PatternKind(TuplePattern(elements)));
+        default:
+            throw new Exception("Unexpected '%s' in pattern".format(cst.name));
+        }
+    }
+
+    /// `TypeAnnotation`, or any of the rules under `Type`. `BaseType` adds no node of its own,
+    /// and neither does a `ParenType` around one type, which is only grouping.
     private TypeExpr convertTypeExpression(ParseTree cst)
     {
         import std.algorithm : map;
@@ -201,6 +229,10 @@ private final class Lowering
             return TypeExpr(ids.next!TypeExpr, spanOf(cst, file), TypeExprKind(FunctionType(params, returnType)));
         case "Silver.UnitType":
             return TypeExpr(ids.next!TypeExpr, spanOf(cst, file), TypeExprKind(UnitType()));
+        case "Silver.ParenType":
+            if (cst.children.length == 1) return convertTypeExpression(cst[0]);
+            auto elements = cst.children.map!(e => convertTypeExpression(e)).array;
+            return TypeExpr(ids.next!TypeExpr, spanOf(cst, file), TypeExprKind(TupleType(elements)));
         default:
             throw new Exception("lower: type expression '%s' not supported yet".format(cst.name));
         }
@@ -235,6 +267,14 @@ private final class Lowering
             return convertBlock(cst);
         case "Silver.UnitLiteral":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(UnitLiteral()));
+        case "Silver.ParenExpression":
+            if (cst.children.length == 1) return convertExpression(cst[0]);
+            Expr[] elements;
+            foreach (element; cst.children)
+            {
+                elements ~= convertExpression(element);
+            }
+            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(TupleLiteral(elements)));
         case "Silver.WhileExpression":
             return convertWhileExpression(cst);
         case "Silver.ForExpression":

@@ -29,3 +29,19 @@ immutable Case[] typeConstruction = [
     parsesAs("val v = line.start.x", "(val v (. (. line start) x))"),
     parsesAs("p.x = 1", "(assign (. p x) 1)"),
 ];
+
+immutable Case[] tupleTypes = [
+    parsesAs("val a: (Int, String) = b", "(val a: (Int, String) b)"),
+    parsesAs("val a: ((Int, Int), Bool) = b", "(val a: ((Int, Int), Bool) b)"),
+    parsesAs("val a: (Int, Int)? = b", "(val a: (Int, Int)? b)"),
+    parsesAs("val a: (Int?, [Int]) = b", "(val a: (Int?, [Int]) b)"),
+    parsesAs("val a: [(Int, Int)] = b", "(val a: [(Int, Int)] b)"),
+    parsesAs("val a: (Int, Int) -> Int = f", "(val a: (Int, Int) -> Int f)"),
+    parsesAs("val a: ((Int, Int)) -> Int = f", "(val a: ((Int, Int)) -> Int f)"),
+    parsesAs("val a: () -> (Int, Int) = f", "(val a: () -> (Int, Int) f)"),
+    parsesAs("val a: (Int,\n    Int) = b", "(val a: (Int, Int) b)"),
+    parsesAs("val a: (Int) = b", "(val a: Int b)"),
+    declaresAs("def f(p: (Int, Int)): (Int, Int) => p", "(def f (p: (Int, Int)): (Int, Int) p)"),
+    declaresAs("type Pair(value: (Int, String))", "(type Pair (value: (Int, String)))"),
+    rejects("val a: (Int,) = b"),
+];

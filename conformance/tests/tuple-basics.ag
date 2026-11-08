@@ -1,0 +1,59 @@
+type Labeled(label: String, at: (Int, Int))
+
+def pair(): (Int, String) => (1, "one")
+def swap(p: (Int, String)): (String, Int) {
+    val (n, s) = p
+    (s, n)
+}
+def origin(): (Float, Float) {
+    return (0.0, 0.0)
+}
+def nothing(): ((), ()) => ((), ())
+
+def main(): Unit {
+    printl((1, 2))
+    printl(("a", true, 1.5))
+    printl(((1, 2), (3, (4, 5))))
+    printl(pair())
+    printl(swap(pair()))
+    printl(swap((2, "two")))
+    printl(origin())
+
+    // Elements print as print would show them alone.
+    printl((Some(1), None == Some(2), [1, 2], ["x"]))
+    printl((Labeled("p", (3, 4)), ()))
+    printl(nothing())
+    printl(((), 7, ()))
+
+    // A literal's elements adapt to what it's checked against.
+    val bytes: (UInt8, Int8) = (255, -128)
+    printl(bytes)
+    val maybe: (Int, Int?) = (1, None)
+    printl(maybe)
+    val wrapped: (Int, String)? = (3, "three")
+    printl(wrapped)
+    val missing: (Int, String)? = None
+    printl(missing)
+    printl(missing ?? (0, "zero"))
+    printl(wrapped ?? (0, "zero"))
+
+    // Through if arms and blocks.
+    val chosen: (UInt8, String) = if bytes == (255, -128) => (1, "yes") else { (2, "no") }
+    printl(chosen)
+
+    // As array elements, fields and values passed around.
+    val points = [(1, 2), (3, 4)]
+    printl(points)
+    printl(points[1])
+    printl(points ~ [(5, 6)])
+    val l = Labeled("q", points[0])
+    printl(l.at)
+    mutable val current = (0, "start")
+    current = (1, "next")
+    printl(current)
+
+    // Formatted in strings and conversions.
+    printl("at {points[0]}, {String(pair())}")
+    print((1, 2))
+    printl("")
+}

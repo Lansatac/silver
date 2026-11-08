@@ -1979,3 +1979,173 @@ unittest
     analyzedMain(`_ = [None]`).shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
     analyzedMain(`while val _ = 1 { }`).shouldReport(DiagnosticCode.InvalidOperand, At("1", 1));
 }
+
+@("a tuple literal synthesizes each element, and its type is the element types in order")
+unittest
+{
+    auto a = analyzedMain(`val t = (1, "a")
+    val n = ((1, 2.0), true, ())
+    val s = (Some(1), [1])`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("t", 1), "(Int, String)");
+    a.shouldDeclareType(At("n", 1), "((Int, Float), Bool, Unit)");
+    a.shouldDeclareType(At("s", 1), "(Int?, [Int])");
+}
+
+@("a tuple literal takes its element types from what it's checked against")
+unittest
+{
+    auto a = analyzed(`def pair(): (UInt8, Int?) => (1, None)
+def main(): Unit {
+    val t: (UInt8, Int?) = (2, 3)
+    val o: (Int, Int)? = (4, 5)
+    val ts: [(UInt8, Bool)] = [(6, true)]
+    val c: (UInt8, Int?) = if true => (7, None) else { (8, 9) }
+}`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("1", "UInt8");
+    a.shouldHaveType("None", "None");
+    a.shouldHaveType("(2, 3)", "(UInt8, Int?)");
+    a.shouldHaveType("3", "Int");
+    a.shouldHaveType("(4, 5)", "(Int, Int)");
+    a.shouldHaveType("6", "UInt8");
+    a.shouldHaveType("8", "UInt8");
+}
+
+@("a tuple of one type is the same type wherever it's written")
+unittest
+{
+    analyzed(`def pair(): (Int, String) => (1, "a")
+def first(p: (Int, String)): Int {
+    val (n, _) = p
+    n
+}
+def main(): Unit {
+    val p: (Int, String) = pair()
+    _ = first(p) + first((2, "b"))
+}`).shouldHaveNoDiagnostics();
+    analyzedMain(`val p: (Int, String) = (1, 2)`).shouldReport(DiagnosticCode.TypeMismatch, At("2", 1));
+    analyzedMain(`val p: (Int, Int) = (1, 2, 3)`).shouldReport(DiagnosticCode.TypeMismatch, At("(1, 2, 3)", 1));
+}
+
+@("a tuple value never converts, though a literal's elements adapt and promote")
+unittest
+{
+    analyzedMain(`val a = (1, 2)
+    val b: (Int, Int?) = a`).shouldReport(DiagnosticCode.TypeMismatch, At("a", 2));
+    analyzedMain(`val b: (Int, Int?) = (1, 2)`).shouldHaveNoDiagnostics();
+}
+
+@("a tuple element with nothing to take a type from says to annotate, and Any isn't one")
+unittest
+{
+    analyzedMain(`val t = (1, None)`).shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+    analyzedMain(`val t = ([], 1)`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
+    analyzed(`def f(t: (Any, Int)): Unit => ()
+def main(): Unit => ()`).shouldReport(DiagnosticCode.InvalidTupleElement, At("Any", 1));
+}
+
+@("tuples compare elementwise when every element can, and have no order")
+unittest
+{
+    auto a = analyzedMain(`val t: (UInt8, Int?) = (1, None)
+    _ = t == (2, Some(3))
+    _ = (2, 3) != t`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("2", 1, "UInt8");
+    a.shouldHaveType("2", 2, "UInt8");
+    analyzed(`def f(): Unit => ()
+def main(): Unit {
+    _ = (f, 1) == (f, 1)
+}`).shouldReport(DiagnosticCode.InvalidOperand, At("(f, 1) == (f, 1)", 1));
+    analyzedMain(`_ = (1, 2) < (1, 3)`).shouldReport(DiagnosticCode.InvalidOperand, At("(1, 2)", 1));
+}
+
+@("a tuple literal against an option is checked against its payload and promoted")
+unittest
+{
+    auto a = analyzedMain(`val t: (UInt8, Bool)? = (1, true)
+    val u: (UInt8, Bool)? = None
+    val v = u ?? (2, false)`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("(1, true)", "(UInt8, Bool)");
+    a.shouldDeclareType(At("v", 1), "(UInt8, Bool)");
+}
+
+@("destructuring binds each part of a tuple, element by element for a literal")
+unittest
+{
+    auto a = analyzed(`def pair(): (Int, String) => (1, "a")
+def main(): Unit {
+    val (x, y) = pair()
+    val (b: UInt8, c, _) = (2, Some(3), None)
+    val ((d, e), f) = ((true, 1.5), pair())
+    mutable val (g, h: Int?) = (4, 5)
+    g = 6
+    h = None
+}`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("x", 1), "Int");
+    a.shouldDeclareType(At("y", 1), "String");
+    a.shouldDeclareType(At("b", 1), "UInt8");
+    a.shouldHaveType("2", "UInt8");
+    a.shouldDeclareType(At("c", 1), "Int?");
+    a.shouldDeclareType(At("d", 1), "Bool");
+    a.shouldDeclareType(At("e", 1), "Float");
+    a.shouldDeclareType(At("f", 1), "(Int, String)");
+    a.shouldDeclareType(At("h", 1), "Int?");
+}
+
+@("a fully annotated pattern checks its value against the pattern's type")
+unittest
+{
+    auto a = analyzedMain(`val (x: UInt8, y: Int?) = if true => (1, 2) else (3, None)`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("1", "UInt8");
+    a.shouldHaveType("(1, 2)", "(UInt8, Int?)");
+    analyzedMain(`val (x: Int, y: Int) = ("a", 1)`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
+}
+
+@("a part of a value that isn't a literal can only be annotated with its own type")
+unittest
+{
+    analyzed(`def pair(): (Int, String) => (1, "a")
+def main(): Unit {
+    val (x: Int, y) = pair()
+}`).shouldHaveNoDiagnostics();
+    analyzed(`def pair(): (Int, String) => (1, "a")
+def main(): Unit {
+    val (x: Int?, y) = pair()
+}`).shouldReport(DiagnosticCode.TypeMismatch, At("Int", 2));
+}
+
+@("a pattern has to fit the tuple it takes apart")
+unittest
+{
+    analyzed(`def triple(): (Int, Int, Int) => (1, 2, 3)
+def main(): Unit {
+    val (x, y) = triple()
+}`).shouldReport(DiagnosticCode.PatternMismatch, At("(x, y)", 1));
+    analyzedMain(`val (x, y) = 1`).shouldReport(DiagnosticCode.PatternMismatch, At("(x, y)", 1));
+    analyzedMain(`val ((x, y), z) = (1, 2)`).shouldReport(DiagnosticCode.PatternMismatch, At("(x, y)", 1));
+    analyzedMain(`val (x, y) = (1, 2, 3)`).shouldReport(DiagnosticCode.PatternMismatch, At("(x, y)", 1));
+}
+
+@("a pattern's bindings follow the rules for locals")
+unittest
+{
+    analyzedMain(`val (x, x) = (1, 2)`).shouldReport(DiagnosticCode.DuplicateDeclaration, At("x", 2));
+    analyzedMain(`val x = 1
+    val (x, y) = (1, 2)`).shouldReport(DiagnosticCode.DuplicateDeclaration, At("x", 2));
+    analyzedMain(`val (x, y) = (1, x)`).shouldReport(DiagnosticCode.UnknownName, At("x", 2));
+    analyzedMain(`val (x, y) = (1, 2)
+    x = 3`).shouldReport(DiagnosticCode.AssignToImmutable, At("x", 2));
+    analyzedMain(`val (_, _) = (None, [])`).shouldHaveNoDiagnostics();
+}
+
+@("a tuple isn't a constant")
+unittest
+{
+    analyzed(`val t: (Int, Int) = (1, 2)
+def main(): Unit => ()`).shouldReport(DiagnosticCode.InvalidConstantType, At("(Int, Int)", 1));
+}

@@ -120,3 +120,22 @@ immutable Case[] imports = [
     declaresAs("import module", "(import module)"),
     declaresAs("import io\nimport a.b.c", ["(import io)", "(import a.b.c)"]),
 ];
+
+immutable Case[] destructuring = [
+    parsesAs("val (a, b) = f()", "(val (a, b) (call f))"),
+    parsesAs("mutable val (a, b) = f()", "(mutable val (a, b) (call f))"),
+    parsesAs("val (a: UInt8, b) = (1, 2)", "(val (a: UInt8, b) (tuple 1 2))"),
+    parsesAs("val (a, _) = f()", "(val (a, _) (call f))"),
+    parsesAs("val ((a, b), c) = f()", "(val ((a, b), c) (call f))"),
+    parsesAs("val (a, (b, _), c: (Int, Int)?) = f()", "(val (a, (b, _), c: (Int, Int)?) (call f))"),
+    parsesAs("val (a,\n    b) = f()", "(val (a, b) (call f))"),
+    parsesAs("val (\n    a,\n    b\n) = f()", "(val (a, b) (call f))"),
+    parsesAs("val\n(a, b)\n= f()", "(val (a, b) (call f))"),
+    parsesAs("mutable\nval (a, b) = f()", "(mutable val (a, b) (call f))"),
+    // A name alone in parentheses isn't a pattern.
+    rejects("val (a) = f()"),
+    rejects("val () = f()"),
+    rejects("val (a, b): (Int, Int) = f()"),
+    rejects("val (a b) = f()"),
+    rejects("val (A, b) = f()"),
+];

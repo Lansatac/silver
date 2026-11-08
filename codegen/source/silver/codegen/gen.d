@@ -361,11 +361,11 @@ final class Generator
         return _analysis.fieldsOf(type).all!(f => f.type != _analysis.types.any && f.type != _analysis.types.never);
     }
 
-    /// The literal struct type of `type`'s values. Unit fields have no value, so they take no space.
+    /// The literal struct type of `type`'s values. Fields with no operand, like Unit, take no space.
     string llvmStruct(Id!TypeDecl type)
     {
         auto stored = _analysis.fieldsOf(type)
-            .filter!(f => f.type != _analysis.types.unit)
+            .filter!(f => hasOperand(f.type))
             .map!(f => llvmType(f.type));
         return "{ %-(%s, %) }".format(stored);
     }
@@ -373,7 +373,7 @@ final class Generator
     /// Where field `fieldIndex` of `fieldsOf(type)` is in `llvmStruct(type)`.
     size_t llvmFieldIndex(Id!TypeDecl type, size_t fieldIndex)
     {
-        return _analysis.fieldsOf(type)[0 .. fieldIndex].count!(f => f.type != _analysis.types.unit);
+        return _analysis.fieldsOf(type)[0 .. fieldIndex].count!(f => hasOperand(f.type));
     }
 
     Fragment load(string type, string pointer)
@@ -435,11 +435,11 @@ final class Generator
             .join(", ");
     }
 
-    /// The operand for a param called `name`, or null for Unit, which has none.
+    /// The operand for a param called `name`, or null for a type with none, like Unit.
     /// Params are immutable, so they're used directly as SSA values with no stack slot.
     string paramOperand(string name, Type type)
     {
-        return type == _analysis.types.unit ? null : "%" ~ name ~ ".arg";
+        return hasOperand(type) ? "%" ~ name ~ ".arg" : null;
     }
 
     string emitParams(const(Param[]) params)
@@ -478,10 +478,57 @@ final class Generator
     }
 
     /// Whether values of `type` have an operand. Unit has one value and Never has none, so
-    /// neither needs one, and an option of either has no payload.
+    /// neither needs one, and an option of either has no payload. A tuple has one when it has a
+    /// value at all and something in it does.
     bool hasOperand(Type type)
     {
-        return type != _analysis.types.unit && type != _analysis.types.never && type != _analysis.types.none;
+        if (type == _analysis.types.unit || type == _analysis.types.never || type == _analysis.types.none) return false;
+        if (!_analysis.types.isTuple(type)) return true;
+        auto elements = _analysis.types.tupleElements(type);
+        return !elements.canFind(_analysis.types.never) && elements.any!(e => hasOperand(e));
+    }
+
+    /// The literal struct type of a tuple's values, which holds the elements that have an operand.
+    string tupleLayout(Type tuple)
+    {
+        return "{ %-(%s, %) }".format(_analysis.types.tupleElements(tuple).filter!(e => hasOperand(e)).map!(e => llvmType(e)));
+    }
+
+    /// Element `index` of the operand `value`, of the tuple type `tuple`, or nothing when that element
+    /// has no operand. `value` is null when the evaluation that was to produce it never comes back.
+    Fragment tupleElement(Type tuple, string value, size_t index)
+    {
+        auto elements = _analysis.types.tupleElements(tuple);
+        if (!hasOperand(elements[index]) || value is null) return Fragment.init;
+
+        auto result = _function.newTemp();
+        auto stored = elements[0 .. index].count!(e => hasOperand(e));
+        return Fragment.instruction("%s = extractvalue %s %s, %s".format(result, tupleLayout(tuple), value, stored), result);
+    }
+
+    /// `(a, b)`. The elements are evaluated in order, then the ones with an operand are inserted.
+    Fragment emitTupleLiteral(const Expr expr, const TupleLiteral literal)
+    {
+        auto type = _analysis.typeOf(expr.id);
+        auto elements = literal.elements.map!(element => emitExpr(element)).array;
+        auto code = Fragment.sequence(elements);
+        if (!hasOperand(type)) return code.withValue(null);
+
+        auto layout = tupleLayout(type);
+        auto current = "undef";
+        size_t stored = 0;
+        foreach (i, elementType; _analysis.types.tupleElements(type))
+        {
+            if (!hasOperand(elementType)) continue;
+            // An element that never comes back means the tuple is never built.
+            if (elements[i].value is null) return code.withValue(null);
+            auto next = _function.newTemp();
+            code = code.then(Fragment.instruction("%s = insertvalue %s %s, %s %s, %s".format(
+                next, layout, current, llvmType(elementType), elements[i].value, stored)));
+            current = next;
+            stored++;
+        }
+        return code.withValue(current);
     }
 
     string optionLayout(Type inner)
@@ -566,7 +613,7 @@ final class Generator
         auto payload = optionPayload(option, object.value);
 
         Fragment field;
-        if (fieldType != _analysis.types.unit)
+        if (hasOperand(fieldType))
         {
             auto pointer = fieldPointer(llvmStruct(type), payload.value, llvmFieldIndex(type, index));
             field = pointer.then(load(llvmType(fieldType), pointer.value));
@@ -616,6 +663,7 @@ final class Generator
             (const MapLiteral _) => assert(0, "sema rejects maps"),
             (const IndexExpr index) => emitIndex(expr, index),
             (const RangeExpr _) => assert(0, "sema only allows a range as a slice's index or in a `for`, which read its bounds"),
+            (const TupleLiteral literal) => emitTupleLiteral(expr, literal),
         );
     }
 
@@ -911,7 +959,7 @@ final class Generator
 
         auto index = _analysis.fieldIndexOf(expr.id);
         auto fieldType = _analysis.fieldsOf(type)[index].type;
-        if (fieldType == _analysis.types.unit) return object.withValue(null);
+        if (!hasOperand(fieldType)) return object.withValue(null);
 
         auto pointer = fieldPointer(llvmStruct(type), object.value, llvmFieldIndex(type, index));
         return object.then(pointer).then(load(llvmType(fieldType), pointer.value));
@@ -1081,6 +1129,21 @@ final class Generator
                     [emitStringLiteral("Some(").value, inner.value, emitStringLiteral(")").value]));
                 return emitConditional(optionTag(type, value), sliceLayout, some, emitStringLiteral("None"), "format");
             },
+            (const TupleData tuple) {
+                // A tuple holding a Never is never built, so this is never reached.
+                if (tuple.elements.canFind(types.never)) return Fragment.undef();
+                Fragment code;
+                string[] operands = [emitStringLiteral("(").value];
+                foreach (i, element; tuple.elements)
+                {
+                    if (i > 0) operands ~= emitStringLiteral(", ").value;
+                    auto part = tupleElement(type, value, i);
+                    auto formatted = emitFormat(element, part.value, span);
+                    code = code.then(part).then(formatted);
+                    operands ~= formatted.value;
+                }
+                return code.then(emitConcat(operands ~ emitStringLiteral(")").value));
+            },
             (_) => unsupported(span, "formatting a value of type `%s`".format(types.describe(type))),
         );
     }
@@ -1111,7 +1174,7 @@ final class Generator
                 if (i > 0) operands ~= emitStringLiteral(", ").value;
 
                 Fragment value;
-                if (field.type != _analysis.types.unit)
+                if (hasOperand(field.type))
                 {
                     auto pointer = fieldPointer(layout, object, llvmFieldIndex(type, i));
                     value = pointer.then(load(llvmType(field.type), pointer.value));
@@ -1669,6 +1732,20 @@ final class Generator
                     "ptr %s, ptr %s".format(lhs, rhs));
             },
             (const OptionData option) => emitOptionEquals(type, option.inner, lhs, rhs, span),
+            (const TupleData tuple) {
+                if (!hasOperand(type)) return Fragment.constant("true");
+                // Built from the last element back: each comparison's true arm is the rest of them.
+                auto result = Fragment.constant("true");
+                foreach_reverse (i, element; tuple.elements)
+                {
+                    if (!hasOperand(element)) continue;
+                    auto left = tupleElement(type, lhs, i);
+                    auto right = tupleElement(type, rhs, i);
+                    auto comparison = left.then(right).then(emitEquals(element, left.value, right.value, span));
+                    result = emitConditional(comparison, "i1", result, Fragment.constant("false"), "element");
+                }
+                return result;
+            },
             (const ArrayData _) {
                 if (type !in _arrayEqualities)
                 {
@@ -1717,7 +1794,7 @@ final class Generator
         auto body = Fragment.constant("true");
         foreach_reverse (i, field; fields)
         {
-            if (field.type == _analysis.types.unit) continue;
+            if (!hasOperand(field.type)) continue;
             auto fieldLlvmType = llvmType(field.type);
             auto leftPointer = fieldPointer(layout, left, llvmFieldIndex(type, i));
             auto leftField = load(fieldLlvmType, leftPointer.value);
@@ -1873,7 +1950,7 @@ final class Generator
             auto value = emitExpr(arg);
             auto argType = _analysis.typeOf(arg.id);
             auto isAny = params[i] == _analysis.types.any;
-            auto formatted = isAny && (isNominal(argType) || _analysis.types.isOption(argType)
+            auto formatted = isAny && (isNominal(argType) || _analysis.types.isOption(argType) || _analysis.types.isTuple(argType)
                 || _analysis.types.isArray(argType));
             if (isAny && _analysis.types.isInteger(argType))
             {
@@ -1958,6 +2035,7 @@ final class Generator
             (const NominalData _) => "string",
             (const OptionData _) => "string",
             (const ArrayData _) => "string",
+            (const TupleData _) => "string",
             (_) => cast(string) null,
         );
     }
@@ -2008,6 +2086,7 @@ final class Generator
     {
         return statement.kind.match!(
             (const VarDecl var) => emitVarDecl(var),
+            (const PatternDecl decl) => emitPattern(decl.pattern, decl.value).withValue(null),
             (const AssignStmt assign) => emitAssign(assign),
             (const ExprStmt exprStmt) => emitExpr(exprStmt.expr).withValue(null),
             (const FunctionDecl function_) => unsupported(statement.span, "nested functions").withValue(null),
@@ -2045,6 +2124,61 @@ final class Generator
             value.code ~ "  store %s %s, ptr %s".format(type, value.value, slot),
             null,
             value.endBlock);
+    }
+
+    /// `val pattern = value`, as sema checked it: a tuple literal element by element, each part
+    /// bound as its own `val`, and anything else evaluated whole and then taken apart.
+    Fragment emitPattern(const Pattern pattern, const Expr value)
+    {
+        if (auto literal = elementwise(pattern, value))
+        {
+            auto parts = pattern.kind.match!(
+                (const TuplePattern tuple) => tuple.elements,
+                (_) => assert(0, "only a tuple pattern goes element by element"),
+            );
+            Fragment code;
+            foreach (i, element; literal.elements)
+            {
+                code = code.then(emitPattern(parts[i], element));
+            }
+            return code;
+        }
+        auto evaluated = emitExpr(value);
+        return evaluated.then(bindParts(pattern, _analysis.valueTypeOf(value.id), evaluated.value));
+    }
+
+    /// Stores each part of the operand `value`, of `type`, in the slot of the binding `pattern`
+    /// gives it. `value` is null when its evaluation never comes back, and the slots are made anyway
+    /// so the code after it, which is never reached, still has them to read.
+    Fragment bindParts(const Pattern pattern, Type type, string value)
+    {
+        return pattern.kind.match!(
+            (const VarDecl binding) {
+                auto bindingType = _analysis.typeOf(binding.id);
+                if (binding.name == discardName || !hasOperand(bindingType)) return Fragment.init;
+
+                auto layout = llvmType(bindingType);
+                auto slot = _function.newSlot(binding.name);
+                _function.slots[binding.id] = slot;
+                auto made = Fragment(["  %s = alloca %s".format(slot, layout)]);
+                return value is null ? made : made.then(Fragment.store(layout, value, slot));
+            },
+            (const TuplePattern tuple) {
+                Fragment code;
+                foreach (i, element; tuple.elements)
+                {
+                    // Sema gives every binding of a Never the type Never, so there's nothing to take apart.
+                    if (!_analysis.types.isTuple(type))
+                    {
+                        code = code.then(bindParts(element, type, null));
+                        continue;
+                    }
+                    auto part = tupleElement(type, hasOperand(type) ? value : null, i);
+                    code = code.then(part).then(bindParts(element, _analysis.types.tupleElements(type)[i], part.value));
+                }
+                return code;
+            },
+        );
     }
 
     /// A store to the target. Reads are always fresh loads, so later uses see it.
@@ -2117,6 +2251,7 @@ final class Generator
             (const EmptyArrayType _) => sliceLayout,
             (const FunctionData f) => "ptr",
             (const NominalData nd) => "ptr",
+            (const TupleData _) => tupleLayout(t),
             (const NoneType _) => assert(0, "every None that has a value is promoted"),
             (const ErrorType _) {
                 _collector.reportError(DiagnosticCode.InternalError, Span.init, "Unknown type!");
@@ -2135,6 +2270,7 @@ final class Generator
             (const EmptyArrayType _) => sliceLayout,
             (const FunctionData f) => "ptr",
             (const NominalData nd) => "ptr",
+            (const TupleData _) => hasOperand(t) ? tupleLayout(t) : "void",
             (const NoneType _) => assert(0, "no function returns a bare None"),
             (const ErrorType _) {
                 _collector.reportError(DiagnosticCode.InternalError, Span.init, "Unknown type!");

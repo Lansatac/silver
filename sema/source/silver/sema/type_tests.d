@@ -29,6 +29,7 @@ private string shape(TypeTable table, Type type)
         (const EmptyArrayType _) => "EmptyArray",
         (const FunctionData f) => "Function/" ~ f.params.length.to!string,
         (const NominalData _) => "Nominal",
+        (const TupleData t) => "Tuple/" ~ t.elements.length.to!string,
         (const ErrorType _) => "Error",
     );
 }
@@ -153,3 +154,16 @@ unittest
     );
 }
 
+
+@("TypeTable interns tuples by their element types in order")
+unittest
+{
+    auto table = new TypeTable;
+    auto pair = table.tuple([table.int_, table.string_]);
+
+    assert(pair == table.tuple([table.int_, table.string_]));
+    assert(pair != table.tuple([table.string_, table.int_]));
+    assert(table.isTuple(pair));
+    assert(table.tupleElements(pair) == [table.int_, table.string_]);
+    assert(table.describe(table.option(table.tuple([pair, table.bool_]))) == "((Int, String), Bool)?");
+}

@@ -3,6 +3,7 @@ module silver.sema.check;
 import std.algorithm;
 import std.array;
 import std.conv;
+import std.range : repeat;
 import std.sumtype;
 import std.string;
 
@@ -453,7 +454,24 @@ private final class TypeChecker
             (const FunctionType func) => _types.function_(
                 func.params.map!(p => resolveType(p)).array, resolveType(*func.returnType)),
             (const UnitType _) => _types.unit,
+            (const TupleType tuple) => tupleOf(tuple.elements.map!(e => resolveType(e)).array, tuple.elements),
         );
+    }
+
+    /// The tuple of `elements`, or `error` if one of them is, reported at its type expression in
+    /// `written` when it's `Any`. Nothing that synthesizes a tuple can give it an `Any`.
+    private Type tupleOf(Type[] elements, const(TypeExpr)[] written = null)
+    {
+        foreach (i, element; elements)
+        {
+            if (element == _types.any && written.length > 0)
+            {
+                _collector.reportError(DiagnosticCode.InvalidTupleElement, written[i].span, "A tuple can't hold `Any`");
+                elements[i] = _types.error;
+            }
+        }
+        if (elements.canFind(_types.error)) return _types.error;
+        return _types.tuple(elements);
     }
 
     /// The option holding `inner`, or `error` (reported at `span`) if there can't be one.
@@ -616,20 +634,8 @@ private final class TypeChecker
     private void checkStmt(const Stmt stmt, BodyContext ctx)
     {
         stmt.kind.match!(
-            (const VarDecl var) {
-                if (var.type is null)
-                {
-                    // A discard keeps no value, so a `None` or `[]` needs no type to be dropped.
-                    auto type = synthesize(var.value, ctx);
-                    _symbolTypes[SymbolId(var.id)] = var.name == discardName ? type : requireTyped(type, var.value.span);
-                }
-                else
-                {
-                    auto type = resolveType(*var.type);
-                    check(var.value, type, ctx);
-                    _symbolTypes[SymbolId(var.id)] = type;
-                }
-            },
+            (const VarDecl var) => checkBinding(var, var.value, ctx),
+            (const PatternDecl decl) => checkPattern(decl.pattern, decl.value, ctx),
             (const AssignStmt assign) {
                 auto lhsType = synthesize(assign.target, ctx);
                 if (lhsType != _types.error) checkAssignable(assign.target);
@@ -653,6 +659,128 @@ private final class TypeChecker
             },
             (const BreakStmt _) => requireLoop("break", stmt.span, ctx),
             (const ContinueStmt _) => requireLoop("continue", stmt.span, ctx),
+        );
+    }
+
+    /// `val binding = value`, or a binding in a pattern given its part of a tuple literal.
+    private void checkBinding(const VarDecl binding, const Expr value, BodyContext ctx)
+    {
+        if (binding.type is null)
+        {
+            // A discard keeps no value, so a `None` or `[]` needs no type to be dropped.
+            auto type = synthesize(value, ctx);
+            _symbolTypes[SymbolId(binding.id)] = binding.name == discardName ? type : requireTyped(type, value.span);
+        }
+        else
+        {
+            auto type = resolveType(*binding.type);
+            check(value, type, ctx);
+            _symbolTypes[SymbolId(binding.id)] = type;
+        }
+    }
+
+    /// `val pattern = value`. A tuple literal of the pattern's size is taken apart element by
+    /// element, each as its own `val`. Any other value is checked against the pattern's type when
+    /// every binding has one, so literals in it still adapt, and synthesized otherwise.
+    private void checkPattern(const Pattern pattern, const Expr value, BodyContext ctx)
+    {
+        if (auto literal = elementwise(pattern, value))
+        {
+            auto parts = pattern.kind.match!(
+                (const TuplePattern tuple) => tuple.elements,
+                (_) => assert(0, "only a tuple pattern goes element by element"),
+            );
+            Type[] types;
+            foreach (i, element; literal.elements)
+            {
+                checkPattern(parts[i], element, ctx);
+                types ~= _promotions.get(element.id, _exprTypes.get(element.id, _types.error));
+            }
+            // Never built, so only recorded for completeness; a dropped `None` leaves it untyped.
+            _exprTypes[value.id] = types.canFind(_types.none) || types.canFind(_types.emptyArray)
+                ? _types.error : tupleOf(types);
+            return;
+        }
+
+        pattern.kind.match!(
+            (const VarDecl binding) => checkBinding(binding, value, ctx),
+            (const TuplePattern _) {
+                auto expected = annotatedType(pattern);
+                if (expected == Type.init)
+                {
+                    bindPattern(pattern, requireTyped(synthesize(value, ctx), value.span));
+                }
+                else
+                {
+                    check(value, expected, ctx);
+                    bindPattern(pattern, expected);
+                }
+            },
+        );
+    }
+
+    /// The type of what `pattern` takes apart, or `Type.init` if a binding in it has no annotation.
+    /// Each annotated binding is given its type on the way.
+    private Type annotatedType(const Pattern pattern)
+    {
+        return pattern.kind.match!(
+            (const VarDecl binding) {
+                if (binding.type is null) return Type.init;
+                auto type = resolveType(*binding.type);
+                _symbolTypes[SymbolId(binding.id)] = type;
+                return type;
+            },
+            (const TuplePattern tuple) {
+                // Every element, so each annotation is resolved once whatever comes after it.
+                auto types = tuple.elements.map!(e => annotatedType(e)).array;
+                return types.canFind(Type.init) ? Type.init : tupleOf(types);
+            },
+        );
+    }
+
+    /// Gives each binding in `pattern` its part of a `type` value. An annotated binding already has
+    /// its type, which the part has to be exactly, since a value doesn't convert.
+    private void bindPattern(const Pattern pattern, Type type)
+    {
+        auto unknown = type == _types.error || type == _types.never;
+        pattern.kind.match!(
+            (const VarDecl binding) {
+                if (binding.type is null)
+                {
+                    _symbolTypes[SymbolId(binding.id)] = type;
+                    return;
+                }
+                auto annotated = _symbolTypes[SymbolId(binding.id)];
+                if (type != annotated && !unknown && annotated != _types.error)
+                {
+                    _collector.reportError(DiagnosticCode.TypeMismatch, binding.type.span,
+                        "This part of the value is `%s`, which doesn't convert to `%s`"
+                            .format(_types.describe(type), _types.describe(annotated)));
+                }
+            },
+            (const TuplePattern tuple) {
+                auto count = tuple.elements.length;
+                const(Type)[] parts;
+                if (_types.isTuple(type) && _types.tupleElements(type).length == count)
+                {
+                    parts = _types.tupleElements(type);
+                }
+                else
+                {
+                    if (!unknown)
+                    {
+                        _collector.reportError(DiagnosticCode.PatternMismatch, pattern.span, _types.isTuple(type)
+                            ? "This pattern takes apart %s values, but `%s` has %s"
+                                .format(count, _types.describe(type), _types.tupleElements(type).length)
+                            : "This pattern takes apart a tuple, but the value is `%s`".format(_types.describe(type)));
+                    }
+                    parts = (type == _types.never ? _types.never : _types.error).repeat(count).array;
+                }
+                foreach (i, element; tuple.elements)
+                {
+                    bindPattern(element, parts[i]);
+                }
+            },
         );
     }
 
@@ -747,6 +875,7 @@ private final class TypeChecker
             (const MapLiteral literal) => synthesizeMapLiteral(literal, expr.span, ctx),
             (const IndexExpr index) => synthesizeIndex(index, ctx),
             (const RangeExpr range) => synthesizeBareRange(range, expr.span, ctx),
+            (const TupleLiteral literal) => tupleOf(literal.elements.map!(e => requireTyped(synthesize(e, ctx), e.span)).array),
         );
         _exprTypes[expr.id] = type;
         return type;
@@ -1073,6 +1202,7 @@ private final class TypeChecker
             (const EmptyArrayType _) => true,
             (const FunctionData _) => false,
             (const NominalData nominal) => _fields[nominal.decl].all!(f => isComparable(f.type, visited)),
+            (const TupleData tuple) => tuple.elements.all!(e => isComparable(e, visited)),
             (const NoneType _) => true,
             (const ErrorType _) => true,
         );
@@ -1151,7 +1281,7 @@ private final class TypeChecker
             check(*binary.right, optionType, ctx);
             return optionType;
         }
-        if (isArraySyntax(*binary.right))
+        if (isArraySyntax(*binary.right) || isTupleLiteral(*binary.right))
         {
             check(*binary.right, inner, ctx);
             return inner;
@@ -1167,12 +1297,18 @@ private final class TypeChecker
         return inner;
     }
 
+    /// A tuple written out, which takes its element types from what it's checked against.
+    private bool isTupleLiteral(const Expr expr)
+    {
+        return expr.kind.match!((const TupleLiteral _) => true, _ => false);
+    }
+
     /// Synthesizes both sides of `==` or `!=`. A side written as `Some`, `None` or an array is
     /// checked against the other one, whichever side it's on, so `x == Some(1)` adapts the literal.
     private void synthesizeCompared(const BinaryExpr binary, out Type leftType, out Type rightType, BodyContext ctx)
     {
-        bool takesType(const Expr expr) => isOptionSyntax(expr) || isArraySyntax(expr);
-        bool givesType(Type type) => _types.isOption(type) || _types.isArray(type);
+        bool takesType(const Expr expr) => isOptionSyntax(expr) || isArraySyntax(expr) || isTupleLiteral(expr);
+        bool givesType(Type type) => _types.isOption(type) || _types.isArray(type) || _types.isTuple(type);
 
         if (takesType(*binary.left) && !takesType(*binary.right))
         {
@@ -1628,18 +1764,19 @@ private final class TypeChecker
 
     private Type check(const Expr expr, Type expected, BodyContext ctx)
     {
-        // A number, option or array is passed down, so that a literal adapts, and a value is
+        // A number, option, array or tuple is passed down, so that a literal adapts, and a value is
         // promoted, in an `if` arm or as a block's value too.
         auto isOption = _types.isOption(expected);
         auto isArray = _types.isArray(expected);
-        // An array written out against an option is checked against what it holds, then promoted.
-        if (isOption && isArraySyntax(expr))
+        auto isTuple = _types.isTuple(expected);
+        // An array or tuple written out against an option is checked against what it holds, then promoted.
+        if (isOption && (isArraySyntax(expr) || isTupleLiteral(expr)))
         {
             check(expr, _types.optionInner(expected), ctx);
             _promotions[expr.id] = expected;
             return expected;
         }
-        if (isNumeric(expected) || isOption || isArray)
+        if (isNumeric(expected) || isOption || isArray || isTuple)
         {
             auto passedDown = expr.kind.match!(
                 (const IfExpr if_) => if_.falseBody !is null,
@@ -1647,6 +1784,7 @@ private final class TypeChecker
                 (const SomeExpr _) => isOption,
                 (const ArrayLiteral _) => isArray,
                 (const BinaryExpr _) => isArray && isArraySyntax(expr),
+                (const TupleLiteral literal) => isTuple && literal.elements.length == _types.tupleElements(expected).length,
                 _ => false,
             );
             if (passedDown)
@@ -1671,7 +1809,14 @@ private final class TypeChecker
                         check(*binary.right, expected, ctx);
                         return expected;
                     },
-                    (_) => assert(0, "only ifs, blocks, Some and arrays are passed down"),
+                    (const TupleLiteral literal) {
+                        foreach (i, element; literal.elements)
+                        {
+                            check(element, _types.tupleElements(expected)[i], ctx);
+                        }
+                        return expected;
+                    },
+                    (_) => assert(0, "only ifs, blocks, Some, arrays and tuples are passed down"),
                 );
                 _exprTypes[expr.id] = type;
                 return type;

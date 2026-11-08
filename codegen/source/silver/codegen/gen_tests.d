@@ -916,3 +916,25 @@ unittest
     auto ir = generateSource("def spin(): Never { return spin() }\ndef main(): Unit => printl(spin())");
     ir.should.not.contain("@silver_printl");
 }
+
+@("codegen passes tuples by value as literal structs, and takes them apart into slots")
+unittest
+{
+    auto source = "def swap(p: (Int8, String)): (String, Int8) {\n    val (n, s) = p\n    (s, n)\n}\n"
+        ~ "def main(): Unit {\n    val (a, b) = swap((1, \"x\"))\n    val (c, _) = (true, ())\n    printl((a, b, c, ()))\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain(`define { { ptr, i64 }, i8 } @"main.swap"({ i8, { ptr, i64 } } %p.arg)`);
+    ir.should.contain("%n.addr = alloca i8");
+    ir.should.contain("extractvalue { i8, { ptr, i64 } } %p.arg, 1");
+    ir.should.contain("insertvalue { { ptr, i64 }, i8 } undef, { ptr, i64 }");
+    // A literal is taken apart element by element, so this one is never built.
+    ir.should.not.contain("{ i1 }");
+    ir.should.contain("store i1 true, ptr %c.addr");
+    // Unit has no operand, so it takes no space in a tuple.
+    ir.should.contain("insertvalue { { ptr, i64 }, i8, i1 } undef");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("(x, 1, true, ())\n");
+}

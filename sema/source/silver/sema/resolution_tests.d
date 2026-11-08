@@ -335,7 +335,21 @@ private final class Indexer
             (const ExprStmt e) => visit(e.expr),
             (const ReturnStmt r) => visit(r.value),
             (const FunctionDecl f) => visit(f),
+            (const PatternDecl p) { visit(p.pattern); visit(p.value); },
             (_) {},
+        );
+    }
+
+    void visit(const Pattern p)
+    {
+        p.kind.match!(
+            (const VarDecl v) { index.declarations[v.nameSpan.start] = SymbolId(v.id); },
+            (const TuplePattern t) {
+                foreach (element; t.elements)
+                {
+                    visit(element);
+                }
+            },
         );
     }
 
@@ -387,6 +401,18 @@ private final class Indexer
                 visit(f.body);
             },
             (const RangeExpr r) { visit(r.start); visit(r.end); },
+            (const TupleLiteral t) {
+                foreach (element; t.elements)
+                {
+                    visit(element);
+                }
+            },
+            (const ArrayLiteral l) {
+                foreach (element; l.elements)
+                {
+                    visit(element);
+                }
+            },
             (const IfExpr i) { visit(i.condition); visit(i.trueBody); visit(i.falseBody); },
             (const BlockExpr b) {
                 foreach (s; b.statements)

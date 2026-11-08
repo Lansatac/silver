@@ -438,6 +438,12 @@ private final class NameResolver
                 resolveTypeExpr(*func.returnType, current);
             },
             (const UnitType _) {},
+            (const TupleType tuple) {
+                foreach (element; tuple.elements)
+                {
+                    resolveTypeExpr(element, current);
+                }
+            },
         );
     }
 
@@ -517,6 +523,11 @@ private final class NameResolver
             },
             (const BreakStmt _) {},
             (const ContinueStmt _) {},
+            (ref const PatternDecl patternDecl) {
+                // The value is resolved first, so it can't see the names the pattern declares.
+                resolveExpr(patternDecl.value, scopeTable);
+                declarePattern(patternDecl.pattern, scopeTable);
+            },
             (const FunctionDecl funcDecl) {
                 _collector.reportError(DiagnosticCode.InternalError, funcDecl.nameSpan,
                     "Nested function declarations are not supported yet");
@@ -640,6 +651,34 @@ private final class NameResolver
             (const RangeExpr range) {
                 resolveExpr(*range.start, scopeTable);
                 resolveExpr(*range.end, scopeTable);
+            },
+            (const TupleLiteral literal) {
+                foreach (element; literal.elements)
+                {
+                    resolveExpr(element, scopeTable);
+                }
+            },
+        );
+    }
+
+    /// Declares each binding in `pattern` in `scopeTable`, as `val` would.
+    private void declarePattern(ref const Pattern pattern, Scope scopeTable)
+    {
+        pattern.kind.match!(
+            (ref const VarDecl binding) {
+                _declarations.locals[binding.id] = &binding;
+                if (binding.type !is null) resolveTypeExpr(*binding.type, scopeTable);
+                if (binding.name != discardName)
+                {
+                    declareLocal(binding.name, binding.nameSpan, SymbolId(binding.id), scopeTable,
+                        DiagnosticCode.DuplicateDeclaration, "'%s' is already declared in this scope");
+                }
+            },
+            (ref const TuplePattern tuple) {
+                foreach (ref element; tuple.elements)
+                {
+                    declarePattern(element, scopeTable);
+                }
             },
         );
     }

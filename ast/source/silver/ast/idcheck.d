@@ -127,6 +127,29 @@ private final class IdCheck
     {
     }
 
+    void visit(const PatternDecl p, Span span)
+    {
+        visit(p.pattern);
+        visit(p.value);
+    }
+
+    /// A binding's value is unused here, so it has no ID to check.
+    void visit(const Pattern p)
+    {
+        p.kind.match!(
+            (const VarDecl v) {
+                see(v.id, v.nameSpan);
+                if (v.type !is null) visit(*v.type);
+            },
+            (const TuplePattern t) {
+                foreach (element; t.elements)
+                {
+                    visit(element);
+                }
+            },
+        );
+    }
+
     void visit(const(Expr)* e)
     {
         if (e !is null)
@@ -188,6 +211,12 @@ private final class IdCheck
             },
             (const IndexExpr i) { visit(i.object); visit(i.index); },
             (const RangeExpr r) { visit(r.start); visit(r.end); },
+            (const TupleLiteral t) {
+                foreach (element; t.elements)
+                {
+                    visit(element);
+                }
+            },
             (const BlockExpr b) {
                 foreach (s; b.statements)
                 {
@@ -219,6 +248,12 @@ private final class IdCheck
                 visit(*f.returnType);
             },
             (const UnitType _) {},
+            (const TupleType t) {
+                foreach (element; t.elements)
+                {
+                    visit(element);
+                }
+            },
         );
     }
 }

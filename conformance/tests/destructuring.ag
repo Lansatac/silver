@@ -1,0 +1,80 @@
+type Card(rank: Int)
+type Deck(cards: [Card])
+
+def deal(deck: Deck): (Card, Deck) {
+    val n = length(deck.cards)
+    (deck.cards[0], Deck(deck.cards[1..n]))
+}
+
+def noisy(label: String, value: Int): Int {
+    printl(label)
+    value
+}
+
+def triple(): (Int, (String, Bool)) => (1, ("two", true))
+
+def main(): Unit {
+    val (a, b) = (1, "b")
+    printl(a)
+    printl(b)
+
+    // From a value that isn't written out, nested, and with parts left out.
+    val (n, (s, flag)) = triple()
+    printl("{n} {s} {flag}")
+    val (_, (word, _)) = triple()
+    printl(word)
+    val whole = triple()
+    val (first, rest) = whole
+    printl(first)
+    printl(rest)
+
+    // A literal goes element by element, so a dropped part needs no type.
+    val (_, x) = (None, 2)
+    printl(x)
+
+    // Annotated parts adapt literals.
+    val (byte: UInt8, maybe: Int?) = (255, 3)
+    printl(byte)
+    printl(maybe)
+    val (low: Int8, high: Int8) = if a == 1 => (-128, 127) else (0, 0)
+    printl(low)
+    printl(high)
+
+    // Parts are evaluated in order, and the value before any binding exists.
+    val (p, q) = (noisy("first", 1), noisy("second", 2))
+    printl(p + q)
+
+    // Mutable bindings can be rebound, which is how a loop carries state.
+    mutable val (card, deck) = deal(Deck([Card(5), Card(9), Card(2), Card(7)]))
+    mutable val higher = 0
+    while length(deck.cards) > 0 {
+        val (next, remaining) = deal(deck)
+        if next.rank > card.rank {
+            higher += 1
+        }
+        card = next
+        deck = remaining
+    }
+    printl(higher)
+    printl(card)
+
+    // Swapping through a literal reads both before binding either.
+    val one = 1
+    val two = 2
+    val (left, right) = (two, one)
+    printl("{left} {right}")
+
+    // In a for body, each iteration's bindings are fresh.
+    for pair in [(1, "a"), (2, "b")] {
+        val (number, letter) = pair
+        printl("{number}{letter}")
+    }
+
+    // Unit parts, and parts of a tuple of Units.
+    val (u, v) = ((), 4)
+    printl(u)
+    printl(v)
+    val (e, f) = ((), ())
+    printl(e)
+    printl(f)
+}

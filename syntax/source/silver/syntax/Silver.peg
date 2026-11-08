@@ -19,6 +19,7 @@ Silver:
 
     # ExpressionStatement is last: anything that isn't another kind of statement is an expression
     Statement            <  (
+                            / PatternDeclaration
                             / VariableDeclaration
                             / ValueDeclaration
                             / FunctionDeclaration
@@ -43,6 +44,10 @@ Silver:
     DiscardStatement     < :UNDERSCORE Nl? :"=" !"=" Nl? Expression
     BindingName          <- UNDERSCORE / Identifier
     VariableDeclaration  < :MUTABLE Nl? :VAL Nl? Identifier (TypeAnnotation (Nl? '=' Nl? Expression)? / Nl? '=' Nl? Expression)
+    # `mutable` is kept, so lowering can tell whether it was there
+    PatternDeclaration   < (MUTABLE Nl?)? :VAL Nl? TuplePattern Nl? :'=' Nl? Expression
+    TuplePattern         < :'(' Nl? PatternElement (Nl? :',' Nl? PatternElement)+ Nl? :')'
+    PatternElement       < TuplePattern / BindingName TypeAnnotation?
 
     AssignmentStatement  < AssignTarget Nl? AssignOp Nl? Expression
     AssignOp             < "+=" / "-=" / "*=" / "/=" / "^=" / "~=" / "&+=" / "&-=" / "&*=" / "&=" / "|=" / "<<=" / ">>=" / "=" !"="
@@ -72,7 +77,9 @@ Silver:
 
     Type                 <- BaseType OptionMark?
     OptionMark           <- "?"
-    BaseType             < FunctionType / UnitType / ArrayType / :'(' Nl? Type Nl? :')' / NamedType
+    BaseType             < FunctionType / UnitType / ArrayType / ParenType / NamedType
+    # One element is grouping and more are a tuple, so the two share a parse
+    ParenType            < :'(' Nl? Type (Nl? :',' Nl? Type)* Nl? :')'
     ArrayType            < :'[' Nl? Type Nl? :']'
     FunctionType         < :'(' Nl? (Type (Nl? :',' Nl? Type)*)? Nl? :')' Nl? :"->" Nl? Type
     UnitType             < '(' Nl? ')'
@@ -115,7 +122,7 @@ Silver:
     Argument             < Expression
 
     Eval                 < UnitLiteral
-                         / :'(' Nl? Expression Nl? :')'
+                         / ParenExpression
                          / Block
                          / Literal
                          / CollectionLiteral
@@ -127,6 +134,8 @@ Silver:
                           / StringLiteral
 
     UnitLiteral          < '(' Nl? ')'
+    # One element is grouping and more are a tuple, so the two share a parse
+    ParenExpression      < :'(' Nl? Expression (Nl? :',' Nl? Expression)* Nl? :')'
 
     # Map is tried first so `[:]` and `[k: v]` aren't read as lists
     CollectionLiteral   < MapLiteral / ListLiteral

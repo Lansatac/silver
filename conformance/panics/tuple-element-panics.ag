@@ -1,0 +1,5 @@
+def main(): Unit {
+    val xs = [1, 2]
+    val (a, b) = (xs[0], xs[2])
+    printl("unreachable {a} {b}")
+}

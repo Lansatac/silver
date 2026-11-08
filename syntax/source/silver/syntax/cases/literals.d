@@ -92,3 +92,27 @@ immutable Case[] collectionLiterals = [
     rejects("a = [1: 2, 3]"),
     rejects("a = [:,]"),
 ];
+
+immutable Case[] tupleLiterals = [
+    parsesAs("a = (1, 2)", "(assign a (tuple 1 2))"),
+    parsesAs("a = (1, \"b\", c)", `(assign a (tuple 1 "b" c))`),
+    parsesAs("a = ((1, 2), 3)", "(assign a (tuple (tuple 1 2) 3))"),
+    parsesAs("a = (1, (), None)", "(assign a (tuple 1 () None))"),
+    parsesAs("a = (1 + 2, f(x))", "(assign a (tuple (Add 1 2) (call f x)))"),
+    parsesAs("a = (1)", "(assign a 1)"),
+    parsesAs("a = ((1))", "(assign a 1)"),
+    parsesAs("f((1, 2))", "(call f (tuple 1 2))"),
+    parsesAs("f(1, 2)", "(call f 1 2)"),
+    parsesAs("a = [(1, 2), (3, 4)]", "(assign a (array (tuple 1 2) (tuple 3 4)))"),
+    parsesAs("a = (1, 2) == b", "(assign a (Equal (tuple 1 2) b))"),
+    parsesAs("a = Some((1, 2))", "(assign a (Some (tuple 1 2)))"),
+    parsesAs("a = (if c => 1 else 2, 3)", "(assign a (tuple (if c 1 2) 3))"),
+    parsesAs("a = (1,\n    2)", "(assign a (tuple 1 2))"),
+    parsesAs("a = (\n    1,\n    2\n)", "(assign a (tuple 1 2))"),
+    parsesAs("a = (1\n    , 2)", "(assign a (tuple 1 2))"),
+    parsesAs("return (1, 2)", "(return (tuple 1 2))"),
+    parsesAs("(1, 2)", "(tuple 1 2)"),
+    rejects("a = (1, 2,)"),
+    rejects("a = (,)"),
+    rejects("a = (1,)"),
+];
