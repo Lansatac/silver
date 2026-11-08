@@ -124,7 +124,16 @@ final class Analysis
     /// only changes who picks the entry: the type checker.
     const(Id!FunctionDecl)* calleeOf(Id!Expr call) const
     {
+        if (auto method = call in _typing.methodCallees) return method;
         return call in _resolution.callees;
+    }
+
+    /// The call `f(x, y)` that `x.f(y)` means, or null if `call` isn't one of those. Its callee is
+    /// still the member access, so use `calleeOf` for the function.
+    const(CallExpr)* methodCallOf(Id!Expr call) const
+    {
+        if (auto method = call in _typing.methodCalls) return *method;
+        return null;
     }
 
     const(Id!TypeDecl)* constructionOf(Id!Expr call) const

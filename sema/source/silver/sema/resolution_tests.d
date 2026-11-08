@@ -1358,3 +1358,18 @@ unittest
 {
     analyzed("val x: Nope = 1\ndef main(): Unit => ()").shouldReport(DiagnosticCode.UnknownType, At("Nope", 1));
 }
+
+@("x.f() finds f as a plain name would, and an ambiguity only matters if no field wins")
+unittest
+{
+    auto files = [
+        "a.ag": "module a\ndef shared(x: Int): Int => 1",
+        "b.ag": "module b\ndef shared(x: Int): Int => 2",
+    ];
+    analyzed("import a\nimport b\ndef main(): Unit {\n    val qq = 1\n    printl(qq.shared())\n}", files)
+        .shouldReport(DiagnosticCode.AmbiguousName, At("qq.shared", 1));
+    analyzed("import a\nimport b\ntype T(shared: (Int) -> Int)\ndef f(x: Int): Int => x\ndef main(): Unit {\n    val qq = T(f)\n    printl(qq.shared(1))\n}", files)
+        .shouldHaveNoDiagnostics();
+    analyzed("import a\nimport b\ndef shared(x: Int): Int => 3\ndef main(): Unit {\n    val qq = 1\n    printl(qq.shared())\n}", files)
+        .shouldHaveNoDiagnostics();
+}

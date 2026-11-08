@@ -653,7 +653,10 @@ final class Generator
             (const Identifier _) => emitIdentifier(expr),
             (const UnaryExpr unary) => emitUnary(expr, unary),
             (const BinaryExpr binary) => emitBinaryExpr(binary, expr),
-            (const CallExpr call) => emitFunctionCall(call, expr),
+            (const CallExpr call) {
+                auto method = _analysis.methodCallOf(expr.id);
+                return emitFunctionCall(method is null ? call : *method, expr);
+            },
             (const MemberAccess access) => emitMemberAccess(access, expr),
             (const WhileExpr while_) => emitWhile(while_),
             (const ForExpr for_) => emitFor(for_),

@@ -70,7 +70,17 @@ package struct Resolution
     Id!TypeDecl[Id!Expr] constructions;
     /// Calls like `UInt8(x)`, by the type they convert to.
     Builtin[Id!Expr] conversions;
+    /// For a call `x.f(...)` on a value, what a plain `f` finds at module level. The type
+    /// checker decides whether it's used, since a field of `x` comes first.
+    MethodLookup[Id!Expr] methodLookups;
     Declarations declarations;
+}
+
+package struct MethodLookup
+{
+    const(SymbolId)[] found;
+    /// The module of each entry of `found`, when it's more than one import.
+    string[] owners;
 }
 
 /// Resolves every name in `program`, reporting problems to `collector`.
@@ -118,6 +128,13 @@ package final class Scope
     const(SymbolId)* resolveLocal(string name) const
     {
         return name in _scopeTable;
+    }
+
+    /// `name` among the declarations of the module this scope is in, skipping any locals.
+    const(SymbolId)* resolveInModule(string name) const
+    {
+        if (_parent is null) return null;
+        return _parent._parent is null ? name in _scopeTable : _parent.resolveInModule(name);
     }
 
     const(SymbolId)* resolve(string name) const
@@ -196,6 +213,7 @@ private final class NameResolver
     private Id!FunctionDecl[Id!Expr] _callees;
     private Id!TypeDecl[Id!Expr] _constructions;
     private Builtin[Id!Expr] _conversions;
+    private MethodLookup[Id!Expr] _methodLookups;
     private Declarations _declarations;
     private Collector _collector;
     /// Each module's own top-level declarations, by module name.
@@ -219,7 +237,7 @@ private final class NameResolver
         {
             resolveModule(mod.name, mod);
         }
-        return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _conversions, _declarations);
+        return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _conversions, _methodLookups, _declarations);
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
@@ -572,6 +590,13 @@ private final class NameResolver
                         (_) {},
                     );
                 }
+                else
+                {
+                    (*call.callee).kind.match!(
+                        (const MemberAccess access) => lookUpMethod(expr.id, access.member, scopeTable),
+                        (_) {},
+                    );
+                }
                 foreach (arg; call.args)
                 {
                     resolveExpr(arg, scopeTable);
@@ -712,6 +737,26 @@ private final class NameResolver
             _collector.reportError(DiagnosticCode.ModuleIsNotAValue, expr.span,
                 "'%s' is a module, not a value".format(path.name));
         }
+    }
+
+    /// What `f` would be in `x.f(...)`. Own declarations beat imports, as for a plain name.
+    private void lookUpMethod(Id!Expr call, string name, const Scope scopeTable)
+    {
+        if (auto own = scopeTable.resolveInModule(name))
+        {
+            _methodLookups[call] = MethodLookup([*own]);
+            return;
+        }
+        MethodLookup lookup;
+        foreach (m; scopeTable.visibleModules)
+        {
+            if (auto symbol = _moduleScopes[m].resolveLocal(name))
+            {
+                lookup.found ~= *symbol;
+                lookup.owners ~= m;
+            }
+        }
+        if (lookup.found.length > 0) _methodLookups[call] = lookup;
     }
 
     /// Resolves an identifier or a member access chain, which may start with a module path.

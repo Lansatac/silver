@@ -27,6 +27,8 @@ package struct Typing
     Type[Id!Expr] promotions;
     bool[Id!Expr] arrayLengths;
     const(Expr)[][Id!Expr] concatOperands;
+    const(CallExpr)*[Id!Expr] methodCalls;
+    Id!FunctionDecl[Id!Expr] methodCallees;
 }
 
 /// Where the checker is inside a function body. Passed by value, so a nested body (a lambda)
@@ -74,6 +76,8 @@ private final class TypeChecker
     /// The prelude's `length`, the one function sema types itself.
     private Id!FunctionDecl _arrayLength;
     private bool[Id!Expr] _arrayLengths;
+    private const(CallExpr)*[Id!Expr] _methodCalls;
+    private Id!FunctionDecl[Id!Expr] _methodCallees;
     private const(Expr)[][Id!Expr] _concatOperands;
 
     Typing checkProgram(const Program program)
@@ -161,7 +165,7 @@ private final class TypeChecker
         }
 
         return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes, _updatePaths, _constants, _promotions,
-            _arrayLengths, _concatOperands);
+            _arrayLengths, _concatOperands, _methodCalls, _methodCallees);
     }
 
     private void declareConstant(const ConstDecl constant)
@@ -897,7 +901,9 @@ private final class TypeChecker
                 ? synthesizeConversion(call, builtinType(_resolutions.conversions[expr.id]), expr.span, ctx)
                 : isArrayLengthName(*call.callee)
                     ? synthesizeLength(expr, call, ctx)
-                    : synthesizeCall(call, expr.span, ctx),
+                    : isMethodCall(expr.id, *call.callee)
+                        ? synthesizeMethodCall(expr, call, ctx)
+                        : synthesizeCall(call, expr.span, ctx),
             (const MemberAccess member) => synthesizeMemberAccess(expr, member, ctx),
             (const WithExpr with_) => synthesizeWith(expr, with_, ctx),
             (const WhileExpr while_) => synthesizeWhile(while_, expr.span, ctx),
@@ -994,13 +1000,14 @@ private final class TypeChecker
         return false;
     }
 
-    private Type synthesizeLength(const Expr expr, const CallExpr call, BodyContext ctx)
+    /// `checked` is how many leading arguments have been synthesized already.
+    private Type synthesizeLength(const Expr expr, const CallExpr call, BodyContext ctx, size_t checked = 0)
     {
         rejectMutableArguments(call);
         _exprTypes[call.callee.id] = _symbolTypes[SymbolId(_arrayLength)];
         if (call.args.length != 1)
         {
-            foreach (arg; call.args)
+            foreach (arg; call.args[checked .. $])
             {
                 synthesize(arg, ctx);
             }
@@ -1010,7 +1017,7 @@ private final class TypeChecker
         }
 
         auto arg = call.args[0];
-        auto argType = requireTyped(synthesize(arg, ctx), arg.span);
+        auto argType = requireTyped(checked > 0 ? _exprTypes[arg.id] : synthesize(arg, ctx), arg.span);
         if (argType != _types.error && !_types.isArray(argType))
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, arg.span,
@@ -1521,12 +1528,17 @@ private final class TypeChecker
 
     private Type synthesizeCall(const CallExpr call, Span span, BodyContext ctx)
     {
-        auto calleeType = synthesize(*call.callee, ctx);
+        return applyCallee(synthesize(*call.callee, ctx), call, span, ctx);
+    }
+
+    /// `checked` is how many leading arguments have already been checked.
+    private Type applyCallee(Type calleeType, const CallExpr call, Span span, BodyContext ctx, size_t checked = 0)
+    {
         // Each argument is checked against its parameter when there is one, and synthesized
         // otherwise, so even a wrong call gives every argument a type and its own errors.
         void synthesizeArgs()
         {
-            foreach (arg; call.args)
+            foreach (arg; call.args[checked .. $])
             {
                 synthesize(arg, ctx);
             }
@@ -1549,6 +1561,7 @@ private final class TypeChecker
                 Span[] placeSpans;
                 foreach (i, arg; call.args)
                 {
+                    if (i < checked) continue;
                     if (!call.isMutable(i))
                     {
                         if (funcData.isMutable(i))
@@ -1582,6 +1595,100 @@ private final class TypeChecker
                     "Expression of type `%s` is not function-like and cannot be called".format(_types.describe(calleeType)));
                 return _types.error;
             },
+        );
+    }
+
+    /// Whether `object.f(...)` is on a value and some declaration could be `f`.
+    private bool isMethodCall(Id!Expr call, const Expr callee)
+    {
+        if ((call in _resolutions.methodLookups) is null) return false;
+        return callee.kind.match!(
+            (const MemberAccess access) => !isModulePath(*access.object),
+            _ => false,
+        );
+    }
+
+    /// `object.f(args)`. A field named `f` comes first; otherwise it's `f(object, args)`, with the
+    /// `f` a plain name finds at module level. The receiver has to be exactly the first
+    /// parameter's type, since it was already synthesized to look for the field.
+    private Type synthesizeMethodCall(const Expr expr, const CallExpr call, BodyContext ctx)
+    {
+        auto access = (*call.callee).kind.match!(
+            (const MemberAccess m) => m,
+            (_) => assert(0, "isMethodCall only accepts a member access"),
+        );
+        auto objectType = synthesize(*access.object, ctx);
+
+        Type asField()
+        {
+            auto calleeType = fieldOf(*call.callee, access, objectType);
+            _exprTypes[call.callee.id] = calleeType;
+            return applyCallee(calleeType, call, expr.span, ctx);
+        }
+
+        if (objectType == _types.error || hasField(objectType, access.member)) return asField();
+
+        auto lookup = _resolutions.methodLookups[expr.id];
+        if (lookup.found.length > 1)
+        {
+            _collector.reportError(DiagnosticCode.AmbiguousName, call.callee.span,
+                "'%s' is defined in more than one imported module (%s); call it qualified, e.g. '%s.%s(...)'"
+                    .format(access.member, lookup.owners.join(", "), lookup.owners[0], access.member));
+            return applyCallee(_types.error, call, expr.span, ctx);
+        }
+        Id!FunctionDecl function_;
+        lookup.found[0].match!((const Id!FunctionDecl f) { function_ = f; }, (_) {});
+        if (!function_.isValid) return asField();
+
+        auto arguments = (cast(Expr*) access.object)[0 .. 1] ~ cast(Expr[]) call.args;
+        auto mutables = call.mutableArgs.length > 0 ? false ~ call.mutableArgs.dup : null;
+        auto rewritten = new const CallExpr(cast(Expr*) call.callee, arguments, mutables);
+        auto functionType = _symbolTypes[SymbolId(function_)];
+        _exprTypes[call.callee.id] = functionType;
+        _methodCalls[expr.id] = rewritten;
+        _methodCallees[expr.id] = function_;
+        if (function_ == _arrayLength) return synthesizeLength(expr, *rewritten, ctx, 1);
+
+        auto valid = receiverFits(access, function_, functionType, requireTyped(objectType, access.object.span), call.callee.span);
+        return applyCallee(valid ? functionType : _types.error, *rewritten, expr.span, ctx, 1);
+    }
+
+    /// Whether a receiver of type `receiver` can be `function_`'s first argument, reporting why not.
+    private bool receiverFits(const MemberAccess access, Id!FunctionDecl function_, Type functionType, Type receiver, Span calleeSpan)
+    {
+        if (receiver == _types.error) return false;
+        auto signature = _types[functionType].match!(
+            (const FunctionData data) => data,
+            (_) => assert(0, "a function's type is a function type"),
+        );
+        if (signature.params.length == 0)
+        {
+            _collector.reportError(DiagnosticCode.WrongArgumentCount, calleeSpan,
+                "`%s` takes no arguments, so it can't be called on a value".format(access.member));
+            return false;
+        }
+        if (signature.isMutable(0))
+        {
+            _collector.reportError(DiagnosticCode.MutabilityMismatch, access.object.span,
+                "`%s` changes its first argument, so the write has to show at the call; write `%s(mutable ...)`"
+                    .format(access.member, access.member));
+            return false;
+        }
+        if (receiver != signature.params[0] && signature.params[0] != _types.any)
+        {
+            _collector.reportError(DiagnosticCode.TypeMismatch, access.object.span,
+                "`%s` takes `%s` first, but this is `%s`, and a receiver isn't converted; write `%s(...)`"
+                    .format(access.member, _types.describe(signature.params[0]), _types.describe(receiver), access.member));
+            return false;
+        }
+        return true;
+    }
+
+    private bool hasField(Type type, string name)
+    {
+        return _types[type].match!(
+            (const NominalData nominal) => _fields[nominal.decl].canFind!(f => f.name == name),
+            (_) => false,
         );
     }
 
@@ -1669,7 +1776,12 @@ private final class TypeChecker
         // `std.math.nope` or `std.nope`: resolution reported it.
         if (isModulePath(*member.object)) return _types.error;
 
-        auto objectType = synthesize(*member.object, ctx);
+        return fieldOf(expr, member, synthesize(*member.object, ctx));
+    }
+
+    /// The field `member` names on a value of `objectType`, reported if there's none.
+    private Type fieldOf(const Expr expr, const MemberAccess member, Type objectType)
+    {
         if (objectType == _types.error) return _types.error;
 
         auto fields = _types[objectType].match!(

@@ -2289,3 +2289,79 @@ unittest
     val q = p with (x = 3)
     p.x = 1`).shouldReport(DiagnosticCode.AssignToImmutable, At("p", 3));
 }
+
+@("x.f() is f(x)")
+unittest
+{
+    auto a = analyzed("def twice(n: Int): Int => n * 2\ndef main(): Unit {\n    val qq = 1\n    val r = qq.twice()\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("r", 1), "Int");
+}
+
+@("x.f() can't hide a write to x")
+unittest
+{
+    analyzed("def next(mutable n: Int): Int => n\ndef main(): Unit {\n    mutable val qq = 1\n    val r = qq.next()\n}")
+        .shouldReport(DiagnosticCode.MutabilityMismatch, At("qq", 2));
+}
+
+@("a later mutable argument of x.f(...) is fine, and still has to be marked")
+unittest
+{
+    enum f = "def f(a: Int, mutable b: Int): Int => a\ndef main(): Unit {\n    val qq = 1\n    mutable val zz = 2\n";
+    analyzed(f ~ "    val r = qq.f(mutable zz)\n}").shouldHaveNoDiagnostics();
+    analyzed(f ~ "    val r = qq.f(zz)\n}").shouldReport(DiagnosticCode.MutabilityMismatch, At("zz", 2));
+}
+
+@("a receiver has to be exactly the first parameter's type")
+unittest
+{
+    analyzed("def f(x: UInt8): Int => 1\ndef main(): Unit {\n    val qq = 1\n    val r = qq.f()\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("qq", 2));
+    analyzed("def f(x: Int?): Int => 1\ndef main(): Unit {\n    val qq = 1\n    val r = qq.f()\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("qq", 2));
+}
+
+@("a function with no parameters can't be called on a value")
+unittest
+{
+    analyzed("def f(): Int => 1\ndef main(): Unit {\n    val qq = 1\n    val r = qq.f()\n}")
+        .shouldReport(DiagnosticCode.WrongArgumentCount, At("qq.f", 1));
+}
+
+@("x.f() counts the receiver as an argument")
+unittest
+{
+    analyzed("def f(a: Int, b: Int): Int => 1\ndef main(): Unit {\n    val qq = 1\n    val r = qq.f()\n}")
+        .shouldReport(DiagnosticCode.WrongArgumentCount, At("qq.f()", 1));
+}
+
+@("only a function can be called on a value")
+unittest
+{
+    analyzed("val k: Int = 1\ndef main(): Unit {\n    val qq = 1\n    val r = qq.k()\n}")
+        .shouldReport(DiagnosticCode.UnknownMember, At("qq.k", 1));
+    analyzed("type K(n: Int)\ndef main(): Unit {\n    val qq = 1\n    val r = qq.K()\n}")
+        .shouldReport(DiagnosticCode.UnknownMember, At("qq.K", 1));
+}
+
+@("a field comes before a function of the same name, even one that can't be called")
+unittest
+{
+    analyzed("type T(n: Int)\ndef n(t: T): Int => 1\ndef main(): Unit {\n    val qq = T(1)\n    val r = qq.n()\n}")
+        .shouldReport(DiagnosticCode.NotCallable, At("qq.n()", 1));
+}
+
+@("a receiver needs a type of its own")
+unittest
+{
+    analyzed("def f(x: Int?): Int => 1\ndef main(): Unit {\n    val r = None.f()\n}")
+        .shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+}
+
+@("x.length() is the array length, and needs an array")
+unittest
+{
+    analyzedMain("    val r = [1].length()").shouldHaveNoDiagnostics();
+    analyzedMain("    val qq = 1\n    val r = qq.length()").shouldReport(DiagnosticCode.InvalidOperand, At("qq", 2));
+}

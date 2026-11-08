@@ -50,6 +50,8 @@ class Evaluator
     private ModuleValue[string] modules;
     /// Implementations for `native def`s, by function name.
     private NativeFunction[string] nativeBindings;
+    /// Every declared function's value, for a call sema resolved by type rather than by name.
+    private Variant[Id!FunctionDecl] functions;
 
     void run()
     {
@@ -237,7 +239,8 @@ class Evaluator
     {
         if (!ast.native)
         {
-            variables.defineVariable(ast.name, Variant(new Function(ast, variables)));
+            functions[ast.id] = Variant(new Function(ast, variables));
+            variables.defineVariable(ast.name, functions[ast.id]);
             return;
         }
         auto binding = ast.name in nativeBindings;
@@ -247,7 +250,8 @@ class Evaluator
 
             throw new CodedException(DiagnosticCode.MissingNativeBinding, "No native binding for %s".format(ast.name));
         }
-        variables.defineVariable(ast.name, Variant(new Function(ast, variables, *binding)));
+        functions[ast.id] = Variant(new Function(ast, variables, *binding));
+        variables.defineVariable(ast.name, functions[ast.id]);
     }
 
     /// A marker's name is its one value; any other type's name is its constructor.
@@ -489,6 +493,10 @@ class Evaluator
         {
             return convert(evaluate(call.args[0], variables), analysis.typeOf(id));
         }
+        if (auto method = analysis.methodCallOf(id))
+        {
+            return apply(*method, functions[*analysis.calleeOf(id)], variables);
+        }
         return evaluate(call, variables);
     }
 
@@ -696,8 +704,11 @@ class Evaluator
 
     private Variant evaluate(const CallExpr ast, Environment variables)
     {
-        auto callee = evaluate(*ast.callee, variables);
+        return apply(ast, evaluate(*ast.callee, variables), variables);
+    }
 
+    private Variant apply(const CallExpr ast, Variant callee, Environment variables)
+    {
         auto args = new Variant[ast.args.length];
         foreach (i, arg; ast.args)
         {

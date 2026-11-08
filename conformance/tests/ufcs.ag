@@ -1,0 +1,64 @@
+import std.math
+
+type Point(x: Int, y: Int)
+type Box(size: Int, scale: (Int) -> Int)
+
+def double(n: Int): Int => n * 2
+def add(a: Int, b: Int): Int => a + b
+def plus(p: Point, n: Int): Point => Point(p.x + n, p.y + n)
+def scale(b: Box, n: Int): Int => 999
+
+def sum(xs: [Int]): Int {
+    mutable val total = 0
+    for x in xs {
+        total += x
+    }
+    total
+}
+
+def noted(text: String, value: Int): Int {
+    printl(text)
+    return value
+}
+
+def take(p: Point, mutable by: Int): Int {
+    by += 10
+    p.x + by
+}
+
+def main(): Unit {
+    printl((3).double())
+    printl(Point(1, 2).plus(3))
+    printl(Point(1, 2).plus(3).plus(1).x)
+
+    val xs = [1, 2, 3]
+    printl(xs.length())
+    printl(xs.sum())
+
+    // A field comes before a function of the same name.
+    val b = Box(7, double)
+    printl(b.size)
+    printl(b.scale(4))
+
+    "hi".printl()
+    Point(1, 2).printl()
+
+    // The receiver is evaluated before the arguments.
+    printl(noted("receiver", 1).add(noted("argument", 2)))
+
+    mutable val amount = 1
+    printl(Point(0, 0).take(mutable amount))
+    printl(amount)
+
+    // Only module-level functions are candidates, so a local doesn't get in the way.
+    val print = 5
+    print.printl()
+
+    val r = Point(1, 1)
+        .plus(1)
+        .plus(2)
+    printl(r)
+
+    printl((4.0).sqrt())
+    (3).printl()
+}
