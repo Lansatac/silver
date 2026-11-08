@@ -1,5 +1,6 @@
 module silver.ast.nodes;
 
+import std.range : iota;
 import std.sumtype;
 
 import silver.ast.span;
@@ -68,7 +69,11 @@ struct NamedType
 struct FunctionType
 {
     TypeExpr[] params;
+    /// Whether each param is `mutable`, or empty when none is.
+    bool[] mutableParams;
     TypeExpr* returnType;
+
+    bool isMutable(size_t i) const => mutableParams.length > 0 && mutableParams[i];
 }
 
 /// `()`.
@@ -95,7 +100,7 @@ string printTypeExpr(const TypeExpr t)
         (const ArrayType a) => "[" ~ printTypeExpr(*a.element) ~ "]",
         (const NamedType n) => n.path.join(".")
             ~ (n.args.length > 0 ? "<" ~ n.args.map!printTypeExpr.join(", ") ~ ">" : ""),
-        (const FunctionType f) => "(" ~ f.params.map!printTypeExpr.join(", ") ~ ") -> "
+        (const FunctionType f) => "(" ~ f.params.length.iota.map!(i => (f.isMutable(i) ? "mutable " : "") ~ printTypeExpr(f.params[i])).join(", ") ~ ") -> "
             ~ printTypeExpr(*f.returnType),
         (const UnitType u) => "()",
         (const TupleType t) => "(" ~ t.elements.map!printTypeExpr.join(", ") ~ ")",
@@ -125,7 +130,7 @@ struct Expr
 alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, InterpolatedString, Identifier,
     UnaryExpr, BinaryExpr, CallExpr, MemberAccess, WhileExpr, ForExpr, IfExpr, BlockExpr, UnitLiteral,
     SomeExpr, NoneLiteral, PropagateExpr, SafeMemberAccess, ArrayLiteral, MapLiteral, IndexExpr, RangeExpr,
-    TupleLiteral);
+    TupleLiteral, WithExpr);
 
 /// `()`, the only value of type Unit.
 struct UnitLiteral
@@ -225,6 +230,25 @@ struct CallExpr
 {
     Expr* callee;
     Expr[] args;
+    /// Whether each argument is written `mutable`, or empty when none is.
+    bool[] mutableArgs;
+
+    bool isMutable(size_t i) const => mutableArgs.length > 0 && mutableArgs[i];
+}
+
+/// `object with (a = 1, b.c = 2)`.
+struct WithExpr
+{
+    Expr* object;
+    FieldUpdate[] updates;
+}
+
+/// `b.c = 2` in a `with`.
+struct FieldUpdate
+{
+    string[] path;
+    Span span;
+    Expr value;
 }
 
 /// `object.member`, e.g. a function in an imported module.
@@ -354,7 +378,8 @@ string printExpr(const Expr e)
         (const Identifier i) => i.name,
         (const BinaryExpr b) => format("(%s %s %s)", b.op, printExpr(*b.left), printExpr(*b.right)),
         (const UnaryExpr u) => format("(%s %s)", u.op, printExpr(*u.operand)),
-        (const CallExpr c) => format("(call %s%s)", printExpr(*c.callee), c.args.map!(a => " " ~ printExpr(a)).join),
+        (const CallExpr c) => format("(call %s%s)", printExpr(*c.callee),
+            c.args.length.iota.map!(i => (c.isMutable(i) ? " mutable " : " ") ~ printExpr(c.args[i])).join),
         (const MemberAccess m) => format("(. %s %s)", printExpr(*m.object), m.member),
         (const WhileExpr w) => format("(while %s %s)", w.binding is null
             ? printExpr(*w.condition)
@@ -387,6 +412,8 @@ string printExpr(const Expr e)
         (const IndexExpr i) => format("(index %s %s)", printExpr(*i.object), printExpr(*i.index)),
         (const RangeExpr r) => format("(.. %s %s)", printExpr(*r.start), printExpr(*r.end)),
         (const TupleLiteral t) => format("(tuple%s)", t.elements.map!(e => " " ~ printExpr(e)).join),
+        (const WithExpr w) => format("(with %s%s)", printExpr(*w.object),
+            w.updates.map!(u => format(" (%-(%s.%) %s)", u.path, printExpr(u.value))).join),
     );
 }
 
@@ -495,6 +522,7 @@ struct Param
     string name;
     Span nameSpan;
     TypeExpr type;
+    bool mutable;
 }
 
 /// `def name(params): Type => expr` or `def name(params): Type { ... }`.
@@ -671,7 +699,7 @@ private string printSignature(const FunctionDecl f)
     import std.algorithm : map;
     import std.array : join;
 
-    return "(" ~ f.params.map!(p => p.name ~ ": " ~ printTypeExpr(p.type)).join(", ") ~ "): "
+    return "(" ~ f.params.map!(p => (p.mutable ? "mutable " : "") ~ p.name ~ ": " ~ printTypeExpr(p.type)).join(", ") ~ "): "
         ~ printTypeExpr(f.returnType);
 }
 

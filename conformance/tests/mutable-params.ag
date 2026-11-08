@@ -1,0 +1,127 @@
+type Rng(state: Int)
+type Game(rng: Rng, score: Int)
+type Match(home: Game, away: Game)
+
+def step(mutable rng: Rng, by: Int): Int {
+    rng.state += by
+    rng.state
+}
+
+def reset(mutable n: Int): Unit {
+    n = 0
+}
+
+// Written back on every way out of the function.
+def capped(mutable n: Int): Int {
+    if n > 100 {
+        n = 100
+        return -1
+    }
+    n += 1
+    n
+}
+
+def firstOrZero(mutable n: Int, value: Int?): Int? {
+    n = 7
+    val v = value?
+    n = v
+    Some(v)
+}
+
+// Passing a mutable parameter on, and one of its fields.
+def twice(mutable game: Game): Unit {
+    _ = step(mutable game.rng, 1)
+    forward(mutable game)
+}
+
+def forward(mutable game: Game): Unit {
+    game.score += 10
+    _ = step(mutable game.rng, 1)
+}
+
+def swap(mutable a: Int, mutable b: Int): Unit {
+    val t = a
+    a = b
+    b = t
+}
+
+def setUnit(mutable u: Unit): Int => 5
+
+def read2(snapshot: Int, mutable n: Int): Int {
+    n += 1
+    snapshot
+}
+
+def bumped(mutable n: Int): Int {
+    n += 1
+    n
+}
+
+def add(mutable n: Int, by: Int): Int {
+    n += by
+    n
+}
+
+def main(): Unit {
+    mutable val rng = Rng(1)
+    printl(step(mutable rng, 2))
+    printl(rng)
+
+    mutable val n = 5
+    reset(mutable n)
+    printl(n)
+
+    mutable val big = 200
+    printl(capped(mutable big))
+    printl(big)
+    printl(capped(mutable n))
+    printl(n)
+
+    mutable val out = 1
+    printl(firstOrZero(mutable out, None))
+    printl(out)
+    printl(firstOrZero(mutable out, 3))
+    printl(out)
+
+    mutable val game = Game(Rng(0), 0)
+    twice(mutable game)
+    printl(game)
+
+    mutable val fixture = Match(game, Game(Rng(100), 1))
+    _ = step(mutable fixture.away.rng, 5)
+    printl(fixture)
+
+    // Disjoint fields of one value can both be passed.
+    mutable val pair = Game(Rng(1), 2)
+    swap(mutable pair.score, mutable pair.rng.state)
+    printl(pair)
+
+    // A function value carries its mutability.
+    val stepper: (mutable Rng, Int) -> Int = step
+    printl(stepper(mutable rng, 10))
+    printl(rng)
+
+    mutable val u = ()
+    printl(setUnit(mutable u))
+
+    // A plain argument is a snapshot.
+    mutable val s = 1
+    printl(read2(s, mutable s))
+    printl(s)
+
+    // A place is read once the other arguments have been evaluated.
+    mutable val r = 0
+    printl(add(mutable r, bumped(mutable r)))
+    printl(r)
+
+    mutable val f = Game(Rng(0), 1)
+    printl(add(mutable f.score, bumped(mutable f.score)))
+    printl(f)
+
+    // In a loop, the temporary for a field path doesn't pile up.
+    mutable val total = Game(Rng(0), 0)
+    for i in 0..1000 {
+        _ = add(mutable total.score, i)
+    }
+    printl(total.score)
+}

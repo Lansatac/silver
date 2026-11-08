@@ -1,0 +1,11 @@
+def fail(mutable n: Int): Int {
+    n = 1
+    n / 0
+}
+
+def main(): Unit {
+    mutable val n = 0
+    printl("before")
+    _ = fail(mutable n)
+    printl("after")
+}

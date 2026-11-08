@@ -65,9 +65,14 @@ final class TypeTable
         return registerTypeData(TypeData(ArrayData(element)));
     }
 
-    Type function_(const(Type)[] params, Type ret)
+    /// `mutables` says which params are `mutable`; it is stored empty when none is, so equal
+    /// signatures intern to one type however they were built.
+    Type function_(const(Type)[] params, Type ret, const(bool)[] mutables = null)
     {
-        return registerTypeData(TypeData(FunctionData(params.idup, ret)));
+        import std.algorithm : canFind;
+
+        auto stored = mutables.canFind(true) ? mutables.idup : null;
+        return registerTypeData(TypeData(FunctionData(params.idup, ret, stored)));
     }
 
     Type tuple(const(Type)[] elements)
@@ -151,13 +156,15 @@ final class TypeTable
         import std.conv : text;
         import std.array : join;
         import std.algorithm : map;
+        import std.range : iota;
         return _types[t.index].match!(
             (const Primitive p) => p.kind.text,
             (const OptionData o) => describeOptionInner(o.inner) ~ "?",
             (const NoneType _) => "None",
             (const ArrayData a) => "[" ~ describe(a.element) ~ "]",
             (const EmptyArrayType _) => "[]",
-            (const FunctionData f) => "(" ~ f.params.map!(p => describe(p)).join(", ") ~ ") -> " ~ describe(f.ret),
+            (const FunctionData f) => "(" ~ f.params.length.iota.map!(i => (f.isMutable(i) ? "mutable " : "") ~ describe(f.params[i])).join(", ")
+                ~ ") -> " ~ describe(f.ret),
             (const TupleData t) => "(" ~ t.elements.map!(e => describe(e)).join(", ") ~ ")",
             (const NominalData nd) => _nominalNames[nd.decl],
             (const ErrorType e) => "Error",
@@ -241,6 +248,9 @@ struct FunctionData
 {
     immutable(Type)[] params;
     Type ret;
+    immutable(bool)[] mutables;
+
+    bool isMutable(size_t i) const => mutables.length > 0 && mutables[i];
 }
 
 struct TupleData

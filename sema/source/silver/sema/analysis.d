@@ -166,6 +166,12 @@ final class Analysis
         return _typing.fieldIndexes[access];
     }
 
+    /// For each update of the `with` expression `with_`, the field index of each step of its path.
+    const(size_t[])[] updatePathsOf(Id!Expr with_) const
+    {
+        return _typing.updatePaths[with_];
+    }
+
     /// The node an ID was given to. Name resolution records every declaration, so an ID
     /// from this program always has one.
     const(FunctionDecl)* declarationOf(Id!FunctionDecl func) const

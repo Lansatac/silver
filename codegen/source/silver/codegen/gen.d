@@ -129,6 +129,8 @@ final class FunctionState
     LoopTargets[] loops;
 
     string[Id!Param] params;
+    /// The address of the caller's place, for each `mutable` param that has an operand.
+    string[Id!Param] paramSlots;
     /// Each local's stack slot.
     string[Id!VarDecl] slots;
 
@@ -444,14 +446,17 @@ final class Generator
 
     string emitParams(const(Param[]) params)
     {
-        auto types = params.map!(p => _analysis.typeOf(p.id)).array;
-        string[] operands;
-        foreach (i, param; params)
+        string[] typed;
+        foreach (param; params)
         {
-            operands ~= paramOperand(param.name, types[i]);
-            _function.params[param.id] = operands[i];
+            auto type = _analysis.typeOf(param.id);
+            auto operand = paramOperand(param.name, type);
+            _function.params[param.id] = operand;
+            if (operand is null) continue;
+            if (param.mutable) _function.paramSlots[param.id] = operand;
+            typed ~= "%s %s".format(param.mutable ? "ptr" : llvmType(type), operand);
         }
-        return typedOperands(types, operands);
+        return typed.join(", ");
     }
 
     /// `expr`'s value, wrapped into the option sema found it lands in, if any.
@@ -664,6 +669,7 @@ final class Generator
             (const IndexExpr index) => emitIndex(expr, index),
             (const RangeExpr _) => assert(0, "sema only allows a range as a slice's index or in a `for`, which read its bounds"),
             (const TupleLiteral literal) => emitTupleLiteral(expr, literal),
+            (const WithExpr with_) => emitWith(expr, with_),
         );
     }
 
@@ -1272,7 +1278,13 @@ final class Generator
                 auto name = mangledNames[decl];
                 return Fragment.constant("@\"%s\"".format(name));
             },
-            (const Id!Param param) => Fragment.constant(_function.params[param]),
+            (const Id!Param param) {
+                if (auto slot = param in _function.paramSlots)
+                {
+                    return load(llvmType(_analysis.typeOf(param)), *slot);
+                }
+                return Fragment.constant(_function.params[param]);
+            },
             (const Id!VarDecl decl) {
                 if (!hasOperand(_analysis.typeOf(decl))) return Fragment.init;
                 return load(llvmType(_analysis.typeOf(decl)), _function.slots[decl]);
@@ -1924,12 +1936,96 @@ final class Generator
     {
         auto signature = calleeSignature(call);
 
-        auto args = call.args.map!(arg => emitExpr(arg)).array;
+        auto args = call.args.length.iota.map!(i => call.isMutable(i) ? Fragment.init : emitExpr(call.args[i])).array;
         auto evaluated = callee.then(Fragment.sequence(args));
-        auto operands = args.map!(arg => arg.value).array;
 
-        return evaluated.then(emitCall(llvmReturnType(signature.ret),
-            callee.value, typedOperands(signature.params, operands)));
+        // Only once every argument has been evaluated is a `mutable` place read.
+        string[] typed;
+        Fragment[] writeBacks;
+        foreach (i, arg; call.args)
+        {
+            auto type = signature.params[i];
+            if (!signature.isMutable(i))
+            {
+                if (args[i].value !is null) typed ~= "%s %s".format(llvmType(type), args[i].value);
+                continue;
+            }
+            if (!hasOperand(type)) continue;
+
+            auto isLocal = arg.kind.match!((const Identifier _) => true, _ => false);
+            if (isLocal)
+            {
+                typed ~= "ptr " ~ slotOf(arg);
+                continue;
+            }
+            auto layout = llvmType(type);
+            auto slot = _function.newSlot(".mutable");
+            auto current = emitExpr(arg);
+            evaluated = evaluated.then(current)
+                .then(Fragment(["  %s = alloca %s".format(slot, layout)]))
+                .then(Fragment.store(layout, current.value, slot));
+            typed ~= "ptr " ~ slot;
+            auto written = load(layout, slot);
+            writeBacks ~= assignTo(arg, written);
+        }
+
+        auto result = evaluated.then(emitCall(llvmReturnType(signature.ret), callee.value, typed.join(", ")));
+        return result.then(Fragment.sequence(writeBacks)).withValue(result.value);
+    }
+
+    /// A copy of `object`, with each update's value in place. The values are evaluated in order.
+    Fragment emitWith(const Expr expr, const WithExpr with_)
+    {
+        auto paths = _analysis.updatePathsOf(expr.id);
+        auto type = _analysis.typeOf(with_.object.id);
+        auto code = emitExpr(*with_.object);
+        auto current = code.value;
+        foreach (i, ref update; with_.updates)
+        {
+            auto value = emitExpr(update.value);
+            code = code.then(value);
+            // Nothing to store for a Unit field, and a value that never comes back ends this code.
+            if (value.value is null) continue;
+            auto rebuilt = rebuildField(type, current, paths[i], value.value, expr.span);
+            code = code.then(rebuilt);
+            current = rebuilt.value;
+        }
+        return code.withValue(current);
+    }
+
+    /// A new object like `object`, of `type`, with the operand `value` at the field `path` reaches.
+    Fragment rebuildField(Type type, string object, const(size_t)[] path, string value, Span span)
+    {
+        auto decl = _analysis.types[type].match!(
+            (const NominalData nominal) => nominal.decl,
+            (_) => assert(0, "sema only finds fields on a declared type"),
+        );
+        if (!hasLayout(decl)) return unsupported(span, "types with `Any` or `Never` fields");
+
+        auto field = _analysis.fieldsOf(decl)[path[0]];
+        auto stored = llvmFieldIndex(decl, path[0]);
+        auto layout = llvmStruct(decl);
+        auto contents = load(layout, object);
+        auto code = contents;
+
+        auto fieldValue = value;
+        if (path.length > 1)
+        {
+            auto inner = _function.newTemp();
+            code = code.then(Fragment.instruction("%s = extractvalue %s %s, %s".format(inner, layout, contents.value, stored), inner));
+            auto rebuilt = rebuildField(field.type, inner, path[1 .. $], value, span);
+            code = code.then(rebuilt);
+            fieldValue = rebuilt.value;
+        }
+
+        auto updated = _function.newTemp();
+        auto allocated = alloc(layout);
+        return code
+            .then(Fragment.instruction("%s = insertvalue %s %s, %s %s, %s".format(
+                updated, layout, contents.value, llvmType(field.type), fieldValue, stored), updated))
+            .then(allocated)
+            .then(Fragment.store(layout, updated, allocated.value))
+            .withValue(allocated.value);
     }
 
     FunctionData calleeSignature(const CallExpr call)
@@ -2228,6 +2324,7 @@ final class Generator
     {
         return (*_analysis.resolutionOf(target.id)).match!(
             (const Id!VarDecl decl) => _function.slots[decl],
+            (const Id!Param param) => _function.paramSlots[param],
             (_) => assert(0, "sema only allows assigning to locals"),
         );
     }

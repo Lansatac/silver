@@ -1,0 +1,23 @@
+Point(1, 2)
+Point(3, 2)
+Point(5, 6)
+Point(7, 8)
+Line(Point(1, 9), Point(3, 2))
+Line(Point(1, 2), Point(3, 2))
+Line(Point(5, 6), Point(3, 2))
+Line(Point(1, 2), Point(3, 2))
+Point(10, 2)
+Point(11, 12)
+Tagged(a, (), Some(200), Point(1, 2))
+Tagged(b, (), None, Point(1, 2))
+Tagged(a, (), None, Point(1, 2))
+Tagged(a, (), None, Point(4, 2))
+eval origin
+eval 1
+eval 2
+Point(2, 1)
+Point(2, 1)
+Point(1, 5)
+42
+true
+Some(Point(1, 0))

@@ -407,6 +407,13 @@ private final class Indexer
                     visit(element);
                 }
             },
+            (const WithExpr w) {
+                visit(w.object);
+                foreach (update; w.updates)
+                {
+                    visit(update.value);
+                }
+            },
             (const ArrayLiteral l) {
                 foreach (element; l.elements)
                 {

@@ -15,6 +15,10 @@ immutable Case[] functions = [
         "(def k (): Int 1)",
     ]),
     rejectsDeclaration("def a() => 1"), // the return type is required
+    declaresAs("def a(mutable x: Int): Int => x", "(def a (mutable x: Int): Int x)"),
+    declaresAs("def a(y: Int, mutable x: Int, mutable z: Int): Unit { }", "(def a (y: Int, mutable x: Int, mutable z: Int): Unit (block))"),
+    declaresAs("def a(mutable\n    x: Int): Int => x", "(def a (mutable x: Int): Int x)"),
+    rejectsDeclaration("def a(x: mutable Int): Int => x"),
 
     declaresAs("native def print(value : Any) : Unit", "(native def print (value: Any): Unit)"),
     declaresAs("native def now() : Int", "(native def now (): Int)"),

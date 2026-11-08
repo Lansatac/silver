@@ -2149,3 +2149,143 @@ unittest
     analyzed(`val t: (Int, Int) = (1, 2)
 def main(): Unit => ()`).shouldReport(DiagnosticCode.InvalidConstantType, At("(Int, Int)", 1));
 }
+
+private enum stepper = `type Rng(state: Int)
+type Game(rng: Rng, score: Int)
+def step(mutable rng: Rng): Int {
+    rng.state += 1
+    rng.state
+}
+def add(mutable a: Int, mutable b: Int): Unit { a += b }
+`;
+
+@("a mutable parameter can be assigned, and its fields too")
+unittest
+{
+    analyzed(stepper ~ "def main(): Unit { }").shouldHaveNoDiagnostics();
+    analyzed("def f(mutable x: Int): Unit { x = 2 }\ndef main(): Unit { }").shouldHaveNoDiagnostics();
+    analyzed("def f(x: Int): Unit { x = 2 }\ndef main(): Unit { }")
+        .shouldReport(DiagnosticCode.AssignToImmutable, At("x", 2));
+}
+
+@("a mutable argument is a place")
+unittest
+{
+    analyzed(stepper ~ `def main(): Unit {
+    mutable val r = Rng(1)
+    mutable val g = Game(r, 1)
+    _ = step(mutable r)
+    _ = step(mutable g.rng)
+}`).shouldHaveNoDiagnostics();
+    analyzed(stepper ~ "def pass(mutable r: Rng): Int => step(mutable r)\ndef main(): Unit { }").shouldHaveNoDiagnostics();
+    analyzed(stepper ~ "def main(): Unit {\n    val r = Rng(1)\n    _ = step(mutable r)\n}")
+        .shouldReport(DiagnosticCode.AssignToImmutable, At("r", 2));
+    analyzed(stepper ~ "def pass(r: Rng): Int => step(mutable r)\ndef main(): Unit { }")
+        .shouldReport(DiagnosticCode.AssignToImmutable, At("r", 2));
+    analyzed(stepper ~ "def main(): Unit {\n    _ = step(mutable Rng(1))\n}")
+        .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("Rng(1)", 1));
+    analyzed(stepper ~ "def main(): Unit {\n    mutable val rs = [Rng(1)]\n    _ = step(mutable rs[0])\n}")
+        .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("rs[0]", 1));
+}
+
+@("a call says which arguments are mutable, as the function does")
+unittest
+{
+    analyzed(stepper ~ "def main(): Unit {\n    mutable val r = Rng(1)\n    _ = step(r)\n}")
+        .shouldReport(DiagnosticCode.MutabilityMismatch, At("r", 2));
+    analyzed("def f(x: Int): Int => x\ndef main(): Unit {\n    mutable val r = 1\n    _ = f(mutable r)\n}")
+        .shouldReport(DiagnosticCode.MutabilityMismatch, At("r", 2));
+    analyzedMain("mutable val r = 1\n    _ = Int8(mutable r)").shouldReport(DiagnosticCode.MutabilityMismatch, At("r", 2));
+    analyzedMain("mutable val r = [1]\n    _ = length(mutable r)").shouldReport(DiagnosticCode.MutabilityMismatch, At("r", 2));
+    analyzedWithTypes("mutable val r = 1\n    _ = Point(mutable r, 2)").shouldReport(DiagnosticCode.MutabilityMismatch, At("r", 2));
+}
+
+@("a mutable argument has exactly the parameter's type")
+unittest
+{
+    analyzed("def f(mutable x: Int?): Unit { }\ndef main(): Unit {\n    mutable val r = 1\n    f(mutable r)\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("r", 2));
+    analyzed("def f(mutable x: UInt8): Unit { }\ndef main(): Unit {\n    mutable val r = 1\n    f(mutable r)\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("r", 2));
+}
+
+@("two mutable arguments of a call can't overlap")
+unittest
+{
+    analyzed(stepper ~ "def main(): Unit {\n    mutable val a = 1\n    add(mutable a, mutable a)\n}")
+        .shouldReport(DiagnosticCode.OverlappingWrites, At("a", 5));
+    analyzed(stepper ~ `def both(mutable g: Game, mutable r: Rng): Unit { }
+def main(): Unit {
+    mutable val g = Game(Rng(1), 2)
+    both(mutable g, mutable g.rng)
+}`).shouldReport(DiagnosticCode.OverlappingWrites, At("g.rng", 1));
+    analyzed(stepper ~ `def main(): Unit {
+    mutable val g = Game(Rng(1), 2)
+    add(mutable g.score, mutable g.rng.state)
+}`).shouldHaveNoDiagnostics();
+    analyzed(stepper ~ `def keep(snapshot: Int, mutable x: Int): Unit { }
+def main(): Unit {
+    mutable val a = 1
+    keep(a, mutable a)
+}`).shouldHaveNoDiagnostics();
+}
+
+@("mutability is part of a function's type")
+unittest
+{
+    analyzed(stepper ~ `def main(): Unit {
+    val f: (mutable Rng) -> Int = step
+    mutable val r = Rng(1)
+    _ = f(mutable r)
+}`).shouldHaveNoDiagnostics();
+    analyzed(stepper ~ "def main(): Unit {\n    val f: (Rng) -> Int = step\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("step", 2));
+}
+
+@("a native can't take a mutable parameter")
+unittest
+{
+    analyzed("native def f(mutable x: Int): Unit\ndef main(): Unit { }")
+        .shouldReport(DiagnosticCode.MutableNativeParameter, At("x", 1));
+}
+
+@("with checks each value against its field, and has the object's type")
+unittest
+{
+    analyzed(stepper ~ `type Limited(limit: UInt8?, game: Game)
+def main(): Unit {
+    val l = Limited(None, Game(Rng(1), 2))
+    val m: Limited = l with (limit = 200, game.rng.state = 3)
+}`).shouldHaveNoDiagnostics();
+    analyzedWithTypes(`val p = Point(1, 2)
+    val q = p with (x = "a")`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
+}
+
+@("with only reaches declared fields")
+unittest
+{
+    analyzedWithTypes(`val p = Point(1, 2)
+    val q = p with (z = 1)`).shouldReport(DiagnosticCode.UnknownMember, At("z", 1));
+    analyzedWithTypes(`val p = Point(1, 2)
+    val q = p with (x.y = 1)`).shouldReport(DiagnosticCode.UnknownMember, At("x.y", 1));
+    analyzedMain(`val q = (1, 2) with (x = 1)`).shouldReport(DiagnosticCode.UnknownMember, At("x", 1));
+}
+
+@("two updates of one with can't overlap")
+unittest
+{
+    analyzedWithTypes(`val p = Point(1, 2)
+    val q = p with (x = 1, x = 2)`).shouldReport(DiagnosticCode.OverlappingWrites, At("x", 3));
+    analyzed(stepper ~ `def main(): Unit {
+    val g = Game(Rng(1), 2)
+    val h = g with (rng = Rng(2), rng.state = 3)
+}`).shouldReport(DiagnosticCode.OverlappingWrites, At("rng.state", 3));
+}
+
+@("with works on an immutable binding")
+unittest
+{
+    analyzedWithTypes(`val p = Point(1, 2)
+    val q = p with (x = 3)
+    p.x = 1`).shouldReport(DiagnosticCode.AssignToImmutable, At("p", 3));
+}

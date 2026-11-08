@@ -58,7 +58,7 @@ Silver:
 
     NativeFunctionDeclaration < :NATIVE Nl? :DEF Nl? Identifier Nl? :'(' Nl? Params Nl? :')' TypeAnnotation
     Params               < (Param (Nl? ',' Nl? Param)*)?
-    Param                < Identifier TypeAnnotation
+    Param                < (MUTABLE Nl?)? Identifier TypeAnnotation
 
     Block                < '{' Sep? (Statement (Sep Statement)* Sep?)? '}'
 
@@ -69,7 +69,9 @@ Silver:
 
     TypeDeclaration      < :TYPE Nl? TypeName Fields?
     # The parens are kept so `type M()` still has a node, which sema rejects in favor of `type M`
-    Fields               < '(' Nl? Params Nl? ')'
+    Fields               < '(' Nl? FieldList Nl? ')'
+    FieldList            < (Field (Nl? ',' Nl? Field)*)?
+    Field                < Identifier TypeAnnotation
 
     ExpressionStatement  < Expression
 
@@ -81,7 +83,8 @@ Silver:
     # One element is grouping and more are a tuple, so the two share a parse
     ParenType            < :'(' Nl? Type (Nl? :',' Nl? Type)* Nl? :')'
     ArrayType            < :'[' Nl? Type Nl? :']'
-    FunctionType         < :'(' Nl? (Type (Nl? :',' Nl? Type)*)? Nl? :')' Nl? :"->" Nl? Type
+    FunctionType         < :'(' Nl? (FunctionTypeParam (Nl? :',' Nl? FunctionTypeParam)*)? Nl? :')' Nl? :"->" Nl? Type
+    FunctionTypeParam    < (MUTABLE Nl?)? Type
     UnitType             < '(' Nl? ')'
     NamedType            < TypePath TypeArguments?
     TypePath             <- (ValueName '.')* TypeName
@@ -113,13 +116,16 @@ Silver:
     UnaryOperator        < "-" / "!" / "~"
 
     Postfix              < Eval PostfixOp*
-    PostfixOp            < CallArgs / IndexArgs / Nl? (SafeMemberAccess / MemberAccess / PropagateNone)
+    PostfixOp            < CallArgs / IndexArgs / Nl? (SafeMemberAccess / MemberAccess / PropagateNone / WithUpdate)
     MemberAccess         < :'.' Nl? identifier
     SafeMemberAccess     < :"?." Nl? identifier
     PropagateNone        <- "?" !("?" / "." !".")
     IndexArgs            < :'[' Nl? Expression Nl? :']'
     CallArgs             < '(' Nl? (Argument (Nl? :',' Nl? Argument)* Nl?)? ')'
-    Argument             < Expression
+    Argument             < (MUTABLE Nl?)? Expression
+    WithUpdate           < :WITH Nl? :'(' Nl? FieldUpdate (Nl? :',' Nl? FieldUpdate)* Nl? :')'
+    FieldUpdate          < FieldPath Nl? :'=' !'=' Nl? Expression
+    FieldPath            < identifier (:'.' Nl? identifier)*
 
     Eval                 < UnitLiteral
                          / ParenExpression
@@ -204,12 +210,13 @@ Silver:
     RETURN              <- Kword("return")
     IMPORT              <- Kword("import")
     MODULE              <- Kword("module")
+    WITH                <- Kword("with")
     # Reserved for sum types, so no program can come to depend on them as names
     MATCH               <- Kword("match")
     ALIAS               <- Kword("alias")
     UNDERSCORE          <- Kword("_")
 
-    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / UNDERSCORE
+    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / WITH / UNDERSCORE
     IdentChar           <- [a-zA-Z0-9_]
     Identifier          <- !Keyword ValueName
 

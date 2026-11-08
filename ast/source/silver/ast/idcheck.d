@@ -217,6 +217,13 @@ private final class IdCheck
                     visit(element);
                 }
             },
+            (const WithExpr w) {
+                visit(w.object);
+                foreach (update; w.updates)
+                {
+                    visit(update.value);
+                }
+            },
             (const BlockExpr b) {
                 foreach (s; b.statements)
                 {

@@ -1,0 +1,63 @@
+type Point(x: Int, y: Int)
+type Line(a: Point, b: Point)
+type Tagged(label: String, nothing: Unit, limit: UInt8?, p: Point)
+
+def log(value: Int): Int {
+    printl("eval {value}")
+    value
+}
+
+def origin(): Point {
+    printl("eval origin")
+    Point(0, 0)
+}
+
+def main(): Unit {
+    val point = Point(1, 2)
+    val moved = point with (x = 3)
+    printl(point)
+    printl(moved)
+
+    val both = point with (x = 5, y = 6)
+    printl(both)
+
+    val chained = point with (x = 7) with (y = 8)
+    printl(chained)
+
+    val line = Line(point, moved)
+    printl(line with (a.y = 9))
+    printl(line with (a.x = 1, b.y = 2))
+    printl(line with (a = both))
+    printl(line)
+
+    val across = point
+        with (x = 10)
+    printl(across)
+    val split = point with (
+        x = 11,
+        y = 12
+    )
+    printl(split)
+
+    // Literals adapt and values promote, as assignment does.
+    val tagged = Tagged("a", (), None, point)
+    printl(tagged with (limit = 200))
+    printl(tagged with (limit = None, label = "b"))
+    printl(tagged with (nothing = ()))
+    printl(tagged with (p.x = 4))
+
+    // The object first, then each value in order.
+    printl(origin() with (y = log(1), x = log(2)))
+
+    // A copy does not follow what it was made from.
+    mutable val m = Point(1, 1)
+    val copy = m with (x = 2)
+    m.y = 5
+    printl(copy)
+    printl(m)
+
+    printl((point with (x = 42)).x)
+    printl(point with (x = 42) == Point(42, 2))
+    val wrapped: Point? = point with (y = 0)
+    printl(wrapped)
+}

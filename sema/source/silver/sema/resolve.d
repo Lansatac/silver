@@ -658,6 +658,13 @@ private final class NameResolver
                     resolveExpr(element, scopeTable);
                 }
             },
+            (const WithExpr with_) {
+                resolveExpr(*with_.object, scopeTable);
+                foreach (update; with_.updates)
+                {
+                    resolveExpr(update.value, scopeTable);
+                }
+            },
         );
     }
 

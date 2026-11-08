@@ -50,6 +50,10 @@ enum DiagnosticCode : string
     UnusedValue = "T0017",
     InvalidTupleElement = "T0018",
     PatternMismatch = "T0019",
+    MutabilityMismatch = "T0020",
+    /// Two `mutable` arguments of one call, or two updates of one `with`, that reach the same place.
+    OverlappingWrites = "T0021",
+    MutableNativeParameter = "T0022",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

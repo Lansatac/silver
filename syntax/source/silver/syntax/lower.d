@@ -1,5 +1,7 @@
 module silver.syntax.lower;
 
+import std.algorithm : canFind, map;
+import std.array : array;
 import std.format : format;
 import std.sumtype : match;
 import pegged.grammar : ParseTree;
@@ -224,9 +226,17 @@ private final class Lowering
             return TypeExpr(ids.next!TypeExpr, spanOf(cst, file), TypeExprKind(NamedType(path, args)));
         case "Silver.FunctionType":
             // The parameter types, then the return type.
-            auto params = cst[0 .. $ - 1].map!(p => convertTypeExpression(p)).array;
+            TypeExpr[] params;
+            bool[] mutables;
+            foreach (param; cst[0 .. $ - 1])
+            {
+                param.validateNodeIs("Silver.FunctionTypeParam");
+                mutables ~= param.children.length == 2;
+                params ~= convertTypeExpression(param[$ - 1]);
+            }
+            if (!mutables.canFind(true)) mutables = null;
             auto returnType = boxed(convertTypeExpression(cst[$ - 1]));
-            return TypeExpr(ids.next!TypeExpr, spanOf(cst, file), TypeExprKind(FunctionType(params, returnType)));
+            return TypeExpr(ids.next!TypeExpr, spanOf(cst, file), TypeExprKind(FunctionType(params, mutables, returnType)));
         case "Silver.UnitType":
             return TypeExpr(ids.next!TypeExpr, spanOf(cst, file), TypeExprKind(UnitType()));
         case "Silver.ParenType":
@@ -514,14 +524,26 @@ private final class Lowering
         {
         case "Silver.CallArgs":
             Expr[] args;
+            bool[] mutables;
             foreach (argument; op.children)
             {
                 argument.validateNodeIs("Silver.Argument");
-                args ~= convertExpression(argument[0]);
+                mutables ~= argument.children.length == 2;
+                args ~= convertExpression(argument[$ - 1]);
             }
+            if (!mutables.canFind(true)) mutables = null;
             auto isSome = lhs.kind.match!((const Identifier callee) => callee.name == "Some", _ => false);
-            if (isSome && args.length == 1) return Expr(ids.next!Expr, span, ExprKind(SomeExpr(boxed(args[0]))));
-            return Expr(ids.next!Expr, span, ExprKind(CallExpr(boxed(lhs), args)));
+            if (isSome && args.length == 1 && mutables is null) return Expr(ids.next!Expr, span, ExprKind(SomeExpr(boxed(args[0]))));
+            return Expr(ids.next!Expr, span, ExprKind(CallExpr(boxed(lhs), args, mutables)));
+        case "Silver.WithUpdate":
+            FieldUpdate[] updates;
+            foreach (update; op.children)
+            {
+                update.validateNodeIs("Silver.FieldUpdate");
+                auto path = update[0].matches;
+                updates ~= FieldUpdate(path, spanOf(update[0], file), convertExpression(update[1]));
+            }
+            return Expr(ids.next!Expr, span, ExprKind(WithExpr(boxed(lhs), updates)));
         case "Silver.MemberAccess":
             return Expr(ids.next!Expr, span, ExprKind(MemberAccess(boxed(lhs), op.matches[0])));
         case "Silver.SafeMemberAccess":
@@ -558,7 +580,10 @@ private final class Lowering
             case "Silver.Params":
                 foreach (param; child.children)
                 {
-                    params ~= Param(ids.next!Param, param.matches[0], spanOf(param[0], file), convertTypeExpression(param[1]));
+                    auto mutable = param.children.length == 3;
+                    auto paramName = param[mutable ? 1 : 0];
+                    params ~= Param(ids.next!Param, paramName.matches[0], spanOf(paramName, file),
+                        convertTypeExpression(param[$ - 1]), mutable);
                 }
                 break;
             case "Silver.TypeAnnotation":
@@ -590,7 +615,7 @@ private final class Lowering
             emptyParens = fieldList.children.length == 0;
             foreach (params; fieldList.children)
             {
-                params.validateNodeIs("Silver.Params");
+                params.validateNodeIs("Silver.FieldList");
                 foreach (param; params.children)
                 {
                     fields ~= Field(ids.next!Field, param.matches[0], spanOf(param[0], file),

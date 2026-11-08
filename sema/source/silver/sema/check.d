@@ -22,6 +22,7 @@ package struct Typing
     Type[SymbolId] symbolTypes;
     FieldInfo[][Id!TypeDecl] fields;
     size_t[Id!Expr] fieldIndexes;
+    size_t[][][Id!Expr] updatePaths;
     ConstValue[Id!ConstDecl] constants;
     Type[Id!Expr] promotions;
     bool[Id!Expr] arrayLengths;
@@ -57,6 +58,7 @@ private final class TypeChecker
     private Type[Id!TypeDecl] _nominalTypes;
     private FieldInfo[][Id!TypeDecl] _fields;
     private size_t[Id!Expr] _fieldIndexes;
+    private size_t[][][Id!Expr] _updatePaths;
     /// Where a value becomes an option, by the option type it's wrapped into.
     private Type[Id!Expr] _promotions;
     /// Every integer literal. A literal's type can change after it's first seen, as it adapts
@@ -158,7 +160,7 @@ private final class TypeChecker
             }
         }
 
-        return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes, _constants, _promotions,
+        return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes, _updatePaths, _constants, _promotions,
             _arrayLengths, _concatOperands);
     }
 
@@ -452,7 +454,7 @@ private final class TypeChecker
             (const OptionType option) => optionOf(resolveType(*option.inner), type.span),
             (const ArrayType array) => arrayOf(resolveType(*array.element), type.span),
             (const FunctionType func) => _types.function_(
-                func.params.map!(p => resolveType(p)).array, resolveType(*func.returnType)),
+                func.params.map!(p => resolveType(p)).array, resolveType(*func.returnType), func.mutableParams),
             (const UnitType _) => _types.unit,
             (const TupleType tuple) => tupleOf(tuple.elements.map!(e => resolveType(e)).array, tuple.elements),
         );
@@ -562,7 +564,16 @@ private final class TypeChecker
         {
             _symbolTypes[SymbolId(param.id)] = params[i];
         }
-        _symbolTypes[SymbolId(func.id)] = _types.function_(params, resolveType(func.returnType));
+        if (func.native)
+        {
+            foreach (param; func.params.filter!(p => p.mutable))
+            {
+                _collector.reportError(DiagnosticCode.MutableNativeParameter, param.nameSpan,
+                    "A native function can't take a `mutable` parameter");
+            }
+        }
+        _symbolTypes[SymbolId(func.id)] = _types.function_(params, resolveType(func.returnType),
+            func.params.map!(p => p.mutable).array);
     }
 
     private void declareConstructor(const TypeDecl decl)
@@ -791,51 +802,78 @@ private final class TypeChecker
             "`%s` needs to be in the body of a loop".format(keyword));
     }
 
-    /// Reports `target` unless it's a mutable binding or a chain of fields rooted at one.
-    private void checkAssignable(const Expr target)
+    /// Reports `target` unless it's a mutable binding or a chain of fields rooted at one. `use` is
+    /// what's being done to it, for the message: "assigned to", or "passed as `mutable`".
+    private bool checkAssignable(const Expr target, string use = "assigned to")
     {
-        target.kind.match!(
-            (const Identifier _) => checkBindingMutable(target),
-            (const MemberAccess access) => checkAssignable(*access.object),
+        return target.kind.match!(
+            (const Identifier _) => checkBindingMutable(target, use),
+            (const MemberAccess access) => checkAssignable(*access.object, use),
             (const IndexExpr _) {
                 _collector.reportError(DiagnosticCode.InvalidAssignmentTarget, target.span,
-                    "An array never changes, so its elements can't be assigned to; rebind the whole array");
+                    "An array never changes, so its elements can't be %s; rebind the whole array".format(use));
+                return false;
             },
-            (_) => reportInvalidAssignment(target),
+            (_) => reportInvalidAssignment(target, use),
         );
     }
 
-    private void checkBindingMutable(const Expr name)
+    private bool checkBindingMutable(const Expr name, string use)
     {
         auto symbol = name.id in _resolutions.resolutions;
         // A package prefix like `std` in `std.math.pow = f` has no resolution of its own.
-        if (symbol is null)
-        {
-            reportInvalidAssignment(name);
-            return;
-        }
-        (*symbol).match!(
+        if (symbol is null) return reportInvalidAssignment(name, use);
+        return (*symbol).match!(
             (const Id!VarDecl local) {
                 auto decl = _resolutions.declarations.locals[local];
-                if (!decl.mutable)
-                {
-                    _collector.reportError(DiagnosticCode.AssignToImmutable, name.span,
-                        "`%s` is not mutable and cannot be assigned to; declare it with `mutable val`".format(decl.name));
-                }
+                if (decl.mutable) return true;
+                _collector.reportError(DiagnosticCode.AssignToImmutable, name.span,
+                    "`%s` is not mutable and cannot be %s; declare it with `mutable val`".format(decl.name, use));
+                return false;
             },
             (const Id!Param param) {
+                auto decl = _resolutions.declarations.params[param];
+                if (decl.mutable) return true;
                 _collector.reportError(DiagnosticCode.AssignToImmutable, name.span,
-                    "`%s` is a parameter, which is not mutable and cannot be assigned to"
-                        .format(_resolutions.declarations.params[param].name));
+                    "`%s` is a parameter, which is not mutable and cannot be %s; declare it `mutable %s`"
+                        .format(decl.name, use, decl.name));
+                return false;
             },
-            (_) => reportInvalidAssignment(name),
+            (_) => reportInvalidAssignment(name, use),
         );
     }
 
-    private void reportInvalidAssignment(const Expr target)
+    private bool reportInvalidAssignment(const Expr target, string use)
     {
         _collector.reportError(DiagnosticCode.InvalidAssignmentTarget, target.span,
-            "Only a `mutable val` or one of its fields can be assigned to");
+            "Only a `mutable val`, a `mutable` parameter or one of their fields can be %s".format(use));
+        return false;
+    }
+
+    /// The place `target` names as its binding and then field names, for telling whether two
+    /// writes overlap. Only called on a target `checkAssignable` accepted.
+    private string[] placePath(const Expr target)
+    {
+        return target.kind.match!(
+            (const Identifier _) => [_resolutions.resolutions[target.id].to!string],
+            (const MemberAccess access) => placePath(*access.object) ~ access.member,
+            (_) => assert(0, "only names and fields are places"),
+        );
+    }
+
+    /// Reports each of `paths` that is, or is inside or around, one before it.
+    private void reportOverlaps(const(string[])[] paths, const(Span)[] spans, string message)
+    {
+        foreach (i, path; paths)
+        {
+            foreach (earlier; paths[0 .. i])
+            {
+                auto shorter = min(path.length, earlier.length);
+                if (path[0 .. shorter] != earlier[0 .. shorter]) continue;
+                _collector.reportError(DiagnosticCode.OverlappingWrites, spans[i], message);
+                break;
+            }
+        }
     }
 
     private Type synthesize(const Expr expr, BodyContext ctx)
@@ -861,6 +899,7 @@ private final class TypeChecker
                     ? synthesizeLength(expr, call, ctx)
                     : synthesizeCall(call, expr.span, ctx),
             (const MemberAccess member) => synthesizeMemberAccess(expr, member, ctx),
+            (const WithExpr with_) => synthesizeWith(expr, with_, ctx),
             (const WhileExpr while_) => synthesizeWhile(while_, expr.span, ctx),
             (const ForExpr for_) => synthesizeFor(for_, ctx),
             (const IfExpr if_) => synthesizeIf(if_, expr.span, ctx),
@@ -957,6 +996,7 @@ private final class TypeChecker
 
     private Type synthesizeLength(const Expr expr, const CallExpr call, BodyContext ctx)
     {
+        rejectMutableArguments(call);
         _exprTypes[call.callee.id] = _symbolTypes[SymbolId(_arrayLength)];
         if (call.args.length != 1)
         {
@@ -1149,6 +1189,7 @@ private final class TypeChecker
     /// number at runtime, where one that doesn't fit panics. `String(x)` takes whatever `print` does.
     private Type synthesizeConversion(const CallExpr call, Type target, Span span, BodyContext ctx)
     {
+        rejectMutableArguments(call);
         _exprTypes[call.callee.id] = target;
         if (call.args.length != 1)
         {
@@ -1504,10 +1545,35 @@ private final class TypeChecker
                         "Expected %s arguments, got %s".format(funcData.params.length, call.args.length));
                     return _types.error;
                 }
+                string[][] places;
+                Span[] placeSpans;
                 foreach (i, arg; call.args)
                 {
-                    check(arg, funcData.params[i], ctx);
+                    if (!call.isMutable(i))
+                    {
+                        if (funcData.isMutable(i))
+                        {
+                            _collector.reportError(DiagnosticCode.MutabilityMismatch, arg.span,
+                                "This parameter is `mutable`, so the call can change the argument; write `mutable` before it");
+                        }
+                        check(arg, funcData.params[i], ctx);
+                        continue;
+                    }
+                    if (!funcData.isMutable(i))
+                    {
+                        synthesize(arg, ctx);
+                        _collector.reportError(DiagnosticCode.MutabilityMismatch, arg.span,
+                            "This parameter isn't `mutable`, so the argument can't be passed as `mutable`");
+                        continue;
+                    }
+                    if (checkMutableArgument(arg, funcData.params[i], ctx))
+                    {
+                        places ~= placePath(arg);
+                        placeSpans ~= arg.span;
+                    }
                 }
+                reportOverlaps(places, placeSpans,
+                    "This overlaps a `mutable` argument before it, and one call can't change a place through two");
                 return funcData.ret;
             },
             (_) {
@@ -1517,6 +1583,80 @@ private final class TypeChecker
                 return _types.error;
             },
         );
+    }
+
+    /// A `mutable` argument is written back when the call returns, so it must be a place of exactly
+    /// the parameter's type. Whether it's one that can be overlap-checked.
+    private bool checkMutableArgument(const Expr arg, Type param, BodyContext ctx)
+    {
+        auto type = synthesize(arg, ctx);
+        if (type == _types.error) return false;
+        if (!checkAssignable(arg, "passed as `mutable`")) return false;
+        if (type == param) return true;
+        _collector.reportError(DiagnosticCode.TypeMismatch, arg.span,
+            "A `mutable` argument is written back, so it has to be exactly `%s`, not `%s`"
+                .format(_types.describe(param), _types.describe(type)));
+        return false;
+    }
+
+    /// For the calls that aren't to a function, which can't take a `mutable` argument.
+    private void rejectMutableArguments(const CallExpr call)
+    {
+        foreach (i, arg; call.args)
+        {
+            if (!call.isMutable(i)) continue;
+            _collector.reportError(DiagnosticCode.MutabilityMismatch, arg.span,
+                "This parameter isn't `mutable`, so the argument can't be passed as `mutable`");
+        }
+    }
+
+    /// `object with (a = 1, b.c = 2)`: a copy of `object`, so it has `object`'s type, and each value
+    /// is checked as an assignment to that field would be.
+    private Type synthesizeWith(const Expr expr, const WithExpr with_, BodyContext ctx)
+    {
+        auto objectType = requireTyped(synthesize(*with_.object, ctx), with_.object.span);
+
+        size_t[][] indexes;
+        string[][] paths;
+        Span[] spans;
+        foreach (ref update; with_.updates)
+        {
+            size_t[] steps;
+            auto fieldType = updatedField(objectType, update, steps);
+            check(update.value, fieldType, ctx);
+            indexes ~= steps;
+            if (fieldType == _types.error) continue;
+            paths ~= update.path.dup;
+            spans ~= update.span;
+        }
+        reportOverlaps(paths, spans, "This overlaps an update before it, and one `with` can't change a place twice");
+        _updatePaths[expr.id] = indexes;
+        return objectType;
+    }
+
+    /// The type of the field `update` writes, reached from `object`, with the field index of each
+    /// step of its path in `steps`.
+    private Type updatedField(Type object, const FieldUpdate update, out size_t[] steps)
+    {
+        auto type = object;
+        foreach (name; update.path)
+        {
+            if (type == _types.error) return type;
+            auto fields = _types[type].match!(
+                (const NominalData nominal) => _fields[nominal.decl],
+                (_) => FieldInfo[].init,
+            );
+            auto index = fields.countUntil!(f => f.name == name);
+            if (index < 0)
+            {
+                _collector.reportError(DiagnosticCode.UnknownMember, update.span,
+                    "Type `%s` has no field named `%s`".format(_types.describe(type), name));
+                return _types.error;
+            }
+            steps ~= index;
+            type = fields[index].type;
+        }
+        return type;
     }
 
     private Type synthesizeMemberAccess(const Expr expr, const MemberAccess member, BodyContext ctx)

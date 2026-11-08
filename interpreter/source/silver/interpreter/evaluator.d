@@ -698,12 +698,42 @@ class Evaluator
     {
         auto callee = evaluate(*ast.callee, variables);
 
-        Variant[] args;
-        foreach (arg; ast.args)
+        auto args = new Variant[ast.args.length];
+        foreach (i, arg; ast.args)
         {
-            args ~= evaluate(arg, variables);
+            if (!ast.isMutable(i)) args[i] = evaluate(arg, variables);
         }
-        return call(callee, args, variables);
+        if (ast.mutableArgs is null) return call(callee, args, variables);
+
+        // Only once every argument has been evaluated is a `mutable` place read.
+        foreach (i, arg; ast.args)
+        {
+            if (ast.isMutable(i)) args[i] = evaluate(arg, variables);
+        }
+        Variant[] written;
+        auto result = call(callee, args, variables, &written);
+        foreach (i, arg; ast.args)
+        {
+            if (ast.isMutable(i)) assign(arg, written[i], variables);
+        }
+        return result;
+    }
+
+    /// A copy of the object, with each update's value in place. The values are evaluated in order.
+    private Variant evaluate(const WithExpr ast, Environment variables)
+    {
+        auto result = evaluate(*ast.object, variables);
+        foreach (ref update; ast.updates)
+        {
+            result = withPath(result, update.path, evaluate(update.value, variables));
+        }
+        return result;
+    }
+
+    private static Variant withPath(Variant object, const(string)[] path, Variant value)
+    {
+        if (path.length == 1) return withField(object, path[0], value);
+        return withField(object, path[0], withPath(member(object, path[0]), path[1 .. $], value));
     }
 
     /// Thrown by `return` and caught by the call that's running the function.
@@ -770,7 +800,8 @@ class Evaluator
         return true;
     }
 
-    private Variant call(Variant callee, Variant[] args, Environment variables)
+    /// `written`, when given, gets each param's final value, for the caller to write back.
+    private Variant call(Variant callee, Variant[] args, Environment variables, Variant[]* written = null)
     {
         if (auto constructor = callee.peek!Constructor)
         {
@@ -789,20 +820,28 @@ class Evaluator
             functionEnv.defineVariable(fn.declaration.params[i].name, arg);
         }
 
+        Variant result;
         try
         {
-            auto value = evaluate(*fn.declaration.body, functionEnv);
+            result = evaluate(*fn.declaration.body, functionEnv);
             // Whatever the body ended in, a Unit function's value is dropped.
             if (analysis.signatureOf(fn.declaration.id).ret == analysis.types.unit)
             {
-                return Variant(Unit());
+                result = Variant(Unit());
             }
-            return value;
         }
         catch (ReturnSignal signal)
         {
-            return signal.value;
+            result = signal.value;
         }
+        if (written !is null)
+        {
+            foreach (param; fn.declaration.params)
+            {
+                *written ~= *functionEnv.find(param.name);
+            }
+        }
+        return result;
     }
 
     private Variant evaluate(const MemberAccess ast, Environment variables)

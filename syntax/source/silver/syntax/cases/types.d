@@ -5,6 +5,7 @@ version (unittest):
 import silver.syntax.cases.core;
 
 immutable Case[] typeDeclarations = [
+    rejectsDeclaration("type Point(mutable x: Int)"),
     declaresAs("type Point(x: Int, y: Int)", "(type Point (x: Int, y: Int))"),
     declaresAs("type Wrapper(value: Int?, f: (Int) -> Int)", "(type Wrapper (value: Int?, f: (Int) -> Int))"),
     declaresAs("type Marker", "(type Marker)"),
@@ -31,6 +32,9 @@ immutable Case[] typeConstruction = [
 ];
 
 immutable Case[] tupleTypes = [
+    parsesAs("val a: (mutable Int) -> Int = f", "(val a: (mutable Int) -> Int f)"),
+    parsesAs("val a: (Int, mutable (Int, Int)?) -> Unit = f", "(val a: (Int, mutable (Int, Int)?) -> Unit f)"),
+    rejects("val a: (mutable Int) = f"),
     parsesAs("val a: (Int, String) = b", "(val a: (Int, String) b)"),
     parsesAs("val a: ((Int, Int), Bool) = b", "(val a: ((Int, Int), Bool) b)"),
     parsesAs("val a: (Int, Int)? = b", "(val a: (Int, Int)? b)"),

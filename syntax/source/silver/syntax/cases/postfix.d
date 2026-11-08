@@ -6,6 +6,20 @@ import silver.syntax.cases.core;
 
 /// Calls and member access, which fold left.
 immutable Case[] postfix = [
+    parsesAs("f(mutable x)", "(call f mutable x)"),
+    parsesAs("f(a, mutable b.c, d)", "(call f a mutable (. b c) d)"),
+    parsesAs("f(mutable\n    x)", "(call f mutable x)"),
+    parsesAs("p with (x = 1)", "(with p (x 1))"),
+    parsesAs("p with (x = 1, a.b = 2)", "(with p (x 1) (a.b 2))"),
+    parsesAs("p with (x = 1) with (y = 2)", "(with (with p (x 1)) (y 2))"),
+    parsesAs("f() with (x = 1).x", "(. (with (call f) (x 1)) x)"),
+    parsesAs("p\n    with (x = 1)", "(with p (x 1))"),
+    parsesAs("p with\n    (x = 1)", "(with p (x 1))"),
+    parsesAs("p with (\n    x = 1,\n    y = 2\n)", "(with p (x 1) (y 2))"),
+    parsesAs("val a = 1 + p with (x = 1)", "(val a (Add 1 (with p (x 1))))"),
+    rejects("p with ()"),
+    rejects("p with (x == 1)"),
+    rejects("val with = 1"),
     parsesAs("f()", "(call f)"),
     parsesAs("val x = a(b)", "(val x (call a b))"),
     parsesAs("a(b,c)", "(call a b c)"),
