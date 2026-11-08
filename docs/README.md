@@ -10,12 +10,12 @@ These documents describe the language as designed. Where the implementation does
 | --- | --- | --- |
 | [Syntax](language/syntax.md) | Comments, names, literals, newlines, operator precedence | Implemented |
 | [Types](language/types.md) | Built-in types, promotion, equality, printing | Mostly implemented |
-| [Numbers](language/numbers.md) | Numeric types, literals, operators, overflow, conversions | Implemented |
+| [Numbers](language/numbers.md) | Numeric types, literals, operators, overflow, conversions | Implemented, except shift amounts of any integer type |
 | [Bindings](language/bindings.md) | `val`, `mutable val`, discards, shadowing, constants | Implemented |
 | [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading | Partial: no lambdas or overloading |
 | [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented |
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
-| [Arrays](language/arrays.md) | Arrays, slices, concatenation, maps | Implemented, except maps |
+| [Arrays](language/arrays.md) | Arrays, slices, concatenation, maps | Implemented, except maps and indexes of any integer type |
 | [Strings](language/strings.md) | Text, interpolation, views | Partial: no byte or character views |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, `match` | Implemented, except `alias` |

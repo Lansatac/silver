@@ -17,11 +17,11 @@ A literal may have a trailing comma, and can span lines.
 
 ## Indexing and slicing
 
-`xs[i]` takes an `Int` and yields an element. It panics on an out-of-range index, including a negative one.
+`xs[i]` takes an index of any integer type and yields an element. It panics on an out-of-range index, including a negative one.
 
-`xs[a..b]` is the half-open slice from `a` to `b`. It panics when `a > b`, `a < 0`, or `b > length(xs)`.
+`xs[a..b]` is the half-open slice from `a` to `b`, whose bounds are of one integer type. It panics when `a > b`, `a < 0`, or `b > length(xs)`.
 
-`length(xs)` is the number of elements.
+`length(xs)` is the number of elements, as an `Int`.
 
 ## Elements can't be assigned
 
@@ -71,4 +71,5 @@ Maps share the bracket syntax, with `:` between key and value:
 ## Current implementation
 
 - Map literals parse, but are rejected.
+- Indexes and slice bounds must be `Int`.
 - `length` is available only as `length(xs)`, and can't be used as a function value.

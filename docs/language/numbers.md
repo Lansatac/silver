@@ -41,7 +41,7 @@ Adaptation applies to a literal, not to arithmetic on literals. `val x: UInt8 = 
 
 Each has a compound assignment form (`+=`, `&+=`, `<<=` and so on), except `%`.
 
-All operands must be of one numeric type, including a shift amount. Values never convert implicitly.
+All operands must be of one numeric type, and values never convert implicitly. The exception is a shift amount, which can be any integer type, since the result has the type of the value being shifted.
 
 ## Integer behaviour
 
@@ -67,4 +67,4 @@ A conversion panics when the value doesn't fit, or is NaN. A `Float` is truncate
 
 ## Current implementation
 
-The implementation matches this description.
+- A shift amount must have the same type as the value being shifted.

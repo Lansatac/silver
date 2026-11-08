@@ -36,6 +36,8 @@ Expected types flow through assignments, arguments, returns, `if` arms, block va
 
 Containers do not promote their contents once they are values. A *literal* checks each element against the expected element type, so `val xs: [Int?] = [1, None]` works, but a value of type `[Int]` is not a `[Int?]`. An empty `[]` and `None` have no type of their own that a binding can take, so they need an expected type.
 
+A conversion is implicit only if it works for every value, keeps the value's meaning, and can't fail at runtime. Anything else is written out, as in `UInt8(x)`. There are no user-defined implicit conversions.
+
 ## Equality and ordering
 
 `==` and `!=` work on any two values of one *comparable* type. Primitives are comparable. Options, arrays, tuples and declared types are compared structurally, and are comparable when everything they contain is. Function values are not comparable.
@@ -55,6 +57,10 @@ Ordering with `<`, `<=`, `>` and `>=` is defined only for numbers and strings.
 | `(1, "a")` | `(1, a)` |
 | a product or member `Point(1, 2)` | `Point(1, 2)` |
 | a marker | its name |
+
+## Open questions
+
+- Whether integers widen implicitly where a type is expected, as `Int8` to `Int` or `UInt8` to `Int16`. These would pass the rule for implicit conversions. `Int` and `UInt` wouldn't convert in either direction, and neither would `Int` to `Float`, which is inexact for large values.
 
 ## Current implementation
 
