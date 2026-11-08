@@ -542,22 +542,32 @@ class Evaluator
         assert(0, "sema only allows a range as a slice's index or in a `for`, which read its bounds");
     }
 
+    /// An integer of any type as unsigned, so a negative one counts as too large.
+    private static ulong rangeChecked(Variant value)
+    {
+        foreach (T; IntegerTypes)
+        {
+            if (auto integer = value.peek!T) return cast(ulong) *integer;
+        }
+        assert(0, "sema only allows integers here");
+    }
+
     private Variant evaluate(const IndexExpr ast, Environment variables)
     {
         auto elements = evaluate(*ast.object, variables).get!ArrayValue.elements;
         if (auto range = asRange(ast.index))
         {
-            auto start = evaluate(*range.start, variables).get!long;
-            auto end = evaluate(*range.end, variables).get!long;
-            if (start < 0 || start > end || end > elements.length)
+            auto start = rangeChecked(evaluate(*range.start, variables));
+            auto end = rangeChecked(evaluate(*range.end, variables));
+            if (start > end || end > elements.length)
             {
                 throw new CodedException(DiagnosticCode.IndexOutOfRange, "Slice is out of range");
             }
             return Variant(new ArrayValue(elements[cast(size_t) start .. cast(size_t) end]));
         }
 
-        auto position = evaluate(*ast.index, variables).get!long;
-        if (position < 0 || position >= elements.length)
+        auto position = rangeChecked(evaluate(*ast.index, variables));
+        if (position >= elements.length)
         {
             throw new CodedException(DiagnosticCode.IndexOutOfRange, "Index is out of range");
         }
@@ -1106,6 +1116,10 @@ class Evaluator
         {
             if (auto left = lhs.peek!T)
             {
+                if (operator == BinaryOp.ShiftLeft || operator == BinaryOp.ShiftRight)
+                {
+                    return shift(operator, *left, rangeChecked(rhs));
+                }
                 return operateInteger(operator, *left, rhs.get!T);
             }
         }
@@ -1233,25 +1247,19 @@ class Evaluator
             return Variant(cast(T)(lhs | rhs));
         case BinaryOp.BitXor:
             return Variant(cast(T)(lhs ^ rhs));
-        case BinaryOp.ShiftLeft:
-        case BinaryOp.ShiftRight:
-            static if (isSigned!T)
-            {
-                auto inRange = rhs >= 0 && rhs < T.sizeof * 8;
-            }
-            else
-            {
-                auto inRange = rhs < T.sizeof * 8;
-            }
-            if (!inRange)
-            {
-                throw new CodedException(DiagnosticCode.InvalidShift, "Shift amount is out of range");
-            }
-            auto count = cast(int) rhs;
-            return Variant(cast(T)(operator == BinaryOp.ShiftLeft ? lhs << count : lhs >> count));
         default:
             return compare(operator, lhs, rhs);
         }
+    }
+
+    private static Variant shift(T)(BinaryOp operator, T lhs, ulong amount)
+    {
+        if (amount >= T.sizeof * 8)
+        {
+            throw new CodedException(DiagnosticCode.InvalidShift, "Shift amount is out of range");
+        }
+        auto count = cast(int) amount;
+        return Variant(cast(T)(operator == BinaryOp.ShiftLeft ? lhs << count : lhs >> count));
     }
 
     private static Variant compare(T)(BinaryOp operator, T lhs, T rhs)

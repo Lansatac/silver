@@ -1,0 +1,30 @@
+def main(): Unit {
+    val xs = [10, 20, 30, 40]
+
+    val byteIndex: UInt8 = 2
+    val shortIndex: Int16 = 1
+    val longIndex: UInt64 = 3
+    printl(xs[byteIndex])
+    printl(xs[shortIndex])
+    printl(xs[longIndex])
+    printl(xs[shortIndex..byteIndex])
+    printl(xs[byteIndex..longIndex])
+    printl(xs[0..byteIndex])
+
+    val amount: UInt8 = 4
+    val signedAmount: Int8 = 3
+    val wideAmount: UInt64 = 7
+    printl(1 << amount)
+    printl(256 >> signedAmount)
+
+    val byte: UInt8 = 1
+    printl(byte << wideAmount)
+    val negative: Int8 = -128
+    printl(negative >> wideAmount)
+    val top: UInt64 = 0x8000000000000000
+    printl(top >> amount)
+
+    mutable val running: UInt16 = 1
+    running <<= amount
+    printl(running)
+}

@@ -67,4 +67,4 @@ A conversion panics when the value doesn't fit, or is NaN. A `Float` is truncate
 
 ## Current implementation
 
-- A shift amount must have the same type as the value being shifted.
+The implementation matches this description.

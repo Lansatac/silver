@@ -71,5 +71,4 @@ Maps share the bracket syntax, with `:` between key and value:
 ## Current implementation
 
 - Map literals parse, but are rejected.
-- Indexes and slice bounds must be `Int`.
 - `length` is available only as `length(xs)`, and can't be used as a function value.

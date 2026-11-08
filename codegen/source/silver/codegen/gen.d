@@ -973,13 +973,14 @@ final class Generator
         // The index never returned, so nothing after it is reached.
         if (position.value is null) return code.then(position).withValue(null);
 
+        auto wide = widenForRuntime(_analysis.valueTypeOf(index.index.id), position.value);
         auto outside = _function.newTemp();
-        code = code.then(position)
-            .then(Fragment.instruction("%s = icmp uge i64 %s, %s".format(outside, position.value, parts.length)))
+        code = code.then(position).then(wide)
+            .then(Fragment.instruction("%s = icmp uge i64 %s, %s".format(outside, wide.value, parts.length)))
             .then(emitPanicIf(outside, expr.span, "Index is out of range"));
         if (layout is null) return code.withValue(null);
 
-        auto pointer = elementPointer(layout, parts.data, position.value);
+        auto pointer = elementPointer(layout, parts.data, wide.value);
         return code.then(pointer).then(load(layout, pointer.value));
     }
 
@@ -990,19 +991,22 @@ final class Generator
         auto code = start.then(end);
         if (start.value is null || end.value is null) return code.withValue(null);
 
+        auto wideStart = widenForRuntime(_analysis.valueTypeOf(range.start.id), start.value);
+        auto wideEnd = widenForRuntime(_analysis.valueTypeOf(range.end.id), end.value);
+        code = code.then(wideStart).then(wideEnd);
         auto reversed = _function.newTemp();
         auto tooLong = _function.newTemp();
         auto outside = _function.newTemp();
         auto length = _function.newTemp();
         code = code
-            .then(Fragment.instruction("%s = icmp ugt i64 %s, %s".format(reversed, start.value, end.value)))
-            .then(Fragment.instruction("%s = icmp ugt i64 %s, %s".format(tooLong, end.value, parts.length)))
+            .then(Fragment.instruction("%s = icmp ugt i64 %s, %s".format(reversed, wideStart.value, wideEnd.value)))
+            .then(Fragment.instruction("%s = icmp ugt i64 %s, %s".format(tooLong, wideEnd.value, parts.length)))
             .then(Fragment.instruction("%s = or i1 %s, %s".format(outside, reversed, tooLong)))
             .then(emitPanicIf(outside, span, "Slice is out of range"))
-            .then(Fragment.instruction("%s = sub i64 %s, %s".format(length, end.value, start.value)));
+            .then(Fragment.instruction("%s = sub i64 %s, %s".format(length, wideEnd.value, wideStart.value)));
         if (layout is null) return code.then(buildSlice("null", length));
 
-        auto pointer = elementPointer(layout, parts.data, start.value);
+        auto pointer = elementPointer(layout, parts.data, wideStart.value);
         return code.then(pointer).then(buildSlice(pointer.value, length));
     }
 
@@ -1555,6 +1559,9 @@ final class Generator
             case BinaryOp.Multiply:
                 if (!_analysis.types.isInteger(type)) goto default;
                 return lhs.then(rhs).then(emitCheckedArithmetic(binary.op, type, lhs.value, rhs.value, expr.span));
+            case BinaryOp.ShiftLeft:
+            case BinaryOp.ShiftRight:
+                return lhs.then(rhs).then(emitShift(binary, type, lhs.value, rhs.value, expr.span));
             case BinaryOp.Equal:
             case BinaryOp.NotEqual:
                 if (comparesWithInstruction(type)) goto default;
@@ -1602,27 +1609,36 @@ final class Generator
             .withValue(value);
     }
 
+    /// Checked at 64 bits because the amount can be of any integer type. Unsigned, so a negative
+    /// amount counts as too large.
+    Fragment emitShift(const BinaryExpr binary, Type type, string value, string amount, Span span)
+    {
+        auto info = _analysis.types.integerOf(type);
+        auto llType = llvmType(type);
+        auto wide = widenForRuntime(_analysis.valueTypeOf(binary.right.id), amount);
+        auto tooFar = _function.newTemp();
+        auto code = wide
+            .then(Fragment.instruction("%s = icmp uge i64 %s, %s".format(tooFar, wide.value, info.bits)))
+            .then(emitPanicIf(tooFar, span, "Shift amount is out of range"));
+        auto count = info.bits == 64 ? Fragment.constant(wide.value) : castInstruction("trunc", "i64", wide.value, llType);
+        auto result = _function.newTemp();
+        return code.then(count).then(Fragment.instruction(
+            "%s = %s %s %s, %s".format(result, llBinaryOp(binary.op, type), llType, value, count.value), result));
+    }
+
     void useIntrinsic(string declaration)
     {
         if (!_usedIntrinsics.canFind(declaration)) _usedIntrinsics ~= declaration;
     }
 
     /// The checks `op` needs before its instruction, which would otherwise be undefined for
-    /// these operands: dividing by zero, the most negative value divided by -1, and shifting
-    /// by the type's width or more.
+    /// these operands: dividing by zero and the most negative value divided by -1.
     Fragment emitOperandChecks(BinaryOp op, Type type, string lhs, string rhs, Span span)
     {
         if (!_analysis.types.isInteger(type)) return Fragment.init;
         auto info = _analysis.types.integerOf(type);
         auto llType = llvmType(type);
 
-        if (op == BinaryOp.ShiftLeft || op == BinaryOp.ShiftRight)
-        {
-            // Unsigned, so a negative amount counts as too large.
-            auto tooFar = _function.newTemp();
-            return Fragment.instruction("%s = icmp uge %s %s, %s".format(tooFar, llType, rhs, info.bits))
-                .then(emitPanicIf(tooFar, span, "Shift amount is out of range"));
-        }
         if (op != BinaryOp.Divide && op != BinaryOp.Modulo) return Fragment.init;
 
         auto isZero = _function.newTemp();

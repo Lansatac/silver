@@ -50,12 +50,21 @@ package string formatValue(const ConstValue value)
     );
 }
 
-/// `lhs op rhs` for two values of one type, which sema has checked. `op` isn't `&&` or `||`,
+/// `lhs op rhs` for two values of one type, which sema has checked, or a shift by any integer
+/// type. `op` isn't `&&` or `||`,
 /// which short-circuit, so their caller decides whether there's a `rhs`. `info` describes the
 /// type when it's an integer.
 /// Throws: ConstantFailure if the operation would panic at runtime.
 package ConstValue binaryValue(BinaryOp op, const ConstValue lhs, const ConstValue rhs, IntegerInfo info)
 {
+    if (op == BinaryOp.ShiftLeft || op == BinaryOp.ShiftRight)
+    {
+        return lhs.match!(
+            (const ConstInt l) => integerShift(op, l.value, shiftAmount(rhs), info),
+            (const ConstUInt l) => integerShift(op, l.value, shiftAmount(rhs), info),
+            (_) => assert(0, "sema only shifts integers"),
+        );
+    }
     return lhs.match!(
         (const ConstInt l) => integerBinary(op, l.value, rhs.get!(const ConstInt).value, info),
         (const ConstUInt l) => integerBinary(op, l.value, rhs.get!(const ConstUInt).value, info),
@@ -166,22 +175,26 @@ private ConstValue integerBinary(T)(BinaryOp op, T lhs, T rhs, IntegerInfo info)
         return integerValue!T(lhs | rhs);
     case BinaryOp.BitXor:
         return integerValue!T(lhs ^ rhs);
-    case BinaryOp.ShiftLeft:
-    case BinaryOp.ShiftRight:
-        static if (isSigned!T)
-        {
-            auto inRange = rhs >= 0 && rhs < info.bits;
-        }
-        else
-        {
-            auto inRange = rhs < info.bits;
-        }
-        if (!inRange) throw new ConstantFailure("Shift amount is out of range");
-        auto count = cast(int) rhs;
-        return integerValue(op == BinaryOp.ShiftLeft ? truncated!T(lhs << count, info) : cast(T)(lhs >> count));
     default:
         return comparison!T(op, lhs, rhs);
     }
+}
+
+/// As unsigned, so a negative amount counts as too large.
+private ulong shiftAmount(const ConstValue amount)
+{
+    return amount.match!(
+        (const ConstInt v) => cast(ulong) v.value,
+        (const ConstUInt v) => v.value,
+        (_) => assert(0, "sema only shifts by integers"),
+    );
+}
+
+private ConstValue integerShift(T)(BinaryOp op, T lhs, ulong amount, IntegerInfo info)
+{
+    if (amount >= info.bits) throw new ConstantFailure("Shift amount is out of range");
+    auto count = cast(int) amount;
+    return integerValue(op == BinaryOp.ShiftLeft ? truncated!T(lhs << count, info) : cast(T)(lhs >> count));
 }
 
 private ConstValue integerUnary(T)(UnaryOp op, T value, IntegerInfo info)

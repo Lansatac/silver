@@ -1262,7 +1262,7 @@ unittest
     analyzedMain("printl(true &* 1)").shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
     analyzedMain("printl(~1.5)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
     analyzedMain("printl(~true)").shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
-    analyzedMain("val a: UInt8 = 1\nval b = 1\nprintl(a >> b)").shouldReport(DiagnosticCode.InvalidOperand, At("a >> b", 1));
+    analyzedMain("val a: UInt8 = 1\nval b = 1\nprintl(a & b)").shouldReport(DiagnosticCode.InvalidOperand, At("a & b", 1));
 }
 
 @("an unsigned value can't be negated")
@@ -1547,6 +1547,31 @@ unittest
     analyzedConstants("val a: Int = nope\nval b: Int = a + 1").shouldReport(DiagnosticCode.UnknownName, At("nope", 1));
 }
 
+@("a shift amount can be any integer type, and the result has the type of the value shifted")
+unittest
+{
+    auto a = analyzedMain(`val n: UInt8 = 2
+    val byte: UInt8 = 1
+    val wide: Int64 = 1
+    val literal = 1 << n
+    val narrow = byte << wide
+    val adapted = byte << 3`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("literal", 1), "Int");
+    a.shouldDeclareType(At("narrow", 1), "UInt8");
+    a.shouldDeclareType(At("adapted", 1), "UInt8");
+
+    analyzedMain(`print(1 << 1.0)`).shouldReport(DiagnosticCode.InvalidOperand, At("1.0", 1));
+
+    auto c = analyzedConstants(`val amount: UInt8 = 4
+val shifted: Int = 1 << amount
+val narrow: UInt8 = 0xF0
+val back: UInt8 = narrow >> amount`);
+    c.shouldHaveNoDiagnostics();
+    c.shouldEvaluateTo("shifted", ConstInt(16), "Int");
+    c.shouldEvaluateTo("back", ConstUInt(15), "UInt8");
+}
+
 @("wrapping operators and shifts in an initializer use the checked type's width and signedness")
 unittest
 {
@@ -1724,7 +1749,7 @@ unittest
         .shouldReport(DiagnosticCode.InvalidArrayElement, At("[Any]", 1));
 }
 
-@("indexing takes an Int and only applies to arrays, and a slice keeps the array's type")
+@("indexing takes any integer and only applies to arrays, and a slice keeps the array's type")
 unittest
 {
     auto a = analyzedMain(`val xs = ["a"]
@@ -1735,10 +1760,13 @@ unittest
     a.shouldDeclareType(At("one", 1), "String");
     a.shouldDeclareType(At("some", 1), "[String]");
 
-    analyzedMain(`val i: UInt = 1
-    print([1][i])`).shouldReport(DiagnosticCode.TypeMismatch, At("i", 2));
-    analyzedMain(`val i: UInt = 1
-    print([1][0..i])`).shouldReport(DiagnosticCode.TypeMismatch, At("i", 2));
+    analyzedMain(`val i: UInt8 = 0
+    val j: Int16 = 1
+    print([1][i])
+    print([1][i..j])`).shouldHaveNoDiagnostics();
+    analyzedMain(`val f = 1.0
+    print([1][f])`).shouldReport(DiagnosticCode.TypeMismatch, At("f", 2));
+    analyzedMain(`print([1][0.."a"])`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
     analyzedMain(`print("abc"[0])`).shouldReport(DiagnosticCode.InvalidOperand, At(`"abc"`, 1));
     analyzedMain(`print(length("abc"))`).shouldReport(DiagnosticCode.InvalidOperand, At(`"abc"`, 1));
 }

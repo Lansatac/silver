@@ -1088,12 +1088,12 @@ private final class TypeChecker
         auto range = asRange(index.index);
         if (range is null)
         {
-            check(*index.index, _types.int_, ctx);
+            checkConsumedInteger(*index.index, ctx);
         }
         else
         {
-            check(*range.start, _types.int_, ctx);
-            check(*range.end, _types.int_, ctx);
+            checkConsumedInteger(*range.start, ctx);
+            checkConsumedInteger(*range.end, ctx);
             _exprTypes[index.index.id] = objectType;
         }
         if (objectType == _types.error) return objectType;
@@ -1104,6 +1104,15 @@ private final class TypeChecker
             return _types.error;
         }
         return range is null ? _types.arrayElement(objectType) : objectType;
+    }
+
+    /// An operand that's range-checked and doesn't affect the result's type, so any integer will do.
+    private void checkConsumedInteger(const Expr expr, BodyContext ctx)
+    {
+        auto type = synthesize(expr, ctx);
+        if (type == _types.error || type == _types.never || _types.isInteger(type)) return;
+        _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
+            "Expected an integer, got `%s`".format(_types.describe(type)));
     }
 
     private Type synthesizeBareRange(const RangeExpr range, Span span, BodyContext ctx)
@@ -1544,11 +1553,12 @@ private final class TypeChecker
             auto integerOnly = [BitAnd, BitOr, BitXor, ShiftLeft, ShiftRight,
                 WrappingAdd, WrappingSubtract, WrappingMultiply].canFind(binary.op);
             bool adaptsTo(Type t) => integerOnly ? _types.isInteger(t) : isNumeric(t);
+            auto isShift = binary.op == ShiftLeft || binary.op == ShiftRight;
             if (adaptsTo(leftType) && isIntLiteral(*binary.right) && !isIntLiteral(*binary.left))
             {
                 rightType = adaptLiteral(*binary.right, leftType);
             }
-            else if (adaptsTo(rightType) && isIntLiteral(*binary.left) && !isIntLiteral(*binary.right))
+            else if (!isShift && adaptsTo(rightType) && isIntLiteral(*binary.left) && !isIntLiteral(*binary.right))
             {
                 leftType = adaptLiteral(*binary.left, rightType);
             }
@@ -1573,7 +1583,7 @@ private final class TypeChecker
                         "`%s` needs an integer, got `%s`".format(binary.op, _types.describe(rightType)));
                     return _types.error;
                 }
-                if (leftType != rightType)
+                if (binary.op != BinaryOp.ShiftLeft && binary.op != BinaryOp.ShiftRight && leftType != rightType)
                 {
                     _collector.reportError(DiagnosticCode.InvalidOperand, span,
                         "`%s` can't combine `%s` and `%s`".format(binary.op, _types.describe(leftType), _types.describe(rightType)));

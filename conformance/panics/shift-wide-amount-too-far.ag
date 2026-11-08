@@ -1,0 +1,5 @@
+def main(): Unit {
+    val byte: UInt8 = 1
+    val n: UInt64 = 256
+    printl(byte << n)
+}
