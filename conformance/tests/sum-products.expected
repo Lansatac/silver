@@ -1,0 +1,22 @@
+literal a
+sequence of 3
+empty
+5
+Literal(a)
+Sequence([Literal(a), Empty, Sequence([Literal(b)])])
+hole: Empty
+Literal(a)
+kept
+arg
+Literal(kept)
+Literal(kept)
+Some(opt)
+Some(Empty)
+true
+false
+true
+true
+true
+Empty
+Empty
+[Empty, Literal(a)]

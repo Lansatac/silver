@@ -1,0 +1,25 @@
+type Token = Word(text: String) | Number(value: Int) | End
+
+def wordOf(t: Token): String => if val Word(text) = t => text else "none"
+
+def main(): Unit {
+    printl(wordOf(Word("a")))
+    printl(wordOf(End))
+
+    if val Number(n) = Number(4) {
+        printl(n)
+    }
+    if val Number(n) = End {
+        printl(n)
+    } else {
+        printl("not a number")
+    }
+    if val End = End => printl("end")
+
+    val opt: Int? = 5
+    if val Some(n) = opt => printl(n)
+    if val None = opt => printl("no") else printl("has one")
+
+    val dropped = if val Word(w) = Word("x") { w }
+    printl(dropped)
+}

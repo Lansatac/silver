@@ -14,6 +14,14 @@ extern (C) noreturn silver_panic(const(char)* message) nothrow @nogc
     exit(1);
 }
 
+/// The `panic` native. `message` isn't NUL-terminated, and generated code has put the location in it.
+extern (C) noreturn silver_panic_message(const(char)* message, size_t length) nothrow @nogc
+{
+    fflush(stdout);
+    fprintf(stderr, "panic: %.*s\n", cast(int) length, message);
+    exit(1);
+}
+
 /// For the runtime's own failures.
 noreturn panic(string message) nothrow
 {

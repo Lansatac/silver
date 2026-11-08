@@ -1,0 +1,20 @@
+import sums_support.shapes
+
+type Local = sums_support.shapes.Square | Other
+
+def describe(s: Shape): Int => match s {
+    sums_support.shapes.Circle(r) => r
+    Dot => 0
+}
+
+def main(): Unit {
+    printl(describe(Circle(3)))
+    printl(describe(sums_support.shapes.Dot))
+    val l: Local = Square(2)
+    printl(l)
+    printl(match l {
+        Square(s) => s
+        Other => -1
+    })
+    printl(Other)
+}

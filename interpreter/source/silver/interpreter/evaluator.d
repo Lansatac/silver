@@ -158,6 +158,7 @@ class Evaluator
                     bindValue(element, parts[i], variables);
                 }
             },
+            (_) { assert(0, "the grammar only allows names and tuples in a `val`"); },
         );
     }
 
@@ -191,7 +192,13 @@ class Evaluator
             return Variant(OptionValue.some(Variant(line)));
         };
         nativeBindings["length"] = (Variant[] args) => Variant(cast(long) args[0].get!ArrayValue.elements.length);
+        nativeBindings["panic"] = &panicNative;
         bindNumericNatives();
+    }
+
+    private Variant panicNative(Variant[] args)
+    {
+        throw new CodedException(DiagnosticCode.ExplicitPanic, args[0].get!string);
     }
 
     /// Each is the same D expression as the compiled backend's, in the runtime's numeric module.
@@ -254,9 +261,11 @@ class Evaluator
         variables.defineVariable(ast.name, functions[ast.id]);
     }
 
-    /// A marker's name is its one value; any other type's name is its constructor.
+    /// A marker's name is its one value; any other type's name is its constructor. Sema rejects
+    /// a sum's name as a value.
     private void execute(const TypeDecl ast, Environment variables)
     {
+        if (ast.members.length > 0) return;
         auto constructor = new Constructor(ast);
         variables.defineVariable(ast.name, ast.fields.length == 0
                 ? Variant(new Instance(constructor, []))
@@ -335,7 +344,12 @@ class Evaluator
                 (const IntLiteral literal) => intLiteralValue(literal, ast.id),
                 (const CallExpr call) => evaluateCall(call, ast.id, variables),
                 (const BinaryExpr binary) => evaluateBinary(binary, ast.id, variables),
+                (const MatchExpr match_) => evaluateMatch(match_, ast.id, variables),
                 s => evaluate(s, variables));
+            if (auto member = analysis.constructedMemberOf(ast.id))
+            {
+                value = promote(value, *member, analysis.typeOf(ast.id));
+            }
             if (auto option = analysis.promotionOf(ast.id))
             {
                 return promote(value, analysis.typeOf(ast.id), *option);
@@ -357,8 +371,73 @@ class Evaluator
     /// on an array type stays as it is.
     private Variant promote(Variant value, Type from, Type to)
     {
+        if (from != to && analysis.membersOf(to).length > 0)
+        {
+            auto index = analysis.memberIndexFor(to, from);
+            return Variant(new SumValue(index, promote(value, from, analysis.membersOf(to)[index])));
+        }
         if (from == to || from == analysis.types.none || !analysis.types.isOption(to)) return value;
         return Variant(OptionValue.some(promote(value, from, analysis.types.optionInner(to))));
+    }
+
+    /// Runs the first arm whose pattern matches. Sema found that one always does.
+    private Variant evaluateMatch(const MatchExpr ast, Id!Expr id, Environment variables)
+    {
+        auto subject = evaluate(*ast.subject, variables);
+        foreach (ref arm; ast.arms)
+        {
+            auto armScope = new Environment(variables);
+            if (!matches(arm.pattern, subject, armScope)) continue;
+            auto value = evaluate(arm.body, armScope);
+            if (analysis.typeOf(id) == analysis.types.unit) return Variant(Unit());
+            return value;
+        }
+        assert(0, "sema requires a match to cover every value");
+    }
+
+    /// Whether `value` matches `pattern`, binding what it takes apart in `variables` on the way.
+    private bool matches(const Pattern pattern, Variant value, Environment variables)
+    {
+        if (auto index = analysis.memberTestOf(pattern.id))
+        {
+            auto sum = value.get!SumValue;
+            if (sum.index != *index) return false;
+            value = sum.member;
+        }
+        return pattern.kind.match!(
+            (const VarDecl binding) {
+                if (binding.name != discardName) variables.defineVariable(binding.name, value);
+                return true;
+            },
+            (const TuplePattern tuple) {
+                auto parts = value.get!TupleValue.elements;
+                foreach (i, element; tuple.elements)
+                {
+                    if (!matches(element, parts[i], variables)) return false;
+                }
+                return true;
+            },
+            (const ConstructorPattern constructor) {
+                auto instance = value.get!Instance;
+                foreach (i, argument; constructor.arguments)
+                {
+                    if (!matches(argument, instance.fieldAt(i), variables)) return false;
+                }
+                return true;
+            },
+            (const SomePattern some) {
+                auto option = value.get!OptionValue;
+                if (!option.present) return false;
+                return matches(*some.inner, option.payload, variables);
+            },
+            (const NonePattern _) => !value.get!OptionValue.present,
+            (const LiteralPattern literal) => operate(BinaryOp.Equal, value, evaluate(*literal.value, variables)).get!bool,
+        );
+    }
+
+    private Variant evaluate(const MatchExpr ast, Environment variables)
+    {
+        assert(0, "evaluate handles a match by its ID");
     }
 
     private Variant evaluate(const SomeExpr ast, Environment variables)
@@ -1062,6 +1141,12 @@ class Evaluator
     /// which would expose whether two values share an Instance.
     private bool valuesEqual(Variant lhs, Variant rhs)
     {
+        if (auto left = lhs.peek!SumValue)
+        {
+            auto right = rhs.get!SumValue;
+            if (left.index != right.index) return false;
+            return operate(BinaryOp.Equal, left.member, right.member).get!bool;
+        }
         if (auto left = lhs.peek!Instance)
         {
             return (*left).fieldsEqual(rhs.get!Instance, (a, b) => operate(BinaryOp.Equal, a, b).get!bool);

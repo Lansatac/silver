@@ -1,0 +1,137 @@
+type Shape = Circle(radius: Int) | Rect(size: (Int, Int), tag: String?) | Dot
+type Box(shape: Shape, weight: Int)
+
+def nested(s: Shape): String => match s {
+    Rect((1, h), Some(tag)) => "unit-wide {h} {tag}"
+    Rect((w, h), None) => "plain {w}x{h}"
+    Rect(_, Some("big")) => "big"
+    Rect(size, Some(t)) => "other {size} {t}"
+    Circle(0) => "point"
+    Circle(r) => "circle {r}"
+    Dot => "dot"
+}
+
+def literals(n: Int): String => match n {
+    0 => "zero"
+    -1 => "minus one"
+    7 => "seven"
+    other => "number {other}"
+}
+
+def strings(s: String): Int => match s {
+    "one" => 1
+    "two" => 2
+    _ => 0
+}
+
+def bools(a: Bool, b: Bool): String => match (a, b) {
+    (true, true) => "both"
+    (true, false) => "first"
+    (false, x) => "neither or second: {x}"
+}
+
+def options(x: Int?): Int => match x {
+    Some(0) => -1
+    Some(n) => n
+    None => 0
+}
+
+def nestedOptions(x: (Int?)?): String => match x {
+    Some(Some(n)) => "value {n}"
+    Some(None) => "inner none"
+    None => "outer none"
+}
+
+def product(b: Box): Int => match b {
+    Box(Circle(r), w) => r * w
+    Box(_, w) => w
+}
+
+def early(s: Shape): Int {
+    val r = match s {
+        Circle(r) => r
+        _ => { return -1 }
+    }
+    r * 2
+}
+
+def firstBelow(limit: Int, xs: [Shape]): Int {
+    mutable val found = -1
+    for x in xs {
+        match x {
+            Circle(r) => if r < limit {
+                found = r
+                break
+            }
+            _ => { continue }
+        }
+        printl("too big")
+    }
+    found
+}
+
+def dropsArms(r: Int): Unit => match r {
+    3 => 1
+    _ => "ignored"
+}
+
+def noisy(): Shape {
+    printl("evaluated once")
+    Circle(3)
+}
+
+def main(): Unit {
+    printl(nested(Rect((1, 2), Some("t"))))
+    printl(nested(Rect((3, 4), None)))
+    printl(nested(Rect((3, 4), Some("big"))))
+    printl(nested(Rect((3, 4), Some("x"))))
+    printl(nested(Circle(0)))
+    printl(nested(Circle(5)))
+    printl(nested(Dot))
+
+    printl(literals(0))
+    printl(literals(-1))
+    printl(literals(7))
+    printl(literals(8))
+    printl(strings("two"))
+    printl(strings("three"))
+    printl(bools(true, true))
+    printl(bools(true, false))
+    printl(bools(false, true))
+    printl(options(Some(0)))
+    printl(options(Some(9)))
+    printl(options(None))
+    printl(nestedOptions(Some(Some(1))))
+    printl(nestedOptions(Some(None)))
+    printl(nestedOptions(None))
+    printl(product(Box(Circle(2), 3)))
+    printl(product(Box(Dot, 3)))
+    printl(early(Circle(4)))
+    printl(early(Dot))
+    printl(firstBelow(3, [Circle(9), Dot, Circle(1), Circle(0)]))
+
+    val r = match noisy() {
+        Circle(a) => a
+        _ => 0
+    }
+    printl(r)
+
+    // Arms adapt to what's expected, and a Unit position drops their values.
+    val small: UInt8 = match r {
+        3 => 200
+        _ => 1
+    }
+    printl(small)
+    val maybe: Int? = match r {
+        3 => 1
+        _ => None
+    }
+    printl(maybe)
+    val joined = match r {
+        3 => Some(1)
+        _ => None
+    }
+    printl(joined)
+    dropsArms(r)
+    printl("done")
+}

@@ -350,6 +350,15 @@ private final class Indexer
                     visit(element);
                 }
             },
+            (const ConstructorPattern c) {
+                foreach (argument; c.arguments)
+                {
+                    visit(argument);
+                }
+            },
+            (const SomePattern s) => visit(*s.inner),
+            (const NonePattern _) {},
+            (const LiteralPattern l) => visit(l.value),
         );
     }
 
@@ -401,6 +410,14 @@ private final class Indexer
                 visit(f.body);
             },
             (const RangeExpr r) { visit(r.start); visit(r.end); },
+            (const MatchExpr m) {
+                visit(m.subject);
+                foreach (arm; m.arms)
+                {
+                    visit(arm.pattern);
+                    visit(arm.body);
+                }
+            },
             (const TupleLiteral t) {
                 foreach (element; t.elements)
                 {

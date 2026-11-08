@@ -28,6 +28,7 @@ static immutable RuntimeFunction[string] runtime = [
 
     "silver_string_compare": RuntimeFunction("i32", ["ptr", "i64", "ptr", "i64"]),
     "silver_panic":       RuntimeFunction("void", ["ptr"], "noreturn"),
+    "silver_panic_message": RuntimeFunction("void", ["ptr", "i64"], "noreturn"),
 
     "silver_pow":         RuntimeFunction("double", ["double", "double"]),
     "silver_sqrt":        RuntimeFunction("double", ["double"]),

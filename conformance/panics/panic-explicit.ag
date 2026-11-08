@@ -1,0 +1,12 @@
+type Color = Red | Green
+
+def pick(c: Color): Int => match c {
+    Red => 1
+    Green => panic("no {c} allowed")
+}
+
+def main(): Unit {
+    printl(pick(Red))
+    val x: Int = pick(Green)
+    printl(x)
+}

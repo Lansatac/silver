@@ -67,7 +67,10 @@ Silver:
     BreakStatement       < BREAK
     ContinueStatement    < CONTINUE
 
-    TypeDeclaration      < :TYPE Nl? TypeName Fields?
+    TypeDeclaration      < :TYPE Nl? TypeName (Fields / Nl? :'=' !'=' Nl? SumMembers)?
+    SumMembers           < SumMember (LeadingNl? :BitOrOperator Nl? SumMember)*
+    SumMember            < InlineMember / Type
+    InlineMember         < TypeName Fields
     # The parens are kept so `type M()` still has a node, which sema rejects in favor of `type M`
     Fields               < '(' Nl? FieldList Nl? ')'
     FieldList            < (Field (Nl? ',' Nl? Field)*)?
@@ -90,12 +93,20 @@ Silver:
     TypePath             <- (ValueName '.')* TypeName
     TypeArguments        < :'<' Nl? Type (Nl? :',' Nl? Type)* Nl? :'>'
 
-    Expression           < ForExpression / WhileExpression / IfExpression / OrExpression
+    Expression           < MatchExpression / ForExpression / WhileExpression / IfExpression / OrExpression
+
+    MatchExpression      < :MATCH Nl? Expression Nl? '{' Sep? (MatchArm (Sep MatchArm)* Sep?)? '}'
+    MatchArm             < MatchPattern Nl? :'=>' Nl? Expression
+    MatchPattern         < MatchTuplePattern / ConstructorPattern / Literal / TypedBinding / BindingName
+    MatchTuplePattern    < :'(' Nl? MatchPattern (Nl? :',' Nl? MatchPattern)+ Nl? :')'
+    ConstructorPattern   < TypePath (:'(' Nl? MatchPattern (Nl? :',' Nl? MatchPattern)* Nl? :')')?
+    TypedBinding         < BindingName TypeAnnotation
 
     ForExpression        < :FOR Nl? BindingName Nl? :IN Nl? Expression Nl? Block
     WhileExpression      < :WHILE Nl? (OptionBinding / Expression) Nl? Block
 
-    IfExpression         < :IF Nl? (OptionBinding / Expression) Nl? IfBranch (Nl? :ELSE Nl? ElseBranch)?
+    IfExpression         < :IF Nl? (PatternBinding / OptionBinding / Expression) Nl? IfBranch (Nl? :ELSE Nl? ElseBranch)?
+    PatternBinding       < :VAL Nl? ConstructorPattern Nl? :'=' Nl? Expression
     OptionBinding        < :VAL Nl? BindingName Nl? :'=' Nl? Expression
     IfBranch             < :'=>' Nl? Expression / Block
     ElseBranch           < Block / Expression
@@ -211,8 +222,8 @@ Silver:
     IMPORT              <- Kword("import")
     MODULE              <- Kword("module")
     WITH                <- Kword("with")
-    # Reserved for sum types, so no program can come to depend on them as names
     MATCH               <- Kword("match")
+    # Reserved for sum types, so no program can come to depend on it as a name
     ALIAS               <- Kword("alias")
     UNDERSCORE          <- Kword("_")
 

@@ -8,7 +8,15 @@ import silver.ast.span;
 import silver.ast.id;
 
 /// The node kinds that get IDs. One NodeIds is shared by every module in a Program.
-alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt, TypeDecl, Field, ConstDecl);
+alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt, TypeDecl, Field, ConstDecl, Pattern);
+
+/// The types every module can name, which no declaration can take the name of.
+enum Builtin
+{
+    Never, Unit, Bool, Int, Float, String, Any,
+    Int8, Int16, Int32, Int64,
+    UInt, UInt8, UInt16, UInt32, UInt64,
+}
 
 struct Module
 {
@@ -130,7 +138,7 @@ struct Expr
 alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, InterpolatedString, Identifier,
     UnaryExpr, BinaryExpr, CallExpr, MemberAccess, WhileExpr, ForExpr, IfExpr, BlockExpr, UnitLiteral,
     SomeExpr, NoneLiteral, PropagateExpr, SafeMemberAccess, ArrayLiteral, MapLiteral, IndexExpr, RangeExpr,
-    TupleLiteral, WithExpr);
+    TupleLiteral, WithExpr, MatchExpr);
 
 /// `()`, the only value of type Unit.
 struct UnitLiteral
@@ -354,6 +362,32 @@ struct ForExpr
     Expr* body;
 }
 
+/// Where a MatchExpr came from. `if val Literal(text) = p ...` lowers to a match with a `_` arm for
+/// its else, so only a written `match` has its arms checked for coverage.
+enum MatchOrigin
+{
+    Match,
+    /// An `if val` with an `else`.
+    IfValElse,
+    /// An `if val` with no `else`, whose value is `()`.
+    IfVal,
+}
+
+/// `match subject { pattern => body ... }`. Arms are tried in order.
+struct MatchExpr
+{
+    Expr* subject;
+    MatchArm[] arms;
+    MatchOrigin origin;
+}
+
+struct MatchArm
+{
+    Span span;
+    Pattern pattern;
+    Expr body;
+}
+
 /// `{ statements }`, which has its own scope. `value` is the last statement when
 /// that's an expression, and null otherwise, in which case the block's value is ().
 struct BlockExpr
@@ -414,6 +448,8 @@ string printExpr(const Expr e)
         (const TupleLiteral t) => format("(tuple%s)", t.elements.map!(e => " " ~ printExpr(e)).join),
         (const WithExpr w) => format("(with %s%s)", printExpr(*w.object),
             w.updates.map!(u => format(" (%-(%s.%) %s)", u.path, printExpr(u.value))).join),
+        (const MatchExpr m) => format("(match %s%s)", printExpr(*m.subject),
+            m.arms.map!(a => format(" (%s %s)", printPattern(a.pattern), printExpr(a.body))).join),
     );
 }
 
@@ -465,9 +501,12 @@ struct PatternDecl
     Expr value;
 }
 
-/// What a PatternDecl's value is taken apart by. Every pattern so far matches every value of its type.
+/// What a value is taken apart by. A PatternDecl only holds bindings and tuples, which match every
+/// value of their type; the rest only appear in a `match`. A binding with a type in a `match` tests
+/// for that member of a sum.
 struct Pattern
 {
+    Id!Pattern id;
     Span span;
     PatternKind kind;
 }
@@ -478,7 +517,31 @@ struct TuplePattern
     Pattern[] elements;
 }
 
-alias PatternKind = SumType!(VarDecl, TuplePattern);
+/// `Literal(text)`, or `Red` with no arguments. `type` names a declared type.
+struct ConstructorPattern
+{
+    TypeExpr type;
+    Pattern[] arguments;
+}
+
+/// `Some(p)`.
+struct SomePattern
+{
+    Pattern* inner;
+}
+
+/// `None`.
+struct NonePattern
+{
+}
+
+/// `1`, `"a"` or `true`, which matches a value equal to it.
+struct LiteralPattern
+{
+    Expr* value;
+}
+
+alias PatternKind = SumType!(VarDecl, TuplePattern, ConstructorPattern, SomePattern, NonePattern, LiteralPattern);
 
 /// The tuple literal `value` is when `pattern` takes it apart element by element, so each element is
 /// bound as its own `val` would be and no tuple is built; null when the whole value is taken apart.
@@ -558,6 +621,19 @@ struct TypeDecl
     Field[] fields;
     /// `type Name()`, which must be written `type Name`.
     bool emptyParens;
+    /// What a sum type's values can be; empty for any other type. A member the sum declares is its
+    /// own TypeDecl in the module, beside this one.
+    SumMember[] members;
+    /// Declared by being named bare in a sum, with no declaration of that name in the module.
+    bool implicitMarker;
+}
+
+/// One alternative of `type Name = A(x: Int) | B | geo.C`.
+struct SumMember
+{
+    TypeExpr type;
+    /// Whether the sum declares this member, rather than naming a type that already exists.
+    bool owned;
 }
 
 /// `val name: Type = value` at the top level of a module. Sema evaluates `value`, so it never runs.
@@ -643,6 +719,7 @@ private bool isMutable(const Pattern pattern)
     return pattern.kind.match!(
         (const VarDecl v) => v.mutable,
         (const TuplePattern t) => isMutable(t.elements[0]),
+        (_) => false,
     );
 }
 
@@ -654,6 +731,11 @@ string printPattern(const Pattern pattern)
     return pattern.kind.match!(
         (const VarDecl v) => v.name ~ (v.type is null ? "" : ": " ~ printTypeExpr(*v.type)),
         (const TuplePattern t) => "(" ~ t.elements.map!printPattern.join(", ") ~ ")",
+        (const ConstructorPattern c) => printTypeExpr(c.type)
+            ~ (c.arguments.length > 0 ? "(" ~ c.arguments.map!printPattern.join(", ") ~ ")" : ""),
+        (const SomePattern s) => "Some(" ~ printPattern(*s.inner) ~ ")",
+        (const NonePattern _) => "None",
+        (const LiteralPattern l) => printExpr(*l.value),
     );
 }
 
@@ -679,6 +761,10 @@ private string printTypeDecl(const TypeDecl t)
     import std.algorithm : map;
     import std.array : join;
 
+    if (t.members.length > 0)
+    {
+        return "(type " ~ t.name ~ " = " ~ t.members.map!(m => printTypeExpr(m.type)).join(" | ") ~ ")";
+    }
     if (t.fields.length == 0)
     {
         return t.emptyParens ? "(type " ~ t.name ~ " ())" : "(type " ~ t.name ~ ")";

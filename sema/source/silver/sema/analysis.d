@@ -162,6 +162,61 @@ final class Analysis
         return _typing.concatOperands[concat];
     }
 
+    /// The declared type `decl` introduces.
+    Type typeOf(Id!TypeDecl decl) const
+    {
+        return _typing.nominalTypes[decl];
+    }
+
+    /// What values of the sum `type` can be, in order, which is what a tag indexes. Empty for
+    /// anything that isn't a sum.
+    const(Type)[] membersOf(Type type) const
+    {
+        return _typing.types[type].match!(
+            (const NominalData nominal) => _typing.members.get(nominal.decl, null),
+            _ => (Type[]).init,
+        );
+    }
+
+    /// Which member of the sum `sum` a value of `from` is promoted to: `from` itself, or the one
+    /// option or array member that a `None` or `[]` takes on.
+    size_t memberIndexFor(Type sum, Type from) const
+    {
+        import std.algorithm : countUntil;
+
+        auto members = membersOf(sum);
+        auto exact = members.countUntil(from);
+        if (exact >= 0) return exact;
+        if (from == types.none) return members.countUntil!(m => types.isOption(m));
+        assert(from == types.emptyArray, "sema only promotes a member of the sum");
+        return members.countUntil!(m => types.isArray(m));
+    }
+
+    /// The member `expr` builds on the way to being its sum, or null if it doesn't. `typeOf(expr)`
+    /// is the sum, and only a constructor of a member the sum owns does this.
+    const(Type)* constructedMemberOf(Id!Expr expr) const
+    {
+        return expr in _typing.constructedMembers;
+    }
+
+    /// The type of the value arriving at `pattern`.
+    Type subjectOf(Id!Pattern pattern) const
+    {
+        return _typing.patternSubjects[pattern];
+    }
+
+    /// Which member of its subject, a sum, `pattern` tests for, or null if it doesn't test one.
+    const(size_t)* memberTestOf(Id!Pattern pattern) const
+    {
+        return pattern in _typing.patternMembers;
+    }
+
+    /// The declaration a constructor pattern takes apart.
+    Id!TypeDecl constructorOf(Id!Pattern pattern) const
+    {
+        return _typing.patternConstructors[pattern];
+    }
+
     /// The fields of `type`, in declaration order.
     const(FieldInfo)[] fieldsOf(Id!TypeDecl type) const
     {

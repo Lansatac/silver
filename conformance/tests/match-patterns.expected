@@ -1,0 +1,34 @@
+unit-wide 2 t
+plain 3x4
+big
+other (3, 4) x
+point
+circle 5
+dot
+zero
+minus one
+seven
+number 8
+2
+0
+both
+first
+neither or second: true
+-1
+9
+0
+value 1
+inner none
+outer none
+6
+3
+8
+-1
+too big
+1
+evaluated once
+3
+200
+Some(1)
+Some(1)
+done

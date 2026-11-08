@@ -71,6 +71,11 @@ class Instance
         return fields[indexOf(name)];
     }
 
+    Variant fieldAt(size_t index)
+    {
+        return fields[index];
+    }
+
     /// A copy of this value with the field `name` replaced.
     Instance withField(string name, Variant value)
     {
@@ -169,6 +174,24 @@ final class ArrayValue
         import std.array : join;
 
         return "[" ~ elements.map!(e => e.toString()).join(", ") ~ "]";
+    }
+}
+
+/// A value of a sum type: which member it is, and that member's value. Like an Instance it never changes.
+final class SumValue
+{
+    size_t index;
+    Variant member;
+
+    this(size_t index, Variant member)
+    {
+        this.index = index;
+        this.member = member;
+    }
+
+    override string toString()
+    {
+        return member.toString();
     }
 }
 

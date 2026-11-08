@@ -1,0 +1,57 @@
+type Peg = Literal(text: String) | Sequence(parts: [Peg]) | Empty
+
+def describe(p: Peg): String => match p {
+    Literal(text) => "literal {text}"
+    Sequence(parts) => "sequence of {length(parts)}"
+    Empty => "empty"
+}
+
+def size(p: Peg): Int => match p {
+    Sequence(parts) => {
+        mutable val total = 1
+        for part in parts { total += size(part) }
+        total
+    }
+    _ => 1
+}
+
+def textOf(l: Literal): String => l.text
+
+def main(): Unit {
+    val a = Literal("a")
+    val tree = Sequence([a, Empty, Sequence([Literal("b")])])
+    printl(describe(a))
+    printl(describe(tree))
+    printl(describe(Empty))
+    printl(size(tree))
+    printl(a)
+    printl(tree)
+    printl("hole: {Empty}")
+    printl(String(a))
+
+    // A constructor checked against its member builds the member.
+    val l: Literal = Literal("kept")
+    printl(l.text)
+    printl(textOf(Literal("arg")))
+    printl(l)
+    val widened: Peg = l
+    printl(widened)
+    val maybe: Literal? = Literal("opt")
+    printl(maybe?.text)
+    val optionalPeg: Peg? = Empty
+    printl(optionalPeg)
+
+    printl(a == Literal("a"))
+    printl(a == Literal("b"))
+    printl(a != Empty)
+    printl(tree == Sequence([Literal("a"), Empty, Sequence([Literal("b")])]))
+    printl(l == Literal("kept"))
+
+    mutable val current = a
+    current = Empty
+    printl(current)
+    val chosen = if size(tree) > 1 => Empty else a
+    printl(chosen)
+    val all = [Empty, a]
+    printl(all)
+}

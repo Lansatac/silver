@@ -12,12 +12,6 @@ import silver.ast;
 
 alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module, Id!TypeDecl, Id!ConstDecl);
 
-enum Builtin
-{
-    Never, Unit, Bool, Int, Float, String, Any,
-    Int8, Int16, Int32, Int64,
-    UInt, UInt8, UInt16, UInt32, UInt64,
-}
 alias TypeSymbol = SumType!(Builtin, Id!TypeDecl);
 
 /// `name` as a type that values can be converted to with `Name(x)`, if it is one.
@@ -279,13 +273,17 @@ private final class NameResolver
                     _declarations.types[type.id] = &type;
                     if (moduleScope.resolveLocalType(type.name) !is null || moduleScope.resolveLocal(type.name) !is null)
                     {
-                        _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan,
-                            "'%s' is already declared in this module".format(type.name));
+                        _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan, type.implicitMarker
+                            ? "`%s` is already a member of another sum in this module; declare `type %s` on its own to share it"
+                                .format(type.name, type.name)
+                            : "'%s' is already declared in this module".format(type.name));
                     }
                     else if (universal.resolveLocalType(type.name) !is null || type.name == "Some" || type.name == "None")
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan,
                             "'%s' is a built-in name".format(type.name));
+                        // `Some` and `None` aren't types, so a sum naming one would also report an unknown type.
+                        if (universal.resolveLocalType(type.name) is null) moduleScope.declare(type.name, TypeSymbol(type.id));
                     }
                     else
                     {
@@ -346,6 +344,11 @@ private final class NameResolver
                     }
                 },
                 (const TypeDecl type) {
+                    foreach (member; type.members)
+                    {
+                        resolveTypeExpr(member.type, _moduleScopes[name]);
+                    }
+                    if (type.implicitMarker) reportImportedMember(type, _moduleScopes[name]);
                     bool[string] seen;
                     foreach (field; type.fields)
                     {
@@ -365,6 +368,16 @@ private final class NameResolver
                 (const ImportStmt _) {},
             );
         }
+    }
+
+    /// A bare name in a sum declares a marker, so one an import also provides would quietly be a new type.
+    private void reportImportedMember(const TypeDecl marker, const Scope current)
+    {
+        auto owners = current.visibleModules.filter!(m => _moduleScopes[m].resolveLocalType(marker.name) !is null).array;
+        if (owners.length == 0) return;
+        _collector.reportError(DiagnosticCode.AmbiguousName, marker.nameSpan,
+            "`%s` is also a type in `%s`; write `%s.%s` to use that one, or rename this member"
+                .format(marker.name, owners[0], owners[0], marker.name));
     }
 
     /// Reports a constant with no type or one that sema can't evaluate a value of.
@@ -690,6 +703,15 @@ private final class NameResolver
                     resolveExpr(update.value, scopeTable);
                 }
             },
+            (const MatchExpr match_) {
+                resolveExpr(*match_.subject, scopeTable);
+                foreach (ref arm; match_.arms)
+                {
+                    auto armScope = new Scope(scopeTable);
+                    declarePattern(arm.pattern, armScope);
+                    resolveExpr(arm.body, armScope);
+                }
+            },
         );
     }
 
@@ -712,6 +734,16 @@ private final class NameResolver
                     declarePattern(element, scopeTable);
                 }
             },
+            (ref const ConstructorPattern constructor) {
+                resolveTypeExpr(constructor.type, scopeTable);
+                foreach (ref argument; constructor.arguments)
+                {
+                    declarePattern(argument, scopeTable);
+                }
+            },
+            (ref const SomePattern some) => declarePattern(*some.inner, scopeTable),
+            (ref const NonePattern _) {},
+            (ref const LiteralPattern _) {},
         );
     }
 

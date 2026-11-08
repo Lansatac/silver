@@ -49,3 +49,35 @@ immutable Case[] tupleTypes = [
     declaresAs("type Pair(value: (Int, String))", "(type Pair (value: (Int, String)))"),
     rejects("val a: (Int,) = b"),
 ];
+
+immutable Case[] sumDeclarations = [
+    declaresAs("type Peg = Literal(text: String) | Sequence(parts: [Peg]) | Empty",
+        ["(type Literal (text: String))", "(type Sequence (parts: [Peg]))", "(type Peg = Literal | Sequence | Empty)", "(type Empty)"]),
+    declaresAs("type Color = Red | Green", ["(type Color = Red | Green)", "(type Red)", "(type Green)"]),
+    declaresAs("type P2\ntype Point = P2 | geo.P3 | Int8 | [Int] | Int?", ["(type P2)", "(type Point = P2 | geo.P3 | Int8 | [Int] | Int?)"]),
+    declaresAs("type Peg =\n    Literal(text: String)\n    | Empty\n    | Other",
+        ["(type Literal (text: String))", "(type Peg = Literal | Empty | Other)", "(type Empty)", "(type Other)"]),
+    declaresAs("type A = B |\n    C", ["(type A = B | C)", "(type B)", "(type C)"]),
+    rejectsDeclaration("type A ="),
+    rejectsDeclaration("type A = B |"),
+    rejectsDeclaration("type A = b"),
+    rejectsDeclaration("type A(x: Int) = B"),
+];
+
+immutable Case[] matches = [
+    parsesAs("val r = match p {\n    Literal(text) => text\n    q: Point3D => q\n    Empty => 1\n    _ => 2\n}",
+        "(val r (match p (Literal(text) text) (q: Point3D q) (Empty 1) (_ 2)))"),
+    parsesAs("val r = match p { a => 1; b => 2 }", "(val r (match p (a 1) (b 2)))"),
+    parsesAs("val r = match\n    p\n{\n\n    x =>\n        1\n\n}", "(val r (match p (x 1)))"),
+    parsesAs("val r = match p { Some(x) => 1\n None => 2 }", "(val r (match p (Some(x) 1) (None 2)))"),
+    parsesAs("val r = match p { (true, 1) => 1\n (\"a\", -1) => 2 }", `(val r (match p ((true, 1) 1) (("a", (Minus 1)) 2)))`),
+    parsesAs("val r = match p { geo.Point(Inner(a), _) => { 1 } }", "(val r (match p (geo.Point(Inner(a), _) (block => 1))))"),
+    parsesAs("val r = match f(x).y { a => a }", "(val r (match (. (call f x) y) (a a)))"),
+    parsesAs("if val Literal(t) = p => t else 2", "(match p (Literal(t) t) (_ 2))"),
+    parsesAs("if val None = p { 1 }", "(match p (None (block => 1)) (_ ()))"),
+    parsesAs("if val x = p => x", "(if (val x p) x)"),
+    rejects("val r = match p { a }"),
+    rejects("val r = match p { a => }"),
+    rejects("val r = match p { a + 1 => 2 }"),
+    rejects("val match = 1"),
+];

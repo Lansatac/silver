@@ -50,6 +50,7 @@ private final class Lowering
                 {
                     declarations ~= convertDeclaration(declaration);
                 }
+                declarations ~= implicitMarkers(declarations);
                 break;
             default:
                 throw new Exception("Unexpected '%s' in module".format(child.name));
@@ -70,21 +71,62 @@ private final class Lowering
     }
 
 
-    private Decl convertDeclaration(ParseTree cst)
+    /// A TypeDecl for each bare name in a sum that nothing in the module declares, and which
+    /// isn't built in. Its members are marked as owned here, once every declaration is known.
+    private Decl[] implicitMarkers(Decl[] declarations)
+    {
+        import std.traits : EnumMembers;
+
+        bool[string] declared;
+        foreach (ref declaration; declarations)
+        {
+            declaration.kind.match!((ref TypeDecl type) { declared[type.name] = true; }, (ref _) {});
+        }
+
+        Decl[] markers;
+        foreach (ref declaration; declarations)
+        {
+            declaration.kind.match!(
+                (ref TypeDecl sum) {
+                    bool[string] inThisSum;
+                    foreach (ref member; sum.members)
+                    {
+                        auto name = member.type.kind.match!(
+                            (ref NamedType named) => named.path.length == 1 && named.args.length == 0 ? named.path[0] : null,
+                            (ref _) => cast(string) null,
+                        );
+                        if (name is null || name in declared || [__traits(allMembers, Builtin)].canFind(name)) continue;
+
+                        member.owned = true;
+                        // Named twice in one sum is reported as a repeated member, not a redeclaration.
+                        if (name in inThisSum) continue;
+                        inThisSum[name] = true;
+                        auto marker = TypeDecl(ids.next!TypeDecl, name, member.type.span, null, false, null, true);
+                        markers ~= Decl(member.type.span, DeclKind(marker));
+                    }
+                },
+                (ref _) {},
+            );
+        }
+        return markers;
+    }
+
+    /// One declaration, except that a sum comes with a declaration for each member it defines inline.
+    private Decl[] convertDeclaration(ParseTree cst)
     {
         cst.validateNodeIs("Silver.Declaration");
         switch (cst[0].name)
         {
         case "Silver.ImportStatement":
             auto path = qualifiedName(cst[0][0]);
-            return Decl(spanOf(cst[0], file), DeclKind(ImportStmt(ids.next!ImportStmt, path)));
+            return [Decl(spanOf(cst[0], file), DeclKind(ImportStmt(ids.next!ImportStmt, path)))];
         case "Silver.FunctionDeclaration":
         case "Silver.NativeFunctionDeclaration":
-            return Decl(spanOf(cst[0], file), DeclKind(convertFunctionDeclaration(cst[0])));
+            return [Decl(spanOf(cst[0], file), DeclKind(convertFunctionDeclaration(cst[0])))];
         case "Silver.TypeDeclaration":
-            return Decl(spanOf(cst[0], file), DeclKind(convertTypeDeclaration(cst[0])));
+            return convertTypeDeclaration(cst[0]);
         case "Silver.ConstantDeclaration":
-            return Decl(spanOf(cst[0], file), DeclKind(convertConstantDeclaration(cst[0])));
+            return [Decl(spanOf(cst[0], file), DeclKind(convertConstantDeclaration(cst[0])))];
         default:
             throw new Exception("lower: declaration '%s' not supported yet".format(cst[0].name));
         }
@@ -178,17 +220,97 @@ private final class Lowering
             TypeExpr* type = cst.children.length > 1 ? boxed(convertTypeExpression(cst[1])) : null;
             // A binding in a pattern has no value of its own; see VarDecl.value.
             auto binding = VarDecl(ids.next!VarDecl, cst[0].matches[0], spanOf(cst[0], file), Expr.init, type, mutable);
-            return Pattern(spanOf(cst, file), PatternKind(binding));
+            return Pattern(ids.next!Pattern, spanOf(cst, file), PatternKind(binding));
         case "Silver.TuplePattern":
             Pattern[] elements;
             foreach (element; cst.children)
             {
                 elements ~= convertPattern(element, mutable);
             }
-            return Pattern(spanOf(cst, file), PatternKind(TuplePattern(elements)));
+            return Pattern(ids.next!Pattern, spanOf(cst, file), PatternKind(TuplePattern(elements)));
         default:
             throw new Exception("Unexpected '%s' in pattern".format(cst.name));
         }
+    }
+
+    private Pattern convertMatchPattern(ParseTree cst)
+    {
+        auto span = spanOf(cst, file);
+        Pattern pattern(K)(K kind) => Pattern(ids.next!Pattern, span, PatternKind(kind));
+        VarDecl binding(ParseTree name, TypeExpr* type) =>
+            VarDecl(ids.next!VarDecl, name.matches[0], spanOf(name, file), Expr.init, type, false);
+
+        switch (cst.name)
+        {
+        case "Silver.MatchPattern":
+            return convertMatchPattern(cst[0]);
+        case "Silver.BindingName":
+            return pattern(binding(cst, null));
+        case "Silver.TypedBinding":
+            return pattern(binding(cst[0], boxed(convertTypeExpression(cst[1]))));
+        case "Silver.MatchTuplePattern":
+            return pattern(TuplePattern(cst.children.map!(e => convertMatchPattern(e)).array));
+        case "Silver.Literal":
+            auto literal = convertExpression(cst);
+            if (literal.kind.match!((ref InterpolatedString _) => true, (ref _) => false))
+            {
+                throw new ParseException(Diagnostic(DiagnosticCode.ParseError, span,
+                    "A string in a pattern can't have holes; write `\\{` for a literal brace", Severity.Error));
+            }
+            return pattern(LiteralPattern(boxed(literal)));
+        case "Silver.ConstructorPattern":
+            return convertConstructorPattern(cst);
+        default:
+            throw new Exception("Unexpected '%s' in pattern".format(cst.name));
+        }
+    }
+
+    /// `TypePath MatchPattern*`. `Some` and `None` are written like constructors, as in expressions.
+    private Pattern convertConstructorPattern(ParseTree cst)
+    {
+        auto span = spanOf(cst, file);
+        auto path = cst[0].children.map!(part => part.matches[0]).array;
+        auto arguments = cst.children[1 .. $].map!(a => convertMatchPattern(a)).array;
+        if (path == ["None"] && arguments.length == 0)
+        {
+            return Pattern(ids.next!Pattern, span, PatternKind(NonePattern()));
+        }
+        if (path == ["Some"] && arguments.length == 1)
+        {
+            return Pattern(ids.next!Pattern, span, PatternKind(SomePattern(boxed(arguments[0]))));
+        }
+        auto type = TypeExpr(ids.next!TypeExpr, spanOf(cst[0], file), TypeExprKind(NamedType(path, null)));
+        return Pattern(ids.next!Pattern, span, PatternKind(ConstructorPattern(type, arguments)));
+    }
+
+    private Expr convertMatchExpression(ParseTree cst)
+    {
+        cst.validateNodeIs("Silver.MatchExpression");
+        MatchArm[] arms;
+        foreach (arm; cst.children[1 .. $])
+        {
+            arm.validateNodeIs("Silver.MatchArm");
+            arms ~= MatchArm(spanOf(arm, file), convertMatchPattern(arm[0]), convertExpression(arm[1]));
+        }
+        return Expr(ids.next!Expr, spanOf(cst, file),
+            ExprKind(MatchExpr(boxed(convertExpression(cst[0])), arms, MatchOrigin.Match)));
+    }
+
+    /// `if val Literal(text) = p => a else b`, as a match of that pattern and `_`.
+    private Expr convertPatternIf(ParseTree cst)
+    {
+        auto head = cst[0];
+        head.validateNodeIs("Silver.PatternBinding");
+        auto span = spanOf(cst, file);
+        auto hasElse = cst.children.length > 2;
+        auto otherwise = hasElse ? convertExpression(cst[2]) : Expr(ids.next!Expr, span, ExprKind(UnitLiteral()));
+        auto discard = VarDecl(ids.next!VarDecl, discardName, span, Expr.init, null, false);
+        auto arms = [
+            MatchArm(spanOf(head[0], file), convertConstructorPattern(head[0]), convertExpression(cst[1])),
+            MatchArm(span, Pattern(ids.next!Pattern, span, PatternKind(discard)), otherwise),
+        ];
+        return Expr(ids.next!Expr, span, ExprKind(MatchExpr(boxed(convertExpression(head[1])), arms,
+            hasElse ? MatchOrigin.IfValElse : MatchOrigin.IfVal)));
     }
 
     /// `TypeAnnotation`, or any of the rules under `Type`. `BaseType` adds no node of its own,
@@ -290,7 +412,10 @@ private final class Lowering
         case "Silver.ForExpression":
             return convertForExpression(cst);
         case "Silver.IfExpression":
+            if (cst[0].name == "Silver.PatternBinding") return convertPatternIf(cst);
             return convertIfExpression(cst);
+        case "Silver.MatchExpression":
+            return convertMatchExpression(cst);
         case "Silver.RelationalExpression":
         case "Silver.OrExpression":
         case "Silver.AndExpression":
@@ -600,17 +725,43 @@ private final class Lowering
         return FunctionDecl(ids.next!FunctionDecl, name, spanOf(cst[0], file), params, body, returnType, native);
     }
 
-    /// `type Name`, `type Name()` or `type Name(fields)`. Fields has no Params child when the parens are empty.
-    private TypeDecl convertTypeDeclaration(ParseTree cst)
+    /// `type Name`, `type Name()`, `type Name(fields)` or `type Name = members`, and for a sum a
+    /// declaration of each member it defines inline, which from here on is a type like any other.
+    private Decl[] convertTypeDeclaration(ParseTree cst)
     {
         cst.validateNodeIs("Silver.TypeDeclaration");
-        auto name = cst[0].matches[0];
+        auto span = spanOf(cst, file);
+        Decl[] declarations;
+        SumMember[] members;
+        if (cst.children.length > 1 && cst[1].name == "Silver.SumMembers")
+        {
+            foreach (member; cst[1].children)
+            {
+                member.validateNodeIs("Silver.SumMember");
+                if (member[0].name != "Silver.InlineMember")
+                {
+                    members ~= SumMember(convertTypeExpression(member[0]), false);
+                    continue;
+                }
+                auto inline = convertProduct(member[0][0], member[0][1]);
+                declarations ~= Decl(spanOf(member[0], file), DeclKind(inline));
+                auto path = [inline.name];
+                members ~= SumMember(TypeExpr(ids.next!TypeExpr, inline.nameSpan, TypeExprKind(NamedType(path, null))), true);
+            }
+            auto sum = TypeDecl(ids.next!TypeDecl, cst[0].matches[0], spanOf(cst[0], file), null, false, members);
+            return declarations ~ Decl(span, DeclKind(sum));
+        }
+        return [Decl(span, DeclKind(convertProduct(cst[0], cst.children.length > 1 ? cst[1] : ParseTree.init)))];
+    }
 
+    /// A type named by `name` with the given `Fields`, which is an empty tree for a marker.
+    /// Fields has no FieldList child when the parens are empty.
+    private TypeDecl convertProduct(ParseTree name, ParseTree fieldList)
+    {
         Field[] fields;
         bool emptyParens;
-        if (cst.children.length > 1)
+        if (fieldList.name.length > 0)
         {
-            auto fieldList = cst[1];
             fieldList.validateNodeIs("Silver.Fields");
             emptyParens = fieldList.children.length == 0;
             foreach (params; fieldList.children)
@@ -623,7 +774,7 @@ private final class Lowering
                 }
             }
         }
-        return TypeDecl(ids.next!TypeDecl, name, spanOf(cst[0], file), fields, emptyParens);
+        return TypeDecl(ids.next!TypeDecl, name.matches[0], spanOf(name, file), fields, emptyParens);
     }
 
     /// `Identifier TypeAnnotation? '=' Expression` once the keyword is discarded.

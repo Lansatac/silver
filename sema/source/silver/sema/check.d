@@ -29,6 +29,32 @@ package struct Typing
     const(Expr)[][Id!Expr] concatOperands;
     const(CallExpr)*[Id!Expr] methodCalls;
     Id!FunctionDecl[Id!Expr] methodCallees;
+    Type[Id!TypeDecl] nominalTypes;
+    Type[][Id!TypeDecl] members;
+    Type[Id!Expr] constructedMembers;
+    Type[Id!Pattern] patternSubjects;
+    size_t[Id!Pattern] patternMembers;
+    Id!TypeDecl[Id!Pattern] patternConstructors;
+}
+
+/// A pattern as coverage sees it: a head (null for one that matches anything) and what's under it.
+private struct CoveragePattern
+{
+    string head;
+    CoveragePattern[] args;
+}
+
+/// One of the shapes a type's values come in, and the types of what's inside it.
+private struct PatternHead
+{
+    string key;
+    string label;
+    const(Type)[] args;
+
+    string render(const(string)[] parts) const
+    {
+        return label ~ (parts.length > 0 ? "(" ~ parts.join(", ") ~ ")" : "");
+    }
 }
 
 /// Where the checker is inside a function body. Passed by value, so a nested body (a lambda)
@@ -79,6 +105,15 @@ private final class TypeChecker
     private const(CallExpr)*[Id!Expr] _methodCalls;
     private Id!FunctionDecl[Id!Expr] _methodCallees;
     private const(Expr)[][Id!Expr] _concatOperands;
+    /// What each sum's values can be, in declaration order.
+    private Type[][Id!TypeDecl] _members;
+    /// The sum that declared each member it owns, which is what its constructor produces.
+    private Type[Id!TypeDecl] _owners;
+    /// For a construction that produces its owner, the member it builds on the way.
+    private Type[Id!Expr] _constructedMembers;
+    private Type[Id!Pattern] _patternSubjects;
+    private size_t[Id!Pattern] _patternMembers;
+    private Id!TypeDecl[Id!Pattern] _patternConstructors;
 
     Typing checkProgram(const Program program)
     {
@@ -165,7 +200,8 @@ private final class TypeChecker
         }
 
         return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes, _updatePaths, _constants, _promotions,
-            _arrayLengths, _concatOperands, _methodCalls, _methodCallees);
+            _arrayLengths, _concatOperands, _methodCalls, _methodCallees, _nominalTypes, _members, _constructedMembers,
+            _patternSubjects, _patternMembers, _patternConstructors);
     }
 
     private void declareConstant(const ConstDecl constant)
@@ -580,8 +616,41 @@ private final class TypeChecker
             func.params.map!(p => p.mutable).array);
     }
 
+    private void declareSum(const TypeDecl decl)
+    {
+        auto sum = _nominalTypes[decl.id];
+        _fields[decl.id] = null;
+        // Only its members can be built. Using the name as a value is reported where it's used.
+        _symbolTypes[SymbolId(decl.id)] = _types.error;
+
+        Type[] members;
+        foreach (member; decl.members)
+        {
+            auto type = resolveType(member.type);
+            if (type == _types.error) continue;
+            string problem;
+            if (type == _types.any || type == _types.never) problem = "A sum can't have `%s` as a member".format(_types.describe(type));
+            else if (type == sum) problem = "A sum can't be a member of itself";
+            else if (members.canFind(type)) problem = "`%s` is already a member of this sum".format(_types.describe(type));
+            if (problem !is null)
+            {
+                _collector.reportError(DiagnosticCode.InvalidSumMember, member.type.span, problem);
+                continue;
+            }
+            members ~= type;
+            if (!member.owned) continue;
+            _resolutions.typeResolutions[member.type.id].match!(
+                (const Id!TypeDecl owned) { _owners[owned] = sum; },
+                (_) {},
+            );
+        }
+        _members[decl.id] = members;
+    }
+
     private void declareConstructor(const TypeDecl decl)
     {
+        if (decl.members.length > 0) return declareSum(decl);
+
         auto fields = decl.fields.map!(f => FieldInfo(f.name, resolveType(f.type))).array;
         _fields[decl.id] = fields;
 
@@ -640,6 +709,7 @@ private final class TypeChecker
                 auto elseType = checkDiscarded(*if_.falseBody, ctx);
                 return thenType == _types.never && elseType == _types.never ? _types.never : _types.unit;
             },
+            (const MatchExpr match_) => checkDiscardedMatch(match_, expr.span, ctx),
             (_) => synthesize(expr, ctx),
         );
         _exprTypes[expr.id] = type;
@@ -731,6 +801,7 @@ private final class TypeChecker
                     bindPattern(pattern, expected);
                 }
             },
+            (_) { assert(0, "the grammar only allows names and tuples in a `val`"); },
         );
     }
 
@@ -750,6 +821,7 @@ private final class TypeChecker
                 auto types = tuple.elements.map!(e => annotatedType(e)).array;
                 return types.canFind(Type.init) ? Type.init : tupleOf(types);
             },
+            (_) => assert(0, "the grammar only allows names and tuples in a `val`"),
         );
     }
 
@@ -796,6 +868,7 @@ private final class TypeChecker
                     bindPattern(element, parts[i]);
                 }
             },
+            (_) { assert(0, "the grammar only allows names and tuples in a `val`"); },
         );
     }
 
@@ -880,10 +953,60 @@ private final class TypeChecker
         }
     }
 
+    /// The declaration `expr` builds a value of, or an invalid ID if it doesn't: a constructor call,
+    /// or the name of a marker.
+    private Id!TypeDecl constructedDecl(const Expr expr)
+    {
+        if (auto type = expr.id in _resolutions.constructions) return *type;
+        auto symbol = expr.id in _resolutions.resolutions;
+        if (symbol is null) return Id!TypeDecl.init;
+        return (*symbol).match!(
+            (const Id!TypeDecl type) {
+                Id!TypeDecl marker;
+                if (_resolutions.declarations.types[type].fields.length == 0) marker = type;
+                return marker;
+            },
+            _ => Id!TypeDecl.init,
+        );
+    }
+
+    private const(Type)[] membersOf(Type type)
+    {
+        return _types[type].match!(
+            (const NominalData nominal) => _members.get(nominal.decl, null),
+            _ => (Type[]).init,
+        );
+    }
+
+    private bool isSum(Type type)
+    {
+        return membersOf(type).length > 0;
+    }
+
+    private bool isOwnedMember(Type type)
+    {
+        return _types[type].match!((const NominalData nominal) => (nominal.decl in _owners) !is null, _ => false);
+    }
+
+    /// The type of `expr`, where nothing asks for a particular one. A constructor of a member its
+    /// sum owns produces the sum.
     private Type synthesize(const Expr expr, BodyContext ctx)
     {
+        auto type = synthesizeExact(expr, ctx);
+        if (type == _types.error) return type;
+        auto sum = constructedDecl(expr) in _owners;
+        if (sum is null) return type;
+
+        _constructedMembers[expr.id] = type;
+        _exprTypes[expr.id] = *sum;
+        return *sum;
+    }
+
+    private Type synthesizeExact(const Expr expr, BodyContext ctx)
+    {
         // "what type is this?"
-        
+        _constructedMembers.remove(expr.id);
+
         auto type = expr.kind.match!(
             (const BoolLiteral _) => _types.bool_,
             (const IntLiteral _) {
@@ -921,6 +1044,7 @@ private final class TypeChecker
             (const IndexExpr index) => synthesizeIndex(index, ctx),
             (const RangeExpr range) => synthesizeBareRange(range, expr.span, ctx),
             (const TupleLiteral literal) => tupleOf(literal.elements.map!(e => requireTyped(synthesize(e, ctx), e.span)).array),
+            (const MatchExpr match_) => synthesizeMatch(match_, expr.span, ctx),
         );
         _exprTypes[expr.id] = type;
         return type;
@@ -1030,6 +1154,17 @@ private final class TypeChecker
     /// `length` is typed where it's called, since no function type can say what it takes.
     private Type requireNotArrayLength(SymbolId symbol, Span span)
     {
+        auto isSumName = symbol.match!(
+            (const Id!TypeDecl type) => _resolutions.declarations.types[type].members.length > 0,
+            _ => false,
+        );
+        if (isSumName)
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, span,
+                "A sum type has no value of its own; build one of its members");
+            return _types.error;
+        }
+
         auto isLength = _arrayLength.isValid
             && symbol.match!((const Id!FunctionDecl f) => f == _arrayLength, _ => false);
         if (!isLength) return symbolType(symbol);
@@ -1249,7 +1384,8 @@ private final class TypeChecker
             (const ArrayData array) => isComparable(array.element, visited),
             (const EmptyArrayType _) => true,
             (const FunctionData _) => false,
-            (const NominalData nominal) => _fields[nominal.decl].all!(f => isComparable(f.type, visited)),
+            (const NominalData nominal) => _fields[nominal.decl].all!(f => isComparable(f.type, visited))
+                && _members.get(nominal.decl, null).all!(m => isComparable(m, visited)),
             (const TupleData tuple) => tuple.elements.all!(e => isComparable(e, visited)),
             (const NoneType _) => true,
             (const ErrorType _) => true,
@@ -1374,6 +1510,7 @@ private final class TypeChecker
     /// the array a `[]` takes on.
     private bool promotes(const Expr expr, Type type, Type target)
     {
+        if (isSum(target)) return isAssignable(type, target) || (isIntLiteral(expr) && membersOf(target).any!(m => isNumeric(m)));
         if (type == _types.emptyArray && _types.isArray(target)) return true;
         if (!_types.isOption(target) || _types.isOption(type) && !isAssignable(type, target)) return false;
         return isAssignable(type, target) || (isIntLiteral(expr) && isNumeric(innermost(target)));
@@ -2014,8 +2151,49 @@ private final class TypeChecker
         return _types.error;
     }
 
+    /// Whether a constructor of `member`, which `owner` owns, should build the member itself.
+    private bool wantsMember(Type member, Type owner, Type expected)
+    {
+        if (expected == member) return true;
+        if (_types.isOption(expected)) return wantsMember(member, owner, _types.optionInner(expected));
+        return expected != owner && membersOf(expected).canFind(member);
+    }
+
+    /// The one member of `sum` that the option, array or tuple written out as `expr` can be, or
+    /// `Type.init` if `expr` isn't one of those or there's no single member.
+    private Type memberForSyntax(const Expr expr, Type sum)
+    {
+        auto candidates = expr.kind.match!(
+            (const SomeExpr _) => membersOf(sum).filter!(m => _types.isOption(m)).array,
+            (const NoneLiteral _) => membersOf(sum).filter!(m => _types.isOption(m)).array,
+            (const ArrayLiteral _) => membersOf(sum).filter!(m => _types.isArray(m)).array,
+            (const BinaryExpr _) => isArraySyntax(expr) ? membersOf(sum).filter!(m => _types.isArray(m)).array : null,
+            (const TupleLiteral literal) => membersOf(sum)
+                .filter!(m => _types.isTuple(m) && _types.tupleElements(m).length == literal.elements.length).array,
+            _ => (const(Type)[]).init,
+        );
+        return candidates.length == 1 ? candidates[0] : Type.init;
+    }
+
     private Type check(const Expr expr, Type expected, BodyContext ctx)
     {
+        auto constructed = constructedDecl(expr);
+        if (auto owner = constructed in _owners)
+        {
+            auto member = _nominalTypes[constructed];
+            if (wantsMember(member, *owner, expected)) return coerce(expr, synthesizeExact(expr, ctx), expected);
+        }
+        if (isSum(expected))
+        {
+            auto member = memberForSyntax(expr, expected);
+            if (member != Type.init)
+            {
+                check(expr, member, ctx);
+                _promotions[expr.id] = expected;
+                return expected;
+            }
+        }
+
         // A number, option, array or tuple is passed down, so that a literal adapts, and a value is
         // promoted, in an `if` arm or as a block's value too.
         auto isOption = _types.isOption(expected);
@@ -2028,7 +2206,7 @@ private final class TypeChecker
             _promotions[expr.id] = expected;
             return expected;
         }
-        if (isNumeric(expected) || isOption || isArray || isTuple)
+        if (isNumeric(expected) || isOption || isArray || isTuple || isSum(expected) || isOwnedMember(expected))
         {
             auto passedDown = expr.kind.match!(
                 (const IfExpr if_) => if_.falseBody !is null,
@@ -2037,6 +2215,7 @@ private final class TypeChecker
                 (const ArrayLiteral _) => isArray,
                 (const BinaryExpr _) => isArray && isArraySyntax(expr),
                 (const TupleLiteral literal) => isTuple && literal.elements.length == _types.tupleElements(expected).length,
+                (const MatchExpr match_) => match_.origin != MatchOrigin.IfVal,
                 _ => false,
             );
             if (passedDown)
@@ -2068,7 +2247,8 @@ private final class TypeChecker
                         }
                         return expected;
                     },
-                    (_) => assert(0, "only ifs, blocks, Some, arrays and tuples are passed down"),
+                    (const MatchExpr match_) => checkMatch(match_, expected, expr.span, ctx),
+                    (_) => assert(0, "only ifs, blocks, matches, Some, arrays and tuples are passed down"),
                 );
                 _exprTypes[expr.id] = type;
                 return type;
@@ -2086,7 +2266,20 @@ private final class TypeChecker
         {
             return adaptLiteral(expr, expected);
         }
-        if (_types.isOption(expected))
+        if (isSum(expected))
+        {
+            auto hasValue = type != _types.error && type != _types.never;
+            if (hasValue && type != expected)
+            {
+                if (isIntLiteral(expr)) return injectLiteral(expr, expected);
+                if (isAssignable(type, expected))
+                {
+                    _promotions[expr.id] = expected;
+                    return expected;
+                }
+            }
+        }
+        else if (_types.isOption(expected))
         {
             if (isIntLiteral(expr) && isNumeric(innermost(expected)))
             {
@@ -2110,6 +2303,367 @@ private final class TypeChecker
         }
         requireAssignable(type, expected, expr.span);
         return type;
+    }
+
+    /// An integer literal in a sum takes the type of its only integer member, or else of a Float one.
+    private Type injectLiteral(const Expr expr, Type sum)
+    {
+        auto integers = membersOf(sum).filter!(m => _types.isInteger(m)).array;
+        if (integers.length > 1)
+        {
+            _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
+                "`%s` has more than one integer member; convert this to the one you mean, as in `%s(...)`"
+                    .format(_types.describe(sum), _types.describe(integers[0])));
+            return _types.error;
+        }
+        auto numbers = integers.length == 1 ? integers : membersOf(sum).filter!(m => m == _types.float_).array;
+        if (numbers.length == 1)
+        {
+            adaptLiteral(expr, numbers[0]);
+            _promotions[expr.id] = sum;
+            return sum;
+        }
+        auto hint = membersOf(sum).any!(m => _types.isOption(m) && isNumeric(innermost(m))) ? "; write `Some(...)`" : "";
+        _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
+            "An integer isn't a member of `%s`%s".format(_types.describe(sum), hint));
+        return _types.error;
+    }
+
+    /// The subject and every pattern of a `match`, then whether the arms cover it. Bindings have
+    /// their types once this returns, so the arms can be checked.
+    private void checkMatchHead(const MatchExpr match_, Span span, BodyContext ctx)
+    {
+        auto subject = requireTyped(synthesize(*match_.subject, ctx), match_.subject.span);
+        auto reported = _collector.diagnostics.length;
+        auto patterns = match_.arms.map!(arm => checkArmPattern(arm.pattern, subject, ctx)).array;
+        if (match_.origin != MatchOrigin.Match || subject == _types.error || subject == _types.never) return;
+        // A pattern that's already wrong would only be reported again as a gap in the coverage.
+        if (_collector.diagnostics.length > reported) return;
+        checkCoverage(match_, patterns, subject, span);
+    }
+
+    private Type synthesizeMatch(const MatchExpr match_, Span span, BodyContext ctx)
+    {
+        if (match_.origin == MatchOrigin.IfVal)
+        {
+            checkDiscardedMatch(match_, span, ctx);
+            return _types.unit;
+        }
+        checkMatchHead(match_, span, ctx);
+        auto types = match_.arms.map!(arm => synthesize(arm.body, ctx)).array;
+        auto joined = _types.never;
+        foreach (i, type; types)
+        {
+            joined = join(joined, type, match_.arms[i].body.span, "Match arms");
+        }
+        if (joined == _types.error) return joined;
+        foreach (i, arm; match_.arms)
+        {
+            coerce(arm.body, types[i], joined);
+        }
+        return joined;
+    }
+
+    private Type checkMatch(const MatchExpr match_, Type expected, Span span, BodyContext ctx)
+    {
+        checkMatchHead(match_, span, ctx);
+        auto types = match_.arms.map!(arm => check(arm.body, expected, ctx)).array;
+        return types.all!(t => t == _types.never) ? _types.never : expected;
+    }
+
+    private Type checkDiscardedMatch(const MatchExpr match_, Span span, BodyContext ctx)
+    {
+        checkMatchHead(match_, span, ctx);
+        auto types = match_.arms.map!(arm => checkDiscarded(arm.body, ctx)).array;
+        return types.all!(t => t == _types.never) ? _types.never : _types.unit;
+    }
+
+    private bool isUnknown(Type type)
+    {
+        return type == _types.error || type == _types.never;
+    }
+
+    private CoveragePattern reportPattern(Span span, string message)
+    {
+        _collector.reportError(DiagnosticCode.PatternMismatch, span, message);
+        return CoveragePattern.init;
+    }
+
+    /// Checks `pattern` against a value of `subject`, giving each binding its type.
+    private CoveragePattern checkArmPattern(const Pattern pattern, Type subject, BodyContext ctx)
+    {
+        _patternSubjects[pattern.id] = subject;
+        return pattern.kind.match!(
+            (const VarDecl binding) => checkArmBinding(pattern, binding, subject),
+            (const TuplePattern tuple) => checkArmTuple(pattern, tuple, subject, ctx),
+            (const ConstructorPattern constructor) => checkArmConstructor(pattern, constructor, subject, ctx),
+            (const SomePattern some) {
+                if (_types.isOption(subject))
+                {
+                    return CoveragePattern("some", [checkArmPattern(*some.inner, _types.optionInner(subject), ctx)]);
+                }
+                checkArmPattern(*some.inner, _types.error, ctx);
+                if (isUnknown(subject)) return CoveragePattern.init;
+                return reportPattern(pattern.span, "`Some` needs an option, but the value is `%s`".format(_types.describe(subject)));
+            },
+            (const NonePattern _) {
+                if (_types.isOption(subject)) return CoveragePattern("none");
+                if (isUnknown(subject)) return CoveragePattern.init;
+                return reportPattern(pattern.span, "`None` needs an option, but the value is `%s`".format(_types.describe(subject)));
+            },
+            (const LiteralPattern literal) {
+                if (isOrdered(subject) || subject == _types.bool_)
+                {
+                    check(*literal.value, subject, ctx);
+                    return CoveragePattern(printExpr(*literal.value));
+                }
+                synthesize(*literal.value, ctx);
+                if (isUnknown(subject)) return CoveragePattern.init;
+                return reportPattern(pattern.span, "A literal can't match a value of type `%s`".format(_types.describe(subject)));
+            },
+        );
+    }
+
+    /// Wildcards for what's inside a `member` that a pattern didn't take apart.
+    private CoveragePattern[] wildcardsFor(Type member)
+    {
+        auto fields = _types[member].match!((const NominalData nominal) => _fields[nominal.decl], _ => FieldInfo[].init);
+        return new CoveragePattern[fields.length];
+    }
+
+    /// Records that `pattern` tests for `member` of the sum `subject`, reporting it if there's no such member.
+    private bool recordMember(const Pattern pattern, Type member, Type subject, out string key)
+    {
+        auto index = membersOf(subject).countUntil(member);
+        if (index < 0)
+        {
+            reportPattern(pattern.span, "`%s` can't be a `%s`".format(_types.describe(subject), _types.describe(member)));
+            return false;
+        }
+        _patternMembers[pattern.id] = index;
+        key = "member%s".format(index);
+        return true;
+    }
+
+    private CoveragePattern checkArmBinding(const Pattern pattern, const VarDecl binding, Type subject)
+    {
+        if (binding.type is null)
+        {
+            _symbolTypes[SymbolId(binding.id)] = subject;
+            return CoveragePattern.init;
+        }
+        auto type = resolveType(*binding.type);
+        _symbolTypes[SymbolId(binding.id)] = type;
+        if (type == _types.error || isUnknown(subject) || type == subject) return CoveragePattern.init;
+
+        string key;
+        if (!recordMember(pattern, type, subject, key)) return CoveragePattern.init;
+        return CoveragePattern(key, wildcardsFor(type));
+    }
+
+    private CoveragePattern checkArmTuple(const Pattern pattern, const TuplePattern tuple, Type subject, BodyContext ctx)
+    {
+        if (_types.isTuple(subject) && _types.tupleElements(subject).length == tuple.elements.length)
+        {
+            auto parts = _types.tupleElements(subject);
+            CoveragePattern[] args;
+            foreach (i, element; tuple.elements)
+            {
+                args ~= checkArmPattern(element, parts[i], ctx);
+            }
+            return CoveragePattern("tuple", args);
+        }
+        foreach (element; tuple.elements)
+        {
+            checkArmPattern(element, _types.error, ctx);
+        }
+        if (isUnknown(subject)) return CoveragePattern.init;
+        return reportPattern(pattern.span, _types.isTuple(subject)
+            ? "This pattern takes apart %s values, but `%s` has %s".format(tuple.elements.length,
+                _types.describe(subject), _types.tupleElements(subject).length)
+            : "This pattern takes apart a tuple, but the value is `%s`".format(_types.describe(subject)));
+    }
+
+    private CoveragePattern checkArmConstructor(const Pattern pattern, const ConstructorPattern constructor,
+        Type subject, BodyContext ctx)
+    {
+        void checkArgumentsAsUnknown()
+        {
+            foreach (argument; constructor.arguments)
+            {
+                checkArmPattern(argument, _types.error, ctx);
+            }
+        }
+
+        Id!TypeDecl decl;
+        if (auto symbol = constructor.type.id in _resolutions.typeResolutions)
+        {
+            (*symbol).match!((const Id!TypeDecl type) { decl = type; }, (_) {});
+        }
+        else
+        {
+            // Name resolution reported it.
+            checkArgumentsAsUnknown();
+            return CoveragePattern.init;
+        }
+        if (!decl.isValid || _resolutions.declarations.types[decl].members.length > 0)
+        {
+            checkArgumentsAsUnknown();
+            return reportPattern(pattern.span, "`%s` has no constructor; bind a value of it with `name: %s`"
+                .format(printTypeExpr(constructor.type), printTypeExpr(constructor.type)));
+        }
+
+        auto type = _nominalTypes[decl];
+        auto fields = _fields[decl];
+        _patternConstructors[pattern.id] = decl;
+        if (constructor.arguments.length != fields.length)
+        {
+            checkArgumentsAsUnknown();
+            return reportPattern(pattern.span, "`%s` has %s fields, but this pattern takes apart %s; use `_` for a field you don't need"
+                .format(_types.describe(type), fields.length, constructor.arguments.length));
+        }
+
+        CoveragePattern[] args;
+        foreach (i, argument; constructor.arguments)
+        {
+            args ~= checkArmPattern(argument, fields[i].type, ctx);
+        }
+        if (isUnknown(subject)) return CoveragePattern.init;
+        if (type == subject) return CoveragePattern("product", args);
+
+        string key;
+        if (!recordMember(pattern, type, subject, key)) return CoveragePattern.init;
+        return CoveragePattern(key, args);
+    }
+
+    /// Every shape `type`'s values come in, or nothing if there are too many to list, as for an integer.
+    private PatternHead[] headsOf(Type type)
+    {
+        if (type == _types.bool_) return [PatternHead("false", "false"), PatternHead("true", "true")];
+        return _types[type].match!(
+            (const OptionData option) => [PatternHead("none", "None"), PatternHead("some", "Some", [option.inner])],
+            (const TupleData tuple) => [PatternHead("tuple", "", tuple.elements)],
+            (const NominalData nominal) {
+                auto members = _members.get(nominal.decl, null);
+                if (members.length == 0)
+                {
+                    return [PatternHead("product", _types.describe(type), _fields[nominal.decl].map!(f => f.type).array)];
+                }
+                PatternHead[] heads;
+                foreach (i, member; members)
+                {
+                    auto fields = _types[member].match!((const NominalData inner) => _fields[inner.decl], _ => FieldInfo[].init);
+                    heads ~= PatternHead("member%s".format(i), _types.describe(member), fields.map!(f => f.type).array);
+                }
+                return heads;
+            },
+            _ => PatternHead[].init,
+        );
+    }
+
+    private static CoveragePattern[][] specialize(CoveragePattern[][] rows, string key, size_t arity)
+    {
+        CoveragePattern[][] result;
+        foreach (row; rows)
+        {
+            if (row[0].head is null) result ~= new CoveragePattern[arity] ~ row[1 .. $].dup;
+            else if (row[0].head == key) result ~= row[0].args.dup ~ row[1 .. $].dup;
+        }
+        return result;
+    }
+
+    private static CoveragePattern[][] defaults(CoveragePattern[][] rows)
+    {
+        return rows.filter!(row => row[0].head is null).map!(row => row[1 .. $].dup).array;
+    }
+
+    private static bool usesAll(const PatternHead[] heads, CoveragePattern[][] rows)
+    {
+        return heads.length > 0 && heads.all!(h => rows.any!(row => row[0].head == h.key));
+    }
+
+    /// Whether `row` matches a value no row of `rows` does. Each is a list of patterns for values of `types`.
+    private bool isUseful(CoveragePattern[][] rows, CoveragePattern[] row, const(Type)[] types)
+    {
+        if (types.length == 0) return rows.length == 0;
+
+        auto heads = headsOf(types[0]);
+        auto rest = types[1 .. $];
+        if (row[0].head !is null)
+        {
+            auto found = heads.find!(h => h.key == row[0].head);
+            const(Type)[] inner = found.empty ? null : found.front.args;
+            return isUseful(specialize(rows, row[0].head, row[0].args.length), row[0].args ~ row[1 .. $], inner ~ rest);
+        }
+        if (usesAll(heads, rows))
+        {
+            foreach (head; heads)
+            {
+                auto wildcards = new CoveragePattern[head.args.length];
+                if (isUseful(specialize(rows, head.key, head.args.length), wildcards ~ row[1 .. $], head.args ~ rest)) return true;
+            }
+            return false;
+        }
+        return isUseful(defaults(rows), row[1 .. $], rest);
+    }
+
+    /// Finds values of `types` that no row matches, written as patterns in `witness`.
+    private bool findUncovered(CoveragePattern[][] rows, const(Type)[] types, out string[] witness)
+    {
+        if (types.length == 0) return rows.length == 0;
+
+        auto heads = headsOf(types[0]);
+        auto rest = types[1 .. $];
+        if (usesAll(heads, rows))
+        {
+            foreach (head; heads)
+            {
+                string[] parts;
+                if (!findUncovered(specialize(rows, head.key, head.args.length), head.args ~ rest, parts)) continue;
+                witness = head.render(parts[0 .. head.args.length]) ~ parts[head.args.length .. $];
+                return true;
+            }
+            return false;
+        }
+
+        string[] after;
+        if (!findUncovered(defaults(rows), rest, after)) return false;
+        auto unused = heads.find!(h => !rows.any!(row => row[0].head == h.key));
+        auto first = unused.empty || rows.all!(row => row[0].head is null)
+            ? "_" : unused.front.render("_".repeat(unused.front.args.length).array);
+        witness = first ~ after;
+        return true;
+    }
+
+    private void checkCoverage(const MatchExpr match_, CoveragePattern[] patterns, Type subject, Span span)
+    {
+        const(Type)[] types = [subject];
+        CoveragePattern[][] rows;
+        foreach (i, pattern; patterns)
+        {
+            if (!isUseful(rows, [pattern], types))
+            {
+                _collector.reportError(DiagnosticCode.UnreachableArm, match_.arms[i].pattern.span,
+                    "This arm can never run, because the arms before it cover everything it matches");
+            }
+            rows ~= [pattern];
+        }
+
+        string[] missing;
+        auto heads = headsOf(subject);
+        foreach (head; heads)
+        {
+            string[] parts;
+            if (findUncovered(specialize(rows, head.key, head.args.length), head.args, parts)) missing ~= head.render(parts);
+        }
+        if (heads.length == 0)
+        {
+            string[] witness;
+            if (findUncovered(rows, types, witness)) missing = witness;
+        }
+        if (missing.length == 0) return;
+        _collector.reportError(DiagnosticCode.NonExhaustiveMatch, span,
+            "This `match` doesn't cover %-(`%s`%|, %); add %s, or a `_` arm".format(missing, missing.length > 1 ? "them" : "it"));
     }
 
     private Type checkIf(const IfExpr if_, Type expected, BodyContext ctx)
@@ -2168,8 +2722,9 @@ private final class TypeChecker
         if (from == _types.none) return _types.isOption(to);
         if (to == _types.any) return true;                             // print's placeholder
         return _types[to].match!(
-            // T -> T?
-            (const OptionData o) => isAssignable(from, o.inner),
+            // T -> T?, but not through a sum, since promotion is one step.
+            (const OptionData o) => isSum(o.inner) ? from == o.inner : isAssignable(from, o.inner),
+            (const NominalData _) => membersOf(to).canFind(from),
             // Both have the layout of an array with no elements, so no conversion hides here.
             (const ArrayData a) => from == _types.emptyArray
                 || (_types.isArray(from) && _types.arrayElement(from) == _types.never),

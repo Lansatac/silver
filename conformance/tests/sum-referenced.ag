@@ -1,0 +1,44 @@
+type Point2D(x: Int, y: Int)
+type Point3D(x: Int, y: Int, z: Int)
+type Point = Point2D | Point3D
+
+type Value = Int8 | String | Float | [Int] | (Int, Bool) | Int? | Unit | Point
+
+def show(v: Value): String => match v {
+    n: Int8 => "byte {n}"
+    s: String => "text {s}"
+    f: Float => "float {f}"
+    xs: [Int] => "array of {length(xs)}"
+    t: (Int, Bool) => "tuple {t}"
+    o: Int? => "option {o}"
+    u: Unit => "unit {u}"
+    p: Point => "point {p}"
+}
+
+def sum(p: Point): Int => match p {
+    Point2D(x, y) => x + y
+    Point3D(x, y, z) => x + y + z
+}
+
+def main(): Unit {
+    val p2 = Point2D(1, 2)
+    printl(p2.x)
+    printl(sum(p2))
+    printl(sum(Point3D(1, 2, 3)))
+    val p: Point = if p2.x == 1 => p2 else Point3D(0, 0, 0)
+    printl(p)
+    printl(p == Point2D(1, 2))
+    printl(p2 == p)
+
+    val values: [Value] = [1, "a", 2.5, [1, 2], (3, true), Some(4), None, (), p]
+    for v in values {
+        printl(show(v))
+    }
+    printl(values)
+    val empty: Value = []
+    printl(show(empty))
+    val literal: Value = -5
+    printl(literal == -5)
+    printl(literal == "x")
+    printl(values[1] == "a")
+}

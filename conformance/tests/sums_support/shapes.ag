@@ -1,0 +1,4 @@
+module sums_support.shapes
+
+type Shape = Circle(r: Int) | Dot
+type Square(side: Int)

@@ -1,0 +1,17 @@
+Red stop Green
+Green go Blue
+Blue odd Red
+[Red, Green, Blue]
+true
+false
+true
+true
+Traffic(Green, 30)
+Traffic(Red, 30)
+true
+false
+Red
+Red
+(Red, 1)
+Some(Blue)
+is Blue

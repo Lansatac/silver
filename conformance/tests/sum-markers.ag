@@ -1,0 +1,45 @@
+type Color = Red | Green | Blue
+type Traffic(light: Color, seconds: Int)
+
+def name(c: Color): String => match c {
+    Red => "stop"
+    Green => "go"
+    Blue => "odd"
+}
+
+def next(c: Color): Color => match c {
+    Red => Green
+    Green => Blue
+    Blue => Red
+}
+
+def main(): Unit {
+    val colors = [Red, Green, Blue]
+    for c in colors {
+        printl("{c} {name(c)} {next(c)}")
+    }
+    printl(colors)
+    printl(Red == Red)
+    printl(Red == Blue)
+    printl(Red != Blue)
+    printl(colors == [Red, Green, Blue])
+
+    val t = Traffic(Green, 30)
+    printl(t)
+    printl(t with (light = Red))
+    printl(t == Traffic(Green, 30))
+    printl(t == Traffic(Blue, 30))
+
+    val r: Red = Red
+    printl(r)
+    val fromMember: Color = r
+    printl(fromMember)
+    val pair = (Red, 1)
+    printl(pair)
+    val option: Color? = Blue
+    printl(option)
+    match Blue {
+        c: Blue => printl("is {c}")
+        _ => printl("other")
+    }
+}

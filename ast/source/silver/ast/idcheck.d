@@ -76,6 +76,10 @@ private final class IdCheck
             see(f.id, f.nameSpan);
             visit(f.type);
         }
+        foreach (member; t.members)
+        {
+            visit(member.type);
+        }
     }
 
     void visit(const ConstDecl c, Span span)
@@ -136,6 +140,7 @@ private final class IdCheck
     /// A binding's value is unused here, so it has no ID to check.
     void visit(const Pattern p)
     {
+        see(p.id, p.span);
         p.kind.match!(
             (const VarDecl v) {
                 see(v.id, v.nameSpan);
@@ -147,6 +152,16 @@ private final class IdCheck
                     visit(element);
                 }
             },
+            (const ConstructorPattern c) {
+                visit(c.type);
+                foreach (argument; c.arguments)
+                {
+                    visit(argument);
+                }
+            },
+            (const SomePattern s) => visit(*s.inner),
+            (const NonePattern _) {},
+            (const LiteralPattern l) => visit(l.value),
         );
     }
 
@@ -222,6 +237,14 @@ private final class IdCheck
                 foreach (update; w.updates)
                 {
                     visit(update.value);
+                }
+            },
+            (const MatchExpr m) {
+                visit(m.subject);
+                foreach (arm; m.arms)
+                {
+                    visit(arm.pattern);
+                    visit(arm.body);
                 }
             },
             (const BlockExpr b) {

@@ -2365,3 +2365,140 @@ unittest
     analyzedMain("    val r = [1].length()").shouldHaveNoDiagnostics();
     analyzedMain("    val qq = 1\n    val r = qq.length()").shouldReport(DiagnosticCode.InvalidOperand, At("qq", 2));
 }
+
+private enum sums = "type Peg = Literal(text: String) | Sequence(parts: [Peg]) | Empty\n"
+    ~ "type Color = Red | Green | Blue\n"
+    ~ "type P2(x: Int)\ntype P3(x: Int, z: Int)\ntype Point = P2 | P3\n";
+
+private Analyzed sumMain(string body)
+{
+    return analyzed(sums ~ "def main(): Unit {\n" ~ body ~ "\n}");
+}
+
+@("a constructor of an owned member is the sum, and of a referenced one is itself")
+unittest
+{
+    auto a = sumMain("    val qa = Literal(\"a\")\n    val qr = Red\n    val qp = P2(1)\n    val qs = [Red, Green]");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType(`Literal("a")`, 1, "Peg");
+    a.shouldHaveType("Red", 2, "Color");
+    a.shouldHaveType("P2(1)", 1, "P2");
+    a.shouldHaveType("[Red, Green]", 1, "[Color]");
+}
+
+@("a constructor checked against its member builds the member")
+unittest
+{
+    auto a = sumMain("    val l: Literal = Literal(\"a\")\n    val t = l.text\n    val o: Literal? = Literal(\"b\")");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType(`Literal("a")`, 1, "Literal");
+    sumMain("    val t = Literal(\"a\").text").shouldReport(DiagnosticCode.UnknownMember, At(`Literal("a").text`, 1));
+}
+
+@("join takes a member to its sum and never invents one")
+unittest
+{
+    sumMain("    val l: Literal = Literal(\"a\")\n    val q = if true => l else Empty").shouldHaveNoDiagnostics();
+    sumMain("    val q = if true => P2(1) else P3(1, 2)").shouldReport(DiagnosticCode.TypeMismatch, At("if true => P2(1) else P3(1, 2)", 1));
+    analyzed("type P2\ntype P3\ntype A = P2 | P3\ndef f(): A => if true => P2 else P3\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
+}
+
+@("a literal adapts to the sum's only integer member")
+unittest
+{
+    analyzed("type V = Int8 | String\ndef main(): Unit {\n    val v: V = 1\n}").shouldHaveNoDiagnostics();
+    analyzed("type V = Int8 | Int\ndef main(): Unit {\n    val v: V = 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+    analyzed("type V = Int? | String\ndef main(): Unit {\n    val v: V = 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+    analyzed("type V = Int8 | String\ndef main(): Unit {\n    val v: V = 300\n}").shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
+}
+
+@("promotion into a sum is one step")
+unittest
+{
+    analyzed("type V = Int? | String\ndef f(x: Int): V => x\ndef main(): Unit => ()").shouldReport(DiagnosticCode.TypeMismatch, At("x", 2));
+    analyzed("type A\ntype B = A | Int\ndef f(a: A): B? => a\ndef main(): Unit => ()").shouldReport(DiagnosticCode.TypeMismatch, At("a", 2));
+}
+
+@("a sum's name isn't a value, and it has no fields")
+unittest
+{
+    sumMain("    val q = Peg").shouldReport(DiagnosticCode.InvalidOperand, At("Peg", 3));
+    sumMain("    val q = Peg(1)").shouldReport(DiagnosticCode.InvalidOperand, At("Peg", 3));
+    sumMain("    mutable val p = Empty\n    p.text = \"a\"").shouldReport(DiagnosticCode.UnknownMember, At("p.text", 1));
+}
+
+@("sums are comparable when every member is, and aren't ordered")
+unittest
+{
+    analyzed("type F(f: () -> Int)\ntype S = F | Int\ndef main(): Unit {\n    val a: S = 1\n    val q = a == a\n}")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("a == a", 1));
+    sumMain("    val q = Red < Green").shouldReport(DiagnosticCode.InvalidOperand, At("Red", 2));
+}
+
+@("sum members have to make sense")
+unittest
+{
+    analyzed("type A = Int | Any\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("Any", 1));
+    analyzed("type A = Int | Never\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("Never", 1));
+    analyzed("type A = A | Int\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("A", 2));
+    analyzed("type A = Int | Int64\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("Int64", 1));
+    analyzed("type A = B | B\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("B", 2));
+}
+
+@("a bare name in a sum is declared once")
+unittest
+{
+    analyzed("type A = X | Y\ntype B = X | Z\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("X", 2));
+    analyzed("type X\ntype A = X | Y\ntype B = X | Z\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
+    analyzed("type A = None | Y\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("None", 1));
+    analyzed("type A = Some(x: Int) | Y\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("Some", 1));
+}
+
+@("a match has to cover its subject, naming what's missing")
+unittest
+{
+    auto a = sumMain("    val q = match Red {\n        Red => 1\n    }");
+    a.shouldReport(DiagnosticCode.NonExhaustiveMatch, At("match Red {\n        Red => 1\n    }", 1));
+    sumMain("    val q = match Red {\n        Red => 1\n        _ => 2\n    }").shouldHaveNoDiagnostics();
+    sumMain("    val q = match 1 {\n        1 => 1\n    }").shouldReport(DiagnosticCode.NonExhaustiveMatch, At("match 1 {\n        1 => 1\n    }", 1));
+    sumMain("    val q = match true {\n        true => 1\n    }").shouldReport(DiagnosticCode.NonExhaustiveMatch, At("match true {\n        true => 1\n    }", 1));
+    sumMain("    val q = match true {\n        true => 1\n        false => 2\n    }").shouldHaveNoDiagnostics();
+    sumMain("    val o: Int? = 1\n    val q = match o {\n        Some(1) => 1\n        None => 2\n    }")
+        .shouldReport(DiagnosticCode.NonExhaustiveMatch, At("match o {\n        Some(1) => 1\n        None => 2\n    }", 1));
+    sumMain("    val p: Point = P2(1)\n    val q = match (p, true) {\n        (P2(_), true) => 1\n        (P3(_, _), _) => 2\n        (_, false) => 3\n    }").shouldHaveNoDiagnostics();
+}
+
+@("an arm that can't run is an error")
+unittest
+{
+    sumMain("    val q = match Red {\n        _ => 1\n        Red => 2\n    }").shouldReport(DiagnosticCode.UnreachableArm, At("Red", 3));
+    sumMain("    val q = match 1 {\n        1 => 1\n        1 => 2\n        _ => 3\n    }").shouldReport(DiagnosticCode.UnreachableArm, At("1", 4));
+    sumMain("    val q = match Red {\n        Red => 1\n        Green => 2\n        Blue => 3\n        _ => 4\n    }").shouldReport(DiagnosticCode.UnreachableArm, At("_", 1));
+}
+
+@("patterns have to fit their subject")
+unittest
+{
+    sumMain("    val q = match Red {\n        Literal(a) => 1\n        _ => 2\n    }").shouldReport(DiagnosticCode.PatternMismatch, At("Literal(a)", 1));
+    sumMain("    val q = match Empty {\n        Literal(a, b) => 1\n        _ => 2\n    }").shouldReport(DiagnosticCode.PatternMismatch, At("Literal(a, b)", 1));
+    sumMain("    val q = match Red {\n        Some(a) => 1\n        _ => 2\n    }").shouldReport(DiagnosticCode.PatternMismatch, At("Some(a)", 1));
+    sumMain("    val q = match Red {\n        1 => 1\n        _ => 2\n    }").shouldReport(DiagnosticCode.PatternMismatch, At("1", 1));
+    sumMain("    val q = match Red {\n        Color(a) => 1\n        _ => 2\n    }").shouldReport(DiagnosticCode.PatternMismatch, At("Color(a)", 1));
+    sumMain("    val q = match Red {\n        x: Int => 1\n        _ => 2\n    }").shouldReport(DiagnosticCode.PatternMismatch, At("x: Int", 3));
+}
+
+@("pattern bindings follow the rules for locals and last for their arm")
+unittest
+{
+    sumMain("    val p = Red\n    val q = match Red {\n        p => 1\n    }").shouldReport(DiagnosticCode.ShadowedDeclaration, At("p", 2));
+    sumMain("    val q = match (1, 2) {\n        (a, a) => 1\n    }").shouldReport(DiagnosticCode.DuplicateDeclaration, At("a", 2));
+    sumMain("    val q = match 1 {\n        a => a\n    }\n    val r = a").shouldReport(DiagnosticCode.UnknownName, At("a", 3));
+    sumMain("    val q = match (1, 2) {\n        (_, _) => 1\n    }").shouldHaveNoDiagnostics();
+}
+
+@("panic never returns")
+unittest
+{
+    analyzed("def f(): Int => panic(\"no\")\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
+    analyzed("def f(): Int => panic(1)\ndef main(): Unit => ()").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+}

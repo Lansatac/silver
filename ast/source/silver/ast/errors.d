@@ -54,6 +54,9 @@ enum DiagnosticCode : string
     /// Two `mutable` arguments of one call, or two updates of one `with`, that reach the same place.
     OverlappingWrites = "T0021",
     MutableNativeParameter = "T0022",
+    InvalidSumMember = "T0023",
+    NonExhaustiveMatch = "T0024",
+    UnreachableArm = "T0025",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",
@@ -63,6 +66,8 @@ enum DiagnosticCode : string
     IntegerOverflow = "R0005",
     InvalidShift = "R0006",
     IndexOutOfRange = "R0007",
+    /// The program called `panic`.
+    ExplicitPanic = "R0008",
 
     /// Something the implementation doesn't handle yet, or a broken invariant.
     InternalError = "I0001",

@@ -7,3 +7,5 @@ native def printl(value: Any): Unit
 native def read(): String?
 // How many elements an array has. Sema requires an array here, until generics can say so.
 native def length(values: Any): Int
+// Stops the program with `message`, for what can't happen.
+native def panic(message: String): Never

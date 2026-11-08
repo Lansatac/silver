@@ -330,6 +330,7 @@ final class Generator
 
     string emitTypeConstructor(const TypeDecl type)
     {
+        if (type.members.length > 0) return "";
         if (type.fields.length == 0)
             return "@\"%s\" = private unnamed_addr constant i8 0\n".format(typeConstructors[type.id]);   // a marker has no constructor
         if (!hasLayout(type.id)) return "";
@@ -463,6 +464,10 @@ final class Generator
     Fragment emitExpr(const Expr expr)
     {
         auto value = emitUnpromoted(expr);
+        if (auto member = _analysis.constructedMemberOf(expr.id))
+        {
+            value = emitPromotion(value, *member, _analysis.typeOf(expr.id));
+        }
         if (auto option = _analysis.promotionOf(expr.id))
         {
             return emitPromotion(value, _analysis.typeOf(expr.id), *option);
@@ -475,6 +480,13 @@ final class Generator
     /// on an array type stays as it is, since every array has the same layout.
     Fragment emitPromotion(Fragment value, Type from, Type to)
     {
+        if (from != to && isSum(to))
+        {
+            auto index = _analysis.memberIndexFor(to, from);
+            auto member = _analysis.membersOf(to)[index];
+            auto inner = emitPromotion(value, from, member);
+            return inner.then(injectMember(to, index, inner.value));
+        }
         if (from == to || !_analysis.types.isOption(to)) return value;
         if (from == _analysis.types.none) return value.then(Fragment.constant(noneConstant(to)));
 
@@ -534,6 +546,209 @@ final class Generator
             stored++;
         }
         return code.withValue(current);
+    }
+
+    bool isSum(Type type)
+    {
+        return _analysis.membersOf(type).length > 0;
+    }
+
+    /// Whether the sum `sum` is only markers, so that its tag is all there is to it.
+    bool isAllMarkers(Type sum)
+    {
+        return _analysis.membersOf(sum).all!(member => _analysis.types[member].match!(
+            (const NominalData nominal) => _analysis.fieldsOf(nominal.decl).length == 0 && !isSum(member),
+            _ => false,
+        ));
+    }
+
+    /// A tag and a pointer to the member's value, so every sum with a payload is the same size and
+    /// a recursive one is finite. A bare tag when there's nothing but markers.
+    string sumLayout(Type sum)
+    {
+        return isAllMarkers(sum) ? "i32" : "{ i32, ptr }";
+    }
+
+    /// The sum `sum` holding member `index`, whose value is the operand `member`. A member that
+    /// isn't already a pointer is boxed. `member` is null for one with no operand, or when the
+    /// evaluation that was to produce it never comes back.
+    Fragment injectMember(Type sum, size_t index, string member)
+    {
+        if (isAllMarkers(sum)) return Fragment.constant(index.to!string);
+
+        auto memberType = _analysis.membersOf(sum)[index];
+        Fragment code;
+        auto payload = "null";
+        if (member !is null && hasOperand(memberType))
+        {
+            auto layout = llvmType(memberType);
+            payload = member;
+            if (layout != "ptr")
+            {
+                auto box = alloc(layout);
+                code = box.then(Fragment.store(layout, member, box.value));
+                payload = box.value;
+            }
+        }
+        auto result = _function.newTemp();
+        return code.then(Fragment.instruction("%s = insertvalue { i32, ptr } { i32 %s, ptr undef }, ptr %s, 1".format(
+            result, index, payload), result));
+    }
+
+    /// The tag of the operand `value`, of the sum `sum`.
+    Fragment sumTag(Type sum, string value)
+    {
+        if (isAllMarkers(sum)) return Fragment.constant(value);
+        auto result = _function.newTemp();
+        return Fragment.instruction("%s = extractvalue { i32, ptr } %s, 0".format(result, value), result);
+    }
+
+    /// Whether the operand `value`, of the sum `sum`, holds member `index`, as an `i1`.
+    Fragment sumHolds(Type sum, string value, size_t index)
+    {
+        auto tag = sumTag(sum, value);
+        auto result = _function.newTemp();
+        return tag.then(Fragment.instruction("%s = icmp eq i32 %s, %s".format(result, tag.value, index), result));
+    }
+
+    /// The value of member `index` of the operand `value`, which has been found to hold it.
+    Fragment sumMember(Type sum, string value, size_t index)
+    {
+        auto member = _analysis.membersOf(sum)[index];
+        if (!hasOperand(member)) return Fragment.init;
+        if (isAllMarkers(sum))
+        {
+            auto decl = _analysis.types[member].match!(
+                (const NominalData nominal) => nominal.decl,
+                (_) => assert(0, "a sum of markers only has nominal members"),
+            );
+            return Fragment.constant("@\"%s\"".format(typeConstructors[decl]));
+        }
+
+        auto payload = _function.newTemp();
+        auto extract = Fragment.instruction("%s = extractvalue { i32, ptr } %s, 1".format(payload, value), payload);
+        auto layout = llvmType(member);
+        return layout == "ptr" ? extract : extract.then(load(layout, payload));
+    }
+
+    /// `arm` for whichever member the operand `value` of the sum `sum` holds, given that member's
+    /// type and value. Evaluates to the arm's value, of the IR type `resultType`.
+    Fragment emitSumDispatch(Type sum, string value, string resultType,
+        Fragment delegate(size_t index, Type member, string payload) arm)
+    {
+        auto members = _analysis.membersOf(sum);
+        Fragment armFor(size_t index)
+        {
+            auto payload = sumMember(sum, value, index);
+            return payload.then(arm(index, members[index], payload.value));
+        }
+
+        // The last member needs no test: nothing else is left.
+        auto result = armFor(members.length - 1);
+        foreach_reverse (i; 0 .. members.length - 1)
+        {
+            result = emitConditional(sumHolds(sum, value, i), resultType, armFor(i), result, "sum");
+        }
+        return result;
+    }
+
+    /// Ends the current block by going to `failLabel` unless the `i1` operand `condition` is true.
+    Fragment failUnless(string condition, string failLabel)
+    {
+        auto okLabel = _function.newLabel("match.ok");
+        return Fragment.branch(condition, okLabel, failLabel).then(Fragment.label(okLabel));
+    }
+
+    /// Tries each arm in turn, the first whose pattern matches running. Sema found that one always does.
+    Fragment emitMatch(const Expr expr, const MatchExpr match_)
+    {
+        auto subject = emitExpr(*match_.subject);
+        if (_analysis.valueTypeOf(match_.subject.id) == _analysis.types.never) return subject.withValue(null);
+
+        auto type = _analysis.typeOf(expr.id);
+        auto resultType = hasOperand(type) ? llvmType(type) : null;
+        auto joinLabel = _function.newLabel("match.join");
+        string[2][] incoming;
+        auto code = subject;
+        foreach (ref arm; match_.arms)
+        {
+            auto nextLabel = _function.newLabel("match.next");
+            // Before the body is generated, since that's what reads the bindings' slots.
+            auto tests = emitPatternTest(arm.pattern, subject.value, nextLabel);
+            auto body = emitExpr(arm.body);
+            auto bodyLabel = _function.newLabel("match.arm");
+            auto block = Fragment.label(bodyLabel).then(body).then(Fragment.jump(joinLabel));
+            incoming ~= [body.value is null ? "undef" : body.value, block.endBlock];
+            code = code.then(tests).then(Fragment.jump(bodyLabel)).then(block).then(Fragment.label(nextLabel));
+        }
+        code = code.then(Fragment.instruction("unreachable")).then(Fragment.label(joinLabel));
+        if (resultType is null) return code.withValue(null);
+        return code.then(Fragment.phi(_function.newTemp(), resultType, incoming));
+    }
+
+    /// Goes to `failLabel` unless the operand `value` matches `pattern`, storing what it binds on the way.
+    Fragment emitPatternTest(const Pattern pattern, string value, string failLabel)
+    {
+        auto subject = _analysis.subjectOf(pattern.id);
+        Fragment code;
+        if (auto index = _analysis.memberTestOf(pattern.id))
+        {
+            auto holds = sumHolds(subject, value, *index);
+            auto member = sumMember(subject, value, *index);
+            code = holds.then(failUnless(holds.value, failLabel)).then(member);
+            value = member.value;
+        }
+        auto operand = value;
+        return code.then(pattern.kind.match!(
+            (const VarDecl binding) {
+                auto type = _analysis.typeOf(binding.id);
+                if (binding.name == discardName || !hasOperand(type)) return Fragment.init;
+                return emitBindingStore(binding, type, Fragment.constant(operand));
+            },
+            (const TuplePattern tuple) {
+                Fragment parts;
+                foreach (i, element; tuple.elements)
+                {
+                    auto part = tupleElement(subject, operand, i);
+                    parts = parts.then(part).then(emitPatternTest(element, part.value, failLabel));
+                }
+                return parts;
+            },
+            (const ConstructorPattern constructor) {
+                auto decl = _analysis.constructorOf(pattern.id);
+                if (!hasLayout(decl)) return unsupported(pattern.span, "types with `Any` or `Never` fields").withValue(null);
+                auto fields = _analysis.fieldsOf(decl);
+                Fragment parts;
+                foreach (i, argument; constructor.arguments)
+                {
+                    Fragment field;
+                    if (hasOperand(fields[i].type))
+                    {
+                        auto pointer = fieldPointer(llvmStruct(decl), operand, llvmFieldIndex(decl, i));
+                        field = pointer.then(load(llvmType(fields[i].type), pointer.value));
+                    }
+                    parts = parts.then(field).then(emitPatternTest(argument, field.value, failLabel));
+                }
+                return parts;
+            },
+            (const SomePattern some) {
+                auto tag = optionTag(subject, operand);
+                auto payload = optionPayload(subject, operand);
+                return tag.then(failUnless(tag.value, failLabel)).then(payload)
+                    .then(emitPatternTest(*some.inner, payload.value, failLabel));
+            },
+            (const NonePattern _) {
+                auto tag = optionTag(subject, operand);
+                auto absent = _function.newTemp();
+                return tag.then(Fragment.instruction("%s = xor i1 %s, true".format(absent, tag.value)))
+                    .then(failUnless(absent, failLabel));
+            },
+            (const LiteralPattern literal) {
+                auto expected = emitExpr(*literal.value);
+                auto equal = emitEquals(subject, operand, expected.value, pattern.span);
+                return expected.then(equal).then(failUnless(equal.value, failLabel));
+            },
+        ).withValue(null));
     }
 
     string optionLayout(Type inner)
@@ -673,6 +888,7 @@ final class Generator
             (const RangeExpr _) => assert(0, "sema only allows a range as a slice's index or in a `for`, which read its bounds"),
             (const TupleLiteral literal) => emitTupleLiteral(expr, literal),
             (const WithExpr with_) => emitWith(expr, with_),
+            (const MatchExpr match_) => emitMatch(expr, match_),
         );
     }
 
@@ -1121,7 +1337,7 @@ final class Generator
                     _formatSeen[nominal.decl] = true;
                     _pendingFormats ~= PendingFormat(nominal.decl, span);
                 }
-                return emitCall(sliceLayout, "@\"%s\"".format(typeFormatters[nominal.decl]), "ptr " ~ value);
+                return emitCall(sliceLayout, "@\"%s\"".format(typeFormatters[nominal.decl]), llvmType(type) ~ " " ~ value);
             },
             (const ArrayData _) {
                 if (type !in _arrayFormatters)
@@ -1169,8 +1385,14 @@ final class Generator
         auto fields = _analysis.fieldsOf(type);
         auto name = _analysis.declarationOf(type).name;
 
+        auto declared = _analysis.typeOf(type);
         Fragment body;
-        if (fields.length == 0)
+        if (isSum(declared))
+        {
+            body = emitSumDispatch(declared, object, sliceLayout,
+                (index, member, payload) => emitFormat(member, payload, pending.span));
+        }
+        else if (fields.length == 0)
         {
             body = emitStringLiteral(name);
         }
@@ -1197,8 +1419,8 @@ final class Generator
         }
         auto lines = body.allocas ~ body.code ~ ("  " ~ returnInstruction(body.value));
 
-        return "define private %s @\"%s\"(ptr %s) {\nentry:\n%s}\n".format(sliceLayout,
-            typeFormatters[type], object, lines.map!(line => line ~ "\n").join);
+        return "define private %s @\"%s\"(%s %s) {\nentry:\n%s}\n".format(sliceLayout,
+            typeFormatters[type], llvmType(declared), object, lines.map!(line => line ~ "\n").join);
     }
 
     /// `lhs op rhs` for a comparison of two Strings, from the sign of the runtime's answer.
@@ -1743,8 +1965,9 @@ final class Generator
                     _equalitySeen[nominal.decl] = true;
                     _pendingEqualities ~= PendingEquality(nominal.decl, span);
                 }
+                auto layout = llvmType(type);
                 return emitCall("i1", "@\"%s\"".format(typeEqualities[nominal.decl]),
-                    "ptr %s, ptr %s".format(lhs, rhs));
+                    "%s %s, %s %s".format(layout, lhs, layout, rhs));
             },
             (const OptionData option) => emitOptionEquals(type, option.inner, lhs, rhs, span),
             (const TupleData tuple) {
@@ -1802,6 +2025,9 @@ final class Generator
 
         enum left = "%left.arg", right = "%right.arg";
         auto type = pending.type;
+        auto declared = _analysis.typeOf(type);
+        if (isSum(declared)) return emitSumEquality(pending, declared);
+
         auto fields = _analysis.fieldsOf(type);
         auto layout = llvmStruct(type);
 
@@ -1823,6 +2049,32 @@ final class Generator
 
         return "define private i1 @\"%s\"(ptr %s, ptr %s) {\nentry:\n%s}\n".format(
             typeEqualities[type], left, right, lines.map!(line => line ~ "\n").join);
+    }
+
+    /// Tags first, then the members, which are only there to compare when the tags agree.
+    string emitSumEquality(PendingEquality pending, Type sum)
+    {
+        enum left = "%left.arg", right = "%right.arg";
+        auto leftTag = sumTag(sum, left);
+        auto rightTag = sumTag(sum, right);
+        auto sameTag = _function.newTemp();
+        auto tags = leftTag.then(rightTag)
+            .then(Fragment.instruction("%s = icmp eq i32 %s, %s".format(sameTag, leftTag.value, rightTag.value), sameTag));
+
+        auto body = tags;
+        if (!isAllMarkers(sum))
+        {
+            auto same = emitSumDispatch(sum, left, "i1", (index, member, payload) {
+                auto other = sumMember(sum, right, index);
+                return other.then(emitEquals(member, payload, other.value, pending.span));
+            });
+            body = emitConditional(tags, "i1", same, Fragment.constant("false"), "sum.same");
+        }
+        auto lines = body.allocas ~ body.code ~ ("  " ~ returnInstruction(body.value));
+
+        auto layout = sumLayout(sum);
+        return "define private i1 @\"%s\"(%s %s, %s %s) {\nentry:\n%s}\n".format(
+            typeEqualities[pending.type], layout, left, layout, right, lines.map!(line => line ~ "\n").join);
     }
 
     Fragment emitUnary(const Expr expr, const UnaryExpr unary)
@@ -2039,8 +2291,27 @@ final class Generator
         );
     }
 
+    /// `panic(message)`, whose message gets the location that the compiler's own panics have.
+    Fragment emitPanicCall(const CallExpr call, Span span)
+    {
+        auto message = emitExpr(call.args[0]);
+        if (message.value is null) return message;
+
+        auto location = _sources.locate(span);
+        auto prefix = emitStringLiteral("%s(%s,%s): ".format(span.file, location.line, location.column));
+        auto text = emitConcat([prefix.value, message.value]);
+        auto parts = sliceParts(text.value);
+        return message.then(text).then(parts.code)
+            .then(callRuntime("silver_panic_message", [parts.data, parts.length]))
+            .then(Fragment.instruction("unreachable"))
+            .then(Fragment.label(_function.newLabel("dead")))
+            .withValue(null);
+    }
+
     Fragment emitNativeCall(const FunctionDecl native, const CallExpr call, const Expr expr)
     {
+        if (native.name == "panic") return emitPanicCall(call, expr.span);
+
         auto params = _analysis.signatureOf(native.id).params;
         Fragment evaluated;
         string[] operands;
@@ -2277,6 +2548,7 @@ final class Generator
                 }
                 return code;
             },
+            (_) => assert(0, "the grammar only allows names and tuples in a `val`"),
         );
     }
 
@@ -2350,7 +2622,7 @@ final class Generator
             (const ArrayData _) => sliceLayout,
             (const EmptyArrayType _) => sliceLayout,
             (const FunctionData f) => "ptr",
-            (const NominalData nd) => "ptr",
+            (const NominalData nd) => isSum(t) ? sumLayout(t) : "ptr",
             (const TupleData _) => tupleLayout(t),
             (const NoneType _) => assert(0, "every None that has a value is promoted"),
             (const ErrorType _) {
@@ -2369,7 +2641,7 @@ final class Generator
             (const ArrayData _) => sliceLayout,
             (const EmptyArrayType _) => sliceLayout,
             (const FunctionData f) => "ptr",
-            (const NominalData nd) => "ptr",
+            (const NominalData nd) => isSum(t) ? sumLayout(t) : "ptr",
             (const TupleData _) => hasOperand(t) ? tupleLayout(t) : "void",
             (const NoneType _) => assert(0, "no function returns a bare None"),
             (const ErrorType _) {
