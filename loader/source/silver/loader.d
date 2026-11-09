@@ -3,7 +3,7 @@ module silver.loader;
 import std.array : join;
 import std.file : exists, readText;
 import std.format : format;
-import std.path : baseName, buildNormalizedPath, buildPath, dirName, stripExtension;
+import std.path : absolutePath, baseName, buildNormalizedPath, buildPath, dirName, stripExtension;
 import std.sumtype;
 
 import silver.ast;
@@ -156,13 +156,13 @@ private string rootOf(string file, const string[] chain)
     {
         return null;
     }
-    auto parts = pathSplitter(buildNormalizedPath(file.stripExtension)).array;
-    if (parts.length < chain.length || !parts[$ - chain.length .. $].equal(chain))
+    // Absolute, since a file named from inside its package has a path shorter than its module name.
+    auto parts = pathSplitter(buildNormalizedPath(absolutePath(file.stripExtension))).array;
+    if (parts.length <= chain.length || !parts[$ - chain.length .. $].equal(chain))
     {
         return null;
     }
-    auto rest = parts[0 .. $ - chain.length];
-    return rest.length == 0 ? "." : buildPath(rest);
+    return buildPath(parts[0 .. $ - chain.length]);
 }
 
 version (unittest)
@@ -396,6 +396,22 @@ unittest
         [], context);
     context.collector.diagnostics.length.should.equal(0);
     assert("std.common" in program.modules);
+}
+
+@("load accepts a declared entry module named by a path shorter than its module name")
+unittest
+{
+    import std.ascii : isLower;
+    import std.algorithm : all;
+    import std.file : getcwd;
+
+    // The working directory's name stands in for the package, so it has to be a valid module name.
+    auto package_ = baseName(getcwd());
+    if (!package_.all!isLower) return;
+
+    auto context = new SourceContext;
+    load("module " ~ package_ ~ ".tool", "tool.ag", [], context);
+    context.collector.diagnostics.length.should.equal(0);
 }
 
 @("load reports a declared entry module whose module line doesn't match its path")
