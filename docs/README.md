@@ -15,7 +15,7 @@ These documents describe the language as designed. Where the implementation does
 | [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading | Partial: no overloading |
 | [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented |
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
-| [Arrays](language/arrays.md) | Arrays, slices, concatenation, maps | Implemented, except maps |
+| [Arrays](language/arrays.md) | Arrays, slices, concatenation, maps | Implemented, except maps and element assignment |
 | [Strings](language/strings.md) | Text, interpolation, views | Partial: no byte or character views |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, `match` | Implemented, except `alias` |

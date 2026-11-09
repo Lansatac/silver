@@ -23,9 +23,21 @@ A literal may have a trailing comma, and can span lines.
 
 `length(xs)` is the number of elements, as an `Int`.
 
-## Elements can't be assigned
+## Assigning elements
 
-`xs[i] = v` is an error, even on a `mutable val`, because it would hide a full copy behind syntax that looks constant-time. Rebinding the whole array is fine.
+`xs[i] = v` replaces one element of an array held by a `mutable val` or a mutable parameter. A `val` can't assign its elements. The index follows the same rules as reading one, so it can be any integer type and an out-of-range index panics. `v` is checked against the element type, so literals adapt and options promote.
+
+```silver
+mutable val xs = [1, 2, 3]
+val before = xs
+xs[0] = 9
+printl(xs)        // [9, 2, 3]
+printl(before)    // [1, 2, 3]
+```
+
+An array remains a value: the assignment changes what `xs` holds, and nothing else that held the old array can see it.
+
+Assigning to an array that nothing else holds is meant to take constant time. If the array has been shared, the next assignment may copy it once, after which assignments are constant time again. Exactly when a copy happens isn't part of the language.
 
 ## Concatenation
 
@@ -64,11 +76,12 @@ Maps share the bracket syntax, with `:` between key and value:
 ## Open questions
 
 - A form of indexing that returns `T?`.
-- Random-access construction of an array, which would need a design for in-place mutation.
+- Which paths can be assigned beyond a plain variable, such as `game.board[i] = v` and `grid[y][x] = v`, and whether compound assignment and `mutable` arguments work on an element.
 - Pre-sizing an array before appending.
 - The semantics of maps.
 
 ## Current implementation
 
 - Map literals parse, but are rejected.
+- `xs[i] = v` isn't available yet.
 - `length` is available only as `length(xs)`, and can't be used as a function value.
