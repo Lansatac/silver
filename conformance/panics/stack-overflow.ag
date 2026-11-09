@@ -1,0 +1,6 @@
+def down(n: Int): Int => 1 + down(n + 1)
+
+def main(): Unit {
+    printl("before")
+    printl(down(0))
+}

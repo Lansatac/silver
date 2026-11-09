@@ -70,6 +70,7 @@ enum DiagnosticCode : string
     IndexOutOfRange = "R0007",
     /// The program called `panic`.
     ExplicitPanic = "R0008",
+    StackOverflow = "R0009",
 
     /// Something the implementation doesn't handle yet, or a broken invariant.
     InternalError = "I0001",

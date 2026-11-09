@@ -74,8 +74,10 @@ There are no labels.
 
 ## Panics
 
-A panic stops the program with a message. Integer overflow, an out-of-range index and a failed conversion all panic, and `panic(message: String): Never` panics explicitly:
+A panic stops the program with a message. Integer overflow, an out-of-range index, a failed conversion and recursion too deep for the stack all panic, and `panic(message: String): Never` panics explicitly:
 
 ```silver
 val result = if isValid => compute() else panic("invalid state")
 ```
+
+How deep a program can recurse isn't specified, and differs between the interpreter and compiled programs.

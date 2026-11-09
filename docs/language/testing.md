@@ -47,7 +47,7 @@ test "first element" {
 
 `silver test <path>` runs the tests under that path, and not those of imported modules. `main` is neither required nor run, so a library tests the same way as a program. `silver build` type-checks inline tests without including them.
 
-Each test is isolated, so a panic ends only that test. A crash that can't be caught, such as a stack overflow, is reported as one. `read` returns `None` in a test.
+Each test is isolated, so a panic ends only that test. A crash that can't be caught is reported as one. `read` returns `None` in a test.
 
 Output shows every failure of the run with its values in one pass. Passing tests are quiet, captured output appears only for failures, a summary comes last, and the exit code is meaningful. `--format json` serves tools.
 

@@ -176,7 +176,8 @@ unittest
         ~ "def main(): Unit {\n    val a = 7\n    printl(same(a))\n}";
     auto ir = generateSource(source);
 
-    ir.should.contain("define i64 @\"main.same\"(i64 %x.arg) {\nentry:\n  ret i64 %x.arg\n}");
+    ir.should.contain("define i64 @\"main.same\"(i64 %x.arg) {\nentry:\n");
+    ir.should.contain("  ret i64 %x.arg\n}");
     ir.should.contain("store i64 7, ptr %a.addr");
     ir.should.contain("%.t0 = load i64, ptr %a.addr");
     ir.should.contain("call i64 @\"main.same\"(i64 %.t0)");
@@ -321,7 +322,7 @@ unittest
     auto ir = generateSource(source);
 
     ir.should.contain("phi i64 ");
-    ir.count("br i1 ").should.equal(3);
+    (ir.count("br i1 ") - ir.count("label %stack.overflow")).should.equal(3);
 
     Run run;
     if (!compileAndRun(source, run)) return;
@@ -339,8 +340,8 @@ unittest
 
     auto source = "def main(): Unit {\n    printl(" ~ `"café \"ok\""` ~ ")\n}";
     auto ir = generateSource(source);
-    ir.should.contain(`@.str.0 = private unnamed_addr constant [10 x i8] c"caf\C3\A9 \22ok\22"`);
-    ir.should.contain("extractvalue { ptr, i64 } { ptr @.str.0, i64 10 }, 0");
+    ir.should.contain(`@.str.1 = private unnamed_addr constant [10 x i8] c"caf\C3\A9 \22ok\22"`);
+    ir.should.contain("extractvalue { ptr, i64 } { ptr @.str.1, i64 10 }, 0");
     ir.should.contain("call void @silver_printl_string(ptr %.t0, i64 %.t1)");
 
     Run run;
@@ -810,7 +811,7 @@ unittest
 unittest
 {
     auto ir = generateSource("def main(): Unit => printl(1.0 / 0.0)");
-    ir.should.not.contain("silver_panic");
+    ir.should.not.contain("Division by zero");
 }
 
 @("codegen checks integer arithmetic for overflow, panicking with the source location")

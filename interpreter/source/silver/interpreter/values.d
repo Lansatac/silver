@@ -121,7 +121,9 @@ class Instance
     {
         import std.algorithm : map;
         import std.array : join;
+        import silver.interpreter.stack : checkStack;
 
+        checkStack();
         auto name = constructor.toString();
         return fields.length == 0 ? name : name ~ "(" ~ fields.map!(f => f.toString()).join(", ") ~ ")";
     }

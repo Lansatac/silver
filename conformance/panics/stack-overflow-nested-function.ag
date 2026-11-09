@@ -1,0 +1,4 @@
+def main(): Unit {
+    def down(n: Int): Int => 1 + down(n + 1)
+    printl(down(0))
+}

@@ -1,0 +1,5 @@
+def count(n: Int): Int => if n == 0 => 0 else 1 + count(n - 1)
+
+def main(): Unit {
+    printl(count(20000))
+}

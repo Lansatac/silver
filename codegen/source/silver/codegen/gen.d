@@ -424,8 +424,9 @@ final class Generator
         auto mangledName = mangledNames[function_.id];
         auto params = emitParams(function_.params);
 
+        auto check = emitStackCheck(function_.body.span);
         auto body = emitExpr(*function_.body);
-        auto lines = body.allocas ~ body.code ~ ("  " ~ returnInstruction(body.value));
+        auto lines = body.allocas ~ check.code ~ body.code ~ ("  " ~ returnInstruction(body.value));
 
         return "define %s @\"%s\"(%s) {\nentry:\n%s}\n".format(returnType, mangledName, params,
             lines.map!(line => line ~ "\n").join);
@@ -524,8 +525,9 @@ final class Generator
             entry = entry.then(bindClosureLocal(lambda.self, closureLayout, self));
         }
 
+        auto check = emitStackCheck(expr.span);
         auto body = emitExpr(*lambda.body);
-        auto lines = entry.allocas ~ body.allocas ~ entry.code ~ body.code ~ ("  " ~ returnInstruction(body.value));
+        auto lines = entry.allocas ~ body.allocas ~ check.code ~ entry.code ~ body.code ~ ("  " ~ returnInstruction(body.value));
         _closureFunctions ~= "define private %s @\"%s\"(%s) {\nentry:\n%s}\n".format(returnType, name,
             (params.length > 0 ? [params] : []).chain(["ptr %.env"]).join(", "), lines.map!(line => line ~ "\n").join);
         return closure;
@@ -1528,6 +1530,7 @@ final class Generator
         auto name = _analysis.declarationOf(type).name;
 
         auto declared = _analysis.typeOf(type);
+        auto check = emitStackCheck(pending.span);
         Fragment body;
         if (isSum(declared))
         {
@@ -1559,7 +1562,7 @@ final class Generator
             operands ~= emitStringLiteral(")").value;
             body = body.then(emitConcat(operands));
         }
-        auto lines = body.allocas ~ body.code ~ ("  " ~ returnInstruction(body.value));
+        auto lines = body.allocas ~ check.code ~ body.code ~ ("  " ~ returnInstruction(body.value));
 
         return "define private %s @\"%s\"(%s %s) {\nentry:\n%s}\n".format(sliceLayout,
             typeFormatters[type], llvmType(declared), object, lines.map!(line => line ~ "\n").join);
@@ -1792,6 +1795,24 @@ final class Generator
             .then(Fragment.instruction("%s = icmp eq %s %s, -1".format(isMinusOne, llType, rhs)))
             .then(Fragment.instruction("%s = and i1 %s, %s".format(overflows, isMin, isMinusOne)))
             .then(emitPanicIf(overflows, span, "Integer overflow"));
+    }
+
+    /// Panics if this frame is below the runtime's limit. It goes first in every function that
+    /// recursion can pass through, after the allocas so that they stay in the entry block.
+    Fragment emitStackCheck(Span span)
+    {
+        useIntrinsic("declare ptr @llvm.frameaddress.p0(i32 immarg)");
+        useIntrinsic("@silver_stack_limit = external global ptr");
+        auto location = _sources.locate(span);
+        auto text = emitCString("%s(%s,%s): Stack overflow".format(span.file, location.line, location.column));
+        return Fragment.instruction("%.frame = call ptr @llvm.frameaddress.p0(i32 0)")
+            .then(Fragment.instruction("%.limit = load ptr, ptr @silver_stack_limit"))
+            .then(Fragment.instruction("%.too.deep = icmp ult ptr %.frame, %.limit"))
+            .then(Fragment.branch("%.too.deep", "stack.overflow", "stack.ok"))
+            .then(Fragment.label("stack.overflow"))
+            .then(callRuntime("silver_panic", [text.value]))
+            .then(Fragment.instruction("unreachable"))
+            .then(Fragment.label("stack.ok"));
     }
 
     /// Panics with `message` and the location of `span` if the `i1` operand `condition` is true.
@@ -2184,6 +2205,7 @@ final class Generator
 
         auto fields = _analysis.fieldsOf(type);
         auto layout = llvmStruct(type);
+        auto check = emitStackCheck(pending.span);
 
         // Built from the last field back: each comparison's true arm is the rest of them.
         auto body = Fragment.constant("true");
@@ -2199,7 +2221,7 @@ final class Generator
                 .then(emitEquals(field.type, leftField.value, rightField.value, pending.span));
             body = emitConditional(comparison, "i1", body, Fragment.constant("false"), "field");
         }
-        auto lines = body.code ~ ("  " ~ returnInstruction(body.value));
+        auto lines = body.allocas ~ check.code ~ body.code ~ ("  " ~ returnInstruction(body.value));
 
         return "define private i1 @\"%s\"(ptr %s, ptr %s) {\nentry:\n%s}\n".format(
             typeEqualities[type], left, right, lines.map!(line => line ~ "\n").join);
@@ -2209,6 +2231,7 @@ final class Generator
     string emitSumEquality(PendingEquality pending, Type sum)
     {
         enum left = "%left.arg", right = "%right.arg";
+        auto check = emitStackCheck(pending.span);
         auto leftTag = sumTag(sum, left);
         auto rightTag = sumTag(sum, right);
         auto sameTag = _function.newTemp();
@@ -2224,7 +2247,7 @@ final class Generator
             });
             body = emitConditional(tags, "i1", same, Fragment.constant("false"), "sum.same");
         }
-        auto lines = body.allocas ~ body.code ~ ("  " ~ returnInstruction(body.value));
+        auto lines = body.allocas ~ check.code ~ body.code ~ ("  " ~ returnInstruction(body.value));
 
         auto layout = sumLayout(sum);
         return "define private i1 @\"%s\"(%s %s, %s %s) {\nentry:\n%s}\n".format(

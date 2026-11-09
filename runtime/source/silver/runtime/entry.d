@@ -21,7 +21,26 @@ module silver.runtime.entry;
 /// Generated code's entry point, which runs the program's `main`.
 extern (C) void silver_main();
 
+private enum stackSize = 256 * 1024 * 1024;
+/// Room for the runtime's own frames below the deepest Silver one.
+private enum margin = 1024 * 1024;
+
+/// The lowest address a Silver function may start at. Generated code checks it on entry,
+/// and panics rather than running off the end of the stack.
+extern (C) __gshared void* silver_stack_limit;
+
+private void runProgram()
+{
+    ubyte marker;
+    silver_stack_limit = &marker - stackSize + margin;
+    silver_main();
+}
+
 void main()
 {
-    silver_main();
+    import core.thread : Thread;
+
+    auto thread = new Thread(&runProgram, stackSize);
+    thread.start();
+    thread.join();
 }

@@ -7,6 +7,7 @@ import std.variant : Variant;
 import silver.ast;
 import silver.interpreter.environment : Environment, ImportScope;
 import silver.interpreter.errors : CodedException;
+import silver.interpreter.stack : checkStack, runOnLargeStack;
 import silver.interpreter.values;
 import silver.sema : Analysis, ConstInt, ConstUInt, ConstUnit, IntegerInfo, Type;
 
@@ -54,6 +55,11 @@ class Evaluator
     private Variant[Id!FunctionDecl] functions;
 
     void run()
+    {
+        runOnLargeStack(&runProgram);
+    }
+
+    private void runProgram()
     {
         bindNatives();
         auto prelude = new ModuleValue("prelude", new Environment(new ImportScope));
@@ -937,6 +943,7 @@ class Evaluator
         {
             return fn.native(args);
         }
+        checkStack();
 
         Environment functionEnv = new Environment(fn.closure);
         foreach (i, arg; args)
@@ -1179,6 +1186,7 @@ class Evaluator
     /// which would expose whether two values share an Instance.
     private bool valuesEqual(Variant lhs, Variant rhs)
     {
+        checkStack();
         if (auto left = lhs.peek!SumValue)
         {
             auto right = rhs.get!SumValue;
