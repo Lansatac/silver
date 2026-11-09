@@ -315,7 +315,8 @@ final class Generator
                 (const ImportStmt _) => "",
                 (const TypeDecl type) => emitTypeConstructor(type),
                 (const FunctionDecl function_) => emitFunction(function_),
-                (const ConstDecl constant) => emitConstant(constant)
+                (const ConstDecl constant) => emitConstant(constant),
+                (const AliasDecl _) => ""
             );
         }
         return topLevelStatements.join("\n");
@@ -1671,6 +1672,10 @@ final class Generator
                 auto type = _analysis.typeOf(decl);
                 if (type == _analysis.types.unit) return Fragment.init;
                 return load(llvmType(type), "@\"%s\"".format(constantGlobals[decl]));
+            },
+            (const Id!AliasDecl _) {
+                _collector.reportError(DiagnosticCode.InternalError, expr.span, "an alias outlived name resolution");
+                return Fragment.undef();
             },
         );
 

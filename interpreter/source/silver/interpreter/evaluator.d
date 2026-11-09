@@ -251,6 +251,10 @@ class Evaluator
         variables.define(SymbolId(ast.id), Variant(new Function(ast.name, ast.params, ast.body, returnsUnit, variables, *binding)));
     }
 
+    private void execute(const AliasDecl, Environment)
+    {
+    }
+
     /// A marker's name is its one value; any other type's name is its constructor. Sema rejects
     /// a sum's name as a value.
     private void execute(const TypeDecl ast, Environment variables)

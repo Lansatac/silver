@@ -41,7 +41,7 @@ There are no `private:` sections.
 
 A private member can't be imported, can't be reached qualified, and doesn't take part in ambiguity between imports.
 
-A public function or constant can't mention a private type in its signature. A public type can't have a field of a private type, and a public sum can't name a private type as a member. The members a private sum declares inline are private too.
+A public function or constant can't mention a private type in its signature. A public type can't have a field of a private type, a public sum can't name a private type as a member, and a public alias can't name a private type. A private alias counts as a private type in all of these. The members a private sum declares inline are private too.
 
 `private def main` is an error.
 

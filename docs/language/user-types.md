@@ -11,6 +11,8 @@ alias Meters = Float
 
 `type` always introduces a new type. `alias` never does. A `type` may refer to itself, as in `type Tree(value: Int, children: [Tree])` or `type List(head: Int, tail: List?)`. An `alias` can't.
 
+An alias can name any type and is interchangeable with it everywhere, including in `match` patterns and the members of a sum. An alias of a product or marker constructs it, and an alias of a numeric type or `String` converts to it, so `Meters(1)` means `Float(1)`. An alias of any other type isn't a value. Aliases are declared at the top level, and can be `private`.
+
 ## Products
 
 A product is constructed by calling its name, and its fields are read with `.`:
@@ -125,4 +127,4 @@ val r = if val Circle(radius) = shape => radius else 0.0
 
 ## Current implementation
 
-- `alias` isn't available, though it's a reserved word.
+Everything above is implemented.

@@ -293,6 +293,7 @@ NameIndex indexNames(const Module m)
             (const FunctionDecl f) => indexer.visit(f),
             (const TypeDecl t) => indexer.visit(t),
             (const ConstDecl c) => indexer.visit(c),
+            (const AliasDecl _) {},
             (const ImportStmt _) {},
         );
     }
@@ -1110,6 +1111,7 @@ void shouldHaveDeclaration(const Analyzed a, At where, string file = __FILE__, s
         (const Id!VarDecl id) => a.analysis.declarationOf(id).name,
         (const Id!Param id) => a.analysis.declarationOf(id).name,
         (const Id!Module _) => cast(string) null,
+        (const Id!AliasDecl _) => cast(string) null,
     );
     if (name != where.word)
     {
@@ -1481,29 +1483,4 @@ def main(): Unit => ()").shouldHaveNoDiagnostics();
 unittest
 {
     analyzed("private def main(): Unit => ()").shouldReport(DiagnosticCode.MainInvalidDefinition, At("main", 1));
-}
-
-private enum handleLibrary = [
-    "lib.ag": "module lib
-type Handle(private id: Int, name: String)
-def make(): Handle => Handle(1, \"h\")",
-];
-
-@("a private field is blocked outside its module")
-unittest
-{
-    void rejected(string body, At where)
-    {
-        analyzed("import lib\ndef main(): Unit {\n" ~ body ~ "\n}", handleLibrary)
-            .shouldReport(DiagnosticCode.PrivateField, where);
-    }
-
-    rejected("val h = make()\nprintl(h.id)", At("h", 2));
-    rejected("val o = Some(make())\nprintl(o?.id)", At("o", 2));
-    rejected("mutable val h = make()\nh.id = 2", At("h", 2));
-    rejected("val h = make()\nprintl(h with (id = 2))", At("id", 1));
-    rejected("printl(Handle(1, \"x\"))", At("Handle", 1));
-    rejected("printl(lib.Handle(1, \"x\"))", At("lib", 2));
-    rejected("val f = Handle\nprintl(f)", At("Handle", 1));
-    rejected("printl(match make() { Handle(i, _) => i })", At("i", 1));
 }

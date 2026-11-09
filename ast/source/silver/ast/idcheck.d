@@ -82,6 +82,12 @@ private final class IdCheck
         }
     }
 
+    void visit(const AliasDecl a, Span span)
+    {
+        see(a.id, a.nameSpan);
+        visit(a.target);
+    }
+
     void visit(const ConstDecl c, Span span)
     {
         see(c.id, c.nameSpan);

@@ -8,7 +8,7 @@ import silver.ast.span;
 import silver.ast.id;
 
 /// The node kinds that get IDs. One NodeIds is shared by every module in a Program.
-alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt, TypeDecl, Field, ConstDecl, Pattern);
+alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt, TypeDecl, Field, ConstDecl, Pattern, AliasDecl);
 
 /// The types every module can name, which no declaration can take the name of.
 enum Builtin
@@ -42,7 +42,7 @@ struct Decl
     DeclKind kind;
 }
 
-alias DeclKind = SumType!(ImportStmt, FunctionDecl, TypeDecl, ConstDecl);
+alias DeclKind = SumType!(ImportStmt, FunctionDecl, TypeDecl, ConstDecl, AliasDecl);
 
 /// A type as written in source. Names aren't resolved, so `Int` is a NamedType
 /// like any other; the checker's resolved types are a separate representation.
@@ -646,6 +646,16 @@ struct TypeDecl
     bool isPrivate;
 }
 
+/// `alias Name = Type`, a second name for a type. Sema expands it, so the backends never see one.
+struct AliasDecl
+{
+    Id!AliasDecl id;
+    string name;
+    Span nameSpan;
+    TypeExpr target;
+    bool isPrivate;
+}
+
 /// One alternative of `type Name = A(x: Int) | B | geo.C`.
 struct SumMember
 {
@@ -712,6 +722,7 @@ string printDecl(const Decl d)
         (const FunctionDecl f) => marked(f.isPrivate, printFunctionDecl(f)),
         (const TypeDecl t) => marked(t.isPrivate, printTypeDecl(t)),
         (const ConstDecl c) => marked(c.isPrivate, printConstDecl(c)),
+        (const AliasDecl a) => marked(a.isPrivate, "(alias " ~ a.name ~ " = " ~ printTypeExpr(a.target) ~ ")"),
     );
 }
 

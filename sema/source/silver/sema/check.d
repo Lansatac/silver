@@ -95,6 +95,7 @@ private final class TypeChecker
     private Type[Id!Expr] _exprTypes;
     private Type[SymbolId] _symbolTypes;
     private Type[Id!TypeDecl] _nominalTypes;
+    private Type[Id!AliasDecl] _aliasTypes;
     private FieldInfo[][Id!TypeDecl] _fields;
     private size_t[Id!Expr] _fieldIndexes;
     private size_t[][][Id!Expr] _updatePaths;
@@ -157,6 +158,18 @@ private final class TypeChecker
             }
         }
 
+        // Before anything that can name one, and even if nothing does, so a bad target is reported.
+        foreach (mod; programModules)
+        {
+            foreach (decl; mod.declarations)
+            {
+                decl.kind.match!(
+                    (const AliasDecl a) { aliasType(a.id); },
+                    (_) {},
+                );
+            }
+        }
+
         foreach (mod; programModules)
         {
             foreach (decl; mod.declarations)
@@ -171,6 +184,7 @@ private final class TypeChecker
                     (const ConstDecl c) {
                         declareConstant(c);
                     },
+                    (const AliasDecl _) {},
                     (const ImportStmt _) {},
                 );
             }
@@ -188,6 +202,7 @@ private final class TypeChecker
                         checkConstant(c);
                     },
                     (const TypeDecl _) {},
+                    (const AliasDecl _) {},
                     (const ImportStmt _) {},
                 );
             }
@@ -582,7 +597,18 @@ private final class TypeChecker
         return (*symbol).match!(
             (const Builtin builtIn) => builtinType(builtIn),
             (const Id!TypeDecl decl) => _nominalTypes[decl],
+            (const Id!AliasDecl decl) => aliasType(decl),
         );
+    }
+
+    private Type aliasType(Id!AliasDecl id)
+    {
+        if (auto known = id in _aliasTypes) return *known;
+        // A recursive alias, which name resolution reported, stops here.
+        _aliasTypes[id] = _types.error;
+        auto type = resolveType(_resolutions.declarations.aliases[id].target);
+        _aliasTypes[id] = type;
+        return type;
     }
 
     private Type builtinType(Builtin builtin)
@@ -2623,7 +2649,8 @@ private final class TypeChecker
         Id!TypeDecl decl;
         if (auto symbol = constructor.type.id in _resolutions.typeResolutions)
         {
-            (*symbol).match!((const Id!TypeDecl type) { decl = type; }, (_) {});
+            expandAlias(*symbol, _resolutions.declarations.aliases, _resolutions.typeResolutions)
+                .match!((const Id!TypeDecl type) { decl = type; }, (_) {});
         }
         else
         {

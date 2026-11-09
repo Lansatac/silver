@@ -1,0 +1,10 @@
+module aliases_support.units
+
+type Sample(value: Int)
+alias Reading = Sample
+alias Kilos = Float
+alias Readings = [Reading]
+private alias Hidden = Int
+
+def double(k: Kilos): Kilos => k * 2.0
+def secret(): Int { val h: Hidden = 7; h }

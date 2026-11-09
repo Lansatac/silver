@@ -1,0 +1,104 @@
+import aliases_support.units
+
+alias Meters = Float
+alias Name = String
+alias Byte = UInt8
+alias Pair = (Int, Int)
+alias Grid = [[Int]]
+alias Maybe = Int?
+alias Op = (Int) -> Int
+alias Nothing2 = ()
+alias LaterAlias = EarlierAlias
+alias EarlierAlias = Int
+
+type Point(x: Int, y: Int)
+type Unknown
+alias P = Point
+alias Q = P
+alias U = Unknown
+
+type Shape = Circle(radius: Int) | Square(side: Int) | Blank
+alias Figure = Shape
+alias Round = Circle
+
+type Other = P | Label | U
+type Label(text: Name)
+
+type Node(value: Int, next: Link)
+alias Link = Node?
+
+val limit: Meters = 2.5
+val greeting: Name = "hi"
+val tiny: Byte = 200
+val unit: Nothing2 = ()
+
+def area(f: Figure): Int => match f {
+    Round(r) => r * r * 3
+    s: Square => match s { Square(side) => side * side }
+    Blank => 0
+}
+
+def describe(o: Other): Name => match o {
+    Q(x, _) => "point {x}"
+    Label(text) => text
+    U => "unknown"
+}
+
+def sum(l: Link): Int => if val n = l => n.value + sum(n.next) else 0
+
+def apply(f: Op, x: Int): Int => f(x)
+
+def main(): Unit {
+    val m: Meters = 1.5
+    val f: Float = m + limit
+    printl(f)
+    printl(Meters(3))
+    printl(greeting)
+    printl(Name(42))
+    printl(Byte(7) +% tiny)
+
+    val p: Pair = (1, 2)
+    val (a, b) = p
+    printl(a + b)
+
+    val g: Grid = [[1, 2], [3]]
+    printl(g)
+    val o: Maybe = 4
+    printl(o ?? 0)
+    val none: Maybe = None
+    printl(none ?? -1)
+    printl(apply(x => x + 1, 2))
+    val n: LaterAlias = 3
+    printl(n)
+
+    val q = Q(1, 2)
+    printl(q)
+    printl(q == Point(1, 2))
+    printl(q with (y = 9))
+    val make: (Int, Int) -> Point = P
+    printl(make(5, 6))
+    printl(U)
+    val mapped: [P] = [q, P(3, 4)]
+    printl(mapped)
+
+    printl(area(Circle(2)))
+    printl(area(Square(3)))
+    printl(area(Blank))
+    val r = Round(1)
+    printl(area(r))
+    printl(describe(q))
+    printl(describe(Label("tag")))
+    printl(describe(U))
+
+    printl(sum(Some(Node(1, Some(Node(2, None))))))
+
+    val s: aliases_support.units.Reading = aliases_support.units.Reading(8)
+    printl(s)
+    val rs: aliases_support.units.Readings = [s, Sample(9)]
+    printl(rs)
+    printl(aliases_support.units.double(aliases_support.units.Kilos(2)))
+    printl(aliases_support.units.secret())
+    val r2: Reading = Reading(1)
+    printl(r2)
+    printl(match r2 { Reading(v) => v })
+}

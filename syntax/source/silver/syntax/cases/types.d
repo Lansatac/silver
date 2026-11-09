@@ -9,6 +9,15 @@ immutable Case[] typeDeclarations = [
     declaresAs("type Point(x: Int, y: Int)", "(type Point (x: Int, y: Int))"),
     declaresAs("type Wrapper(value: Int?, f: (Int) -> Int)", "(type Wrapper (value: Int?, f: (Int) -> Int))"),
     declaresAs("type Marker", "(type Marker)"),
+    declaresAs("alias Meters = Float", "(alias Meters = Float)"),
+    declaresAs("alias Grid = [[Int?]]", "(alias Grid = [[Int?]])"),
+    declaresAs("alias F = (Int) -> geo.Point", "(alias F = (Int) -> geo.Point)"),
+    declaresAs("alias\nA =\nB", "(alias A = B)"),
+    declaresAs("private alias A = Int", "(private (alias A = Int))"),
+    rejectsDeclaration("alias meters = Float"),
+    rejectsDeclaration("alias A"),
+    rejectsDeclaration("alias A == B"),
+    rejects("alias A = Int"), // only at module level, like `type`
     declaresAs("type Marker()", "(type Marker ())"), // sema rejects the empty parens
     declaresAs("type Point(x: Int)\ndef f(): Int => 1", ["(type Point (x: Int))", "(def f (): Int 1)"]),
     rejectsDeclaration("type point(x: Int)"),

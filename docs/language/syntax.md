@@ -83,5 +83,4 @@ The condition of an `if` or `while`, the iterable of a `for` and the subject of 
 
 ## Current implementation
 
-- `alias`-based declarations aren't available, though `alias` is reserved.
 - `test` declarations aren't available.

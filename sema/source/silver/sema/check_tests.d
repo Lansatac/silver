@@ -2610,3 +2610,56 @@ unittest
     analyzed("def f(): Int => panic(\"no\")\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
     analyzed("def f(): Int => panic(1)\ndef main(): Unit => ()").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
 }
+
+unittest
+{
+    // Interchangeable with the type it names.
+    auto a = analyzed(`alias Meters = Float
+    alias Pair = (Int, Int)
+    alias Later = Pair
+    alias Fn = (Later) -> Meters
+    type Node(next: Link)
+    alias Link = Node?
+    val limit: Meters = 1.5
+    def add(a: Meters, b: Float): Float => a + b
+    def first(p: Later): Int { val (a, _) = p; a }
+    def main(): Unit {
+        val f: Fn = p => Float(first(p))
+        val m: Meters = Meters(1)
+        val n = Node(None)
+        val l: Link = Some(n)
+        _ = add(m, f((1, 2))) + limit
+        _ = l
+    }`);
+    assert(!a.collector.hasErrors);
+}
+
+unittest
+{
+    analyzed("alias A = A\ndef main(): Unit => ()").shouldReport(DiagnosticCode.RecursiveAlias, At("A", 1));
+    analyzed("alias A = [A]\ndef main(): Unit => ()").shouldReport(DiagnosticCode.RecursiveAlias, At("A", 1));
+    analyzed("alias A = B?\nalias B = (A, Int)\ndef main(): Unit => ()").shouldReport(DiagnosticCode.RecursiveAlias, At("A", 1));
+    analyzed("alias A = Int\ntype A\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("A", 2));
+    analyzed("alias Int = Float\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("Int", 1));
+    analyzed("alias None = Int\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("None", 1));
+    analyzed("alias A = Missing\ndef main(): Unit => ()").shouldReport(DiagnosticCode.UnknownType, At("Missing", 1));
+    analyzed("alias A = [Any]\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidArrayElement, At("[Any]", 1));
+    analyzed("private type P\nalias A = [P]\ndef main(): Unit => ()").shouldReport(DiagnosticCode.PrivateTypeExposed, At("P", 2));
+    analyzed("private alias A = Int\ndef f(a: A): Int => 1\ndef main(): Unit => ()").shouldReport(DiagnosticCode.PrivateTypeExposed, At("A", 2));
+    analyzed("alias A = (Int, Int)\nval a: A = 1\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidConstantType, At("A", 2));
+    analyzed("alias A = [Int]\ndef main(): Unit { _ = A(1) }").shouldReport(DiagnosticCode.AliasIsNotAValue, At("A", 2));
+    analyzed("alias A = Float\ndef main(): Unit { _ = A }").shouldReport(DiagnosticCode.AliasIsNotAValue, At("A", 2));
+    analyzed("alias A = Bool\ndef main(): Unit { _ = A(1) }").shouldReport(DiagnosticCode.AliasIsNotAValue, At("A", 2));
+    analyzed("alias M = Float\ndef main(): Unit { val s: String = M(1) }").shouldReport(DiagnosticCode.TypeMismatch, At("M", 2));
+}
+
+unittest
+{
+    auto library = ["lib.ag": "module lib\nprivate alias Hidden = Int\nalias Shown = Int\n"];
+    analyzed("import lib\ndef main(): Unit { val x: lib.Hidden = 1 }", library)
+        .shouldReport(DiagnosticCode.PrivateMember, At("lib", 2));
+    analyzed("import lib\ndef main(): Unit { val x: Hidden = 1 }", library)
+        .shouldReport(DiagnosticCode.UnknownType, At("Hidden", 1));
+    analyzed("import lib\ndef main(): Unit { _ = lib.Hidden(1) }", library)
+        .shouldReport(DiagnosticCode.PrivateMember, At("lib", 2));
+}

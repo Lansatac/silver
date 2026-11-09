@@ -89,7 +89,11 @@ private final class Lowering
         bool[string] declared;
         foreach (ref declaration; declarations)
         {
-            declaration.kind.match!((ref TypeDecl type) { declared[type.name] = true; }, (ref _) {});
+            declaration.kind.match!(
+                (ref TypeDecl type) { declared[type.name] = true; },
+                (ref AliasDecl alias_) { declared[alias_.name] = true; },
+                (ref _) {},
+            );
         }
 
         Decl[] markers;
@@ -133,6 +137,7 @@ private final class Lowering
                 (ref FunctionDecl function_) { function_.isPrivate = true; },
                 (ref TypeDecl type) { type.isPrivate = true; },
                 (ref ConstDecl constant) { constant.isPrivate = true; },
+                (ref AliasDecl alias_) { alias_.isPrivate = true; },
                 (ref ImportStmt _) {},
             );
         }
@@ -151,6 +156,9 @@ private final class Lowering
             return [Decl(spanOf(cst, file), DeclKind(convertFunctionDeclaration(cst)))];
         case "Silver.TypeDeclaration":
             return convertTypeDeclaration(cst);
+        case "Silver.AliasDeclaration":
+            auto alias_ = AliasDecl(ids.next!AliasDecl, cst[0].matches[0], spanOf(cst[0], file), convertTypeExpression(cst[1]));
+            return [Decl(spanOf(cst, file), DeclKind(alias_))];
         case "Silver.ConstantDeclaration":
             return [Decl(spanOf(cst, file), DeclKind(convertConstantDeclaration(cst)))];
         default:

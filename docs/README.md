@@ -18,7 +18,7 @@ These documents describe the language as designed. Where the implementation does
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, maps | Implemented, except maps and element assignment |
 | [Strings](language/strings.md) | Text, interpolation, views | Partial: no byte or character views |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
-| [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, `match` | Implemented, except `alias` |
+| [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, `match` | Implemented |
 | [Modules](language/modules.md) | Files, imports, visibility | Partial: no import forms beyond `import a.b` |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, the test runner | Not implemented |
 

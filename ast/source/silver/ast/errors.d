@@ -33,6 +33,8 @@ enum DiagnosticCode : string
     CapturedMutable = "S0019",
     PrivateMember = "S0020",
     PrivateTypeExposed = "S0021",
+    RecursiveAlias = "S0022",
+    AliasIsNotAValue = "S0023",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",

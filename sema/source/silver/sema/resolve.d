@@ -10,9 +10,16 @@ import std.sumtype;
 
 import silver.ast;
 
-alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module, Id!TypeDecl, Id!ConstDecl);
+/// An `Id!AliasDecl` is only ever in a scope: a use of one records what it stands for.
+alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module, Id!TypeDecl, Id!ConstDecl, Id!AliasDecl);
 
-alias TypeSymbol = SumType!(Builtin, Id!TypeDecl);
+alias TypeSymbol = SumType!(Builtin, Id!TypeDecl, Id!AliasDecl);
+
+private bool isConversion(Builtin builtin)
+{
+    static immutable Builtin[] notConversions = [Builtin.Never, Builtin.Unit, Builtin.Bool, Builtin.Any];
+    return !notConversions.canFind(builtin);
+}
 
 /// `name` as a type that values can be converted to with `Name(x)`, if it is one.
 /// Types can't be declared with these names, so nothing can hide them.
@@ -21,10 +28,9 @@ private const(Builtin)* conversionBuiltin(string name)
     import std.conv : to;
     import std.traits : EnumMembers;
 
-    static immutable Builtin[] notConversions = [Builtin.Never, Builtin.Unit, Builtin.Bool, Builtin.Any];
     foreach (builtin; EnumMembers!Builtin)
     {
-        if (builtin.to!string == name && !notConversions.canFind(builtin))
+        if (builtin.to!string == name && isConversion(builtin))
         {
             return new Builtin(builtin);
         }
@@ -51,6 +57,7 @@ package struct Declarations
     const(FunctionDecl)*[Id!FunctionDecl] functions;
     const(TypeDecl)*[Id!TypeDecl] types;
     const(ConstDecl)*[Id!ConstDecl] constants;
+    const(AliasDecl)*[Id!AliasDecl] aliases;
     const(VarDecl)*[Id!VarDecl] locals;
     const(Param)*[Id!Param] params;
 }
@@ -70,6 +77,23 @@ package struct Resolution
     /// checker decides whether it's used, since a field of `x` comes first.
     MethodLookup[Id!Expr] methodLookups;
     Declarations declarations;
+}
+
+/// The builtin or declared type `symbol` is another name for. It's still an alias if it stands
+/// for a type with no name, like `[Int]`, or is recursive.
+package TypeSymbol expandAlias(TypeSymbol symbol, const(AliasDecl*[Id!AliasDecl]) aliases,
+    const(TypeSymbol[Id!TypeExpr]) typeResolutions)
+{
+    foreach (_; 0 .. aliases.length)
+    {
+        auto next = symbol.match!(
+            (const Id!AliasDecl a) => aliases[a].target.id in typeResolutions,
+            _ => cast(const(TypeSymbol)*) null,
+        );
+        if (next is null) break;
+        symbol = *next;
+    }
+    return symbol;
 }
 
 package struct MethodLookup
@@ -225,6 +249,10 @@ private final class NameResolver
     /// Each module's own top-level declarations, by module name.
     private Scope[string] _moduleScopes;
     private Id!Module[string] _moduleIds;
+    /// The call whose callee is being resolved, since only there can an alias of a builtin be a value.
+    private Id!Expr _call;
+    private Id!Expr _callee;
+    private bool[Id!AliasDecl] _recursiveAliases;
     /// The module being resolved, which is the one that sees its own private declarations.
     private string _currentModule;
 
@@ -240,6 +268,15 @@ private final class NameResolver
         foreach (mod; modules)
         {
             declareModule(mod.name, mod, (preludeName in program.modules) !is null);
+        }
+        // First, so that what uses an alias can see what it stands for.
+        foreach (mod; modules)
+        {
+            resolveAliases(mod.name, mod);
+        }
+        foreach (mod; modules)
+        {
+            reportRecursiveAliases(mod);
         }
         foreach (mod; modules)
         {
@@ -257,6 +294,7 @@ private final class NameResolver
                 (const FunctionDecl _) {},
                 (const TypeDecl _) {},
                 (const ConstDecl _) {},
+                (const AliasDecl _) {},
                 (const ImportStmt importStmt) {
                     auto imported = importStmt.path.join(".");
                     if (!visible.canFind(imported))
@@ -315,6 +353,24 @@ private final class NameResolver
                         moduleScope.declare(type.name, SymbolId(type.id));
                     }
                 },
+                (ref const AliasDecl alias_) {
+                    _declarations.aliases[alias_.id] = &alias_;
+                    if (moduleScope.resolveLocalType(alias_.name) !is null)
+                    {
+                        _collector.reportError(DiagnosticCode.DuplicateDeclaration, alias_.nameSpan,
+                            "'%s' is already declared in this module".format(alias_.name));
+                    }
+                    else if (universal.resolveLocalType(alias_.name) !is null || alias_.name == "Some" || alias_.name == "None")
+                    {
+                        _collector.reportError(DiagnosticCode.DuplicateDeclaration, alias_.nameSpan,
+                            "'%s' is a built-in name".format(alias_.name));
+                    }
+                    else
+                    {
+                        moduleScope.declare(alias_.name, TypeSymbol(alias_.id));
+                        moduleScope.declare(alias_.name, SymbolId(alias_.id));
+                    }
+                },
                 (ref const ConstDecl constant) {
                     _declarations.constants[constant.id] = &constant;
                     if (moduleScope.resolveLocal(constant.name) !is null)
@@ -339,9 +395,83 @@ private final class NameResolver
                 (const FunctionDecl func) => reportModuleRootClash(func.name, func.nameSpan, visible),
                 (const ConstDecl constant) => reportModuleRootClash(constant.name, constant.nameSpan, visible),
                 (const TypeDecl _) {},
+                (const AliasDecl _) {},
                 (const ImportStmt _) {},
             );
         }
+    }
+
+    private void resolveAliases(string name, const Module mod)
+    {
+        _currentModule = name;
+        foreach (decl; mod.declarations)
+        {
+            decl.kind.match!(
+                (const AliasDecl alias_) {
+                    resolveTypeExpr(alias_.target, _moduleScopes[name]);
+                    if (!alias_.isPrivate) reportPrivateType(alias_.target, "a public alias");
+                },
+                (_) {},
+            );
+        }
+    }
+
+    /// Reports each cycle of aliases once, at its first. One that only names such an alias is left alone.
+    private void reportRecursiveAliases(const Module mod)
+    {
+        foreach (decl; mod.declarations)
+        {
+            decl.kind.match!(
+                (const AliasDecl alias_) {
+                    bool[Id!AliasDecl] seen;
+                    if (!reaches(alias_.target, alias_.id, seen)) return;
+                    auto reported = _recursiveAliases.byKey.any!((known) {
+                        bool[Id!AliasDecl] visited;
+                        return reaches(alias_.target, known, visited);
+                    });
+                    _recursiveAliases[alias_.id] = true;
+                    if (reported) return;
+                    _collector.reportError(DiagnosticCode.RecursiveAlias, alias_.nameSpan,
+                        "the alias `%s` refers to itself; a `type` can do that, but an alias can't".format(alias_.name));
+                },
+                (_) {},
+            );
+        }
+    }
+
+    /// Whether `type` mentions `target`, directly or through other aliases.
+    private bool reaches(const TypeExpr type, Id!AliasDecl target, ref bool[Id!AliasDecl] seen)
+    {
+        bool through(const(TypeExpr)[] types)
+        {
+            foreach (t; types)
+            {
+                if (reaches(t, target, seen)) return true;
+            }
+            return false;
+        }
+
+        return type.kind.match!(
+            (const NamedType named) {
+                if (through(named.args)) return true;
+                auto symbol = type.id in _typeResolutions;
+                if (symbol is null) return false;
+                return (*symbol).match!(
+                    (const Id!AliasDecl a) {
+                        if (a == target) return true;
+                        if (a in seen) return false;
+                        seen[a] = true;
+                        return reaches(_declarations.aliases[a].target, target, seen);
+                    },
+                    _ => false,
+                );
+            },
+            (const OptionType option) => reaches(*option.inner, target, seen),
+            (const ArrayType array) => reaches(*array.element, target, seen),
+            (const FunctionType func) => through(func.params) || reaches(*func.returnType, target, seen),
+            (const UnitType _) => false,
+            (const TupleType tuple) => through(tuple.elements),
+        );
     }
 
     private void resolveModule(string name, const Module mod)
@@ -395,6 +525,7 @@ private final class NameResolver
                     resolveConstantType(constant, _moduleScopes[name]);
                     resolveExpr(constant.value, _moduleScopes[name]);
                 },
+                (const AliasDecl _) {},
                 (const ImportStmt _) {},
             );
         }
@@ -408,6 +539,7 @@ private final class NameResolver
             (const Id!FunctionDecl f) => _declarations.functions[f].isPrivate,
             (const Id!TypeDecl t) => _declarations.types[t].isPrivate,
             (const Id!ConstDecl c) => _declarations.constants[c].isPrivate,
+            (const Id!AliasDecl a) => _declarations.aliases[a].isPrivate,
             _ => false,
         );
     }
@@ -417,6 +549,7 @@ private final class NameResolver
         if (m == _currentModule) return true;
         return !symbol.match!(
             (const Id!TypeDecl t) => _declarations.types[t].isPrivate,
+            (const Id!AliasDecl a) => _declarations.aliases[a].isPrivate,
             (const Builtin _) => false,
         );
     }
@@ -444,6 +577,7 @@ private final class NameResolver
                 if (symbol is null) return;
                 auto isPrivate = (*symbol).match!(
                     (const Id!TypeDecl t) => _declarations.types[t].isPrivate,
+                    (const Id!AliasDecl a) => _declarations.aliases[a].isPrivate,
                     (const Builtin _) => false,
                 );
                 if (isPrivate)
@@ -486,25 +620,30 @@ private final class NameResolver
         }
         resolveTypeExpr(*constant.type, current);
 
-        auto allowed = constant.type.kind.match!(
-            (const UnitType _) => true,
-            (const NamedType _) {
-                auto symbol = constant.type.id in _typeResolutions;
-                // An unknown type has already been reported.
-                if (symbol is null) return true;
-                return (*symbol).match!(
-                    (const Builtin builtin) => builtin != Builtin.Any && builtin != Builtin.Never,
-                    (const Id!TypeDecl _) => false,
-                );
-            },
-            _ => false,
-        );
-        if (!allowed)
+        if (!isConstantType(*constant.type))
         {
             _collector.reportError(DiagnosticCode.InvalidConstantType, constant.type.span,
                 "a top-level constant must be a Bool, integer, Float, String or Unit, not `%s`"
                     .format(printTypeExpr(*constant.type)));
         }
+    }
+
+    private bool isConstantType(const TypeExpr type)
+    {
+        return type.kind.match!(
+            (const UnitType _) => true,
+            (const NamedType _) {
+                auto symbol = type.id in _typeResolutions;
+                // An unknown type has already been reported.
+                if (symbol is null) return true;
+                return expandAlias(*symbol, _declarations.aliases, _typeResolutions).match!(
+                    (const Builtin builtin) => builtin != Builtin.Any && builtin != Builtin.Never,
+                    (const Id!TypeDecl _) => false,
+                    (const Id!AliasDecl a) => (a in _recursiveAliases) !is null || isConstantType(_declarations.aliases[a].target),
+                );
+            },
+            _ => false,
+        );
     }
 
     private void resolveTypeExpr(const TypeExpr type, const Scope current)
@@ -703,6 +842,8 @@ private final class NameResolver
                 }
                 else
                 {
+                    _call = expr.id;
+                    _callee = call.callee.id;
                     resolveExpr(*call.callee, scopeTable);
                 }
                 if (auto symbol = call.callee.id in _resolutions)
@@ -929,9 +1070,8 @@ private final class NameResolver
     {
         if (auto local = scopeTable.resolve(name))
         {
-            _resolutions[expr.id] = *local;
             recordCapture(*local, name, expr.span, scopeTable);
-            return Path(Path.Kind.Value);
+            return recordValue(expr, name, *local);
         }
 
         const(SymbolId)[] found;
@@ -946,8 +1086,7 @@ private final class NameResolver
         }
         if (found.length == 1)
         {
-            _resolutions[expr.id] = found[0];
-            return Path(Path.Kind.Value);
+            return recordValue(expr, name, found[0]);
         }
         if (found.length > 1)
         {
@@ -964,6 +1103,34 @@ private final class NameResolver
         _collector.reportError(DiagnosticCode.UnknownName, expr.span, name == "Some"
             ? "`Some` takes exactly one value, and can't be used as a function"
             : "Unknown name '%s'".format(name));
+        return Path(Path.Kind.Error);
+    }
+
+    /// Records that `expr` names `symbol`. An alias stands for its type, so the name of a product
+    /// or marker constructs it and a builtin's converts to it, as the type's own name would.
+    private Path recordValue(const Expr expr, string name, SymbolId symbol)
+    {
+        auto alias_ = symbol.match!((const Id!AliasDecl a) => a, _ => Id!AliasDecl.init);
+        if (!alias_.isValid)
+        {
+            _resolutions[expr.id] = symbol;
+            return Path(Path.Kind.Value);
+        }
+
+        auto isValue = expandAlias(TypeSymbol(alias_), _declarations.aliases, _typeResolutions).match!(
+            (const Id!TypeDecl type) { _resolutions[expr.id] = SymbolId(type); return true; },
+            (const Builtin builtin) {
+                if (expr.id != _callee || !isConversion(builtin)) return false;
+                _conversions[_call] = builtin;
+                return true;
+            },
+            (const Id!AliasDecl _) => false,
+        );
+        if (isValue) return Path(Path.Kind.Value);
+
+        _collector.reportError(DiagnosticCode.AliasIsNotAValue, expr.span,
+            "`%s` is an alias of `%s`, which can't be used as a value here"
+                .format(name, printTypeExpr(_declarations.aliases[alias_].target)));
         return Path(Path.Kind.Error);
     }
 
@@ -1010,8 +1177,7 @@ private final class NameResolver
             }
             if (auto symbol = visibleSymbol(object.name, access.member))
             {
-                _resolutions[expr.id] = *symbol;
-                return Path(Path.Kind.Value);
+                return recordValue(expr, access.member, *symbol);
             }
             // `a.b` on the way to `a.b.c`, when `a` and `a.b.c` are imported but `a.b` isn't.
             if (auto path = modulePath(expr, nested, scopeTable))

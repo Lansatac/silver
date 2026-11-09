@@ -15,6 +15,7 @@ Silver:
                             / FunctionDeclaration
                             / NativeFunctionDeclaration
                             / TypeDeclaration
+                            / AliasDeclaration
                             / ConstantDeclaration
                             )
 
@@ -33,7 +34,7 @@ Silver:
                             / ExpressionStatement
                             )
 
-    PrivateDeclaration   < :PRIVATE Nl? (FunctionDeclaration / NativeFunctionDeclaration / TypeDeclaration / ConstantDeclaration)
+    PrivateDeclaration   < :PRIVATE Nl? (FunctionDeclaration / NativeFunctionDeclaration / TypeDeclaration / AliasDeclaration / ConstantDeclaration)
 
     QualifiedName        <- ValueName ('.' ValueName)*
 
@@ -71,6 +72,7 @@ Silver:
     ContinueStatement    < CONTINUE
 
     TypeDeclaration      < :TYPE Nl? TypeName (Fields / Nl? :'=' !'=' Nl? SumMembers)?
+    AliasDeclaration     < :ALIAS Nl? TypeName Nl? :'=' !'=' Nl? Type
     SumMembers           < SumMember (LeadingNl? :BitOrOperator Nl? SumMember)*
     SumMember            < InlineMember / Type
     InlineMember         < TypeName Fields
@@ -234,7 +236,6 @@ Silver:
     MODULE              <- Kword("module")
     WITH                <- Kword("with")
     MATCH               <- Kword("match")
-    # Reserved for sum types, so no program can come to depend on it as a name
     ALIAS               <- Kword("alias")
     UNDERSCORE          <- Kword("_")
 
