@@ -41,7 +41,7 @@ val either = isReady
     || isForced
 ```
 
-Some tokens can both continue an expression and begin a statement: `-`, `~`, `!`, `(` and `[`. A line starting with one of them begins a new statement. To continue across such a line, put the operator at the end of the previous line, or use parentheses.
+Some tokens can both continue an expression and begin a statement: `-`, `~`, `!`, `(` and `[`. A line starting with one of them begins a new statement. (`-%` is not one of them: no statement can begin with it, so it continues the line above.) To continue across such a line, put the operator at the end of the previous line, or use parentheses.
 
 ```silver
 val a = x -
@@ -74,8 +74,8 @@ From loosest to tightest:
 | `^` | left |
 | `&` | left |
 | `<<` `>>` | left |
-| `+` `-` `~` `&+` `&-` | left |
-| `*` `/` `%` `&*` | left |
+| `+` `-` `~` `+%` `-%` | left |
+| `*` `/` `%` `*%` | left |
 | prefix `-` `!` `~` | |
 | postfix: call, index, `.`, `?.`, `?`, `with` | left |
 

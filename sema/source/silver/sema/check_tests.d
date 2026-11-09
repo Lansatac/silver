@@ -1258,8 +1258,8 @@ unittest
     analyzedMain("printl(1 | 1.5)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
     analyzedMain("printl(1.5 ^ 2.5)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
     analyzedMain("printl(1.5 << 1)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
-    analyzedMain("printl(1.5 &+ 1)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
-    analyzedMain("printl(true &* 1)").shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
+    analyzedMain("printl(1.5 +% 1)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
+    analyzedMain("printl(true *% 1)").shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
     analyzedMain("printl(~1.5)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
     analyzedMain("printl(~true)").shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
     analyzedMain("val a: UInt8 = 1\nval b = 1\nprintl(a & b)").shouldReport(DiagnosticCode.InvalidOperand, At("a & b", 1));
@@ -1658,19 +1658,19 @@ unittest
     auto a = analyzedConstants(`val umax: UInt8 = 255
 val imax: Int8 = 127
 val imin: Int8 = -128
-val addedU: UInt8 = umax &+ 1
-val addedI: Int8 = imax &+ 1
-val subbedU: UInt8 = 0 &- umax
-val subbedI: Int8 = imin &- 1
-val timesU: UInt8 = umax &* umax
-val timesI: Int8 = imax &* 2
+val addedU: UInt8 = umax +% 1
+val addedI: Int8 = imax +% 1
+val subbedU: UInt8 = 0 -% umax
+val subbedI: Int8 = imin -% 1
+val timesU: UInt8 = umax *% umax
+val timesI: Int8 = imax *% 2
 val leftU: UInt8 = umax << 4
 val leftI: Int8 = imax << 1
 val rightU: UInt8 = umax >> 4
 val rightI: Int8 = imin >> 2
 val notU: UInt8 = ~umax
 val notI: Int8 = ~imax
-val wide: Int = 9223372036854775807 &+ 1`);
+val wide: Int = 9223372036854775807 +% 1`);
     a.shouldHaveNoDiagnostics();
     a.shouldEvaluateTo("addedU", ConstUInt(0), "UInt8");
     a.shouldEvaluateTo("addedI", ConstInt(-128), "Int8");

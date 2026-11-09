@@ -7,7 +7,7 @@ Silver:
     Nl                   <: (eol Spacing)+
     # `-`, `~`, `!`, `(` and `[` can also begin a statement, so a leading one does.
     LeadingNl            <: Nl &LeadingOperator
-    LeadingOperator      <- "&" / "|" / "==" / "!=" / "<" / ">" / "??" / ".." / "+" / "*" / "/" / "%" / "^"
+    LeadingOperator      <- "&" / "|" / "==" / "!=" / "<" / ">" / "??" / ".." / "+" / "-%" / "*" / "/" / "%" / "^"
 
     Declaration          <  (
                             / ImportStatement
@@ -50,7 +50,7 @@ Silver:
     PatternElement       < TuplePattern / BindingName TypeAnnotation?
 
     AssignmentStatement  < AssignTarget Nl? AssignOp Nl? Expression
-    AssignOp             < "+=" / "-=" / "*=" / "/=" / "^=" / "~=" / "&+=" / "&-=" / "&*=" / "&=" / "|=" / "<<=" / ">>=" / "=" !"="
+    AssignOp             < "+=" / "-=" / "*=" / "/=" / "^=" / "~=" / "+%=" / "-%=" / "*%=" / "&=" / "|=" / "<<=" / ">>=" / "=" !"="
 
     AssignTarget         < Postfix
 
@@ -176,10 +176,10 @@ Silver:
     CoalesceOperator    < "??"
     BitOrOperator       <- "|" !("|" / ">")
     BitXorOperator      <- "^"
-    BitAndOperator      <- "&" !("&" / "+" / "-" / "*")
+    BitAndOperator      <- "&" !"&"
     ShiftOperator       <- "<<" / ">>"
-    AdditionOperator    <  "&+" / "&-" / "+" / "-" / "~"
-    MultiplyOperator    <  "&*" / "*" / "/" / "%"
+    AdditionOperator    <  "+%" / "-%" / "+" / "-" / "~"
+    MultiplyOperator    <  "*%" / "*" / "/" / "%"
 
 
     BooleanLiteral      <- TRUE / FALSE

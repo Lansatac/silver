@@ -62,9 +62,9 @@ immutable Case[] precedence = [
     parsesAs("val x = a ?? b | c", "(val x (Coalesce a (BitOr b c)))"),
 
     // Wrapping operators bind like what they wrap
-    parsesAs("val x = a &+ b &* c", "(val x (WrappingAdd a (WrappingMultiply b c)))"),
-    parsesAs("val x = a &* b + c", "(val x (Add (WrappingMultiply a b) c))"),
-    parsesAs("val x = a &- b", "(val x (WrappingSubtract a b))"),
+    parsesAs("val x = a +% b *% c", "(val x (WrappingAdd a (WrappingMultiply b c)))"),
+    parsesAs("val x = a *% b + c", "(val x (Add (WrappingMultiply a b) c))"),
+    parsesAs("val x = a -% b", "(val x (WrappingSubtract a b))"),
 
     // Spacing tells these apart: `& -b` is a bitwise and of a negation
     parsesAs("val x = a & -b", "(val x (BitAnd a (Minus b)))"),

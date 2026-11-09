@@ -887,11 +887,11 @@ private final class Lowering
             return BinaryOp.ShiftLeft;
         case ">>":
             return BinaryOp.ShiftRight;
-        case "&+":
+        case "+%":
             return BinaryOp.WrappingAdd;
-        case "&-":
+        case "-%":
             return BinaryOp.WrappingSubtract;
-        case "&*":
+        case "*%":
             return BinaryOp.WrappingMultiply;
         case "==":
             return BinaryOp.Equal;

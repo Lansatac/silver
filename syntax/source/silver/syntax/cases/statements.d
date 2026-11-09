@@ -31,9 +31,9 @@ immutable Case[] assignments = [
     parsesAs("a |= 3", "(assign a (BitOr a 3))"),
     parsesAs("a <<= 3", "(assign a (ShiftLeft a 3))"),
     parsesAs("a >>= 3", "(assign a (ShiftRight a 3))"),
-    parsesAs("a &+= 3", "(assign a (WrappingAdd a 3))"),
-    parsesAs("a &-= 3", "(assign a (WrappingSubtract a 3))"),
-    parsesAs("a &*= 3", "(assign a (WrappingMultiply a 3))"),
+    parsesAs("a +%= 3", "(assign a (WrappingAdd a 3))"),
+    parsesAs("a -%= 3", "(assign a (WrappingSubtract a 3))"),
+    parsesAs("a *%= 3", "(assign a (WrappingMultiply a 3))"),
     parsesAs("a.b += 3", "(assign (. a b) (Add (. a b) 3))"),
     parsesAs("a *= b + 1", "(assign a (Multiply a (Add b 1)))"),
 

@@ -32,14 +32,14 @@ Adaptation applies to a literal, not to arithmetic on literals. `val x: UInt8 = 
 | Operators | Meaning |
 | --- | --- |
 | `+ - * / %` | arithmetic |
-| `&+ &- &*` | wrapping integer arithmetic |
+| `+% -% *%` | wrapping integer arithmetic |
 | `& \| ^` | bitwise and, or, xor |
 | `~` (prefix) | bitwise not |
 | `<< >>` | shifts |
 
 `^` is xor. Silver has no power operator. `std.math` provides `pow` and `powInt`.
 
-Each has a compound assignment form (`+=`, `&+=`, `<<=` and so on), except `%`.
+Each has a compound assignment form (`+=`, `+%=`, `<<=` and so on), except `%`.
 
 All operands must be of one numeric type, and values never convert implicitly. The exception is a shift amount, which can be any integer type, since the result has the type of the value being shifted.
 
@@ -52,7 +52,7 @@ An integer operation produces the right answer or stops the program. This is the
 - the most negative value `/` or `%` `-1`
 - a shift amount that is negative, or at least the type's width
 
-`<<` does not panic when bits fall off the end. `>>` is logical on unsigned types and arithmetic on signed types. `&+`, `&-` and `&*` wrap instead of panicking.
+`<<` does not panic when bits fall off the end. `>>` is logical on unsigned types and arithmetic on signed types. `+%`, `-%` and `*%` wrap instead of panicking.
 
 ## Conversions
 
@@ -62,7 +62,6 @@ A conversion panics when the value doesn't fit, or is NaN. A `Float` is truncate
 
 ## Open questions
 
-- Whether the wrapping operators should be respelled `+%`, `-%` and `*%`. With `&-`, spacing changes the meaning: `a & -1` is bitwise and, while `a &-1` wraps.
 - If a `Float32` is added, float literals would adapt the way integer literals do.
 
 ## Current implementation

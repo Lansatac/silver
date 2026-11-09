@@ -831,7 +831,7 @@ unittest
 @("codegen doesn't check the wrapping operators")
 unittest
 {
-    auto ir = generateSource("def f(a: Int): Int => a &+ a &- a &* a\ndef main(): Unit => printl(f(1))");
+    auto ir = generateSource("def f(a: Int): Int => a +% a -% a *% a\ndef main(): Unit => printl(f(1))");
     ir.should.not.contain("with.overflow");
     ir.should.contain("add i64 ");
     ir.should.contain("sub i64 ");

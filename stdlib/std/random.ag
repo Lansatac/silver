@@ -11,10 +11,10 @@ def seeded(seed: UInt64): Rng => Rng(seed)
 def fromClock(): Rng => seeded(UInt64(nowNanos()))
 
 def next(mutable rng: Rng): UInt64 {
-    rng.state &+= golden
+    rng.state +%= golden
     val a = rng.state
-    val b = (a ^ (a >> 30)) &* 0xBF58476D1CE4E5B9
-    val c = (b ^ (b >> 27)) &* 0x94D049BB133111EB
+    val b = (a ^ (a >> 30)) *% 0xBF58476D1CE4E5B9
+    val c = (b ^ (b >> 27)) *% 0x94D049BB133111EB
     c ^ (c >> 31)
 }
 
@@ -23,7 +23,7 @@ def nextInt(mutable rng: Rng, bound: Int): Int {
     // Values below the threshold are redrawn, since taking them
     // would make the low results slightly more likely.
     val range = UInt64(bound)
-    val threshold = (0 &- range) % range
+    val threshold = (0 -% range) % range
     mutable val x = next(mutable rng)
     while x < threshold {
         x = next(mutable rng)
