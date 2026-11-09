@@ -1,0 +1,161 @@
+type Counter(value: Int)
+type Rng(state: Int)
+
+// A closure keeps the variable after the function that declared it returns.
+def counter(): () -> Int {
+    mutable val n = 0
+    () => { n += 1; n }
+}
+
+// Two lambdas over one variable.
+def pair(): (() -> Unit, () -> Int) {
+    mutable val shared = 0
+    (() => { shared += 10 }, () => shared)
+}
+
+// A mutable parameter is the function's own variable: a lambda keeps it, and the caller sees
+// the value at return and nothing after.
+def tracker(mutable n: Int): () -> Int {
+    n += 1
+    () => { n += 1; n }
+}
+
+// A place is written when the call returns, so a lambda over it sees the old value during the call.
+def peekDuring(mutable x: Int, peek: () -> Int): Int {
+    x = 5
+    peek()
+}
+
+// Written back on each exit, including `return` and `?`, while a lambda holds the param.
+def viaReturn(mutable n: Int, early: Bool): Int {
+    val f = () => { n += 1 }
+    f()
+    if early { return n }
+    f()
+    n
+}
+
+def viaPropagate(mutable n: Int, v: Int?): Int? {
+    val f = () => { n = n * 2 }
+    f()
+    val got = v?
+    f()
+    Some(got)
+}
+
+def nextInt(mutable rng: Rng, bound: Int): Int {
+    rng.state = (rng.state * 31 + 7) % 1009
+    rng.state % bound
+}
+
+def main(): Unit {
+    // Shared in both directions.
+    mutable val count = 0
+    val tick = () => { count += 1; count }
+    printl(tick())
+    printl(tick())
+    printl(count)
+    count = 10
+    printl(tick())
+
+    // Through a lambda called from a nested def.
+    mutable val total = 0
+    val add = (by: Int) => { total += by }
+    def addTwice(by: Int): Unit {
+        add(by)
+        add(by)
+    }
+    addTwice(3)
+    printl(total)
+
+    // Nested two levels.
+    mutable val depth = 0
+    val outer = () => () => { depth += 1; depth }
+    val inner = outer()
+    printl(inner())
+    printl(inner())
+    printl(depth)
+
+    // Outlives its function, once per call.
+    val c1 = counter()
+    val c2 = counter()
+    printl(c1())
+    printl(c1())
+    printl(c2())
+
+    val (bump, read) = pair()
+    bump()
+    bump()
+    printl(read())
+
+    // A loop shares a variable declared outside it, and not one declared inside.
+    mutable val outside = 0
+    mutable val insides: [() -> Int] = []
+    mutable val outsides: [() -> Int] = []
+    for i in 0..3 {
+        mutable val inside = i
+        insides ~= [() => { inside += 10; inside }]
+        outsides ~= [() => { outside += 1; outside }]
+    }
+    for f in insides { printl(f()) }
+    for f in insides { printl(f()) }
+    for f in outsides { printl(f()) }
+
+    // Accumulating into a captured array, and a field of a captured object.
+    mutable val seen: [Int] = []
+    mutable val box = Counter(0)
+    val record = (x: Int) => {
+        seen ~= [x]
+        box.value += x
+    }
+    for x in [1, 2, 3] { record(x) }
+    printl(seen)
+    printl(box)
+
+    // Randomness inside a lambda.
+    mutable val rng = Rng(1)
+    val roll = () => nextInt(mutable rng, 6)
+    printl([roll(), roll(), roll()])
+    printl(rng)
+
+    // Mutable parameters.
+    mutable val base = 1
+    val t = tracker(mutable base)
+    printl(base)
+    printl(t())
+    printl(t())
+    printl(base)
+
+    mutable val watched = 0
+    val peek = () => watched
+    printl(peekDuring(mutable watched, peek))
+    printl(watched)
+
+    mutable val r = 0
+    printl(viaReturn(mutable r, true))
+    printl(r)
+    printl(viaReturn(mutable r, false))
+    printl(r)
+    mutable val p = 1
+    printl(viaPropagate(mutable p, None))
+    printl(p)
+    printl(viaPropagate(mutable p, 4))
+    printl(p)
+
+    // A lambda's own mutable parameter, captured by a lambda inside it.
+    val make = (mutable x: Int) => { val f = () => { x += 1; x }; _ = f(); f() }
+    mutable val arg = 0
+    printl(make(mutable arg))
+    printl(arg)
+
+    // An option variable with no initializer, and a destructured mutable binding.
+    mutable val last: Int?
+    val remember = (x: Int) => { last = x }
+    remember(8)
+    printl(last)
+    mutable val (lo, hi) = (1, 9)
+    val widen = () => { lo -= 1; hi += 1 }
+    widen()
+    printl(lo)
+    printl(hi)
+}

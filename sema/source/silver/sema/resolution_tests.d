@@ -1521,3 +1521,41 @@ printl(h with (name = \"x\"))
 printl(match h { Handle(_, n) => n })
 }", handleLibrary).shouldHaveNoDiagnostics();
 }
+
+/// Asserts whether the local or param declared at `declaration` is boxed, i.e. mutable and
+/// captured by some lambda.
+void shouldBeBoxed(const Analyzed a, At declaration, bool expected,
+    string file = __FILE__, size_t line = __LINE__)
+{
+    auto symbol = declaration.offsetIn(a) in a.names[declaration.moduleName].declarations;
+    if (symbol is null)
+    {
+        throw new AssertError(format("%s isn't a declaration", declaration), file, line);
+    }
+    if (a.analysis.isBoxed(*symbol) != expected)
+    {
+        throw new AssertError(format("%s should%s be boxed", declaration, expected ? "" : "n't"), file, line);
+    }
+}
+
+@("a mutable local or param that a lambda captures is boxed, and nothing else is")
+unittest
+{
+    auto a = analyzed("def main(): Unit {
+    mutable val shared = 0
+    val plain = 1
+    mutable val own = 2
+    val f = () => () => { shared += plain }
+    own += 1
+    def g(): Int => own
+}
+
+def h(mutable n: Int, m: Int): () -> Int => () => n + m
+");
+    a.shouldHaveNoDiagnostics();
+    a.shouldBeBoxed(At("shared", 1), true);
+    a.shouldBeBoxed(At("plain", 1), false);
+    a.shouldBeBoxed(At("own", 1), true);
+    a.shouldBeBoxed(At("n", 1), true);
+    a.shouldBeBoxed(At("m", 1), false);
+}

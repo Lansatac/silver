@@ -22,6 +22,8 @@ line.start.x = 2
 
 A value behaves as a copy. After `mutable val p = q` and `p.x = 3`, `q` is unchanged. Sharing is never observable. Shared mutable identity is not part of the language's value model.
 
+A variable isn't a value. A lambda that captures a `mutable val` shares the variable itself, so an assignment by either side is seen by both; see [Functions](functions.md).
+
 A `mutable val` of an option type can omit its initializer and starts as `None`. Any other binding needs an initializer.
 
 ## Discarding

@@ -66,6 +66,9 @@ package struct Resolution
     Id!TypeDecl[Id!Expr] constructions;
     /// The locals and params each lambda uses from outside itself, in first-use order.
     const(SymbolId)[][Id!Expr] captures;
+    /// The mutable locals and params some lambda captures. Each is one variable shared between
+    /// its function and the lambda, so both backends keep it in a box rather than a copy.
+    bool[SymbolId] boxed;
     /// Calls like `UInt8(x)`, by the type they convert to.
     Builtin[Id!Expr] conversions;
     /// For a call `x.f(...)` on a value, what a plain `f` finds at module level. The type
@@ -220,6 +223,7 @@ private final class NameResolver
     private Id!FunctionDecl[Id!Expr] _callees;
     private Id!TypeDecl[Id!Expr] _constructions;
     private const(SymbolId)[][Id!Expr] _captures;
+    private bool[SymbolId] _boxed;
     private Builtin[Id!Expr] _conversions;
     private MethodLookup[Id!Expr] _methodLookups;
     private Declarations _declarations;
@@ -247,7 +251,7 @@ private final class NameResolver
         {
             resolveModule(mod.name, mod);
         }
-        return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _declarations);
+        return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _boxed, _conversions, _methodLookups, _declarations);
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
@@ -986,12 +990,7 @@ private final class NameResolver
         for (Rebindable!(const Scope) current = from; current.resolveLocal(name) is null; current = current.parent)
         {
             if (!current.lambda.isValid || symbol == SymbolId(current.selfBinding)) continue;
-            if (mutable)
-            {
-                _collector.reportError(DiagnosticCode.CapturedMutable, span,
-                    "A lambda can't capture `%s`, which is mutable; copy it into a `val` first, or pass it as an argument".format(name));
-                return;
-            }
+            if (mutable) _boxed[symbol] = true;
             if (!_captures.get(current.lambda, null).canFind(symbol)) _captures[current.lambda] ~= symbol;
         }
     }

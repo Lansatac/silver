@@ -119,6 +119,13 @@ struct Fragment
     }
 }
 
+/// A `mutable` param and the caller's place it's written back to.
+struct WriteBack
+{
+    Id!Param param;
+    string home;
+}
+
 /// Where `break` and `continue` go in one loop.
 struct LoopTargets
 {
@@ -133,9 +140,13 @@ final class FunctionState
     LoopTargets[] loops;
 
     string[Id!Param] params;
-    /// The address of the caller's place, for each `mutable` param that has an operand.
+    /// The slot of each `mutable` param that has an operand: the function's own variable.
     string[Id!Param] paramSlots;
-    /// Each local's stack slot.
+    /// The caller's place for each `mutable` param of this function, written back on every exit.
+    WriteBack[] writeBacks;
+    /// Copies each `mutable` param from the caller's place into its slot, before the body.
+    Fragment prologue;
+    /// Each local's slot: a stack slot, or a heap box when a lambda shares the variable.
     string[Id!VarDecl] slots;
 
     /// The function's LLVM return type, `void` for Unit and Never.
@@ -426,7 +437,8 @@ final class Generator
 
         auto check = emitStackCheck(function_.body.span);
         auto body = emitExpr(*function_.body);
-        auto lines = body.allocas ~ check.code ~ body.code ~ ("  " ~ returnInstruction(body.value));
+        auto prologue = _function.prologue;
+        auto lines = prologue.allocas ~ body.allocas ~ check.code ~ prologue.code ~ body.code ~ emitExit(body.value).code;
 
         return "define %s @\"%s\"(%s) {\nentry:\n%s}\n".format(returnType, mangledName, params,
             lines.map!(line => line ~ "\n").join);
@@ -469,7 +481,7 @@ final class Generator
         auto name = ".lambda.%s".format(_nextLambda++);
         auto captures = _analysis.capturesOf(expr.id);
         auto stored = captures.filter!(c => hasOperand(captureType(c))).array;
-        auto envLayout = "{ %-(%s, %) }".format(stored.map!(c => llvmType(captureType(c))));
+        auto envLayout = "{ %-(%s, %) }".format(stored.map!(c => captureLayout(c)));
 
         Fragment closure = Fragment.constant("{ ptr @\"%s\", ptr null }".format(name));
         if (stored.length > 0)
@@ -480,7 +492,7 @@ final class Generator
             {
                 auto value = readCapture(capture);
                 auto pointer = fieldPointer(envLayout, env.value, i);
-                code = code.then(value).then(pointer).then(Fragment.store(llvmType(captureType(capture)), value.value, pointer.value));
+                code = code.then(value).then(pointer).then(Fragment.store(captureLayout(capture), value.value, pointer.value));
             }
             auto result = _function.newTemp();
             closure = code.then(Fragment.instruction("%s = insertvalue %s { ptr @\"%s\", ptr undef }, ptr %s, 1".format(
@@ -500,12 +512,17 @@ final class Generator
         foreach (i, capture; stored)
         {
             auto pointer = fieldPointer(envLayout, "%.env", i);
-            auto value = load(llvmType(captureType(capture)), pointer.value);
+            auto value = load(captureLayout(capture), pointer.value);
             entry = entry.then(pointer).then(value);
+            auto boxed = _analysis.isBoxed(capture);
             capture.match!(
-                (const Id!Param param) { _function.params[param] = value.value; },
+                (const Id!Param param) {
+                    if (boxed) _function.paramSlots[param] = value.value;
+                    else _function.params[param] = value.value;
+                },
                 (const Id!VarDecl local) {
-                    entry = entry.then(bindClosureLocal(local, llvmType(captureType(capture)), value.value));
+                    if (boxed) _function.slots[local] = value.value;
+                    else entry = entry.then(bindClosureLocal(local, captureLayout(capture), value.value));
                 },
                 (_) => assert(0, "only locals and params are captured"),
             );
@@ -527,7 +544,9 @@ final class Generator
 
         auto check = emitStackCheck(expr.span);
         auto body = emitExpr(*lambda.body);
-        auto lines = entry.allocas ~ body.allocas ~ check.code ~ entry.code ~ body.code ~ ("  " ~ returnInstruction(body.value));
+        auto prologue = _function.prologue;
+        auto lines = prologue.allocas ~ entry.allocas ~ body.allocas ~ check.code ~ prologue.code ~ entry.code ~ body.code
+            ~ emitExit(body.value).code;
         _closureFunctions ~= "define private %s @\"%s\"(%s) {\nentry:\n%s}\n".format(returnType, name,
             (params.length > 0 ? [params] : []).chain(["ptr %.env"]).join(", "), lines.map!(line => line ~ "\n").join);
         return closure;
@@ -542,8 +561,22 @@ final class Generator
         );
     }
 
+    /// What the environment holds for `capture`: a mutable variable's box, or an immutable one's value.
+    string captureLayout(const SymbolId capture)
+    {
+        return _analysis.isBoxed(capture) ? "ptr" : llvmType(captureType(capture));
+    }
+
     Fragment readCapture(const SymbolId capture)
     {
+        if (_analysis.isBoxed(capture))
+        {
+            return Fragment.constant(capture.match!(
+                (const Id!Param param) => _function.paramSlots[param],
+                (const Id!VarDecl local) => _function.slots[local],
+                (_) => assert(0, "only locals and params are captured"),
+            ));
+        }
         return capture.match!(
             (const Id!Param param) => Fragment.constant(_function.params[param]),
             (const Id!VarDecl local) => load(llvmType(_analysis.typeOf(local)), _function.slots[local]),
@@ -566,6 +599,29 @@ final class Generator
         auto type = _function.returnType;
         if (type == "void") return "ret void";
         return "ret %s %s".format(type, value is null ? "undef" : value);
+    }
+
+    /// Writes each `mutable` param back to the caller's place, then returns `value`.
+    Fragment emitExit(string value)
+    {
+        Fragment code;
+        foreach (writeBack; _function.writeBacks)
+        {
+            auto layout = llvmType(_analysis.typeOf(writeBack.param));
+            auto current = load(layout, _function.paramSlots[writeBack.param]);
+            code = code.then(current).then(Fragment.store(layout, current.value, writeBack.home));
+        }
+        return code.then(Fragment.instruction(returnInstruction(value)));
+    }
+
+    /// Storage for the variable `symbol`, named `name`: a stack slot, or a heap box when a lambda
+    /// shares the variable. The box is made where the declaration runs, so that a declaration in
+    /// a loop gives each iteration's lambdas their own.
+    Fragment variableSlot(SymbolId symbol, string name, string layout)
+    {
+        if (_analysis.isBoxed(symbol)) return alloc(layout);
+        auto slot = _function.newSlot(name);
+        return Fragment(["  %s = alloca %s".format(slot, layout)], null, slot);
     }
 
     /// `"i64 %a, ptr %b"`, leaving out Units, whose operand is null.
@@ -593,8 +649,18 @@ final class Generator
             auto operand = paramOperand(param.name, type);
             _function.params[param.id] = operand;
             if (operand is null) continue;
-            if (param.mutable) _function.paramSlots[param.id] = operand;
             typed ~= "%s %s".format(param.mutable ? "ptr" : llvmType(type), operand);
+            if (!param.mutable) continue;
+
+            // A mutable param is the function's own variable, copied in from the caller's place
+            // here and back on exit, so a lambda that outlives the call keeps a variable of its own.
+            auto layout = llvmType(type);
+            auto slot = variableSlot(SymbolId(param.id), param.name, layout);
+            auto incoming = load(layout, operand);
+            _function.prologue = _function.prologue.then(slot).then(incoming)
+                .then(Fragment.store(layout, incoming.value, slot.value));
+            _function.paramSlots[param.id] = slot.value;
+            _function.writeBacks ~= WriteBack(param.id, operand);
         }
         return typed.join(", ");
     }
@@ -949,7 +1015,7 @@ final class Generator
             .then(tag)
             .then(Fragment.branch(tag.value, someLabel, noneLabel))
             .then(Fragment.label(noneLabel))
-            .then(Fragment.instruction(returnInstruction(noneConstant(_function.declaredReturn))))
+            .then(emitExit(noneConstant(_function.declaredReturn)))
             .then(Fragment.label(someLabel))
             .then(optionPayload(option, operand.value));
     }
@@ -2661,7 +2727,7 @@ final class Generator
     {
         auto value = emitExpr(return_.value);
         return value
-            .then(Fragment.instruction(returnInstruction(value.value)))
+            .then(emitExit(value.value))
             .then(Fragment.label(_function.newLabel("dead")));
     }
 
@@ -2671,13 +2737,9 @@ final class Generator
         // Unit has no operand, so a Unit local has no slot: only its initializer's effects remain.
         if (value.value is null || var.name == discardName) return value.withValue(null);
         auto type = llvmType(_analysis.typeOf(var.id));
-        auto slot = _function.newSlot(var.name);
-        _function.slots[var.id] = slot;
-        return Fragment(
-            value.allocas ~ "  %s = alloca %s".format(slot, type),
-            value.code ~ "  store %s %s, ptr %s".format(type, value.value, slot),
-            null,
-            value.endBlock);
+        auto slot = variableSlot(SymbolId(var.id), var.name, type);
+        _function.slots[var.id] = slot.value;
+        return value.then(slot).then(Fragment.store(type, value.value, slot.value)).withValue(null);
     }
 
     /// `val pattern = value`, as sema checked it: a tuple literal element by element, each part
@@ -2712,10 +2774,9 @@ final class Generator
                 if (binding.name == discardName || !hasOperand(bindingType)) return Fragment.init;
 
                 auto layout = llvmType(bindingType);
-                auto slot = _function.newSlot(binding.name);
-                _function.slots[binding.id] = slot;
-                auto made = Fragment(["  %s = alloca %s".format(slot, layout)]);
-                return value is null ? made : made.then(Fragment.store(layout, value, slot));
+                auto slot = variableSlot(SymbolId(binding.id), binding.name, layout);
+                _function.slots[binding.id] = slot.value;
+                return value is null ? slot : slot.then(Fragment.store(layout, value, slot.value));
             },
             (const TuplePattern tuple) {
                 Fragment code;
