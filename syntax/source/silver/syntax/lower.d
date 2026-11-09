@@ -8,6 +8,15 @@ import pegged.grammar : ParseTree;
 import silver.ast;
 import silver.syntax.parse : ParseException;
 
+/// `to!double` rounds through x87 reals, so its result depends on the calling thread's FPU precision.
+private double parseFloat(string text)
+{
+    import core.stdc.stdlib : strtod;
+    import std.string : toStringz;
+
+    return strtod(text.toStringz, null);
+}
+
 import std.utf;
 
 /// Lowers a parse tree from silver.syntax.parse into an AST Module.
@@ -480,13 +489,13 @@ private final class Lowering
                 return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(UnaryExpr(UnaryOp.Minus, boxed(literal))));
             }
         case "Silver.FloatingLiteral":
-            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(FloatLiteral(cst.matches[0].to!double)));
+            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(FloatLiteral(parseFloat(cst.matches[0]))));
         case "Silver.Identifier":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(Identifier(cst.matches[0])));
         case "Silver.StringLiteral":
             return convertStringLiteral(cst);
         case "Silver.ScientificLiteral":
-            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(FloatLiteral(cst.matches[0].to!double)));
+            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(FloatLiteral(parseFloat(cst.matches[0]))));
         case "Silver.HexaLiteral":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(integerLiteral(cst.matches[0][2 .. $], 16)));
         case "Silver.BinaryLiteral":

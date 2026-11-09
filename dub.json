@@ -21,5 +21,6 @@
 		"silver:loader": "*",
 		"silver:codegen": "*"
 	},
-	"targetType": "executable"
+	"targetType": "executable",
+	"lflags-windows": ["/STACK:67108864"]
 }

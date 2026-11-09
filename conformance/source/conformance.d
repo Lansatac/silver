@@ -6,8 +6,10 @@ version (unittest)
     import std.array : array, join;
     import std.conv : to;
     import std.file : dirEntries, exists, mkdirRecurse, readText, rmdirRecurse, SpanMode, tempDir, write;
+    import std.parallelism : taskPool;
     import std.path : baseName, buildNormalizedPath, buildPath, dirName, stripExtension;
-    import std.process : pipeProcess, Redirect, thisProcessID, wait;
+    import std.process : environment, pipeProcess, Redirect, thisProcessID, wait;
+    import std.range : chunks;
     import std.stdio : File, stdin, writeln;
     import std.string : lineSplitter, replace, startsWith, strip;
     import silver.ast : formatDiagnostic, Program, SourceContext;
@@ -163,10 +165,144 @@ version (unittest)
             evaluator.run();
             return;
         }
-        auto original = stdin;
-        stdin = File(c.inputPath, "r");
-        scope (exit) stdin = original;
-        evaluator.run();
+        // Standard input is global, and cases run concurrently.
+        synchronized
+        {
+            auto original = stdin;
+            stdin = File(c.inputPath, "r");
+            scope (exit) stdin = original;
+            evaluator.run();
+        }
+    }
+
+    /// `run` applied to every item concurrently, in the order of `items`.
+    string[] inParallel(T)(T[] items, string delegate(T) run)
+    {
+        auto results = new string[](items.length);
+        foreach (i, item; taskPool.parallel(items, 1))
+        {
+            results[i] = run(item);
+        }
+        return results;
+    }
+
+    /// `name: failure` for each item that failed.
+    string[] failureMessages(Case[] items, string[] results)
+    {
+        string[] messages;
+        foreach (i, c; items)
+        {
+            if (results[i] !is null)
+            {
+                messages ~= c.name ~ ": " ~ results[i];
+            }
+        }
+        return messages;
+    }
+
+    enum bundleSize = 12;
+    enum bundleEntry = "conformanceEntry";
+
+    struct Bundle
+    {
+        /// A generated program running every member in turn.
+        Case program;
+        Case[] members;
+    }
+
+    /// Whether `c` can run as an imported module, in a process shared with other cases.
+    bool isBundleable(Case c)
+    {
+        bool importsSibling(string line)
+        {
+            auto statement = line.startsWith("public ") ? line["public ".length .. $] : line;
+            return statement.startsWith("import ") && !statement.startsWith("import std");
+        }
+
+        if (c.inputPath !is null)
+        {
+            return false;
+        }
+        auto lines = readText(c.sourcePath).lineSplitter.map!(line => line.strip).array;
+        return lines.canFind!(line => line.startsWith("def main("))
+            && !lines.canFind!(line => line.startsWith("module ") || importsSibling(line));
+    }
+
+    /// Writes `members` to `directory` as modules, and a program there that runs each of them.
+    Bundle makeBundle(string name, Case[] members, string directory)
+    {
+        mkdirRecurse(directory);
+        string imports;
+        string calls;
+        string expected;
+        foreach (c; members)
+        {
+            auto moduleName = "t_" ~ c.name.replace("-", "_");
+            auto source = ("module " ~ moduleName ~ "\n" ~ readText(c.sourcePath))
+                .replace("\ndef main(", "\ndef " ~ bundleEntry ~ "(");
+            write(buildPath(directory, moduleName ~ ".ag"), source);
+            imports ~= "import " ~ moduleName ~ "\n";
+            calls ~= "    " ~ moduleName ~ "." ~ bundleEntry ~ "()\n";
+            expected ~= c.expected;
+        }
+        auto path = buildPath(directory, "bundle.ag");
+        write(path, imports ~ "def main(): Unit {\n" ~ calls ~ "}\n");
+        return Bundle(Case(name, path, expected, null, null), members);
+    }
+
+    /// Why each case in `all` failed when compiled, by name; a case that passed has no entry.
+    /// A bundle that fails has its members rerun alone, so failures are reported per case.
+    string[string] compiledFailures(Case[] all, const string[] pending, const Toolchain toolchain, string workDirectory)
+    {
+        Case[] alone;
+        Case[] grouped;
+        auto bundling = environment.get("SILVER_CONFORMANCE_UNBUNDLED") is null;
+        foreach (c; all)
+        {
+            if (bundling && !pending.canFind(c.name) && isBundleable(c))
+            {
+                grouped ~= c;
+            }
+            else
+            {
+                alone ~= c;
+            }
+        }
+
+        Bundle[] bundles;
+        foreach (members; grouped.chunks(bundleSize))
+        {
+            auto name = "bundle-" ~ bundles.length.to!string;
+            bundles ~= makeBundle(name, members, buildPath(workDirectory, name));
+        }
+        auto programs = bundles.map!(b => b.program).array;
+        auto bundleResults = inParallel(programs, (Case c) => runCompiled(c, toolchain, workDirectory));
+        foreach (i, bundle; bundles)
+        {
+            if (bundleResults[i] !is null)
+            {
+                alone ~= bundle.members;
+            }
+        }
+
+        auto results = inParallel(alone, (Case c) => runCompiled(c, toolchain, workDirectory));
+        string[string] failures;
+        foreach (i, c; alone)
+        {
+            if (results[i] !is null)
+            {
+                failures[c.name] = results[i];
+            }
+        }
+        foreach (i, bundle; bundles)
+        {
+            if (bundleResults[i] !is null && !bundle.members.canFind!(c => (c.name in failures) !is null))
+            {
+                failures[bundle.program.name] = "failed, though its members pass alone ("
+                    ~ bundle.members.map!(c => c.name).join(", ") ~ "): " ~ bundleResults[i];
+            }
+        }
+        return failures;
     }
 
     /// Compiles and runs `c`, and returns why its output didn't match, or null if it did.
@@ -273,14 +409,8 @@ version (unittest)
 @("Interpreted conformance programs match their expected output")
 unittest
 {
-    string[] failures;
-    foreach (c; cases)
-    {
-        if (auto failure = runInterpreted(c))
-        {
-            failures ~= c.name ~ ": " ~ failure;
-        }
-    }
+    auto all = cases;
+    auto failures = failureMessages(all, inParallel(all, (Case c) => runInterpreted(c)));
     assert(failures.length == 0, "Interpreted conformance failures:\n\n" ~ failures.join("\n\n"));
 }
 
@@ -298,20 +428,17 @@ unittest
     mkdirRecurse(workDirectory);
 
     auto pending = pendingCompiledCases();
+    auto all = cases;
+    auto failed = compiledFailures(all, pending, toolchain, workDirectory);
     string[] failures;
-    string[] unexpectedPasses;
-    foreach (c; cases)
+    foreach (name; failed.keys.sort)
     {
-        auto failure = runCompiled(c, toolchain, workDirectory);
-        if (failure is null && pending.canFind(c.name))
+        if (!pending.canFind(name))
         {
-            unexpectedPasses ~= c.name;
-        }
-        else if (failure !is null && !pending.canFind(c.name))
-        {
-            failures ~= c.name ~ ": " ~ failure;
+            failures ~= name ~ ": " ~ failed[name];
         }
     }
+    auto unexpectedPasses = all.map!(c => c.name).filter!(name => pending.canFind(name) && name !in failed).array;
 
     string message;
     if (failures.length > 0)
@@ -334,14 +461,8 @@ unittest
 @("Interpreted programs that panic report the expected error")
 unittest
 {
-    string[] failures;
-    foreach (c; panicCases)
-    {
-        if (auto failure = runInterpretedPanic(c))
-        {
-            failures ~= c.name ~ ": " ~ failure;
-        }
-    }
+    auto all = panicCases;
+    auto failures = failureMessages(all, inParallel(all, (Case c) => runInterpretedPanic(c)));
     assert(failures.length == 0, "Interpreted panic failures:\n\n" ~ failures.join("\n\n"));
 }
 
@@ -358,14 +479,8 @@ unittest
     auto workDirectory = buildPath(tempDir, "silver-conformance-panics-" ~ thisProcessID.to!string);
     mkdirRecurse(workDirectory);
 
-    string[] failures;
-    foreach (c; panicCases)
-    {
-        if (auto failure = runCompiledPanic(c, toolchain, workDirectory))
-        {
-            failures ~= c.name ~ ": " ~ failure;
-        }
-    }
+    auto all = panicCases;
+    auto failures = failureMessages(all, inParallel(all, (Case c) => runCompiledPanic(c, toolchain, workDirectory)));
     if (failures.length == 0)
     {
         rmdirRecurse(workDirectory);
