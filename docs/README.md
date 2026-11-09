@@ -12,7 +12,7 @@ These documents describe the language as designed. Where the implementation does
 | [Types](language/types.md) | Built-in types, promotion, equality, printing | Mostly implemented |
 | [Numbers](language/numbers.md) | Numeric types, literals, operators, overflow, conversions | Implemented |
 | [Bindings](language/bindings.md) | `val`, `mutable val`, discards, shadowing, constants | Implemented |
-| [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading | Partial: no overloading |
+| [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading | Partial: no overloading or tail calls |
 | [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented |
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, maps | Implemented, except maps and element assignment |

@@ -21,6 +21,23 @@ Functions at the top level of a module can be used before they are declared. A f
 
 `native def` declares a function implemented outside Silver. It has a signature and no body.
 
+## Tail calls
+
+`tail f(args)` exits the innermost function or lambda with the result of the call, as `return f(args)` would, except that the call reuses the current call's stack space. Recursion through `tail` therefore runs at any depth.
+
+```silver
+def sum(n: Int, acc: Int): Int {
+    if n == 0 { return acc }
+    tail sum(n - 1, acc + n)
+}
+```
+
+- It can appear wherever `return` can.
+- The operand must be a call of a function or a function value. A constructor, a conversion or a native function can't be the operand.
+- The call's return type must be exactly the function's. Nothing can be done with the result after the call, so it can't be promoted: in a function returning `Int?`, `tail f(x)` needs `f` to return `Int?` as well.
+- A `mutable` argument must be a whole mutable parameter of the current function. A `mutable val` or a field path would have to be written back after the current call has ended.
+- A call without `tail` has no such guarantee, even when it's the last thing a function does.
+
 ## Lambdas
 
 A lambda is a parameter list, an optional return type, `=>`, and one expression:
@@ -107,6 +124,7 @@ Functions can be overloaded on all of their parameters, and `f(x)` and `x.f()` s
 - Whether `x.f()` can drop its parentheses.
 - Whether a method call can have a `mutable` receiver.
 - Method calls through `?.`, as in `a?.f()`.
+- Whether `tail` can call any function, or only the function it appears in.
 
 ## Current implementation
 
@@ -115,3 +133,4 @@ Functions can be overloaded on all of their parameters, and `f(x)` and `x.f()` s
 - In a method call, the receiver must be exactly the first parameter's type, with no adaptation or promotion, and its type doesn't choose between functions.
 - A `mutable` first parameter is rejected for a method call. A later `mutable` argument is fine.
 - A native function can't be used as a function value in compiled programs.
+- `tail` isn't available.
