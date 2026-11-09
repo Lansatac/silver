@@ -1593,18 +1593,18 @@ unittest
     }`).shouldReport(DiagnosticCode.JumpOutsideLoop, At("break", 1));
 }
 
-@("a lambda can capture and assign what's mutable around it")
+@("a lambda can capture what's immutable and nothing else")
 unittest
 {
     analyzedMain(`val a = 1
     val f = () => a`).shouldHaveNoDiagnostics();
     analyzedMain(`mutable val a = 1
-    val f = () => { a += 1; a }`).shouldHaveNoDiagnostics();
+    val f = () => a`).shouldReport(DiagnosticCode.CapturedMutable, At("a", 2));
     analyzedMain(`mutable val a = 1
-    val f = () => () => { a = 2 }`).shouldHaveNoDiagnostics();
+    val f = () => () => a`).shouldReport(DiagnosticCode.CapturedMutable, At("a", 2));
     analyzedMain(`mutable val a = 1
-    def f(): Int => a`).shouldHaveNoDiagnostics();
-    analyzedMain(`val f = (mutable x: Int) => () => { x += 1 }`).shouldHaveNoDiagnostics();
+    def f(): Int => a`).shouldReport(DiagnosticCode.CapturedMutable, At("a", 2));
+    analyzedMain(`val f = (mutable x: Int) => () => x`).shouldReport(DiagnosticCode.CapturedMutable, At("x", 2));
     analyzedMain(`val f = () => {
         mutable val own = 1
         own += 1

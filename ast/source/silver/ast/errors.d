@@ -30,6 +30,7 @@ enum DiagnosticCode : string
     MissingConstantType = "S0016",
     InvalidConstantType = "S0017",
     JumpOutsideLoop = "S0018",
+    CapturedMutable = "S0019",
     PrivateMember = "S0020",
     PrivateTypeExposed = "S0021",
 

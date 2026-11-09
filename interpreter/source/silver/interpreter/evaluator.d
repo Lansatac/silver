@@ -109,7 +109,7 @@ class Evaluator
     private void execute(const VarDecl ast, Environment variables)
     {
         auto value = evaluate(ast.value, variables);
-        if (ast.name != discardName) variables.define(SymbolId(ast.id), value, analysis.isBoxed(SymbolId(ast.id)));
+        if (ast.name != discardName) variables.define(SymbolId(ast.id), value);
     }
 
     private void execute(const PatternDecl ast, Environment variables)
@@ -140,7 +140,7 @@ class Evaluator
     {
         pattern.kind.match!(
             (const VarDecl binding) {
-                if (binding.name != discardName) variables.define(SymbolId(binding.id), value, analysis.isBoxed(SymbolId(binding.id)));
+                if (binding.name != discardName) variables.define(SymbolId(binding.id), value);
             },
             (const TuplePattern tuple) {
                 auto parts = value.get!TupleValue.elements;
@@ -345,14 +345,13 @@ class Evaluator
         return Variant(OptionValue.some(promote(value, from, analysis.types.optionInner(to))));
     }
 
-    /// A function over what it captures, as compiled code makes it: a copy of each immutable
-    /// variable's value, and the box of each mutable one.
+    /// A function over a copy of what it captures, as compiled code makes.
     private Variant evaluateLambda(const Lambda ast, Id!Expr id, Environment variables)
     {
         auto captured = new Environment(globals);
         foreach (symbol; analysis.capturesOf(id))
         {
-            captured.variables[symbol] = variables.stored(symbol);
+            captured.define(symbol, variables.get(symbol));
         }
 
         auto returnsUnit = analysis.signatureOf(id).ret == analysis.types.unit;
@@ -892,8 +891,7 @@ class Evaluator
         foreach (i, arg; args)
         {
             // Arguments are evaluated in the caller's environment.
-            auto param = SymbolId(fn.params[i].id);
-            functionEnv.define(param, arg, analysis.isBoxed(param));
+            functionEnv.define(SymbolId(fn.params[i].id), arg);
         }
 
         Variant result;

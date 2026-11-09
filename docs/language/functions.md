@@ -42,19 +42,7 @@ So a named function is `def name` followed by a lambda, except that a named bloc
 - `x => y => x + y` nests to the right.
 - `return` and postfix `?` exit the lambda. `break` and `continue` can't cross one.
 
-A lambda can capture the locals and parameters around it. An immutable one is copied when the lambda is created. A `mutable val` or mutable parameter is shared instead: the lambda and the code around it name one variable, and an assignment by either is seen by the other, for as long as either lives. What the variable holds is still a value, so reading it behaves as a copy.
-
-```silver
-mutable val count = 0
-val tick = () => { count += 1; count }
-_ = tick()
-_ = tick()
-printl(count)      // 2
-count = 10
-printl(tick())     // 11
-```
-
-Lambdas created in a loop share a `mutable val` declared outside the loop, and each gets its own for one declared inside it.
+A lambda can capture surrounding values, which are copied when the lambda is created. It can't capture a `mutable val` or a mutable parameter: copy one into a `val` first, or pass it as an argument.
 
 ## Function values
 
@@ -87,7 +75,6 @@ val now = advance(mutable counter, 2)
 - The argument must be a place: a `mutable val`, a mutable parameter, or a field path rooted at one (`mutable state.counter`). An array element or a `?.` path isn't a place.
 - Its type must be exactly the parameter's type.
 - A place is read when the call starts, after all arguments are evaluated, and is written when the call returns, including through `return` and `?`. So in `f(mutable c, g(mutable c))`, `f` sees `g`'s write. A plain argument naming the same variable is a snapshot.
-- The parameter is the function's own variable, so a lambda that captures it keeps that variable after the call, and the caller's place is not affected again. A lambda over the caller's place sees its old value until the call returns.
 - Two `mutable` arguments of one call can't overlap, which means neither path may be a prefix of the other. Disjoint fields are fine.
 - Mutability is part of a function type: `(mutable Counter) -> Int`. A lambda can take a mutable parameter: `(mutable c) => ...`.
 - A native function can't take one.
@@ -120,7 +107,6 @@ Functions can be overloaded on all of their parameters, and `f(x)` and `x.f()` s
 - Whether `x.f()` can drop its parentheses.
 - Whether a method call can have a `mutable` receiver.
 - Method calls through `?.`, as in `a?.f()`.
-- Whether to warn when a lambda that captures a mutable parameter escapes the call, since its later assignments never reach the caller.
 
 ## Current implementation
 

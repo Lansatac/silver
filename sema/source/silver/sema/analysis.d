@@ -121,19 +121,11 @@ final class Analysis
         );
     }
 
-    /// The locals and params `lambda` uses from outside itself. An immutable one is copied when
-    /// the lambda is created; a mutable one is boxed (`isBoxed`) and the lambda shares the box.
+    /// The locals and params `lambda` uses from outside itself. Each is immutable, so it can be
+    /// copied when the lambda is created.
     const(SymbolId)[] capturesOf(Id!Expr lambda) const
     {
         return _resolution.captures.get(lambda, null);
-    }
-
-    /// Whether `symbol` is a mutable local or param that some lambda captures. It lives in a box
-    /// shared by its function and every lambda capturing it, so an assignment by any of them is
-    /// seen by all.
-    bool isBoxed(SymbolId symbol) const
-    {
-        return (symbol in _resolution.boxed) !is null;
     }
 
     /// The declaration a name or module-rooted member chain refers to, or null if it was
