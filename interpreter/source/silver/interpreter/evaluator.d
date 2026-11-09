@@ -5,11 +5,11 @@ import std.sumtype;
 import std.traits : isSigned;
 import std.variant : Variant;
 import silver.ast;
-import silver.interpreter.environment : Environment, ImportScope;
+import silver.interpreter.environment : Environment;
 import silver.interpreter.errors : CodedException;
 import silver.interpreter.stack : checkStack, runOnLargeStack;
 import silver.interpreter.values;
-import silver.sema : Analysis, ConstInt, ConstUInt, ConstUnit, IntegerInfo, Type;
+import silver.sema : Analysis, ConstInt, ConstUInt, ConstUnit, IntegerInfo, SymbolId, Type;
 
 /// The D type holding each Silver integer type's values.
 private alias IntegerTypes = std.meta.AliasSeq!(byte, short, int, long, ubyte, ushort, uint, ulong);
@@ -47,12 +47,11 @@ class Evaluator
         this.useStdOut = useStdOut;
     }
 
-    /// Every module run so far, by dotted name, so each runs once however often it's imported.
-    private ModuleValue[string] modules;
     /// Implementations for `native def`s, by function name.
     private NativeFunction[string] nativeBindings;
-    /// Every declared function's value, for a call sema resolved by type rather than by name.
-    private Variant[Id!FunctionDecl] functions;
+    /// Every module's declarations. Nothing at module level has effects or depends on order, so
+    /// they're all bound before `main` runs.
+    private Environment globals;
 
     void run()
     {
@@ -62,31 +61,17 @@ class Evaluator
     private void runProgram()
     {
         bindNatives();
-        auto prelude = new ModuleValue("prelude", new Environment(new ImportScope));
-        modules["prelude"] = prelude;
-        auto preludeModule = program.modules.get("prelude", null);
-        if (preludeModule !is null)
+        globals = new Environment;
+        foreach (loaded; program.sortedModules)
         {
-            execute(*preludeModule, prelude.environment);
+            foreach (declaration; loaded.declarations)
+            {
+                execute(declaration, globals);
+            }
         }
-        callMain();
-    }
-
-    /// Runs the module that defines `main`, which runs everything it imports, then calls `main`.
-    private void callMain()
-    {
-        auto mains = mainFunctions(program);
-        assert(mains.length == 1, "sema reports a program without exactly one `main`");
-        auto environment = moduleValue(mains[0].moduleName).environment;
-        call(environment.variables["main"], [], environment);
-    }
-
-    private void execute(const Module ast, Environment variables)
-    {
-        foreach (declaration; ast.declarations)
-        {
-            execute(declaration, variables);
-        }
+        auto entryPoint = analysis.entryPoint;
+        assert(entryPoint !is null, "sema reports a program without exactly one `main`");
+        call(globals.get(SymbolId(*entryPoint)), []);
     }
 
     private void execute(const Decl ast, Environment variables)
@@ -124,7 +109,7 @@ class Evaluator
     private void execute(const VarDecl ast, Environment variables)
     {
         auto value = evaluate(ast.value, variables);
-        if (ast.name != discardName) variables.defineVariable(ast.name, value);
+        if (ast.name != discardName) variables.define(SymbolId(ast.id), value);
     }
 
     private void execute(const PatternDecl ast, Environment variables)
@@ -155,7 +140,7 @@ class Evaluator
     {
         pattern.kind.match!(
             (const VarDecl binding) {
-                if (binding.name != discardName) variables.defineVariable(binding.name, value);
+                if (binding.name != discardName) variables.define(SymbolId(binding.id), value);
             },
             (const TuplePattern tuple) {
                 auto parts = value.get!TupleValue.elements;
@@ -178,7 +163,7 @@ class Evaluator
     private void assign(const Expr target, Variant value, Environment variables)
     {
         target.kind.match!(
-            (const Identifier i) { variables.setVariable(i.name, value); },
+            (const Identifier _) { variables.set(*analysis.resolutionOf(target.id), value); },
             (const MemberAccess m) {
                 auto updated = withField(evaluate(*m.object, variables), m.member, value);
                 assign(*m.object, updated, variables);
@@ -253,8 +238,7 @@ class Evaluator
         auto returnsUnit = analysis.signatureOf(ast.id).ret == analysis.types.unit;
         if (!ast.native)
         {
-            functions[ast.id] = Variant(new Function(ast.name, ast.params, ast.body, returnsUnit, variables));
-            variables.defineVariable(ast.name, functions[ast.id]);
+            variables.define(SymbolId(ast.id), Variant(new Function(ast.name, ast.params, ast.body, returnsUnit, variables)));
             return;
         }
         auto binding = ast.name in nativeBindings;
@@ -264,8 +248,7 @@ class Evaluator
 
             throw new CodedException(DiagnosticCode.MissingNativeBinding, "No native binding for %s".format(ast.name));
         }
-        functions[ast.id] = Variant(new Function(ast.name, ast.params, ast.body, returnsUnit, variables, *binding));
-        variables.defineVariable(ast.name, functions[ast.id]);
+        variables.define(SymbolId(ast.id), Variant(new Function(ast.name, ast.params, ast.body, returnsUnit, variables, *binding)));
     }
 
     /// A marker's name is its one value; any other type's name is its constructor. Sema rejects
@@ -274,7 +257,7 @@ class Evaluator
     {
         if (ast.members.length > 0) return;
         auto constructor = new Constructor(ast);
-        variables.defineVariable(ast.name, ast.fields.length == 0
+        variables.define(SymbolId(ast.id), ast.fields.length == 0
                 ? Variant(new Instance(constructor, []))
                 : Variant(constructor));
     }
@@ -291,7 +274,7 @@ class Evaluator
             (string v) => Variant(v),
             (const ConstUnit _) => Variant(Unit()),
         );
-        variables.defineVariable(ast.name, value);
+        variables.define(SymbolId(ast.id), value);
     }
 
     /// `value` as the D type holding Silver's `type`.
@@ -305,37 +288,9 @@ class Evaluator
         assert(0, "every integer type has a D type");
     }
 
-    /// Adds the module to the importing module's ImportScope. It isn't bound as a variable;
-    /// identifiers and member accesses find it there.
+    /// Sema has already resolved every use of an imported name.
     private void execute(const ImportStmt ast, Environment variables)
     {
-        import std.array : join;
-
-        auto name = ast.path.join(".");
-        ImportScope.of(variables).modules[name] = moduleValue(name);
-    }
-
-    /// The module `name`, running it first if this is its first import.
-    private ModuleValue moduleValue(string name)
-    {
-        import std.format : format;
-
-        if (auto existing = name in modules)
-        {
-            return *existing;
-        }
-        auto loaded = program.modules.get(name, null);
-        if (loaded is null)
-        {
-            throw new CodedException(DiagnosticCode.InternalError, "Module %s was not loaded".format(name));
-        }
-        auto imports = new ImportScope;
-        imports.modules["prelude"] = modules["prelude"];
-        auto value = new ModuleValue(name, new Environment(imports));
-        // Recorded before running, so an import cycle gets this module back instead of recursing.
-        modules[name] = value;
-        execute(*loaded, value.environment);
-        return value;
     }
 
     private void execute(const ExprStmt ast, Environment variables)
@@ -349,6 +304,8 @@ class Evaluator
         {
             auto value = ast.kind.match!(
                 (const IntLiteral literal) => intLiteralValue(literal, ast.id),
+                (const Identifier _) => variables.get(*analysis.resolutionOf(ast.id)),
+                (const MemberAccess access) => evaluateMember(access, ast.id, variables),
                 (const CallExpr call) => evaluateCall(call, ast.id, variables),
                 (const BinaryExpr binary) => evaluateBinary(binary, ast.id, variables),
                 (const MatchExpr match_) => evaluateMatch(match_, ast.id, variables),
@@ -391,23 +348,15 @@ class Evaluator
     /// A function over a copy of what it captures, as compiled code makes.
     private Variant evaluateLambda(const Lambda ast, Id!Expr id, Environment variables)
     {
-        auto moduleLevel = variables;
-        while (cast(ImportScope) moduleLevel.parent is null) moduleLevel = moduleLevel.parent;
-
-        auto captured = new Environment(moduleLevel);
+        auto captured = new Environment(globals);
         foreach (symbol; analysis.capturesOf(id))
         {
-            auto name = symbol.match!(
-                (const Id!Param param) => analysis.declarationOf(param).name,
-                (const Id!VarDecl local) => analysis.declarationOf(local).name,
-                (_) => assert(0, "only locals and params are captured"),
-            );
-            captured.defineVariable(name, *variables.find(name));
+            captured.define(symbol, variables.get(symbol));
         }
 
         auto returnsUnit = analysis.signatureOf(id).ret == analysis.types.unit;
         auto value = Variant(new Function(ast.name is null ? "lambda" : ast.name, ast.params, ast.body, returnsUnit, captured));
-        if (ast.self.isValid) captured.defineVariable(ast.name, value);
+        if (ast.self.isValid) captured.define(SymbolId(ast.self), value);
         return value;
     }
 
@@ -437,7 +386,7 @@ class Evaluator
         }
         return pattern.kind.match!(
             (const VarDecl binding) {
-                if (binding.name != discardName) variables.defineVariable(binding.name, value);
+                if (binding.name != discardName) variables.define(SymbolId(binding.id), value);
                 return true;
             },
             (const TuplePattern tuple) {
@@ -615,7 +564,7 @@ class Evaluator
         }
         if (auto method = analysis.methodCallOf(id))
         {
-            return apply(*method, functions[*analysis.calleeOf(id)], variables);
+            return apply(*method, globals.get(SymbolId(*analysis.calleeOf(id))), variables);
         }
         return evaluate(call, variables);
     }
@@ -774,13 +723,6 @@ class Evaluator
         return Variant(text);
     }
 
-    private Variant evaluate(const Identifier ast, Environment variables)
-    {
-        auto value = variables.find(ast.name);
-        assert(value !is null, "sema reports a name that isn't in scope");
-        return *value;
-    }
-
     private Variant evaluate(const UnaryExpr ast, Environment variables)
     {
         auto value = evaluate(*ast.operand, variables);
@@ -834,7 +776,7 @@ class Evaluator
         {
             if (!ast.isMutable(i)) args[i] = evaluate(arg, variables);
         }
-        if (ast.mutableArgs is null) return call(callee, args, variables);
+        if (ast.mutableArgs is null) return call(callee, args);
 
         // Only once every argument has been evaluated is a `mutable` place read.
         foreach (i, arg; ast.args)
@@ -842,7 +784,7 @@ class Evaluator
             if (ast.isMutable(i)) args[i] = evaluate(arg, variables);
         }
         Variant[] written;
-        auto result = call(callee, args, variables, &written);
+        auto result = call(callee, args, &written);
         foreach (i, arg; ast.args)
         {
             if (ast.isMutable(i)) assign(arg, written[i], variables);
@@ -932,7 +874,7 @@ class Evaluator
     }
 
     /// `written`, when given, gets each param's final value, for the caller to write back.
-    private Variant call(Variant callee, Variant[] args, Environment variables, Variant[]* written = null)
+    private Variant call(Variant callee, Variant[] args, Variant[]* written = null)
     {
         if (auto constructor = callee.peek!Constructor)
         {
@@ -949,7 +891,7 @@ class Evaluator
         foreach (i, arg; args)
         {
             // Arguments are evaluated in the caller's environment.
-            functionEnv.defineVariable(fn.params[i].name, arg);
+            functionEnv.define(SymbolId(fn.params[i].id), arg);
         }
 
         Variant result;
@@ -969,20 +911,16 @@ class Evaluator
         {
             foreach (param; fn.params)
             {
-                *written ~= *functionEnv.find(param.name);
+                *written ~= functionEnv.get(SymbolId(param.id));
             }
         }
         return result;
     }
 
-    private Variant evaluate(const MemberAccess ast, Environment variables)
+    /// A chain like `std.math.pow` is resolved to its declaration; anything else is a field.
+    private Variant evaluateMember(const MemberAccess ast, Id!Expr id, Environment variables)
     {
-        // A chain like `std.math.pow` whose first name isn't a variable is a module path.
-        auto base = dottedPath(*ast.object);
-        if (base !is null && variables.find(base[0]) is null)
-        {
-            return resolveModulePath(base ~ ast.member, variables);
-        }
+        if (auto symbol = analysis.resolutionOf(id)) return variables.get(*symbol);
         return member(evaluate(*ast.object, variables), ast.member);
     }
 
@@ -994,40 +932,6 @@ class Evaluator
     private static Variant withField(Variant object, string name, Variant value)
     {
         return Variant(object.get!Instance.withField(name, value));
-    }
-
-    /// `a.b.c` as ["a", "b", "c"], or null if the chain doesn't start with an identifier.
-    private static string[] dottedPath(const Expr expr)
-    {
-        return expr.kind.match!(
-            (const Identifier i) { string[] path = [i.name]; return path; },
-            (const MemberAccess m) {
-                auto base = dottedPath(*m.object);
-                return base is null ? null : base ~ m.member;
-            },
-            (_) => cast(string[]) null);
-    }
-
-    /// Looks `path` up as an imported module's member: the longest prefix that's an imported
-    /// module, then members within it.
-    private Variant resolveModulePath(string[] path, Environment variables)
-    {
-        import std.array : join;
-
-        auto imports = ImportScope.of(variables);
-        foreach_reverse (length; 1 .. path.length)
-        {
-            if (auto imported = path[0 .. length].join(".") in imports.modules)
-            {
-                auto value = imported.member(path[length]);
-                foreach (name; path[length + 1 .. $])
-                {
-                    value = member(value, name);
-                }
-                return value;
-            }
-        }
-        assert(0, "sema resolves every module path");
     }
 
     private Variant evaluate(const WhileExpr ast, Environment variables)
@@ -1044,7 +948,7 @@ class Evaluator
                 auto option = evaluate(ast.binding.value, variables).get!OptionValue;
                 if (!option.present) break;
                 bodyScope = new Environment(variables);
-                bodyScope.defineVariable(ast.binding.name, option.payload);
+                bodyScope.define(SymbolId(ast.binding.id), option.payload);
             }
             if (!runLoopBody(*ast.body, bodyScope)) break;
         }
@@ -1056,7 +960,7 @@ class Evaluator
         bool iterate(Variant value)
         {
             auto bodyScope = new Environment(variables);
-            bodyScope.defineVariable(ast.binding.name, value);
+            bodyScope.define(SymbolId(ast.binding.id), value);
             return runLoopBody(*ast.body, bodyScope);
         }
 
@@ -1103,7 +1007,7 @@ class Evaluator
             if (taken)
             {
                 trueScope = new Environment(variables);
-                trueScope.defineVariable(ast.binding.name, option.payload);
+                trueScope.define(SymbolId(ast.binding.id), option.payload);
             }
         }
 

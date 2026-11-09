@@ -205,33 +205,6 @@ final class SumValue
     }
 }
 
-/// A loaded module. Not a Silver value: `std.math` is resolved by name, never evaluated.
-class ModuleValue
-{
-    string name;
-    Environment environment;
-
-    this(string name, Environment environment)
-    {
-        this.name = name;
-        this.environment = environment;
-    }
-
-    /// Looks up a name defined at the module's top level.
-    /// Deliberately does not search parent environments.
-    Variant member(string memberName)
-    {
-        auto value = memberName in environment.variables;
-        assert(value !is null, "sema reports an unknown module member");
-        return *value;
-    }
-
-    override string toString() const
-    {
-        return name;
-    }
-}
-
 /// A value of a tuple type. Like an Instance it never changes.
 final class TupleValue
 {

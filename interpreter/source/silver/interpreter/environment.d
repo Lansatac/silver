@@ -1,13 +1,14 @@
 module silver.interpreter.environment;
 
 import std.variant : Variant;
-import silver.interpreter.values : ModuleValue;
+import silver.sema : SymbolId;
 
-/// One scope's variables, chained to the scope it's nested in. Sema has already checked every
-/// declaration and assignment, so a lookup that fails here is a bug.
+/// One scope's variables, by declaration, chained to the scope it's nested in. The root holds
+/// every module's declarations. Sema has already resolved each use to its declaration, so a
+/// lookup that fails here is a bug.
 class Environment
 {
-    Variant[string] variables;
+    Variant[SymbolId] variables;
     Environment parent;
 
     this(Environment parent = null)
@@ -15,65 +16,31 @@ class Environment
         this.parent = parent;
     }
 
-    void defineVariable(string name, Variant value)
+    void define(SymbolId symbol, Variant value)
     {
-        assert(name !in variables, "sema reports a duplicate declaration");
-        variables[name] = value;
+        assert(symbol !in variables, "a declaration only runs once per scope");
+        variables[symbol] = value;
     }
 
-    void setVariable(string name, Variant value)
+    void set(SymbolId symbol, Variant value)
     {
-        if (name in variables)
+        for (auto current = this; current !is null; current = current.parent)
         {
-            variables[name] = value;
-            return;
-        }
-        assert(parent !is null, "sema only lets a local be assigned");
-        parent.setVariable(name, value);
-    }
-
-    /// The variable `name` in this scope or an enclosing one, or null.
-    Variant* find(string name)
-    {
-        if (auto value = name in variables)
-        {
-            return value;
-        }
-        return parent is null ? null : parent.find(name);
-    }
-}
-
-/// The names a module gets from its imports, the prelude among them, searched after the
-/// module's own definitions. Each module has its own, so imports aren't transitive.
-class ImportScope : Environment
-{
-    /// By dotted name.
-    ModuleValue[string] modules;
-
-    override Variant* find(string name)
-    {
-        Variant* found;
-        foreach (imported; modules)
-        {
-            if (auto value = name in imported.environment.variables)
+            if (auto slot = symbol in current.variables)
             {
-                assert(found is null, "sema reports a name that's ambiguous between imports");
-                found = value;
+                *slot = value;
+                return;
             }
         }
-        return found;
+        assert(0, "sema only lets a local be assigned");
     }
 
-    /// The import scope that `environment`'s lookups end in.
-    static ImportScope of(Environment environment)
+    Variant get(SymbolId symbol)
     {
-        for (auto current = environment; current !is null; current = current.parent)
+        for (auto current = this; current !is null; current = current.parent)
         {
-            if (auto imports = cast(ImportScope) current)
-            {
-                return imports;
-            }
+            if (auto value = symbol in current.variables) return *value;
         }
-        assert(false, "Every environment chain ends in an ImportScope");
+        assert(0, "sema resolves every name to a declaration in scope");
     }
 }
