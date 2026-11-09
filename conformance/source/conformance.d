@@ -273,7 +273,7 @@ version (unittest)
         foreach (members; grouped.chunks(bundleSize))
         {
             auto name = "bundle-" ~ bundles.length.to!string;
-            bundles ~= makeBundle(name, members, buildPath(workDirectory, name));
+            bundles ~= makeBundle(name, members, buildPath(workDirectory, name ~ ".src"));
         }
         auto programs = bundles.map!(b => b.program).array;
         auto bundleResults = inParallel(programs, (Case c) => runCompiled(c, toolchain, workDirectory));
