@@ -44,7 +44,7 @@ package string formatValue(const ConstValue value)
         (const ConstInt v) => v.value.to!string,
         (const ConstUInt v) => v.value.to!string,
         (const bool v) => v.to!string,
-        (const double v) => v.to!string,
+        (const double v) => v != v ? "nan" : v.to!string,
         (const string v) => v,
         (const ConstUnit _) => "()",
     );

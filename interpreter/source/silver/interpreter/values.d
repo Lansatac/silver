@@ -13,6 +13,18 @@ struct Unit
     }
 }
 
+/// `value` as `print` shows it. D would show a NaN's sign bit, which means nothing.
+string formatted(Variant value)
+{
+    import std.math : isNaN;
+
+    if (auto number = value.peek!double)
+    {
+        if (isNaN(*number)) return "nan";
+    }
+    return value.toString();
+}
+
 /// The D implementation behind a `native def`. Arguments are already
 /// evaluated, and sema has checked them against the declaration.
 alias NativeFunction = Variant delegate(Variant[] args);
@@ -125,7 +137,7 @@ class Instance
 
         checkStack();
         auto name = constructor.toString();
-        return fields.length == 0 ? name : name ~ "(" ~ fields.map!(f => f.toString()).join(", ") ~ ")";
+        return fields.length == 0 ? name : name ~ "(" ~ fields.map!(f => formatted(f)).join(", ") ~ ")";
     }
 }
 
@@ -163,7 +175,7 @@ final class OptionValue
 
     override string toString()
     {
-        return _present ? "Some(" ~ _payload.toString() ~ ")" : "None";
+        return _present ? "Some(" ~ formatted(_payload) ~ ")" : "None";
     }
 }
 
@@ -183,7 +195,7 @@ final class ArrayValue
         import std.algorithm : map;
         import std.array : join;
 
-        return "[" ~ elements.map!(e => e.toString()).join(", ") ~ "]";
+        return "[" ~ elements.map!(e => formatted(e)).join(", ") ~ "]";
     }
 }
 
@@ -201,7 +213,7 @@ final class SumValue
 
     override string toString()
     {
-        return member.toString();
+        return formatted(member);
     }
 }
 
@@ -220,6 +232,6 @@ final class TupleValue
         import std.algorithm : map;
         import std.array : join;
 
-        return "(" ~ elements.map!(e => e.toString()).join(", ") ~ ")";
+        return "(" ~ elements.map!(e => formatted(e)).join(", ") ~ ")";
     }
 }

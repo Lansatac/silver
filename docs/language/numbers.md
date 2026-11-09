@@ -2,7 +2,7 @@
 
 ## Types
 
-The integer types are `Int8`, `Int16`, `Int32`, `Int64`, `UInt8`, `UInt16`, `UInt32` and `UInt64`. `Int` and `UInt` are the same types as `Int64` and `UInt64`. `Float` is a 64-bit floating-point number.
+The integer types are `Int8`, `Int16`, `Int32`, `Int64`, `UInt8`, `UInt16`, `UInt32` and `UInt64`. `Int` and `UInt` are the same types as `Int64` and `UInt64`. `Float` is a 64-bit floating-point number. Every NaN prints as `nan`, whatever its sign bit.
 
 ## Literals
 

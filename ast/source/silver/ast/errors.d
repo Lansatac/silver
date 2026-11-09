@@ -63,6 +63,7 @@ enum DiagnosticCode : string
     NonExhaustiveMatch = "T0024",
     UnreachableArm = "T0025",
     UntypedLambdaParameter = "T0026",
+    UninhabitedType = "T0027",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

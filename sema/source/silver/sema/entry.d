@@ -1,6 +1,9 @@
 module silver.sema.entry;
 
 import silver.ast;
+import silver.sema.check : Typing;
+import silver.sema.resolve : Resolution, SymbolId;
+import silver.sema.type : FunctionData;
 
 /// Reports a program that doesn't have exactly one top-level `main` across all its modules.
 /// Returns that `main`, or an invalid ID if there isn't exactly one.
@@ -52,15 +55,29 @@ void checkEntryPointShape(const ref Program program, Collector collector, const 
                         collector.reportError(DiagnosticCode.MainInvalidDefinition, f.nameSpan,
                             "`main` must not have parameters");
                     }
-                    // else if (!f.returnType.isUnit)
-                    // {
-                    //     collector.reportError(DiagnosticCode.MainInvalidDefinition, f.nameSpan,
-                    //         "`main` must return `Unit`");
-                    // }
                 }
             },
             (_) {},
         );
+    }
+}
+
+/// Separate from the shape check because it needs the resolved type: `main`'s return type can be
+/// written as an alias of `Unit`.
+package void checkEntryPointReturn(Id!FunctionDecl entryPoint, const ref Resolution resolution, ref Typing typing,
+    Collector collector)
+{
+    import std.sumtype : match;
+
+    if (!entryPoint.isValid) return;
+    auto returnType = typing.types[typing.symbolTypes[SymbolId(entryPoint)]].match!(
+        (const FunctionData f) => f.ret,
+        _ => typing.types.error,
+    );
+    if (returnType != typing.types.unit && returnType != typing.types.error)
+    {
+        collector.reportError(DiagnosticCode.MainInvalidDefinition, resolution.declarations.functions[entryPoint].nameSpan,
+            "`main` must return `Unit`");
     }
 }
 
@@ -162,10 +179,6 @@ unittest
 @("analyze reports an invlaid main function definition")
 unittest
 {
-    // auto returnErrors = entryPointErrors(["app": "def main(): Int {}"]);
-    // returnErrors.length.should.equal(1);
-    // returnErrors[0].code.should.equal(DiagnosticCode.MainInvalidDefinition);
-
     auto parameterErrors = entryPointErrors(["app": "def main(a: Int): Unit {}"]);
     parameterErrors.length.should.equal(1);
     parameterErrors[0].code.should.equal(DiagnosticCode.MainInvalidDefinition);

@@ -218,7 +218,7 @@ class Evaluator
         import std.conv : to;
         import std.stdio : write, writeln;
 
-        outputText ~= value.to!string ~ (newline ? "\n" : "");
+        outputText ~= formatted(value) ~ (newline ? "\n" : "");
         if (useStdOut)
         {
             if (newline)
@@ -597,7 +597,7 @@ class Evaluator
     {
         import std.conv : to;
 
-        if (target == analysis.types.string_) return Variant(value.to!string);
+        if (target == analysis.types.string_) return Variant(formatted(value));
         if (target == analysis.types.float_)
         {
             if (value.peek!double) return value;
@@ -722,7 +722,7 @@ class Evaluator
         string text;
         foreach (part; ast.parts)
         {
-            text ~= evaluate(part, variables).to!string;
+            text ~= formatted(evaluate(part, variables));
         }
         return Variant(text);
     }

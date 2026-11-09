@@ -1,0 +1,25 @@
+// A NaN's sign bit never shows, however the NaN was made or printed
+type Holder(value: Float)
+type Number = Float | Int
+
+val constant: Float = 0.0 / 0.0
+val hole: String = "{constant}"
+
+def main(): Unit {
+    val zero = 0.0
+    val nan = zero / zero
+    printl(nan)
+    printl(-nan)
+    printl(String(nan))
+    printl("{nan}")
+    printl([nan])
+    printl(Some(nan))
+    printl((nan, 1))
+    printl(Holder(nan))
+    val number: Number = nan
+    printl(number)
+    printl(constant)
+    printl(hole)
+    printl(1.0 / zero)
+    printl(-1.0 / zero)
+}

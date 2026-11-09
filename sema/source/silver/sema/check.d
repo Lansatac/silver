@@ -208,6 +208,8 @@ private final class TypeChecker
             }
         }
 
+        checkInhabited(programModules);
+
         foreach (literal; _intLiterals)
         {
             checkLiteralRange(literal);
@@ -697,6 +699,64 @@ private final class TypeChecker
             : _types.function_(fields.map!(f => f.type).array, declared);
     }
 
+
+    /// Reports the types no value can ever have, such as `type A(a: A)`: the ones that can be built
+    /// are found from those needing nothing else, and whatever's left can't finish building itself.
+    private void checkInhabited(M)(M modules)
+    {
+        const(TypeDecl)[] decls;
+        foreach (mod; modules)
+        {
+            foreach (decl; mod.declarations)
+            {
+                decl.kind.match!((const TypeDecl t) { decls ~= t; }, (_) {});
+            }
+        }
+
+        bool[Id!TypeDecl] buildable;
+        bool canBuild(Type type)
+        {
+            return _types[type].match!(
+                (const NominalData nominal) => (nominal.decl in buildable) !is null,
+                (const TupleData tuple) => tuple.elements.all!(e => canBuild(e)),
+                _ => true,
+            );
+        }
+        bool canBuildDecl(const TypeDecl decl)
+        {
+            if (decl.members.length == 0) return _fields[decl.id].all!(f => canBuild(f.type));
+            auto members = _members[decl.id];
+            return members.length == 0 || members.any!(m => canBuild(m));
+        }
+
+        for (auto changed = true; changed;)
+        {
+            changed = false;
+            foreach (decl; decls.filter!(d => d.id !in buildable))
+            {
+                if (!canBuildDecl(decl)) continue;
+                buildable[decl.id] = true;
+                changed = true;
+            }
+        }
+
+        foreach (decl; decls.filter!(d => d.id !in buildable))
+        {
+            if (auto owner = decl.id in _owners)
+            {
+                if (!canBuild(*owner)) continue;
+            }
+            auto reason = "none of its members can be";
+            if (decl.members.length == 0)
+            {
+                auto field = _fields[decl.id].find!(f => !canBuild(f.type)).front;
+                reason = "its field `%s: %s` can't be".format(field.name, _types.describe(field.type));
+            }
+            _collector.reportError(DiagnosticCode.UninhabitedType, decl.nameSpan,
+                "No value of `%s` can ever be built, because %s; an option or array field would end the recursion"
+                    .format(decl.name, reason));
+        }
+    }
 
     private void checkFunction(const FunctionDecl func)
     {

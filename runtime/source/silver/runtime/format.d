@@ -8,6 +8,12 @@ import std.conv : to;
 import silver.runtime.buffer : newString, silver_array_append;
 import silver.runtime.panic : panic;
 
+/// D would show a NaN's sign bit, which means nothing.
+package string floatText(double value)
+{
+    return value != value ? "nan" : value.to!string;
+}
+
 extern (C) nothrow:
 
 void silver_format_int(long value, const(char)** data, size_t* length) { format(value, data, length); }
@@ -56,7 +62,8 @@ private void format(T)(T value, const(char)** data, size_t* length)
 {
     try
     {
-        newString(value.to!string, data, length);
+        static if (is(T == double)) newString(floatText(value), data, length);
+        else newString(value.to!string, data, length);
     }
     catch (Exception e)
     {

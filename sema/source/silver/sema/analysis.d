@@ -287,12 +287,13 @@ final class Analysis
 /// Analyzes every module in `program`, reporting problems to `collector`.
 Analysis analyze(const ref Program program, Collector collector)
 {
-    import silver.sema.entry : checkEntryPoint;
+    import silver.sema.entry : checkEntryPoint, checkEntryPointReturn;
     import silver.sema.resolve : resolveNames;
 
     auto entryPoint = checkEntryPoint(program, collector);
     auto resolution = resolveNames(program, collector);
     auto typing = checkTypes(program, resolution, collector);
+    checkEntryPointReturn(entryPoint, resolution, typing, collector);
     return new Analysis(resolution, typing, entryPoint);
 }
 
@@ -310,6 +311,53 @@ version (unittest)
         analyze(program, context.collector);
         return context.collector;
     }
+}
+
+@("analyze requires main to return Unit, however that's spelled")
+unittest
+{
+    foreach (source; ["def main(): Int => 1", "def main(): Never => panic(\"x\")"])
+    {
+        auto collector = analyzeSource(source);
+        collector.diagnostics.length.should.equal(1);
+        collector.diagnostics[0].code.should.equal(DiagnosticCode.MainInvalidDefinition);
+    }
+    analyzeSource("alias Empty = Unit\ndef main(): Empty => ()").diagnostics.length.should.equal(0);
+}
+
+@("analyze doesn't report main's return type when it's already unknown")
+unittest
+{
+    auto collector = analyzeSource("def main(): Nope => ()");
+    collector.diagnostics.length.should.equal(1);
+    collector.diagnostics[0].code.should.equal(DiagnosticCode.UnknownType);
+}
+
+@("analyze rejects a type that can only be built from itself")
+unittest
+{
+    import std.algorithm : map;
+    import std.array : array;
+
+    const(DiagnosticCode)[] reported(string declarations)
+    {
+        return analyzeSource(declarations ~ "\ndef main(): Unit => ()").diagnostics.map!(d => d.code).array;
+    }
+
+    with (DiagnosticCode)
+    {
+        reported("type A(a: A)").should.equal([UninhabitedType]);
+        reported("type A(pair: (Int, A))").should.equal([UninhabitedType]);
+        reported("type A(b: B)\ntype B(a: A)").should.equal([UninhabitedType, UninhabitedType]);
+        reported("type S = X(s: S) | Y(s: S)").should.equal([UninhabitedType]);
+        reported("type S = X(x: X) | Nothing").should.equal([UninhabitedType]);
+    }
+
+    reported("type A(a: A?)").length.should.equal(0);
+    reported("type A(a: [A])").length.should.equal(0);
+    reported("type A(a: () -> A)").length.should.equal(0);
+    reported("type S = X(s: S) | Nothing").length.should.equal(0);
+    reported("type A(a: B)\ntype B(n: Int)").length.should.equal(0);
 }
 
 @("analyze accepts a minimal program")

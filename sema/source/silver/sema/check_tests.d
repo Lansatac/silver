@@ -810,9 +810,7 @@ type Point(x: Int)`);
 unittest
 {
     auto a = analyzed(`type Node(value: Int, next: Node?)
-type Knot(self: Knot)
 def push(v: Int, n: Node): Node => Node(v, n)
-def tie(k: Knot): Knot => Knot(k)
 def rest(n: Node): Node? => n.next
 def main(): Unit => ()`);
     a.shouldHaveNoDiagnostics();
