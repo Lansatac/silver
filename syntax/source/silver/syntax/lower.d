@@ -826,9 +826,8 @@ private final class Lowering
                 params.validateNodeIs("Silver.FieldList");
                 foreach (param; params.children)
                 {
-                    auto fieldName = param[$ - 2];
-                    fields ~= Field(ids.next!Field, fieldName.matches[0], spanOf(fieldName, file),
-                        convertTypeExpression(param[$ - 1]), param.children.length == 3);
+                    fields ~= Field(ids.next!Field, param.matches[0], spanOf(param[0], file),
+                        convertTypeExpression(param[1]));
                 }
             }
         }

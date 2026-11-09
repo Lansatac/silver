@@ -17,8 +17,6 @@ immutable Case[] typeDeclarations = [
     rejectsDeclaration("type Point(x: Int,)"),
     rejects("type Point(x: Int)"), // only at module level for now
     rejects("val type = 1"),
-    declaresAs("type Handle(private id: Int, name: String)", "(type Handle (private id: Int, name: String))"),
-    declaresAs("type Handle(private\n    id: Int)", "(type Handle (private id: Int))"),
     declaresAs("type Key(privateKey: Int)", "(type Key (privateKey: Int))"),
     declaresAs("private type Detail(value: Int)", "(private (type Detail (value: Int)))"),
     declaresAs("private type S = A(x: Int) | B", ["(private (type A (x: Int)))", "(private (type S = A | B))", "(private (type B))"]),

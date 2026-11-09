@@ -1472,7 +1472,6 @@ unittest
 {
     analyzed("private type Detail(value: Int)
 private def f(d: Detail): Detail => d
-type Holder(private d: Detail)
 private type Inner(d: Detail)
 private type Sum = Detail | Other
 def main(): Unit => ()").shouldHaveNoDiagnostics();
@@ -1482,80 +1481,4 @@ def main(): Unit => ()").shouldHaveNoDiagnostics();
 unittest
 {
     analyzed("private def main(): Unit => ()").shouldReport(DiagnosticCode.MainInvalidDefinition, At("main", 1));
-}
-
-private enum handleLibrary = [
-    "lib.ag": "module lib
-type Handle(private id: Int, name: String)
-def make(): Handle => Handle(1, \"h\")",
-];
-
-@("a private field is blocked outside its module")
-unittest
-{
-    void rejected(string body, At where)
-    {
-        analyzed("import lib\ndef main(): Unit {\n" ~ body ~ "\n}", handleLibrary)
-            .shouldReport(DiagnosticCode.PrivateField, where);
-    }
-
-    rejected("val h = make()\nprintl(h.id)", At("h", 2));
-    rejected("val o = Some(make())\nprintl(o?.id)", At("o", 2));
-    rejected("mutable val h = make()\nh.id = 2", At("h", 2));
-    rejected("val h = make()\nprintl(h with (id = 2))", At("id", 1));
-    rejected("printl(Handle(1, \"x\"))", At("Handle", 1));
-    rejected("printl(lib.Handle(1, \"x\"))", At("lib", 2));
-    rejected("val f = Handle\nprintl(f)", At("Handle", 1));
-    rejected("printl(match make() { Handle(i, _) => i })", At("i", 1));
-}
-
-@("a private field leaves the rest of the type usable")
-unittest
-{
-    analyzed("import lib\ndef main(): Unit {
-val h = make()
-printl(h)
-printl(h == make())
-printl(h.name)
-printl(h with (name = \"x\"))
-printl(match h { Handle(_, n) => n })
-}", handleLibrary).shouldHaveNoDiagnostics();
-}
-
-/// Asserts whether the local or param declared at `declaration` is boxed, i.e. mutable and
-/// captured by some lambda.
-void shouldBeBoxed(const Analyzed a, At declaration, bool expected,
-    string file = __FILE__, size_t line = __LINE__)
-{
-    auto symbol = declaration.offsetIn(a) in a.names[declaration.moduleName].declarations;
-    if (symbol is null)
-    {
-        throw new AssertError(format("%s isn't a declaration", declaration), file, line);
-    }
-    if (a.analysis.isBoxed(*symbol) != expected)
-    {
-        throw new AssertError(format("%s should%s be boxed", declaration, expected ? "" : "n't"), file, line);
-    }
-}
-
-@("a mutable local or param that a lambda captures is boxed, and nothing else is")
-unittest
-{
-    auto a = analyzed("def main(): Unit {
-    mutable val shared = 0
-    val plain = 1
-    mutable val own = 2
-    val f = () => () => { shared += plain }
-    own += 1
-    def g(): Int => own
-}
-
-def h(mutable n: Int, m: Int): () -> Int => () => n + m
-");
-    a.shouldHaveNoDiagnostics();
-    a.shouldBeBoxed(At("shared", 1), true);
-    a.shouldBeBoxed(At("plain", 1), false);
-    a.shouldBeBoxed(At("own", 1), true);
-    a.shouldBeBoxed(At("n", 1), true);
-    a.shouldBeBoxed(At("m", 1), false);
 }

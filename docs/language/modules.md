@@ -35,16 +35,13 @@ private def helper(): Int => 1
 private val limit: Int = 10
 private type Detail(value: Int)
 private native def primitive(): Int
-type Handle(private id: Int)
 ```
 
 There are no `private:` sections.
 
 A private member can't be imported, can't be reached qualified, and doesn't take part in ambiguity between imports.
 
-A public function or constant can't mention a private type in its signature. A public type can't have a public field of a private type, and a public sum can't name a private type as a member. The members a private sum declares inline are private too.
-
-A private field blocks construction, field access, `with` and binding it in a pattern (`_` is fine) outside the module. A field that is hidden this way is also not what `x.f(...)` finds, so a public function `f` applies. Equality and printing are unaffected. A type with a private field therefore needs a factory function.
+A public function or constant can't mention a private type in its signature. A public type can't have a field of a private type, and a public sum can't name a private type as a member. The members a private sum declares inline are private too.
 
 `private def main` is an error.
 
@@ -65,6 +62,7 @@ Imports can also be renamed. A symbol's identity is its declaring module, so rea
 - How source roots are found. The leaning is that the compiler takes named roots only for other packages, and a file's own root comes from its declaration.
 - The syntax for renamed imports.
 - A visibility level wider than a file and narrower than public.
+- How a module keeps a type's invariants. A type's fields are all public, so anyone can construct it or use `with` on it. An `opaque type`, with a public name and a constructor, fields and patterns private to its module, is the leading candidate.
 
 ## Current implementation
 

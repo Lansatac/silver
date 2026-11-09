@@ -50,8 +50,6 @@ package struct Declarations
 {
     const(FunctionDecl)*[Id!FunctionDecl] functions;
     const(TypeDecl)*[Id!TypeDecl] types;
-    /// The module declaring each type.
-    string[Id!TypeDecl] typeModules;
     const(ConstDecl)*[Id!ConstDecl] constants;
     const(VarDecl)*[Id!VarDecl] locals;
     const(Param)*[Id!Param] params;
@@ -296,7 +294,6 @@ private final class NameResolver
                 },
                 (ref const TypeDecl type) {
                     _declarations.types[type.id] = &type;
-                    _declarations.typeModules[type.id] = name;
                     if (moduleScope.resolveLocalType(type.name) !is null || moduleScope.resolveLocal(type.name) !is null)
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan, type.implicitMarker
@@ -395,7 +392,7 @@ private final class NameResolver
                         }
                         seen[field.name] = true;
                         resolveTypeExpr(field.type, _moduleScopes[name]);
-                        if (!type.isPrivate && !field.isPrivate) reportPrivateType(field.type, "a public field");
+                        if (!type.isPrivate) reportPrivateType(field.type, "a public field");
                     }
                 },
                 (const ConstDecl constant) {

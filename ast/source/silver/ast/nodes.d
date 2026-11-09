@@ -626,7 +626,6 @@ struct Field
     string name;
     Span nameSpan;
     TypeExpr type;
-    bool isPrivate;
 }
 
 /// `type Name(fields)`, or `type Name` for a marker type, whose only value is `Name`.
@@ -791,7 +790,7 @@ private string printTypeDecl(const TypeDecl t)
     {
         return t.emptyParens ? "(type " ~ t.name ~ " ())" : "(type " ~ t.name ~ ")";
     }
-    return "(type " ~ t.name ~ " (" ~ t.fields.map!(f => (f.isPrivate ? "private " : "") ~ f.name ~ ": " ~ printTypeExpr(f.type)).join(", ") ~ "))";
+    return "(type " ~ t.name ~ " (" ~ t.fields.map!(f => f.name ~ ": " ~ printTypeExpr(f.type)).join(", ") ~ "))";
 }
 
 private string printConstDecl(const ConstDecl c)

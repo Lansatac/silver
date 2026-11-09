@@ -3,7 +3,7 @@ module silver.sema.check;
 import std.algorithm;
 import std.array;
 import std.conv;
-import std.range : enumerate, repeat;
+import std.range : repeat;
 import std.sumtype;
 import std.string;
 
@@ -96,8 +96,6 @@ private final class TypeChecker
     private Type[SymbolId] _symbolTypes;
     private Type[Id!TypeDecl] _nominalTypes;
     private FieldInfo[][Id!TypeDecl] _fields;
-    /// The module whose declarations are being checked, which is the one that sees its private fields.
-    private string _currentModule;
     private size_t[Id!Expr] _fieldIndexes;
     private size_t[][][Id!Expr] _updatePaths;
     /// Where a value becomes an option, by the option type it's wrapped into.
@@ -180,7 +178,6 @@ private final class TypeChecker
 
         foreach (mod; programModules)
         {
-            _currentModule = mod.name;
             foreach (decl; mod.declarations)
             {
                 decl.kind.match!(
@@ -1268,17 +1265,6 @@ private final class TypeChecker
             (const Id!TypeDecl type) => _resolutions.declarations.types[type].members.length > 0,
             _ => false,
         );
-        auto privateField = symbol.match!(
-            (const Id!TypeDecl type) => _resolutions.declarations.types[type].fields
-                .enumerate.filter!(f => isHiddenField(type, f.index)).map!(f => f.value.name).array,
-            _ => (string[]).init,
-        );
-        if (privateField.length > 0)
-        {
-            _collector.reportError(DiagnosticCode.PrivateField, span,
-                "This type can't be constructed here, because `%s` is a private field".format(privateField[0]));
-            return _types.error;
-        }
         if (isSumName)
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, span,
@@ -1417,11 +1403,6 @@ private final class TypeChecker
         {
             if (field.name == access.member)
             {
-                if (isHiddenField(_types.optionInner(objectType), i))
-                {
-                    reportPrivateField(expr.span, field.name);
-                    return _types.error;
-                }
                 _fieldIndexes[expr.id] = i;
                 return _types.isOption(field.type) ? field.type : _types.option(field.type);
             }
@@ -1952,36 +1933,12 @@ private final class TypeChecker
         return true;
     }
 
-    /// A private field outside its module doesn't count, so it can't take a method call from a public function.
     private bool hasField(Type type, string name)
     {
         return _types[type].match!(
-            (const NominalData nominal) {
-                auto index = _fields[nominal.decl].countUntil!(f => f.name == name);
-                return index >= 0 && !isHiddenField(type, index);
-            },
+            (const NominalData nominal) => _fields[nominal.decl].canFind!(f => f.name == name),
             (_) => false,
         );
-    }
-
-    /// Whether the field at `index` of `owner` is private to a module other than the one being checked.
-    private bool isHiddenField(Type owner, size_t index)
-    {
-        return _types[owner].match!(
-            (const NominalData nominal) => isHiddenField(nominal.decl, index),
-            (_) => false,
-        );
-    }
-
-    private bool isHiddenField(Id!TypeDecl decl, size_t index)
-    {
-        return _resolutions.declarations.types[decl].fields[index].isPrivate
-            && _resolutions.declarations.typeModules[decl] != _currentModule;
-    }
-
-    private void reportPrivateField(Span span, string name)
-    {
-        _collector.reportError(DiagnosticCode.PrivateField, span, "`%s` is a private field".format(name));
     }
 
     /// A `mutable` argument is written back when the call returns, so it must be a place of exactly
@@ -2052,11 +2009,6 @@ private final class TypeChecker
                     "Type `%s` has no field named `%s`".format(_types.describe(type), name));
                 return _types.error;
             }
-            if (isHiddenField(type, index))
-            {
-                reportPrivateField(update.span, name);
-                return _types.error;
-            }
             steps ~= index;
             type = fields[index].type;
         }
@@ -2089,11 +2041,6 @@ private final class TypeChecker
         {
             if (field.name == member.member)
             {
-                if (isHiddenField(objectType, i))
-                {
-                    reportPrivateField(expr.span, field.name);
-                    return _types.error;
-                }
                 _fieldIndexes[expr.id] = i;
                 return field.type;
             }
@@ -2704,8 +2651,6 @@ private final class TypeChecker
         CoveragePattern[] args;
         foreach (i, argument; constructor.arguments)
         {
-            auto ignored = argument.kind.match!((ref const VarDecl binding) => binding.name == discardName, (ref _) => false);
-            if (!ignored && isHiddenField(decl, i)) reportPrivateField(argument.span, fields[i].name);
             args ~= checkArmPattern(argument, fields[i].type, ctx);
         }
         if (isUnknown(subject)) return CoveragePattern.init;

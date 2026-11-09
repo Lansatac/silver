@@ -6,12 +6,9 @@ private def bump(x: Int): Int => x + step
 private type Detail(value: Int)
 private type Hidden = Shown(n: Int) | Empty
 
-type Handle(private id: Int, label: String)
+type Handle(id: Int, label: String)
 
 def handle(n: Int): Handle => Handle(bump(n), "h")
-def renumber(h: Handle): Handle => h with (id = h.id + 1)
-def id(h: Handle): Int => h.id + 100
-def takeApart(h: Handle): Int => match h { Handle(n, _) => n }
 
 def detail(): Int {
     val d = Detail(3)
