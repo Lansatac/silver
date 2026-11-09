@@ -16,6 +16,10 @@ import std.regex;
 /// array (its first element, and how many there are).
 enum sliceLayout = "{ ptr, i64 }";
 
+/// The IR type of a function value: the code, which takes the environment after its parameters,
+/// and the environment, which holds what a lambda captured and is null otherwise.
+enum closureLayout = "{ ptr, ptr }";
+
 /// The code for one expression and the operand holding its value. Fragments are values:
 /// an expression's fragment is built from its children's, and the parent decides where
 /// each one goes. Evaluation order is the order they're sequenced with `then`. A fragment
@@ -204,6 +208,11 @@ final class Generator
     private string[] _usedIntrinsics;
     /// One private global per string literal.
     private string[] _strings;
+    /// The definition of each lambda, and of each thunk that adapts a named function to a
+    /// function value's calling convention.
+    private string[] _closureFunctions;
+    private int _nextLambda;
+    private bool[string] _thunksSeen;
 
     this(const Analysis analysis, Collector collector, const SourceMap sources)
     {
@@ -249,6 +258,8 @@ final class Generator
                 modules ~= emitArrayFormatter(pending);
             }
         }
+
+        modules ~= _closureFunctions;
 
         // After the modules, so every runtime call and string literal has been seen.
         return emitDeclares() ~ _strings.map!(s => s ~ "\n").join ~ modules.join("\n") ~ "\n" ~ emitLLMain();
@@ -418,6 +429,132 @@ final class Generator
 
         return "define %s @\"%s\"(%s) {\nentry:\n%s}\n".format(returnType, mangledName, params,
             lines.map!(line => line ~ "\n").join);
+    }
+
+    /// A function value for the named function `target`, of type `type`.
+    Fragment namedClosure(string target, Type type)
+    {
+        auto thunk = ".thunk." ~ target;
+        if (thunk !in _thunksSeen)
+        {
+            _thunksSeen[thunk] = true;
+            auto signature = _analysis.types[type].match!(
+                (const FunctionData data) => data,
+                (_) => assert(0, "only a function has a thunk"),
+            );
+            string[] declared, passed;
+            foreach (i, param; signature.params)
+            {
+                if (!hasOperand(param)) continue;
+                auto operand = "%%.a%s".format(i);
+                auto typed = "%s %s".format(signature.isMutable(i) ? "ptr" : llvmType(param), operand);
+                declared ~= typed;
+                passed ~= typed;
+            }
+            auto returned = llvmReturnType(signature.ret);
+            auto call = returned == "void"
+                ? "  call void @\"%s\"(%s)\n  ret void\n".format(target, passed.join(", "))
+                : "  %%.r = call %s @\"%s\"(%s)\n  ret %s %%.r\n".format(returned, target, passed.join(", "), returned);
+            _closureFunctions ~= "define private %s @\"%s\"(%s) {\nentry:\n%s}\n".format(
+                returned, thunk, (declared ~ "ptr %.env").join(", "), call);
+        }
+        return Fragment.constant("{ ptr @\"%s\", ptr null }".format(thunk));
+    }
+
+    /// The closure for `lambda`: its function is generated separately, and what it captures is
+    /// copied into a new environment here.
+    Fragment emitLambda(const Expr expr, const Lambda lambda)
+    {
+        auto name = ".lambda.%s".format(_nextLambda++);
+        auto captures = _analysis.capturesOf(expr.id);
+        auto stored = captures.filter!(c => hasOperand(captureType(c))).array;
+        auto envLayout = "{ %-(%s, %) }".format(stored.map!(c => llvmType(captureType(c))));
+
+        Fragment closure = Fragment.constant("{ ptr @\"%s\", ptr null }".format(name));
+        if (stored.length > 0)
+        {
+            auto env = alloc(envLayout);
+            auto code = env;
+            foreach (i, capture; stored)
+            {
+                auto value = readCapture(capture);
+                auto pointer = fieldPointer(envLayout, env.value, i);
+                code = code.then(value).then(pointer).then(Fragment.store(llvmType(captureType(capture)), value.value, pointer.value));
+            }
+            auto result = _function.newTemp();
+            closure = code.then(Fragment.instruction("%s = insertvalue %s { ptr @\"%s\", ptr undef }, ptr %s, 1".format(
+                result, closureLayout, name, env.value), result));
+        }
+
+        auto enclosing = _function;
+        scope (exit) _function = enclosing;
+        _function = new FunctionState;
+        auto signature = _analysis.signatureOf(expr.id);
+        auto returnType = llvmReturnType(signature.ret);
+        _function.returnType = returnType;
+        _function.declaredReturn = signature.ret;
+        auto params = emitParams(lambda.params);
+
+        Fragment entry;
+        foreach (i, capture; stored)
+        {
+            auto pointer = fieldPointer(envLayout, "%.env", i);
+            auto value = load(llvmType(captureType(capture)), pointer.value);
+            entry = entry.then(pointer).then(value);
+            capture.match!(
+                (const Id!Param param) { _function.params[param] = value.value; },
+                (const Id!VarDecl local) {
+                    entry = entry.then(bindClosureLocal(local, llvmType(captureType(capture)), value.value));
+                },
+                (_) => assert(0, "only locals and params are captured"),
+            );
+        }
+        foreach (capture; captures.filter!(c => !hasOperand(captureType(c))))
+        {
+            capture.match!(
+                (const Id!Param param) { _function.params[param] = null; },
+                (_) {},
+            );
+        }
+        if (lambda.self.isValid)
+        {
+            auto self = _function.newTemp();
+            entry = entry.then(Fragment.instruction("%s = insertvalue %s { ptr @\"%s\", ptr undef }, ptr %%.env, 1".format(
+                self, closureLayout, name), self));
+            entry = entry.then(bindClosureLocal(lambda.self, closureLayout, self));
+        }
+
+        auto body = emitExpr(*lambda.body);
+        auto lines = entry.allocas ~ body.allocas ~ entry.code ~ body.code ~ ("  " ~ returnInstruction(body.value));
+        _closureFunctions ~= "define private %s @\"%s\"(%s) {\nentry:\n%s}\n".format(returnType, name,
+            (params.length > 0 ? [params] : []).chain(["ptr %.env"]).join(", "), lines.map!(line => line ~ "\n").join);
+        return closure;
+    }
+
+    Type captureType(const SymbolId capture)
+    {
+        return capture.match!(
+            (const Id!Param param) => _analysis.typeOf(param),
+            (const Id!VarDecl local) => _analysis.typeOf(local),
+            (_) => assert(0, "only locals and params are captured"),
+        );
+    }
+
+    Fragment readCapture(const SymbolId capture)
+    {
+        return capture.match!(
+            (const Id!Param param) => Fragment.constant(_function.params[param]),
+            (const Id!VarDecl local) => load(llvmType(_analysis.typeOf(local)), _function.slots[local]),
+            (_) => assert(0, "only locals and params are captured"),
+        );
+    }
+
+    /// A stack slot in the current function for `local`, holding `value`.
+    Fragment bindClosureLocal(Id!VarDecl local, string layout, string value)
+    {
+        auto slot = _function.newSlot(_analysis.declarationOf(local).name);
+        _function.slots[local] = slot;
+        return Fragment(["  %s = alloca %s".format(slot, layout)]).then(Fragment.store(layout, value, slot));
     }
 
     /// `ret` for `value` from the current function. No value in a non-void function means
@@ -889,6 +1026,7 @@ final class Generator
             (const TupleLiteral literal) => emitTupleLiteral(expr, literal),
             (const WithExpr with_) => emitWith(expr, with_),
             (const MatchExpr match_) => emitMatch(expr, match_),
+            (const Lambda lambda) => emitLambda(expr, lambda),
         );
     }
 
@@ -1504,8 +1642,7 @@ final class Generator
         auto fragment = (*resolved).match!(
             (const Id!FunctionDecl decl) {
                 if (_analysis.declarationOf(decl).native) return unsupported(expr.span, "native functions as values");
-                auto name = mangledNames[decl];
-                return Fragment.constant("@\"%s\"".format(name));
+                return namedClosure(mangledNames[decl], _analysis.typeOf(decl));
             },
             (const Id!Param param) {
                 if (auto slot = param in _function.paramSlots)
@@ -1524,6 +1661,7 @@ final class Generator
             },
             (const Id!TypeDecl type) {
                 if (!hasLayout(type)) return unsupported(expr.span, "types with `Any` or `Never` fields");
+                if (_analysis.fieldsOf(type).length > 0) return namedClosure(typeConstructors[type], _analysis.typeOf(expr.id));
                 return Fragment.constant("@\"%s\"".format(typeConstructors[type]));
             },
             (const Id!ConstDecl decl) {
@@ -2193,7 +2331,13 @@ final class Generator
         {
             if (calleeSignature(call).params.canFind(_analysis.types.any))
                 return unsupported(expr.span, "calling a value that takes `Any`");
-            return emitCallTo(call, emitExpr(*call.callee));
+            auto closure = emitExpr(*call.callee);
+            auto code = _function.newTemp();
+            auto env = _function.newTemp();
+            auto parts = closure
+                .then(Fragment.instruction("%s = extractvalue %s %s, 0".format(code, closureLayout, closure.value)))
+                .then(Fragment.instruction("%s = extractvalue %s %s, 1".format(env, closureLayout, closure.value)));
+            return emitCallTo(call, parts.withValue(code), env);
         }
         auto function_ = _analysis.declarationOf(*callee);
 
@@ -2201,9 +2345,9 @@ final class Generator
         return emitCallTo(call, Fragment.constant("@\"%s\"".format(mangledNames[function_.id])));
     }
 
-    /// A call of the function `callee` holds. LLVM pointers are untyped, so the same code calls
-    /// a named function and a function value; the callee is evaluated first, then the arguments.
-    Fragment emitCallTo(const CallExpr call, Fragment callee)
+    /// A call of the code `callee` holds, passing `env` after the arguments when it's a function
+    /// value. The callee is evaluated first, then the arguments.
+    Fragment emitCallTo(const CallExpr call, Fragment callee, string env = null)
     {
         auto signature = calleeSignature(call);
 
@@ -2240,6 +2384,7 @@ final class Generator
             writeBacks ~= assignTo(arg, written);
         }
 
+        if (env !is null) typed ~= "ptr " ~ env;
         auto result = evaluated.then(emitCall(llvmReturnType(signature.ret), callee.value, typed.join(", ")));
         return result.then(Fragment.sequence(writeBacks)).withValue(result.value);
     }
@@ -2475,7 +2620,7 @@ final class Generator
             (const PatternDecl decl) => emitPattern(decl.pattern, decl.value).withValue(null),
             (const AssignStmt assign) => emitAssign(assign),
             (const ExprStmt exprStmt) => emitExpr(exprStmt.expr).withValue(null),
-            (const FunctionDecl function_) => unsupported(statement.span, "nested functions").withValue(null),
+            (const FunctionDecl function_) => unsupported(statement.span, "nested native functions").withValue(null),
             (const ReturnStmt return_) => emitReturn(return_),
             (const BreakStmt _) => emitJumpOut(_function.loops[$ - 1].breakLabel),
             (const ContinueStmt _) => emitJumpOut(_function.loops[$ - 1].continueLabel),
@@ -2637,7 +2782,7 @@ final class Generator
             (const OptionData o) => optionLayout(o.inner),
             (const ArrayData _) => sliceLayout,
             (const EmptyArrayType _) => sliceLayout,
-            (const FunctionData f) => "ptr",
+            (const FunctionData f) => closureLayout,
             (const NominalData nd) => isSum(t) ? sumLayout(t) : "ptr",
             (const TupleData _) => tupleLayout(t),
             (const NoneType _) => assert(0, "every None that has a value is promoted"),
@@ -2656,7 +2801,7 @@ final class Generator
             (const OptionData o) => optionLayout(o.inner),
             (const ArrayData _) => sliceLayout,
             (const EmptyArrayType _) => sliceLayout,
-            (const FunctionData f) => "ptr",
+            (const FunctionData f) => closureLayout,
             (const NominalData nd) => isSum(t) ? sumLayout(t) : "ptr",
             (const TupleData _) => hasOperand(t) ? tupleLayout(t) : "void",
             (const NoneType _) => assert(0, "no function returns a bare None"),

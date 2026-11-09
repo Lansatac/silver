@@ -112,6 +112,22 @@ final class Analysis
         );
     }
 
+    /// ditto, for a lambda.
+    FunctionData signatureOf(Id!Expr lambda) const
+    {
+        return _typing.types[typeOf(lambda)].match!(
+            (const FunctionData data) => data,
+            (_) => assert(0, "A lambda's type should always be a function type"),
+        );
+    }
+
+    /// The locals and params `lambda` uses from outside itself. Each is immutable, so it can be
+    /// copied when the lambda is created.
+    const(SymbolId)[] capturesOf(Id!Expr lambda) const
+    {
+        return _resolution.captures.get(lambda, null);
+    }
+
     /// The declaration a name or module-rooted member chain refers to, or null if it was
     /// left unresolved (e.g. `x.f` on a value, which types decide).
     const(SymbolId)* resolutionOf(Id!Expr use) const

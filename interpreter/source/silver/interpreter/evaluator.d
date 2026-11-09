@@ -244,9 +244,10 @@ class Evaluator
 
     private void execute(const FunctionDecl ast, Environment variables)
     {
+        auto returnsUnit = analysis.signatureOf(ast.id).ret == analysis.types.unit;
         if (!ast.native)
         {
-            functions[ast.id] = Variant(new Function(ast, variables));
+            functions[ast.id] = Variant(new Function(ast.name, ast.params, ast.body, returnsUnit, variables));
             variables.defineVariable(ast.name, functions[ast.id]);
             return;
         }
@@ -257,7 +258,7 @@ class Evaluator
 
             throw new CodedException(DiagnosticCode.MissingNativeBinding, "No native binding for %s".format(ast.name));
         }
-        functions[ast.id] = Variant(new Function(ast, variables, *binding));
+        functions[ast.id] = Variant(new Function(ast.name, ast.params, ast.body, returnsUnit, variables, *binding));
         variables.defineVariable(ast.name, functions[ast.id]);
     }
 
@@ -345,6 +346,7 @@ class Evaluator
                 (const CallExpr call) => evaluateCall(call, ast.id, variables),
                 (const BinaryExpr binary) => evaluateBinary(binary, ast.id, variables),
                 (const MatchExpr match_) => evaluateMatch(match_, ast.id, variables),
+                (const Lambda lambda) => evaluateLambda(lambda, ast.id, variables),
                 s => evaluate(s, variables));
             if (auto member = analysis.constructedMemberOf(ast.id))
             {
@@ -378,6 +380,29 @@ class Evaluator
         }
         if (from == to || from == analysis.types.none || !analysis.types.isOption(to)) return value;
         return Variant(OptionValue.some(promote(value, from, analysis.types.optionInner(to))));
+    }
+
+    /// A function over a copy of what it captures, as compiled code makes.
+    private Variant evaluateLambda(const Lambda ast, Id!Expr id, Environment variables)
+    {
+        auto moduleLevel = variables;
+        while (cast(ImportScope) moduleLevel.parent is null) moduleLevel = moduleLevel.parent;
+
+        auto captured = new Environment(moduleLevel);
+        foreach (symbol; analysis.capturesOf(id))
+        {
+            auto name = symbol.match!(
+                (const Id!Param param) => analysis.declarationOf(param).name,
+                (const Id!VarDecl local) => analysis.declarationOf(local).name,
+                (_) => assert(0, "only locals and params are captured"),
+            );
+            captured.defineVariable(name, *variables.find(name));
+        }
+
+        auto returnsUnit = analysis.signatureOf(id).ret == analysis.types.unit;
+        auto value = Variant(new Function(ast.name is null ? "lambda" : ast.name, ast.params, ast.body, returnsUnit, captured));
+        if (ast.self.isValid) captured.defineVariable(ast.name, value);
+        return value;
     }
 
     /// Runs the first arm whose pattern matches. Sema found that one always does.
@@ -917,15 +942,14 @@ class Evaluator
         foreach (i, arg; args)
         {
             // Arguments are evaluated in the caller's environment.
-            functionEnv.defineVariable(fn.declaration.params[i].name, arg);
+            functionEnv.defineVariable(fn.params[i].name, arg);
         }
 
         Variant result;
         try
         {
-            result = evaluate(*fn.declaration.body, functionEnv);
-            // Whatever the body ended in, a Unit function's value is dropped.
-            if (analysis.signatureOf(fn.declaration.id).ret == analysis.types.unit)
+            result = evaluate(*fn.body, functionEnv);
+            if (fn.returnsUnit)
             {
                 result = Variant(Unit());
             }
@@ -936,7 +960,7 @@ class Evaluator
         }
         if (written !is null)
         {
-            foreach (param; fn.declaration.params)
+            foreach (param; fn.params)
             {
                 *written ~= *functionEnv.find(param.name);
             }

@@ -1,0 +1,143 @@
+type Op(apply: (Int) -> Int, n: Int)
+type Point(x: Int, y: Int)
+type Counter(value: Int)
+
+def double(x: Int): Int => x * 2
+def applyTo(f: (Int) -> Int, x: Int): Int => f(x)
+def twice(f: (Int) -> Int): (Int) -> Int => x => f(f(x))
+def adder(n: Int): (Int) -> Int => x => x + n
+def bump(c: (mutable Counter) -> Int, mutable target: Counter): Int => c(mutable target)
+
+def firstOr(xs: [Int]): (Int) -> Int {
+    val head = xs[0]
+    fallback => if fallback > 0 => head else fallback
+}
+
+def main(): Unit {
+    // Every spelling, with and without types.
+    val a = (x: Int): Int => x * 2
+    val b = (x: Int) => x * 3
+    val c: (Int, Int) -> Int = (x, y) => x + y
+    val d: (Int) -> Int = x => x * 4
+    val e: (Int) -> Int = x => { val y = x * 2; y + 1 }
+    val none = () => 7
+    printl(a(1))
+    printl(b(1))
+    printl(c(1, 2))
+    printl(d(1))
+    printl(e(1))
+    printl(none())
+
+    // Called where it's written, and passed as an argument.
+    printl(((x: Int) => x + 1)(1))
+    printl(applyTo(x => x + 10, 1))
+    printl(applyTo(double, 4))
+
+    // Capturing locals, params and lambdas, through several levels.
+    val base = 100
+    val addBase: (Int) -> Int = x => x + base
+    printl(addBase(1))
+    printl(adder(5)(1))
+    printl(twice(addBase)(0))
+    printl(twice(adder(3))(1))
+    val curried: (Int) -> (Int) -> Int = x => y => x * y + base
+    printl(curried(2)(3))
+    printl(firstOr([9])(1))
+    printl(firstOr([9])(-1))
+
+    // A capture is a copy of an immutable value.
+    val unit = ()
+    val usesUnit: () -> Int = () => { val u = unit; 1 }
+    printl(usesUnit())
+
+    // Each iteration captures its own.
+    mutable val makers: [() -> Int] = []
+    for i in 0..3 {
+        val square = i * i
+        makers ~= [() => i + square]
+    }
+    for maker in makers {
+        printl(maker())
+    }
+
+    // Function values go anywhere other values do.
+    val op = Op(x => x + base, 1)
+    printl(op.apply(op.n))
+    val chosen: (Int) -> Int = if base > 1 => x => x + 1 else double
+    printl(chosen(1))
+    val maybe: ((Int) -> Int)? = x => x - 1
+    printl(if val f = maybe => f(1) else 0)
+    val pair: ((Int) -> Int, Int) = (x => x * base, 2)
+    val (applied, argument) = pair
+    printl(applied(argument))
+    val build = Point
+    printl(build(1, 2).y)
+
+    // Return types are inferred from every `return` and the final value.
+    val sign = (x: Int) => {
+        if x < 0 { return "negative" }
+        "other"
+    }
+    printl(sign(-1))
+    printl(sign(1))
+    val positive = (x: Int) => {
+        if x > 0 { return Some(x) }
+        None
+    }
+    printl(positive(1) ?? 0)
+    printl(positive(-1) ?? 0)
+    val widened = (x: Int?) => {
+        val value = x?
+        value + 1
+    }
+    printl(widened(1) ?? 0)
+    printl(widened(None) ?? 0)
+    val early = (x: Int) => {
+        for i in 0..10 {
+            if i == x { return i * 2 }
+        }
+        -1
+    }
+    printl(early(3))
+    printl(early(30))
+
+    // A Unit lambda drops its value.
+    val sink: (Int) -> Unit = x => x + 1
+    sink(1)
+    val log = (x: Int) => print("{x}\n")
+    log(5)
+
+    // A mutable parameter writes back through a function value.
+    val increment: (mutable Counter) -> Int = (mutable held) => {
+        held.value += 1
+        held.value
+    }
+    mutable val counter = Counter(1)
+    printl(bump(increment, mutable counter))
+    printl(counter.value)
+
+    // Nested functions see earlier locals and themselves.
+    val factor = 2
+    def scaled(x: Int): Int => x * factor
+    def factorial(n: Int): Int {
+        if n <= 1 => 1 else n * factorial(n - 1)
+    }
+    def countdown(n: Int): Unit {
+        if n == 0 { return }
+        def inner(): Int => n
+        printl(inner())
+        countdown(n - 1)
+    }
+    printl(scaled(4))
+    printl(factorial(5))
+    countdown(2)
+    val alias_ = factorial
+    printl(alias_(3))
+
+    // A condition isn't a lambda, so these arrows belong to the `if`.
+    val done = true
+    printl(if done => 1 else 2)
+    printl(if (done) => 3 else 4)
+    val found = Some(1)
+    printl(if val v = found => v else 0)
+}

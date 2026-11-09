@@ -193,7 +193,11 @@ private final class Lowering
         case "Silver.FunctionDeclaration":
         case "Silver.NativeFunctionDeclaration":
             auto decl = convertFunctionDeclaration(cst);
-            return Stmt(spanOf(cst, file), StmtKind(decl));
+            if (decl.native) return Stmt(spanOf(cst, file), StmtKind(decl));
+            auto binding = ids.next!VarDecl;
+            auto nested = Expr(ids.next!Expr, spanOf(cst, file),
+                ExprKind(Lambda(decl.params, boxed(decl.returnType), decl.body, decl.name, binding)));
+            return Stmt(spanOf(cst, file), StmtKind(VarDecl(binding, decl.name, decl.nameSpan, nested, null, false)));
         case "Silver.ReturnStatement":
             // `RETURN Expression?`; the keyword is kept so a bare `return` still has a node.
             auto value = cst.children.length > 1
@@ -377,7 +381,10 @@ private final class Lowering
 
         switch (cst.name)
         {
+        case "Silver.Lambda":
+            return convertLambda(cst);
         case "Silver.Expression":
+        case "Silver.Condition":
         case "Silver.Eval":
         case "Silver.Literal":
         case "Silver.NumberLiteral":
@@ -686,6 +693,30 @@ private final class Lowering
     /// or `NATIVE DEF Identifier Params? TypeAnnotation` with no body.
     /// Params is absent rather than empty when there are no params,
     /// so children are matched by name.
+    private Expr convertLambda(ParseTree cst)
+    {
+        cst.validateNodeIs("Silver.Lambda");
+        Param[] params;
+        if (cst[0].name == "Silver.Identifier")
+        {
+            params ~= Param(ids.next!Param, cst[0].matches[0], spanOf(cst[0], file), TypeExpr.init, false, false);
+        }
+        else
+        {
+            foreach (param; cst[0].children)
+            {
+                auto mutable = param[0].name == "Silver.MUTABLE";
+                auto name = param[mutable ? 1 : 0];
+                auto annotated = param.children.length > (mutable ? 2 : 1);
+                params ~= Param(ids.next!Param, name.matches[0], spanOf(name, file),
+                    annotated ? convertTypeExpression(param[$ - 1]) : TypeExpr.init, mutable, annotated);
+            }
+        }
+        auto returnType = cst.children.length == 3 ? boxed(convertTypeExpression(cst[1])) : null;
+        return Expr(ids.next!Expr, spanOf(cst, file),
+            ExprKind(Lambda(params, returnType, boxed(convertExpression(cst.children[$ - 1])))));
+    }
+
     private FunctionDecl convertFunctionDeclaration(ParseTree cst)
     {
         auto native = cst.name == "Silver.NativeFunctionDeclaration";

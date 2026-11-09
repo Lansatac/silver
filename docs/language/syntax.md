@@ -85,4 +85,3 @@ The condition of an `if` or `while`, the iterable of a `for` and the subject of 
 
 - `private` and `alias`-based declarations aren't available. `alias` is reserved, but `private` can still be used as a name.
 - `test` declarations aren't available.
-- Lambdas aren't available.

@@ -1547,6 +1547,86 @@ unittest
     analyzedConstants("val a: Int = nope\nval b: Int = a + 1").shouldReport(DiagnosticCode.UnknownName, At("nope", 1));
 }
 
+@("a lambda's parameter types come from the annotation or the context")
+unittest
+{
+    auto a = analyzedMain(`val f = (x: Int) => x + 1
+    val g: (Int) -> Int = x => x + 1
+    val h: ((Int) -> Int)? = x => x`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldTypeEveryExpression();
+    a.shouldDeclareType(At("f", 1), "(Int) -> Int");
+
+    analyzedMain(`val f = x => x`).shouldReport(DiagnosticCode.UntypedLambdaParameter, At("x", 1));
+    analyzedMain(`val f = (x, y: Int) => y`).shouldReport(DiagnosticCode.UntypedLambdaParameter, At("x", 1));
+    analyzedMain(`val f: (Int) -> Int = (x, y) => x`).shouldReport(DiagnosticCode.TypeMismatch, At("(x, y) => x", 1));
+    analyzedMain(`val f: (Int) -> Int = (x: String) => 1`).shouldReport(DiagnosticCode.TypeMismatch, At("(x: String) => 1", 1));
+    analyzedMain(`val f: (mutable Int) -> Int = x => x`).shouldReport(DiagnosticCode.TypeMismatch, At("x => x", 1));
+}
+
+@("a lambda's return type is the common type of what it returns")
+unittest
+{
+    auto a = analyzedMain(`val f = (x: Int) => {
+        if x > 0 { return None }
+        x
+    }
+    val g = (x: Int?) => x?`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("f", 1), "(Int) -> Int?");
+    a.shouldDeclareType(At("g", 1), "(Int?) -> Int?");
+
+    analyzedMain(`val f = (x: Int) => {
+        if x > 0 { return "a" }
+        x
+    }`).shouldReport(DiagnosticCode.TypeMismatch, At("{\n        if", 1));
+    analyzedMain(`val f = () => None`).shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
+    analyzedMain(`val f = (x: Int): String => x`).shouldReport(DiagnosticCode.TypeMismatch, At("x", 2));
+    analyzedMain(`val f = (x: Int?): Int => x?`).shouldReport(DiagnosticCode.InvalidPropagation, At("x?", 1));
+}
+
+@("a lambda can't jump out to a loop around it")
+unittest
+{
+    analyzedMain(`while true {
+        val f = () => { break }
+    }`).shouldReport(DiagnosticCode.JumpOutsideLoop, At("break", 1));
+}
+
+@("a lambda can capture what's immutable and nothing else")
+unittest
+{
+    analyzedMain(`val a = 1
+    val f = () => a`).shouldHaveNoDiagnostics();
+    analyzedMain(`mutable val a = 1
+    val f = () => a`).shouldReport(DiagnosticCode.CapturedMutable, At("a", 2));
+    analyzedMain(`mutable val a = 1
+    val f = () => () => a`).shouldReport(DiagnosticCode.CapturedMutable, At("a", 2));
+    analyzedMain(`mutable val a = 1
+    def f(): Int => a`).shouldReport(DiagnosticCode.CapturedMutable, At("a", 2));
+    analyzedMain(`val f = (mutable x: Int) => () => x`).shouldReport(DiagnosticCode.CapturedMutable, At("x", 2));
+    analyzedMain(`val f = () => {
+        mutable val own = 1
+        own += 1
+        own
+    }`).shouldHaveNoDiagnostics();
+}
+
+@("a nested function sees itself and what's before it, follows the shadowing rules, and can't be native")
+unittest
+{
+    analyzedMain(`def f(n: Int): Int => if n == 0 => 0 else f(n - 1)
+    print(f(1))`).shouldHaveNoDiagnostics();
+    analyzedMain(`print(g())
+    def g(): Int => 1`).shouldReport(DiagnosticCode.UnknownName, At("g", 1));
+    analyzedMain(`val x = 1
+    val f = (x: Int) => x`).shouldReport(DiagnosticCode.ShadowedDeclaration, At("x", 2));
+    analyzedMain(`val f = () => f()`).shouldReport(DiagnosticCode.UnknownName, At("f", 2));
+    analyzedMain(`def f(): Int => 1
+    def f(): Int => 2`).shouldReport(DiagnosticCode.DuplicateDeclaration, At("f", 2));
+    analyzedMain(`native def f(): Int`).shouldReport(DiagnosticCode.InternalError, At("f", 1));
+}
+
 @("a shift amount can be any integer type, and the result has the type of the value shifted")
 unittest
 {

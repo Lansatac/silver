@@ -65,6 +65,17 @@ private struct BodyContext
     Type returnType;
     /// Whether this is in the body of a loop, so `break` and `continue` have one to act on.
     bool inLoop;
+    /// Collects what the body returns when `returnType` is still to be inferred, or null.
+    InferredReturn* inferred;
+}
+
+/// What a lambda with no known return type was found to return.
+private struct InferredReturn
+{
+    const(Expr)[] values;
+    Type[] types;
+    /// Each postfix `?`, which returns `None`.
+    Span[] nones;
 }
 
 struct FieldInfo { string name; Type type; }
@@ -673,6 +684,85 @@ private final class TypeChecker
         }
     }
 
+    /// The function type of `lambda`, checking its body. `expected` supplies what it leaves out.
+    private Type typeLambda(const Expr expr, const Lambda lambda, const(FunctionData)* expected)
+    {
+        auto wrongCount = expected !is null && expected.params.length != lambda.params.length;
+        if (wrongCount)
+        {
+            _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
+                "This lambda has %s parameters, where %s are expected".format(lambda.params.length, expected.params.length));
+            expected = null;
+        }
+
+        Type[] params;
+        bool[] mutables;
+        foreach (i, param; lambda.params)
+        {
+            auto type = _types.error;
+            if (param.annotated)
+            {
+                type = resolveType(param.type);
+            }
+            else if (expected !is null)
+            {
+                type = expected.params[i];
+            }
+            else if (!wrongCount)
+            {
+                _collector.reportError(DiagnosticCode.UntypedLambdaParameter, param.nameSpan,
+                    "Nothing here says what type `%s` is; write `%s: Type`".format(param.name, param.name));
+            }
+            _symbolTypes[SymbolId(param.id)] = type;
+            params ~= type;
+            mutables ~= param.mutable;
+        }
+
+        Type ret = lambda.returnType !is null ? resolveType(*lambda.returnType)
+            : expected !is null ? expected.ret : Type.init;
+        if (ret == Type.init)
+        {
+            ret = inferReturn(*lambda.body);
+        }
+        else
+        {
+            if (lambda.self.isValid) _symbolTypes[SymbolId(lambda.self)] = _types.function_(params, ret, mutables);
+            checkBody(*lambda.body, ret);
+        }
+
+        auto failed = wrongCount || ret == _types.error || params.canFind(_types.error);
+        auto type = failed ? _types.error : _types.function_(params, ret, mutables);
+        _exprTypes[expr.id] = type;
+        return type;
+    }
+
+    /// The common type of everything `body` can return, each promoted to it as needed.
+    private Type inferReturn(const Expr body)
+    {
+        InferredReturn inferred;
+        auto bodyType = synthesize(body, BodyContext(_types.error, false, &inferred));
+        inferred.values ~= body;
+        inferred.types ~= bodyType;
+
+        auto joined = _types.never;
+        foreach (i, type; inferred.types)
+        {
+            joined = join(joined, type, inferred.values[i].span, "Return values");
+        }
+        foreach (span; inferred.nones)
+        {
+            joined = join(joined, _types.none, span, "Return values");
+        }
+        joined = requireTyped(joined, body.span);
+        if (joined == _types.error) return joined;
+
+        foreach (i, type; inferred.types)
+        {
+            if (type != _types.never && type != joined) coerce(inferred.values[i], type, joined);
+        }
+        return joined;
+    }
+
     /// Checks a function or lambda body in a fresh context, against its return type.
     private void checkBody(const Expr body, Type returnType)
     {
@@ -737,10 +827,17 @@ private final class TypeChecker
                             .format(_types.describe(type)));
                 }
             },
-            // Name resolution reports nested functions as unsupported.
+            // A nested `def` lowers to a VarDecl, and name resolution reports a nested native one.
             (const FunctionDecl _) {},
             (const ReturnStmt ret) {
-                check(ret.value, ctx.returnType, ctx);
+                if (ctx.inferred is null)
+                {
+                    check(ret.value, ctx.returnType, ctx);
+                    return;
+                }
+                auto type = synthesize(ret.value, ctx);
+                ctx.inferred.values ~= ret.value;
+                ctx.inferred.types ~= type;
             },
             (const BreakStmt _) => requireLoop("break", stmt.span, ctx),
             (const ContinueStmt _) => requireLoop("continue", stmt.span, ctx),
@@ -1045,6 +1142,7 @@ private final class TypeChecker
             (const RangeExpr range) => synthesizeBareRange(range, expr.span, ctx),
             (const TupleLiteral literal) => tupleOf(literal.elements.map!(e => requireTyped(synthesize(e, ctx), e.span)).array),
             (const MatchExpr match_) => synthesizeMatch(match_, expr.span, ctx),
+            (const Lambda lambda) => typeLambda(expr, lambda, null),
         );
         _exprTypes[expr.id] = type;
         return type;
@@ -1270,7 +1368,11 @@ private final class TypeChecker
                 "`?` needs an option, got `%s`".format(_types.describe(operandType)));
             return _types.error;
         }
-        if (!_types.isOption(ctx.returnType))
+        if (ctx.inferred !is null)
+        {
+            ctx.inferred.nones ~= span;
+        }
+        else if (!_types.isOption(ctx.returnType))
         {
             _collector.reportError(DiagnosticCode.InvalidPropagation, span,
                 "`?` returns `None` when there's no value, but this function returns `%s`"
@@ -2187,6 +2289,18 @@ private final class TypeChecker
 
     private Type check(const Expr expr, Type expected, BodyContext ctx)
     {
+        if (isLambda(expr) && _types.isFunction(expected))
+        {
+            auto data = _types[expected].match!(
+                (const FunctionData f) => f,
+                (_) => assert(0, "checked above"),
+            );
+            auto lambda = expr.kind.match!(
+                (const Lambda l) => l,
+                (_) => assert(0, "checked above"),
+            );
+            return coerce(expr, typeLambda(expr, lambda, &data), expected);
+        }
         auto constructed = constructedDecl(expr);
         if (auto owner = constructed in _owners)
         {
@@ -2210,13 +2324,14 @@ private final class TypeChecker
         auto isArray = _types.isArray(expected);
         auto isTuple = _types.isTuple(expected);
         // An array or tuple written out against an option is checked against what it holds, then promoted.
-        if (isOption && (isArraySyntax(expr) || isTupleLiteral(expr)))
+        if (isOption && (isArraySyntax(expr) || isTupleLiteral(expr) || isLambda(expr)))
         {
             check(expr, _types.optionInner(expected), ctx);
             _promotions[expr.id] = expected;
             return expected;
         }
-        if (isNumeric(expected) || isOption || isArray || isTuple || isSum(expected) || isOwnedMember(expected))
+        if (isNumeric(expected) || isOption || isArray || isTuple || isSum(expected) || isOwnedMember(expected)
+            || _types.isFunction(expected))
         {
             auto passedDown = expr.kind.match!(
                 (const IfExpr if_) => if_.falseBody !is null,
@@ -2703,6 +2818,11 @@ private final class TypeChecker
 
     /// An integer literal, possibly signed: the only integer that takes the type expected of it.
     /// Number values never convert implicitly; only literals adapt to where they're used.
+    private bool isLambda(const Expr expr)
+    {
+        return expr.kind.match!((const Lambda _) => true, _ => false);
+    }
+
     private bool isIntLiteral(const Expr expr)
     {
         return expr.kind.match!(

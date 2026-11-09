@@ -30,6 +30,7 @@ enum DiagnosticCode : string
     MissingConstantType = "S0016",
     InvalidConstantType = "S0017",
     JumpOutsideLoop = "S0018",
+    CapturedMutable = "S0019",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",
@@ -57,6 +58,7 @@ enum DiagnosticCode : string
     InvalidSumMember = "T0023",
     NonExhaustiveMatch = "T0024",
     UnreachableArm = "T0025",
+    UntypedLambdaParameter = "T0026",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

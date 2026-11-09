@@ -75,6 +75,11 @@ final class TypeTable
         return registerTypeData(TypeData(FunctionData(params.idup, ret, stored)));
     }
 
+    bool isFunction(Type t) const
+    {
+        return _types[t.index].match!((const FunctionData _) => true, _ => false);
+    }
+
     Type tuple(const(Type)[] elements)
     {
         return registerTypeData(TypeData(TupleData(elements.idup)));

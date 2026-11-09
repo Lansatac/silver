@@ -759,13 +759,6 @@ unittest
     a.shouldHaveNoDiagnostics();
 }
 
-@("name resolution reports a nested function as unsupported")
-unittest
-{
-    auto a = analyzed("def main(): Unit {\n    def inner(): Unit => ()\n}");
-    a.shouldReport(DiagnosticCode.InternalError, At("inner", 1));
-}
-
 @("name resolution passes a type declaration")
 unittest
 {

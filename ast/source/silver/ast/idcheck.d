@@ -247,6 +247,15 @@ private final class IdCheck
                     visit(arm.body);
                 }
             },
+            (const Lambda l) {
+                foreach (p; l.params)
+                {
+                    see(p.id, p.nameSpan);
+                    if (p.annotated) visit(p.type);
+                }
+                if (l.returnType !is null) visit(*l.returnType);
+                visit(l.body);
+            },
             (const BlockExpr b) {
                 foreach (s; b.statements)
                 {

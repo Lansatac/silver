@@ -42,7 +42,7 @@ So a named function is `def name` followed by a lambda, except that a named bloc
 - `x => y => x + y` nests to the right.
 - `return` and postfix `?` exit the lambda. `break` and `continue` can't cross one.
 
-A lambda can capture surrounding values, but can't capture a mutable parameter.
+A lambda can capture surrounding values, which are copied when the lambda is created. It can't capture a `mutable val` or a mutable parameter: copy one into a `val` first, or pass it as an argument.
 
 ## Function values
 
@@ -104,14 +104,13 @@ Functions can be overloaded on all of their parameters, and `f(x)` and `x.f()` s
 ## Open questions
 
 - Details of overload selection, as currently proposed: no overloading on the return type or on `mutable` alone; each argument is typed at most once; arguments with a type select first, and a lambda is then checked against the one remaining candidate; exact matches beat adaptation and promotion, and a literal prefers its default type; two equally good matches are an error; a function used as a value needs an expected type when overloaded.
-- Whether a lambda can capture a `mutable val`. The leaning is no.
 - Whether `x.f()` can drop its parentheses.
 - Whether a method call can have a `mutable` receiver.
 - Method calls through `?.`, as in `a?.f()`.
 
 ## Current implementation
 
-- Lambdas aren't available, and neither are nested function declarations.
+- A nested function can call itself and those declared before it, but not one declared after it.
 - Overloading isn't available, so every call is resolved by name alone.
 - In a method call, the receiver must be exactly the first parameter's type, with no adaptation or promotion, and its type doesn't choose between functions.
 - A `mutable` first parameter is rejected for a method call. A later `mutable` argument is fine.

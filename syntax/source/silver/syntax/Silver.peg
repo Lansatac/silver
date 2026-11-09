@@ -93,21 +93,28 @@ Silver:
     TypePath             <- (ValueName '.')* TypeName
     TypeArguments        < :'<' Nl? Type (Nl? :',' Nl? Type)* Nl? :'>'
 
-    Expression           < MatchExpression / ForExpression / WhileExpression / IfExpression / OrExpression
+    Expression           < MatchExpression / ForExpression / WhileExpression / IfExpression / Lambda / OrExpression
+    # No lambda, or `if done => 1 else 2` would read the condition as one
+    Condition            < MatchExpression / ForExpression / WhileExpression / IfExpression / OrExpression
 
-    MatchExpression      < :MATCH Nl? Expression Nl? '{' Sep? (MatchArm (Sep MatchArm)* Sep?)? '}'
+    Lambda               < (LambdaParams TypeAnnotation? / Identifier) Nl? :'=>' Nl? Expression
+    # The parens are kept so `()` still has a node
+    LambdaParams         < '(' Nl? (LambdaParam (Nl? :',' Nl? LambdaParam)*)? Nl? ')'
+    LambdaParam          < (MUTABLE Nl?)? Identifier TypeAnnotation?
+
+    MatchExpression      < :MATCH Nl? Condition Nl? '{' Sep? (MatchArm (Sep MatchArm)* Sep?)? '}'
     MatchArm             < MatchPattern Nl? :'=>' Nl? Expression
     MatchPattern         < MatchTuplePattern / ConstructorPattern / Literal / TypedBinding / BindingName
     MatchTuplePattern    < :'(' Nl? MatchPattern (Nl? :',' Nl? MatchPattern)+ Nl? :')'
     ConstructorPattern   < TypePath (:'(' Nl? MatchPattern (Nl? :',' Nl? MatchPattern)* Nl? :')')?
     TypedBinding         < BindingName TypeAnnotation
 
-    ForExpression        < :FOR Nl? BindingName Nl? :IN Nl? Expression Nl? Block
-    WhileExpression      < :WHILE Nl? (OptionBinding / Expression) Nl? Block
+    ForExpression        < :FOR Nl? BindingName Nl? :IN Nl? Condition Nl? Block
+    WhileExpression      < :WHILE Nl? (OptionBinding / Condition) Nl? Block
 
-    IfExpression         < :IF Nl? (PatternBinding / OptionBinding / Expression) Nl? IfBranch (Nl? :ELSE Nl? ElseBranch)?
-    PatternBinding       < :VAL Nl? ConstructorPattern Nl? :'=' Nl? Expression
-    OptionBinding        < :VAL Nl? BindingName Nl? :'=' Nl? Expression
+    IfExpression         < :IF Nl? (PatternBinding / OptionBinding / Condition) Nl? IfBranch (Nl? :ELSE Nl? ElseBranch)?
+    PatternBinding       < :VAL Nl? ConstructorPattern Nl? :'=' Nl? Condition
+    OptionBinding        < :VAL Nl? BindingName Nl? :'=' Nl? Condition
     IfBranch             < :'=>' Nl? Expression / Block
     ElseBranch           < Block / Expression
 

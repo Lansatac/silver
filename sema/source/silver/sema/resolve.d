@@ -62,6 +62,8 @@ package struct Resolution
     TypeSymbol[Id!TypeExpr] typeResolutions;
     Id!FunctionDecl[Id!Expr] callees;
     Id!TypeDecl[Id!Expr] constructions;
+    /// The locals and params each lambda uses from outside itself, in first-use order.
+    const(SymbolId)[][Id!Expr] captures;
     /// Calls like `UInt8(x)`, by the type they convert to.
     Builtin[Id!Expr] conversions;
     /// For a call `x.f(...)` on a value, what a plain `f` finds at module level. The type
@@ -93,6 +95,10 @@ package final class Scope
     /// The modules visible from here: the enclosing module's imports, plus the prelude.
     private const(string)[] _visibleModules;
     private TypeSymbol[string] _typeTable;
+    /// The lambda this is the outermost scope of, if any, and the local that lambda is bound to
+    /// when it's a nested `def`.
+    Id!Expr lambda;
+    Id!VarDecl selfBinding;
 
     this(TypeSymbol[string] builtInTypes) pure
     {
@@ -112,6 +118,11 @@ package final class Scope
     {
         _parent = parent;
         _visibleModules = parent._visibleModules;
+    }
+
+    const(Scope) parent() const
+    {
+        return _parent;
     }
 
     const(string)[] visibleModules() const
@@ -206,6 +217,7 @@ private final class NameResolver
     private TypeSymbol[Id!TypeExpr] _typeResolutions;
     private Id!FunctionDecl[Id!Expr] _callees;
     private Id!TypeDecl[Id!Expr] _constructions;
+    private const(SymbolId)[][Id!Expr] _captures;
     private Builtin[Id!Expr] _conversions;
     private MethodLookup[Id!Expr] _methodLookups;
     private Declarations _declarations;
@@ -231,7 +243,7 @@ private final class NameResolver
         {
             resolveModule(mod.name, mod);
         }
-        return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _conversions, _methodLookups, _declarations);
+        return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _declarations);
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
@@ -479,9 +491,12 @@ private final class NameResolver
     }
 
     /// Resolves a function or lambda body in a new scope holding its params, inside `enclosing`.
-    private void resolveBody(const Param[] params, const Expr body, Scope enclosing)
+    private void resolveBody(const Param[] params, const Expr body, Scope enclosing,
+        Id!Expr lambda = Id!Expr.init, Id!VarDecl selfBinding = Id!VarDecl.init)
     {
         auto functionScope = new Scope(enclosing);
+        functionScope.lambda = lambda;
+        functionScope.selfBinding = selfBinding;
         foreach (param; params)
         {
             declareLocal(param.name, param.nameSpan, SymbolId(param.id), functionScope,
@@ -502,7 +517,7 @@ private final class NameResolver
         }
         if (auto outer = current.resolve(name))
         {
-            // Nested defs aren't supported, so a function found here is a module-level one.
+            // A nested def is a local, so a function found here is a module-level one.
             auto what = (*outer).match!(
                 (const Id!FunctionDecl _) => "a function in this module",
                 (const Id!ConstDecl _) => "a constant in this module",
@@ -535,8 +550,14 @@ private final class NameResolver
             (ref const VarDecl varDecl) {
                 _declarations.locals[varDecl.id] = &varDecl;
                 if (varDecl.type !is null) resolveTypeExpr(*varDecl.type, scopeTable);
+                auto recursive = varDecl.value.kind.match!((const Lambda l) => l.self == varDecl.id, _ => false);
+                if (recursive)
+                {
+                    declareLocal(varDecl.name, varDecl.nameSpan, SymbolId(varDecl.id), scopeTable,
+                        DiagnosticCode.DuplicateDeclaration, "'%s' is already declared in this scope");
+                }
                 resolveExpr(varDecl.value, scopeTable);
-                if (varDecl.name != discardName)
+                if (!recursive && varDecl.name != discardName)
                 {
                     declareLocal(varDecl.name, varDecl.nameSpan, SymbolId(varDecl.id), scopeTable,
                         DiagnosticCode.DuplicateDeclaration, "'%s' is already declared in this scope");
@@ -561,7 +582,7 @@ private final class NameResolver
             },
             (const FunctionDecl funcDecl) {
                 _collector.reportError(DiagnosticCode.InternalError, funcDecl.nameSpan,
-                    "Nested function declarations are not supported yet");
+                    "A native function has to be declared at the top level");
             },
         );
     }
@@ -614,6 +635,15 @@ private final class NameResolver
                 {
                     resolveExpr(arg, scopeTable);
                 }
+            },
+            (const Lambda lambda) {
+                foreach (ref param; lambda.params)
+                {
+                    _declarations.params[param.id] = &param;
+                    if (param.annotated) resolveTypeExpr(param.type, scopeTable);
+                }
+                if (lambda.returnType !is null) resolveTypeExpr(*lambda.returnType, scopeTable);
+                resolveBody(lambda.params, *lambda.body, scopeTable, expr.id, lambda.self);
             },
             (const UnaryExpr unary) {
                 resolveExpr(*unary.operand, scopeTable);
@@ -811,6 +841,7 @@ private final class NameResolver
         if (auto local = scopeTable.resolve(name))
         {
             _resolutions[expr.id] = *local;
+            recordCapture(*local, name, expr.span, scopeTable);
             return Path(Path.Kind.Value);
         }
 
@@ -845,6 +876,32 @@ private final class NameResolver
             ? "`Some` takes exactly one value, and can't be used as a function"
             : "Unknown name '%s'".format(name));
         return Path(Path.Kind.Error);
+    }
+
+    /// Notes `symbol`, just found from `from`, as captured by each lambda between the two.
+    private void recordCapture(SymbolId symbol, string name, Span span, const Scope from)
+    {
+        import std.typecons : Rebindable;
+
+        bool isLocal = true;
+        auto mutable = symbol.match!(
+            (const Id!VarDecl local) => _declarations.locals[local].mutable,
+            (const Id!Param param) => _declarations.params[param].mutable,
+            (_) { isLocal = false; return false; },
+        );
+        if (!isLocal) return;
+
+        for (Rebindable!(const Scope) current = from; current.resolveLocal(name) is null; current = current.parent)
+        {
+            if (!current.lambda.isValid || symbol == SymbolId(current.selfBinding)) continue;
+            if (mutable)
+            {
+                _collector.reportError(DiagnosticCode.CapturedMutable, span,
+                    "A lambda can't capture `%s`, which is mutable; copy it into a `val` first, or pass it as an argument".format(name));
+                return;
+            }
+            if (!_captures.get(current.lambda, null).canFind(symbol)) _captures[current.lambda] ~= symbol;
+        }
     }
 
     private Path resolveMember(const Expr expr, const MemberAccess access, Scope scopeTable)

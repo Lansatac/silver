@@ -1,7 +1,7 @@
 module silver.interpreter.values;
 
 import std.variant : Variant;
-import silver.ast : FunctionDecl, TypeDecl;
+import silver.ast : Expr, Param, TypeDecl;
 import silver.interpreter.environment : Environment;
 
 /// The runtime value of `()`, e.g. a block that doesn't end in an expression.
@@ -19,21 +19,29 @@ alias NativeFunction = Variant delegate(Variant[] args);
 
 class Function
 {
-    const FunctionDecl declaration;
+    string name;
+    const(Param)[] params;
+    /// Null when `native` is set.
+    const(Expr)* body;
+    /// A Unit function's value is dropped, whatever its body ended in.
+    bool returnsUnit;
     Environment closure;
-    /// Set when the declaration is `native`; the body is null then.
     NativeFunction native;
 
-    this(const FunctionDecl declaration, Environment closure, NativeFunction native = null)
+    this(string name, const(Param)[] params, const(Expr)* body, bool returnsUnit, Environment closure,
+        NativeFunction native = null)
     {
-        this.declaration = declaration;
+        this.name = name;
+        this.params = params;
+        this.body = body;
+        this.returnsUnit = returnsUnit;
         this.closure = closure;
         this.native = native;
     }
 
     override string toString() const
     {
-        return declaration.name;
+        return name;
     }
 }
 

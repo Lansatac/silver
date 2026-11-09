@@ -138,7 +138,19 @@ struct Expr
 alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, InterpolatedString, Identifier,
     UnaryExpr, BinaryExpr, CallExpr, MemberAccess, WhileExpr, ForExpr, IfExpr, BlockExpr, UnitLiteral,
     SomeExpr, NoneLiteral, PropagateExpr, SafeMemberAccess, ArrayLiteral, MapLiteral, IndexExpr, RangeExpr,
-    TupleLiteral, WithExpr, MatchExpr);
+    TupleLiteral, WithExpr, MatchExpr, Lambda);
+
+/// `(x, y) => body`. A `def` inside a block is one of these bound to a local.
+struct Lambda
+{
+    Param[] params;
+    /// null when it's inferred.
+    TypeExpr* returnType;
+    Expr* body;
+    /// For a nested `def`, its name and the local it's bound to, which its body can call.
+    string name;
+    Id!VarDecl self;
+}
 
 /// `()`, the only value of type Unit.
 struct UnitLiteral
@@ -448,6 +460,7 @@ string printExpr(const Expr e)
         (const TupleLiteral t) => format("(tuple%s)", t.elements.map!(e => " " ~ printExpr(e)).join),
         (const WithExpr w) => format("(with %s%s)", printExpr(*w.object),
             w.updates.map!(u => format(" (%-(%s.%) %s)", u.path, printExpr(u.value))).join),
+        (const Lambda l) => format("(lambda (%-(%s %)) %s)", l.params.map!(p => p.name), printExpr(*l.body)),
         (const MatchExpr m) => format("(match %s%s)", printExpr(*m.subject),
             m.arms.map!(a => format(" (%s %s)", printPattern(a.pattern), printExpr(a.body))).join),
     );
@@ -586,6 +599,8 @@ struct Param
     Span nameSpan;
     TypeExpr type;
     bool mutable;
+    /// False for a lambda's parameter that takes its type from the context; `type` is unset then.
+    bool annotated = true;
 }
 
 /// `def name(params): Type => expr` or `def name(params): Type { ... }`.
