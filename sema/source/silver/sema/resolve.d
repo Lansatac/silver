@@ -50,6 +50,8 @@ package struct Declarations
 {
     const(FunctionDecl)*[Id!FunctionDecl] functions;
     const(TypeDecl)*[Id!TypeDecl] types;
+    /// The module declaring each type.
+    string[Id!TypeDecl] typeModules;
     const(ConstDecl)*[Id!ConstDecl] constants;
     const(VarDecl)*[Id!VarDecl] locals;
     const(Param)*[Id!Param] params;
@@ -225,6 +227,8 @@ private final class NameResolver
     /// Each module's own top-level declarations, by module name.
     private Scope[string] _moduleScopes;
     private Id!Module[string] _moduleIds;
+    /// The module being resolved, which is the one that sees its own private declarations.
+    private string _currentModule;
 
     this(Collector collector)
     {
@@ -271,6 +275,11 @@ private final class NameResolver
             decl.kind.match!(
                 (ref const FunctionDecl func) {
                     _declarations.functions[func.id] = &func;
+                    if (func.isPrivate && func.name == "main")
+                    {
+                        _collector.reportError(DiagnosticCode.MainInvalidDefinition, func.nameSpan,
+                            "`main` can't be private");
+                    }
                     if (moduleScope.resolveLocal(func.name) !is null)
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, func.nameSpan,
@@ -283,6 +292,7 @@ private final class NameResolver
                 },
                 (ref const TypeDecl type) {
                     _declarations.types[type.id] = &type;
+                    _declarations.typeModules[type.id] = name;
                     if (moduleScope.resolveLocalType(type.name) !is null || moduleScope.resolveLocal(type.name) !is null)
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan, type.implicitMarker
@@ -339,6 +349,7 @@ private final class NameResolver
 
     private void resolveModule(string name, const Module mod)
     {
+        _currentModule = name;
         foreach (decl; mod.declarations)
         {
             decl.kind.match!(
@@ -349,6 +360,14 @@ private final class NameResolver
                         resolveTypeExpr(param.type, _moduleScopes[name]);
                     }
                     resolveTypeExpr(func.returnType, _moduleScopes[name]);
+                    if (!func.isPrivate)
+                    {
+                        foreach (ref param; func.params)
+                        {
+                            reportPrivateType(param.type, "a public function's signature");
+                        }
+                        reportPrivateType(func.returnType, "a public function's signature");
+                    }
 
                     if (func.body !is null)
                     {
@@ -359,6 +378,7 @@ private final class NameResolver
                     foreach (member; type.members)
                     {
                         resolveTypeExpr(member.type, _moduleScopes[name]);
+                        if (!type.isPrivate) reportPrivateType(member.type, "a public sum's members");
                     }
                     if (type.implicitMarker) reportImportedMember(type, _moduleScopes[name]);
                     bool[string] seen;
@@ -371,6 +391,7 @@ private final class NameResolver
                         }
                         seen[field.name] = true;
                         resolveTypeExpr(field.type, _moduleScopes[name]);
+                        if (!type.isPrivate && !field.isPrivate) reportPrivateType(field.type, "a public field");
                     }
                 },
                 (const ConstDecl constant) {
@@ -382,10 +403,75 @@ private final class NameResolver
         }
     }
 
+    /// Whether `m`'s declaration `symbol` can be seen from the module being resolved.
+    private bool isVisible(SymbolId symbol, string m)
+    {
+        if (m == _currentModule) return true;
+        return !symbol.match!(
+            (const Id!FunctionDecl f) => _declarations.functions[f].isPrivate,
+            (const Id!TypeDecl t) => _declarations.types[t].isPrivate,
+            (const Id!ConstDecl c) => _declarations.constants[c].isPrivate,
+            _ => false,
+        );
+    }
+
+    private bool isVisible(TypeSymbol symbol, string m)
+    {
+        if (m == _currentModule) return true;
+        return !symbol.match!(
+            (const Id!TypeDecl t) => _declarations.types[t].isPrivate,
+            (const Builtin _) => false,
+        );
+    }
+
+    /// What the name `name` is in module `m`, if the module being resolved can see it.
+    private const(SymbolId)* visibleSymbol(string m, string name)
+    {
+        auto symbol = _moduleScopes[m].resolveLocal(name);
+        return symbol !is null && isVisible(*symbol, m) ? symbol : null;
+    }
+
+    private const(TypeSymbol)* visibleType(string m, string name)
+    {
+        auto symbol = _moduleScopes[m].resolveLocalType(name);
+        return symbol !is null && isVisible(*symbol, m) ? symbol : null;
+    }
+
+    /// Reports each private type that the resolved `type` mentions, which `where` would expose.
+    private void reportPrivateType(const TypeExpr type, string where)
+    {
+        type.kind.match!(
+            (const NamedType named) {
+                foreach (arg; named.args) reportPrivateType(arg, where);
+                auto symbol = type.id in _typeResolutions;
+                if (symbol is null) return;
+                auto isPrivate = (*symbol).match!(
+                    (const Id!TypeDecl t) => _declarations.types[t].isPrivate,
+                    (const Builtin _) => false,
+                );
+                if (isPrivate)
+                {
+                    _collector.reportError(DiagnosticCode.PrivateTypeExposed, type.span,
+                        "`%s` is private, so it can't appear in %s".format(named.path.join("."), where));
+                }
+            },
+            (const OptionType option) => reportPrivateType(*option.inner, where),
+            (const ArrayType array) => reportPrivateType(*array.element, where),
+            (const FunctionType func) {
+                foreach (param; func.params) reportPrivateType(param, where);
+                reportPrivateType(*func.returnType, where);
+            },
+            (const UnitType _) {},
+            (const TupleType tuple) {
+                foreach (element; tuple.elements) reportPrivateType(element, where);
+            },
+        );
+    }
+
     /// A bare name in a sum declares a marker, so one an import also provides would quietly be a new type.
     private void reportImportedMember(const TypeDecl marker, const Scope current)
     {
-        auto owners = current.visibleModules.filter!(m => _moduleScopes[m].resolveLocalType(marker.name) !is null).array;
+        auto owners = current.visibleModules.filter!(m => visibleType(m, marker.name) !is null).array;
         if (owners.length == 0) return;
         _collector.reportError(DiagnosticCode.AmbiguousName, marker.nameSpan,
             "`%s` is also a type in `%s`; write `%s.%s` to use that one, or rename this member"
@@ -440,7 +526,7 @@ private final class NameResolver
                     if (resolvedType is null)
                     {
                         auto owners = current.visibleModules
-                            .filter!(m => _moduleScopes[m].resolveLocalType(name) !is null)
+                            .filter!(m => visibleType(m, name) !is null)
                             .array;
                         if (owners.length > 1)
                         {
@@ -451,7 +537,7 @@ private final class NameResolver
                         }
                         if (owners.length == 1)
                         {
-                            resolvedType = _moduleScopes[owners[0]].resolveLocalType(name);
+                            resolvedType = visibleType(owners[0], name);
                         }
                     }
                 }
@@ -461,6 +547,12 @@ private final class NameResolver
                     if (current.visibleModules.canFind(moduleName))
                     {
                         resolvedType = _moduleScopes[moduleName].resolveLocalType(name);
+                        if (resolvedType !is null && !isVisible(*resolvedType, moduleName))
+                        {
+                            _collector.reportError(DiagnosticCode.PrivateMember, type.span,
+                                "`%s` is private to `%s`".format(name, moduleName));
+                            return;
+                        }
                     }
                 }
                 if (resolvedType is null)
@@ -812,7 +904,7 @@ private final class NameResolver
         MethodLookup lookup;
         foreach (m; scopeTable.visibleModules)
         {
-            if (auto symbol = _moduleScopes[m].resolveLocal(name))
+            if (auto symbol = visibleSymbol(m, name))
             {
                 lookup.found ~= *symbol;
                 lookup.owners ~= m;
@@ -849,7 +941,7 @@ private final class NameResolver
         string[] owners;
         foreach (m; scopeTable.visibleModules)
         {
-            if (auto symbol = _moduleScopes[m].resolveLocal(name))
+            if (auto symbol = visibleSymbol(m, name))
             {
                 found ~= *symbol;
                 owners ~= m;
@@ -919,7 +1011,7 @@ private final class NameResolver
             {
                 return *modulePath(expr, nested, scopeTable);
             }
-            if (auto symbol = _moduleScopes[object.name].resolveLocal(access.member))
+            if (auto symbol = visibleSymbol(object.name, access.member))
             {
                 _resolutions[expr.id] = *symbol;
                 return Path(Path.Kind.Value);
@@ -928,6 +1020,12 @@ private final class NameResolver
             if (auto path = modulePath(expr, nested, scopeTable))
             {
                 return *path;
+            }
+            if (_moduleScopes[object.name].resolveLocal(access.member) !is null)
+            {
+                _collector.reportError(DiagnosticCode.PrivateMember, expr.span,
+                    "'%s' is private to '%s'".format(access.member, object.name));
+                return Path(Path.Kind.Error);
             }
             _collector.reportError(DiagnosticCode.UnknownModuleMember, expr.span,
                 "Module '%s' has no '%s'".format(object.name, access.member));

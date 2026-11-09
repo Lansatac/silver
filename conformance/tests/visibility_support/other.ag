@@ -1,0 +1,4 @@
+module visibility_support.other
+
+def shared(): Int => 2
+private def bump(x: Int): Int => x

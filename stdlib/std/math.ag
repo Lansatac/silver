@@ -1,7 +1,5 @@
 module std.math
 
-import std.internal.math
-
 val pi: Float = 3.141592653589793
 
 native def sqrt(x: Float): Float
@@ -83,4 +81,19 @@ def factorial(n: Int): Int {
         0 => 1
         _ => n * factorial(n - 1)
     }
+}
+
+// Unlike `x < 0`, this is true of -0.0.
+private def isNegative(x: Float): Bool => x < 0 || (x == 0 && 1 / x < 0)
+
+private def magnitude(x: Float): Float => if isNegative(x) => -x else x
+
+// Rounds toward zero, keeping the sign of a zero result as IEEE requires.
+private def truncate(x: Float): Float {
+    // From 2^52 up every Float is whole, and Int() would panic on NaN or the infinities.
+    if x != x || x == 0 || magnitude(x) >= 4503599627370496.0 {
+        return x
+    }
+    val whole = Float(Int(x))
+    if whole == 0 && x < 0 => -0.0 else whole
 }

@@ -19,7 +19,7 @@ These documents describe the language as designed. Where the implementation does
 | [Strings](language/strings.md) | Text, interpolation, views | Partial: no byte or character views |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, `match` | Implemented, except `alias` |
-| [Modules](language/modules.md) | Files, imports, visibility | Partial: no visibility or import forms beyond `import a.b` |
+| [Modules](language/modules.md) | Files, imports, visibility | Partial: no import forms beyond `import a.b` |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, the test runner | Not implemented |
 
 ## Not designed yet

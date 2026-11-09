@@ -42,9 +42,9 @@ There are no `private:` sections.
 
 A private member can't be imported, can't be reached qualified, and doesn't take part in ambiguity between imports.
 
-A public function or constant can't mention a private type in its signature. A public type can't have a public field of a private type.
+A public function or constant can't mention a private type in its signature. A public type can't have a public field of a private type, and a public sum can't name a private type as a member. The members a private sum declares inline are private too.
 
-A private field blocks construction, field access and `with` on that field outside the module. Equality and printing are unaffected. A type with a private field therefore needs a factory function.
+A private field blocks construction, field access, `with` and binding it in a pattern (`_` is fine) outside the module. A field that is hidden this way is also not what `x.f(...)` finds, so a public function `f` applies. Equality and printing are unaffected. A type with a private field therefore needs a factory function.
 
 `private def main` is an error.
 
@@ -68,5 +68,4 @@ Imports can also be renamed. A symbol's identity is its declaring module, so rea
 
 ## Current implementation
 
-- `private` isn't available.
 - Only plain `import a.b` is available.

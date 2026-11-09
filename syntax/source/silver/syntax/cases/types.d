@@ -17,6 +17,18 @@ immutable Case[] typeDeclarations = [
     rejectsDeclaration("type Point(x: Int,)"),
     rejects("type Point(x: Int)"), // only at module level for now
     rejects("val type = 1"),
+    declaresAs("type Handle(private id: Int, name: String)", "(type Handle (private id: Int, name: String))"),
+    declaresAs("type Handle(private\n    id: Int)", "(type Handle (private id: Int))"),
+    declaresAs("type Key(privateKey: Int)", "(type Key (privateKey: Int))"),
+    declaresAs("private type Detail(value: Int)", "(private (type Detail (value: Int)))"),
+    declaresAs("private type S = A(x: Int) | B", ["(private (type A (x: Int)))", "(private (type S = A | B))", "(private (type B))"]),
+    declaresAs("private def f(): Int => 1", "(private (def f (): Int 1))"),
+    declaresAs("private\ndef f(): Int => 1", "(private (def f (): Int 1))"),
+    declaresAs("private native def f(): Int", "(private (native def f (): Int))"),
+    declaresAs("private val limit: Int = 10", "(private (val limit: Int 10))"),
+    rejectsDeclaration("private import a"),
+    rejects("private val a = 1"),
+    rejects("val private = 1"),
 ];
 
 /// Sema decides what an uppercase name means, so lowering treats it as a plain name.

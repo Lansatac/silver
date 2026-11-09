@@ -11,6 +11,7 @@ Silver:
 
     Declaration          <  (
                             / ImportStatement
+                            / PrivateDeclaration
                             / FunctionDeclaration
                             / NativeFunctionDeclaration
                             / TypeDeclaration
@@ -31,6 +32,8 @@ Silver:
                             / AssignmentStatement
                             / ExpressionStatement
                             )
+
+    PrivateDeclaration   < :PRIVATE Nl? (FunctionDeclaration / NativeFunctionDeclaration / TypeDeclaration / ConstantDeclaration)
 
     QualifiedName        <- ValueName ('.' ValueName)*
 
@@ -74,7 +77,8 @@ Silver:
     # The parens are kept so `type M()` still has a node, which sema rejects in favor of `type M`
     Fields               < '(' Nl? FieldList Nl? ')'
     FieldList            < (Field (Nl? ',' Nl? Field)*)?
-    Field                < Identifier TypeAnnotation
+    # `private` is kept, so lowering can tell whether it was there
+    Field                < (PRIVATE Nl?)? Identifier TypeAnnotation
 
     ExpressionStatement  < Expression
 
@@ -216,6 +220,7 @@ Silver:
     DEF                 <- Kword("def")
     TYPE                <- Kword("type")
     NATIVE              <- Kword("native")
+    PRIVATE             <- Kword("private")
     WHILE               <- Kword("while")
     FOR                 <- Kword("for")
     IN                  <- Kword("in")
@@ -234,7 +239,7 @@ Silver:
     ALIAS               <- Kword("alias")
     UNDERSCORE          <- Kword("_")
 
-    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / WITH / UNDERSCORE
+    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / PRIVATE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / WITH / UNDERSCORE
     IdentChar           <- [a-zA-Z0-9_]
     Identifier          <- !Keyword ValueName
 

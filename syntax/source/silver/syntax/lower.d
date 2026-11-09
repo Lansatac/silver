@@ -110,7 +110,7 @@ private final class Lowering
                         // Named twice in one sum is reported as a repeated member, not a redeclaration.
                         if (name in inThisSum) continue;
                         inThisSum[name] = true;
-                        auto marker = TypeDecl(ids.next!TypeDecl, name, member.type.span, null, false, null, true);
+                        auto marker = TypeDecl(ids.next!TypeDecl, name, member.type.span, null, false, null, true, sum.isPrivate);
                         markers ~= Decl(member.type.span, DeclKind(marker));
                     }
                 },
@@ -124,20 +124,37 @@ private final class Lowering
     private Decl[] convertDeclaration(ParseTree cst)
     {
         cst.validateNodeIs("Silver.Declaration");
-        switch (cst[0].name)
+        if (cst[0].name != "Silver.PrivateDeclaration") return convertDeclarationBody(cst[0]);
+
+        auto declarations = convertDeclarationBody(cst[0][0]);
+        foreach (ref declaration; declarations)
+        {
+            declaration.kind.match!(
+                (ref FunctionDecl function_) { function_.isPrivate = true; },
+                (ref TypeDecl type) { type.isPrivate = true; },
+                (ref ConstDecl constant) { constant.isPrivate = true; },
+                (ref ImportStmt _) {},
+            );
+        }
+        return declarations;
+    }
+
+    private Decl[] convertDeclarationBody(ParseTree cst)
+    {
+        switch (cst.name)
         {
         case "Silver.ImportStatement":
-            auto path = qualifiedName(cst[0][0]);
-            return [Decl(spanOf(cst[0], file), DeclKind(ImportStmt(ids.next!ImportStmt, path)))];
+            auto path = qualifiedName(cst[0]);
+            return [Decl(spanOf(cst, file), DeclKind(ImportStmt(ids.next!ImportStmt, path)))];
         case "Silver.FunctionDeclaration":
         case "Silver.NativeFunctionDeclaration":
-            return [Decl(spanOf(cst[0], file), DeclKind(convertFunctionDeclaration(cst[0])))];
+            return [Decl(spanOf(cst, file), DeclKind(convertFunctionDeclaration(cst)))];
         case "Silver.TypeDeclaration":
-            return convertTypeDeclaration(cst[0]);
+            return convertTypeDeclaration(cst);
         case "Silver.ConstantDeclaration":
-            return [Decl(spanOf(cst[0], file), DeclKind(convertConstantDeclaration(cst[0])))];
+            return [Decl(spanOf(cst, file), DeclKind(convertConstantDeclaration(cst)))];
         default:
-            throw new Exception("lower: declaration '%s' not supported yet".format(cst[0].name));
+            throw new Exception("lower: declaration '%s' not supported yet".format(cst.name));
         }
     }
 
@@ -809,8 +826,9 @@ private final class Lowering
                 params.validateNodeIs("Silver.FieldList");
                 foreach (param; params.children)
                 {
-                    fields ~= Field(ids.next!Field, param.matches[0], spanOf(param[0], file),
-                        convertTypeExpression(param[1]));
+                    auto fieldName = param[$ - 2];
+                    fields ~= Field(ids.next!Field, fieldName.matches[0], spanOf(fieldName, file),
+                        convertTypeExpression(param[$ - 1]), param.children.length == 3);
                 }
             }
         }

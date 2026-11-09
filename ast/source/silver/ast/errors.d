@@ -31,6 +31,8 @@ enum DiagnosticCode : string
     InvalidConstantType = "S0017",
     JumpOutsideLoop = "S0018",
     CapturedMutable = "S0019",
+    PrivateMember = "S0020",
+    PrivateTypeExposed = "S0021",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",
@@ -59,6 +61,7 @@ enum DiagnosticCode : string
     NonExhaustiveMatch = "T0024",
     UnreachableArm = "T0025",
     UntypedLambdaParameter = "T0026",
+    PrivateField = "T0027",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

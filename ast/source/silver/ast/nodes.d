@@ -616,6 +616,7 @@ struct FunctionDecl
     Expr* body;
     TypeExpr returnType;
     bool native;
+    bool isPrivate;
 }
 
 /// `name: Type` in a type declaration.
@@ -625,6 +626,7 @@ struct Field
     string name;
     Span nameSpan;
     TypeExpr type;
+    bool isPrivate;
 }
 
 /// `type Name(fields)`, or `type Name` for a marker type, whose only value is `Name`.
@@ -641,6 +643,8 @@ struct TypeDecl
     SumMember[] members;
     /// Declared by being named bare in a sum, with no declaration of that name in the module.
     bool implicitMarker;
+    /// On a sum, also set on each member it declares.
+    bool isPrivate;
 }
 
 /// One alternative of `type Name = A(x: Int) | B | geo.C`.
@@ -660,6 +664,7 @@ struct ConstDecl
     /// null when the type isn't annotated, which sema reports.
     TypeExpr* type;
     Expr value;
+    bool isPrivate;
 }
 
 /// `return value`. A bare `return` has a UnitLiteral value.
@@ -701,11 +706,13 @@ string printModuleDeclaration(const ModuleDeclaration d)
 
 string printDecl(const Decl d)
 {
+    static string marked(bool isPrivate, string printed) => isPrivate ? "(private " ~ printed ~ ")" : printed;
+
     return d.kind.match!(
         (const ImportStmt i) => printImport(i),
-        (const FunctionDecl f) => printFunctionDecl(f),
-        (const TypeDecl t) => printTypeDecl(t),
-        (const ConstDecl c) => printConstDecl(c),
+        (const FunctionDecl f) => marked(f.isPrivate, printFunctionDecl(f)),
+        (const TypeDecl t) => marked(t.isPrivate, printTypeDecl(t)),
+        (const ConstDecl c) => marked(c.isPrivate, printConstDecl(c)),
     );
 }
 
@@ -784,7 +791,7 @@ private string printTypeDecl(const TypeDecl t)
     {
         return t.emptyParens ? "(type " ~ t.name ~ " ())" : "(type " ~ t.name ~ ")";
     }
-    return "(type " ~ t.name ~ " (" ~ t.fields.map!(f => f.name ~ ": " ~ printTypeExpr(f.type)).join(", ") ~ "))";
+    return "(type " ~ t.name ~ " (" ~ t.fields.map!(f => (f.isPrivate ? "private " : "") ~ f.name ~ ": " ~ printTypeExpr(f.type)).join(", ") ~ "))";
 }
 
 private string printConstDecl(const ConstDecl c)

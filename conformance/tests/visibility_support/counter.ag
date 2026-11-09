@@ -1,0 +1,27 @@
+module visibility_support.counter
+
+private val step: Int = 2
+private native def sqrt(x: Float): Float
+private def bump(x: Int): Int => x + step
+private type Detail(value: Int)
+private type Hidden = Shown(n: Int) | Empty
+
+type Handle(private id: Int, label: String)
+
+def handle(n: Int): Handle => Handle(bump(n), "h")
+def renumber(h: Handle): Handle => h with (id = h.id + 1)
+def id(h: Handle): Int => h.id + 100
+def takeApart(h: Handle): Int => match h { Handle(n, _) => n }
+
+def detail(): Int {
+    val d = Detail(3)
+    val hidden: Hidden = Shown(d.value)
+    match hidden {
+        Shown(n) => n + 1
+        Empty => 0
+    }
+}
+
+def root(): Float => sqrt(4.0)
+
+private def shared(): Int => 1

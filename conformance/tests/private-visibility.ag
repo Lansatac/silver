@@ -1,0 +1,20 @@
+import visibility_support.counter
+import visibility_support.other
+
+def bump(x: Int): Int => x * 10
+
+def main(): Unit {
+    val h = handle(1)
+    printl(h)
+    printl(h == handle(1))
+    printl(h.label)
+    printl(h with (label = "renamed"))
+    printl(renumber(h))
+    printl(h.id())
+    printl(takeApart(h))
+    printl(match h { Handle(_, label) => label })
+    printl(detail())
+    printl(root())
+    printl(shared())
+    printl(bump(1))
+}

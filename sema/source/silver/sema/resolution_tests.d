@@ -1383,3 +1383,141 @@ unittest
     analyzed("import a\nimport b\ndef shared(x: Int): Int => 3\ndef main(): Unit {\n    val qq = 1\n    printl(qq.shared())\n}", files)
         .shouldHaveNoDiagnostics();
 }
+
+private enum privateLibrary = [
+    "lib.ag": "module lib
+private def helper(): Int => 1
+private val limit: Int = 2
+private type Detail(value: Int)
+private type Hidden = Inner(n: Int) | Bare
+def open(): Int => helper() + limit",
+];
+
+@("a private declaration is usable in its own module")
+unittest
+{
+    analyzed("import lib\ndef main(): Unit => printl(open())", privateLibrary).shouldHaveNoDiagnostics();
+}
+
+@("a private declaration can't be used unqualified from another module")
+unittest
+{
+    analyzed("import lib\ndef main(): Unit => printl(helper())", privateLibrary)
+        .shouldReport(DiagnosticCode.UnknownName, At("helper", 1));
+    analyzed("import lib\ndef main(): Unit => printl(limit)", privateLibrary)
+        .shouldReport(DiagnosticCode.UnknownName, At("limit", 1));
+    analyzed("import lib\ndef f(d: Detail): Int => 1\ndef main(): Unit => ()", privateLibrary)
+        .shouldReport(DiagnosticCode.UnknownType, At("Detail", 1));
+    analyzed("import lib\ndef main(): Unit => printl(Detail(1))", privateLibrary)
+        .shouldReport(DiagnosticCode.UnknownName, At("Detail", 1));
+    analyzed("import lib\ndef main(): Unit => printl(Inner(1))", privateLibrary)
+        .shouldReport(DiagnosticCode.UnknownName, At("Inner", 1));
+    analyzed("import lib\ndef main(): Unit => printl(Bare)", privateLibrary)
+        .shouldReport(DiagnosticCode.UnknownName, At("Bare", 1));
+}
+
+@("a private declaration can't be reached qualified, and the error says whose it is")
+unittest
+{
+    auto value = analyzed("import lib\ndef main(): Unit => printl(lib.helper())", privateLibrary);
+    value.shouldReport(DiagnosticCode.PrivateMember, At("lib", 2));
+    import std.algorithm : canFind;
+    assert(value.collector.errors.front.message.canFind("private to 'lib'"));
+
+    analyzed("import lib\ndef f(d: lib.Detail): Int => 1\ndef main(): Unit => ()", privateLibrary)
+        .shouldReport(DiagnosticCode.PrivateMember, At("lib", 2));
+}
+
+@("a private declaration doesn't take part in ambiguity between imports")
+unittest
+{
+    auto files = [
+        "a.ag": "module a\nprivate def shared(): Int => 1\nprivate type T",
+        "b.ag": "module b\ndef shared(): Int => 2\ntype T",
+    ];
+    auto a = analyzed("import a\nimport b\ndef f(t: T): Int => shared()\ndef main(): Unit => ()", files);
+    a.shouldHaveNoDiagnostics();
+    a.shouldResolve(At("shared", 1), At("shared", 1, "b"));
+}
+
+@("a private function isn't a method candidate from another module")
+unittest
+{
+    auto files = ["a.ag": "module a\nprivate def twice(x: Int): Int => x * 2"];
+    analyzed("import a\ndef main(): Unit {\nval n = 1\nprintl(n.twice())\n}", files)
+        .shouldReport(DiagnosticCode.UnknownMember, At("n", 2));
+}
+
+@("a public signature can't mention a private type")
+unittest
+{
+    void rejected(string declaration)
+    {
+        auto a = analyzed("module main\nprivate type Detail(value: Int)\n" ~ declaration ~ "\ndef main(): Unit => ()");
+        a.shouldReport(DiagnosticCode.PrivateTypeExposed, At("Detail", 2));
+    }
+
+    rejected("def f(d: Detail): Int => 1");
+    rejected("def f(): Detail? => None");
+    rejected("def f(g: ([Detail]) -> Int): Int => 1");
+    rejected("def f(p: (Int, Detail)): Int => 1");
+    rejected("native def f(d: Detail): Int");
+    rejected("type Holder(d: Detail)");
+    rejected("type Sum = Detail | Other");
+    rejected("type Sum = Inline(d: Detail) | Other");
+}
+
+@("a private signature or field can mention a private type")
+unittest
+{
+    analyzed("private type Detail(value: Int)
+private def f(d: Detail): Detail => d
+type Holder(private d: Detail)
+private type Inner(d: Detail)
+private type Sum = Detail | Other
+def main(): Unit => ()").shouldHaveNoDiagnostics();
+}
+
+@("main can't be private")
+unittest
+{
+    analyzed("private def main(): Unit => ()").shouldReport(DiagnosticCode.MainInvalidDefinition, At("main", 1));
+}
+
+private enum handleLibrary = [
+    "lib.ag": "module lib
+type Handle(private id: Int, name: String)
+def make(): Handle => Handle(1, \"h\")",
+];
+
+@("a private field is blocked outside its module")
+unittest
+{
+    void rejected(string body, At where)
+    {
+        analyzed("import lib\ndef main(): Unit {\n" ~ body ~ "\n}", handleLibrary)
+            .shouldReport(DiagnosticCode.PrivateField, where);
+    }
+
+    rejected("val h = make()\nprintl(h.id)", At("h", 2));
+    rejected("val o = Some(make())\nprintl(o?.id)", At("o", 2));
+    rejected("mutable val h = make()\nh.id = 2", At("h", 2));
+    rejected("val h = make()\nprintl(h with (id = 2))", At("id", 1));
+    rejected("printl(Handle(1, \"x\"))", At("Handle", 1));
+    rejected("printl(lib.Handle(1, \"x\"))", At("lib", 2));
+    rejected("val f = Handle\nprintl(f)", At("Handle", 1));
+    rejected("printl(match make() { Handle(i, _) => i })", At("i", 1));
+}
+
+@("a private field leaves the rest of the type usable")
+unittest
+{
+    analyzed("import lib\ndef main(): Unit {
+val h = make()
+printl(h)
+printl(h == make())
+printl(h.name)
+printl(h with (name = \"x\"))
+printl(match h { Handle(_, n) => n })
+}", handleLibrary).shouldHaveNoDiagnostics();
+}
