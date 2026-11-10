@@ -1,5 +1,5 @@
 /// The prelude's `print`, `printl` and `read`. `print` and `printl` take `Any`, so there's one
-/// function per argument type, named `silver_<native>_<type>`. Values are formatted with
+/// function per argument type, named `silver_<intrinsic>_<type>`. Values are formatted with
 /// `to!string`, as the interpreter does, so both backends print the same thing.
 /// Every integer type widens to `int` or `uint` first.
 module silver.runtime.io;

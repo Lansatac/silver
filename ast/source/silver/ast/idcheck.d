@@ -314,7 +314,7 @@ version (unittest)
         }
         auto body = new Expr(ids.next!Expr, Span.init, ExprKind(BlockExpr(statements, null)));
         auto unit = TypeExpr(ids.next!TypeExpr, Span.init, TypeExprKind(UnitType()));
-        auto main = FunctionDecl(ids.next!FunctionDecl, "main", Span.init, [], body, unit, false);
+        auto main = FunctionDecl(ids.next!FunctionDecl, "main", Span.init, [], body, unit);
         return Module(ids.next!Module, "test", Span.init, [Decl(Span.init, DeclKind(main))]);
     }
 }

@@ -35,6 +35,9 @@ enum DiagnosticCode : string
     PrivateTypeExposed = "S0021",
     RecursiveAlias = "S0022",
     AliasIsNotAValue = "S0023",
+    IntrinsicOutsideStandardLibrary = "S0024",
+    /// An `intrinsic def` or `intrinsic alias` the compiler doesn't implement.
+    UnknownIntrinsic = "S0025",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",
@@ -64,6 +67,8 @@ enum DiagnosticCode : string
     UnreachableArm = "T0025",
     UntypedLambdaParameter = "T0026",
     UninhabitedType = "T0027",
+    /// A type in a native's signature that has no C equivalent.
+    InvalidNativeType = "T0028",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

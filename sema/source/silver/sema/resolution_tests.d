@@ -12,6 +12,7 @@ import silver.ast;
 import silver.loader : load, standardLibraryPath;
 import silver.sema.analysis;
 import silver.sema.resolve;
+import silver.sema.target : Target;
 
 /// A program loaded with the real stdlib and analyzed, with every module indexed.
 struct Analyzed
@@ -25,7 +26,7 @@ struct Analyzed
 
 /// Analyzes `entry` as main.ag. `files` (by file name, e.g. "a/b.ag") are written to a
 /// temporary import path, searched before the stdlib.
-Analyzed analyzed(string entry, string[string] files = null)
+Analyzed analyzed(string entry, string[string] files = null, Target target = Target.host)
 {
     import std.file : mkdirRecurse, readText, rmdirRecurse, tempDir, write;
     import std.path : buildPath, dirName;
@@ -46,7 +47,7 @@ Analyzed analyzed(string entry, string[string] files = null)
     assert(!context.collector.hasErrors, "The test program failed to load");
 
     Analyzed a;
-    a.analysis = analyze(program, context.collector);
+    a.analysis = analyze(program, context.collector, target);
     a.collector = context.collector;
     foreach (name, m; program.modules)
     {
@@ -828,7 +829,6 @@ unittest
         "def f(p: Point?): Unit => ()",
         "def f(g: (Point) -> Int): Unit => ()",
         "def f(g: (Int) -> Point): Unit => ()",
-        "native def f(p: Point): Unit",
         "type Line(a: Point, b: Point)",
         "type Box(p: Point?, f: (Point) -> Point)",
     ])
@@ -1463,7 +1463,6 @@ unittest
     rejected("def f(): Detail? => None");
     rejected("def f(g: ([Detail]) -> Int): Int => 1");
     rejected("def f(p: (Int, Detail)): Int => 1");
-    rejected("native def f(d: Detail): Int");
     rejected("type Holder(d: Detail)");
     rejected("type Sum = Detail | Other");
     rejected("type Sum = Inline(d: Detail) | Other");

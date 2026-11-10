@@ -8,7 +8,7 @@ import std.sumtype : match;
 import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException, SourceMap, Span;
 import silver.codegen.runtime_bindings : runtime;
 import silver.core;
-import silver.sema : Type;
+import silver.sema : Intrinsic, Type;
 
 /// The LLVM IR for `program`, as text. `sources` locates spans for panic messages.
 /// Throws: DiagnosticException (`NotImplemented`) at the first construct codegen doesn't handle yet.
@@ -71,6 +71,8 @@ private final class Generator
     /// The runtime functions and intrinsics used, each declared once at the top of the module.
     private bool[string] _usedRuntime;
     private bool[string] _usedIntrinsics;
+    /// The declaration of each C function a native binds, by its symbol.
+    private string[string] _foreign;
     private string[] _strings;
 
     this(const ref Program program, const SourceMap sources)
@@ -104,6 +106,10 @@ private final class Generator
         {
             auto f = runtime[name];
             text ~= "declare %s @%s(%s) %s\n".format(f.returnType, name, f.params.join(", "), f.attributes);
+        }
+        foreach (line; _foreign.byValue)
+        {
+            text ~= line ~ "\n";
         }
         foreach (line; _usedIntrinsics.byKey)
         {
@@ -178,22 +184,82 @@ private final class Generator
         return notImplemented("Call", e.span);
     }
 
-    /// A call to the runtime's `silver_<name>`, with a suffix naming the argument's type for each
-    /// `Any` parameter.
-    private string emit(const Expr e, const NativeCall call)
+    /// A call to the C function `call.symbol`, declared from the types at the call.
+    private string emit(const Expr e, const ForeignCall call)
     {
-        auto types = _program.types;
-        if (call.name == "panic") return notImplemented("panic", e.span);
-        if (e.type == types.string_ || types.isOption(e.type))
+        auto returnType = cType(e.type, e.span);
+        string[] params;
+        string[] operands;
+        foreach (ref arg; call.args)
         {
-            return notImplemented("a native returning `%s`".format(types.describe(e.type)), e.span);
+            auto param = cType(arg.type, arg.span);
+            params ~= param;
+            operands ~= param ~ " " ~ emitExpr(arg);
         }
 
-        auto name = "silver_" ~ call.name;
+        auto declaration = "declare ccc %s @%s(%s)%s".format(returnType, call.symbol, params.join(", "),
+            e.type == _program.types.never ? " noreturn" : "");
+        if (call.symbol in runtime) return notImplemented("a native named like the runtime's own " ~ call.symbol, e.span);
+        if (auto existing = call.symbol in _foreign)
+        {
+            if (*existing != declaration)
+            {
+                return notImplemented("natives that bind `%s` with different signatures".format(call.symbol), e.span);
+            }
+        }
+        _foreign[call.symbol] = declaration;
+
+        auto instruction = "call ccc %s @%s(%s)".format(returnType, call.symbol, operands.join(", "));
+        if (e.type == _program.types.never)
+        {
+            _function.instruction(instruction);
+            _function.instruction("unreachable");
+            // Whatever follows is never reached, but it still needs a block to be in.
+            _function.label(_function.newLabel("after.noreturn"));
+            return null;
+        }
+        if (returnType == "void")
+        {
+            _function.instruction(instruction);
+            return null;
+        }
+        auto result = _function.newTemp();
+        _function.instruction(result ~ " = " ~ instruction);
+        return result;
+    }
+
+    /// `type` as a C function takes or returns it: C's ABI wants `bool`, and integers narrower
+    /// than an `int`, extended to 32 bits by whoever passes them, which LLVM leaves to the attribute.
+    private string cType(Type type, Span span)
+    {
+        auto types = _program.types;
+        if (type == types.bool_) return "zeroext i1";
+        if (types.isInteger(type))
+        {
+            auto info = types.integerOf(type);
+            if (info.bits < 32) return "%s i%s".format(info.signed ? "signext" : "zeroext", info.bits);
+        }
+        return llvmType(type, span);
+    }
+
+    /// A call to the runtime's `silver_<name>`, with a suffix naming the argument's type for each
+    /// `Any` parameter.
+    private string emit(const Expr e, const IntrinsicCall call)
+    {
+        import std.conv : to;
+
+        auto types = _program.types;
+        if (call.intrinsic == Intrinsic.panic) return notImplemented("panic", e.span);
+        if (e.type == types.string_ || types.isOption(e.type))
+        {
+            return notImplemented("an intrinsic returning `%s`".format(types.describe(e.type)), e.span);
+        }
+
+        auto name = "silver_" ~ call.intrinsic.to!string;
         string[] operands;
         foreach (i, ref arg; call.args)
         {
-            if (arg.type == types.string_) return notImplemented("passing a String to a native", arg.span);
+            if (arg.type == types.string_) return notImplemented("passing a String to an intrinsic", arg.span);
             auto value = emitExpr(arg);
             if (call.anyArgs[i])
             {
@@ -203,7 +269,7 @@ private final class Generator
             if (value !is null) operands ~= value;
         }
 
-        if (name !in runtime) return notImplemented("the native " ~ name, e.span);
+        if (name !in runtime) return notImplemented("the intrinsic " ~ name, e.span);
         return callRuntime(name, operands);
     }
 
@@ -215,7 +281,7 @@ private final class Generator
         if (type == types.float_) return "float";
         if (type == types.bool_) return "bool";
         if (type == types.unit) return "unit";
-        assert(0, "lowering only passes primitives to a native's Any");
+        assert(0, "lowering only passes primitives to an intrinsic's Any");
     }
 
     /// An integer as the runtime takes it: 64 bits, sign- or zero-extended.

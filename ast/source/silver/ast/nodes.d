@@ -26,6 +26,15 @@ struct Module
     Decl[] declarations;
     /// null when the file has no `module` line, which only a file that's never imported may omit.
     ModuleDeclaration* declaration;
+    /// `native library "name"`, or null.
+    NativeLibrary* library;
+}
+
+/// `native library "name"`: where every native function in a module is found.
+struct NativeLibrary
+{
+    string name;
+    Span span;
 }
 
 /// `module a.b`, the first line of a file. `path` must match the file's path under its root.
@@ -605,18 +614,29 @@ struct Param
 
 /// `def name(params): Type => expr` or `def name(params): Type { ... }`.
 /// A block body is a BlockExpr, so either way the body is one expression.
-/// `native def name(params): Type` has no body; the runtime binds it by name.
+/// `native def` and `intrinsic def` have no body.
 struct FunctionDecl
 {
     Id!FunctionDecl id;
     string name;
     Span nameSpan;
     Param[] params;
-    /// null when `native` is set.
+    /// null unless the kind is `ordinary`.
     Expr* body;
     TypeExpr returnType;
-    bool native;
+    FunctionKind kind;
+    /// The C symbol a native binds, which is its name unless `native("...")` gives another.
+    string symbol;
     bool isPrivate;
+}
+
+enum FunctionKind
+{
+    ordinary,
+    /// `native def`, a C function.
+    native,
+    /// `intrinsic def`, which the compiler implements.
+    intrinsic,
 }
 
 /// `name: Type` in a type declaration.
@@ -652,8 +672,12 @@ struct AliasDecl
     Id!AliasDecl id;
     string name;
     Span nameSpan;
+    /// For an intrinsic alias, a placeholder naming the alias itself, which sema gives the
+    /// type the alias stands for on the target.
     TypeExpr target;
     bool isPrivate;
+    /// `intrinsic alias Name`, written with no target.
+    bool intrinsic;
 }
 
 /// One alternative of `type Name = A(x: Int) | B | geo.C`.
@@ -694,16 +718,18 @@ struct ContinueStmt
 
 string printModule(const Module m)
 {
-    import std.format : format;
     import std.algorithm : map;
-    import std.array : join;
-    auto declarations = m.declarations.map!(printDecl).join("\n");
-    if (m.declaration is null)
-    {
-        return declarations;
-    }
-    auto header = printModuleDeclaration(*m.declaration);
-    return declarations.length == 0 ? header : header ~ "\n" ~ declarations;
+    import std.array : array, join;
+
+    string[] lines;
+    if (m.declaration !is null) lines ~= printModuleDeclaration(*m.declaration);
+    if (m.library !is null) lines ~= printNativeLibrary(*m.library);
+    return (lines ~ m.declarations.map!(printDecl).array).join("\n");
+}
+
+string printNativeLibrary(const NativeLibrary library)
+{
+    return "(native library \"" ~ library.name ~ "\")";
 }
 
 string printModuleDeclaration(const ModuleDeclaration d)
@@ -722,7 +748,9 @@ string printDecl(const Decl d)
         (const FunctionDecl f) => marked(f.isPrivate, printFunctionDecl(f)),
         (const TypeDecl t) => marked(t.isPrivate, printTypeDecl(t)),
         (const ConstDecl c) => marked(c.isPrivate, printConstDecl(c)),
-        (const AliasDecl a) => marked(a.isPrivate, "(alias " ~ a.name ~ " = " ~ printTypeExpr(a.target) ~ ")"),
+        (const AliasDecl a) => marked(a.isPrivate, a.intrinsic
+            ? "(intrinsic alias " ~ a.name ~ ")"
+            : "(alias " ~ a.name ~ " = " ~ printTypeExpr(a.target) ~ ")"),
     );
 }
 
@@ -783,9 +811,16 @@ private string printFunctionDecl(const FunctionDecl f)
 {
     import std.format : format;
 
-    return f.native
-        ? format("(native def %s %s)", f.name, printSignature(f))
-        : format("(def %s %s %s)", f.name, printSignature(f), printExpr(*f.body));
+    final switch (f.kind)
+    {
+        case FunctionKind.ordinary:
+            return format("(def %s %s %s)", f.name, printSignature(f), printExpr(*f.body));
+        case FunctionKind.native:
+            auto symbol = f.symbol == f.name ? "" : "(\"" ~ f.symbol ~ "\")";
+            return format("(native%s def %s %s)", symbol, f.name, printSignature(f));
+        case FunctionKind.intrinsic:
+            return format("(intrinsic def %s %s)", f.name, printSignature(f));
+    }
 }
 
 private string printTypeDecl(const TypeDecl t)

@@ -9,7 +9,7 @@ import silver.codegen : executablePath, findToolchain, generate, linkExecutable,
 import silver.core : lowerProgram;
 import silver.interpreter.evaluator : Evaluator;
 import silver.loader : load, standardLibraryPath;
-import silver.sema : analyze, Analysis;
+import silver.sema : analyze, Analysis, Target;
 
 /// Loads and analyzes `programFile`. Problems go to `context.collector`, which the caller
 /// must check before using `program` or the returned Analysis.
@@ -28,7 +28,7 @@ Analysis loadAndAnalyze(string programFile, string[] importPaths, SourceContext 
     {
         return null;
     }
-    return analyze(program, context.collector);
+    return analyze(program, context.collector, Target.host);
 }
 
 /// Interprets the program in `programFile`.
@@ -67,7 +67,8 @@ enum Backend
 }
 
 /// The LLVM IR for the program in `programFile`, or null after printing why there isn't any.
-string compileToIr(string programFile, string[] importPaths)
+/// `libraries` are what it has to be linked with.
+string compileToIr(string programFile, string[] importPaths, out string[] libraries)
 {
     auto context = new SourceContext();
     Program program;
@@ -79,7 +80,9 @@ string compileToIr(string programFile, string[] importPaths)
     }
     try
     {
-        return generate(lowerProgram(program, analysis), program.sources);
+        auto lowered = lowerProgram(program, analysis);
+        libraries = lowered.libraries.dup;
+        return generate(lowered, program.sources);
     }
     catch (DiagnosticException e)
     {
@@ -91,7 +94,8 @@ string compileToIr(string programFile, string[] importPaths)
 /// Compiles the program in `programFile` to the executable `outputPath`. False after printing why it failed.
 bool compileToExecutable(string programFile, string[] importPaths, string outputPath)
 {
-    auto ir = compileToIr(programFile, importPaths);
+    string[] libraries;
+    auto ir = compileToIr(programFile, importPaths, libraries);
     if (ir is null)
     {
         return false;
@@ -107,7 +111,7 @@ bool compileToExecutable(string programFile, string[] importPaths, string output
     std.file.write(irPath, ir);
     scope (exit) remove(irPath);
 
-    auto linked = linkExecutable(toolchain, irPath, outputPath);
+    auto linked = linkExecutable(toolchain, irPath, outputPath, libraries);
     if (!linked.succeeded)
     {
         stderr.writeln("Linking failed:\n", linked.output);
@@ -122,7 +126,8 @@ int build(string programFile, string[] importPaths, string outputPath, bool emit
     auto name = programFile.baseName.stripExtension;
     if (emitLlvm)
     {
-        auto ir = compileToIr(programFile, importPaths);
+        string[] libraries;
+        auto ir = compileToIr(programFile, importPaths, libraries);
         if (ir is null)
         {
             return 1;

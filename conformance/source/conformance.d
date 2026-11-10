@@ -17,7 +17,7 @@ version (unittest)
     import silver.core : lowerProgram, CoreProgram = Program;
     import silver.interpreter.evaluator : Evaluator;
     import silver.loader : load, standardLibraryPath;
-    import silver.sema : analyze, Analysis;
+    import silver.sema : analyze, Analysis, Target;
 
     string conformanceDirectory()
     {
@@ -80,7 +80,7 @@ version (unittest)
         program = load(readText(c.sourcePath), c.sourcePath, [standardLibraryPath(), dirName(c.sourcePath)], context);
         if (!context.collector.hasErrors)
         {
-            analysis = analyze(program, context.collector);
+            analysis = analyze(program, context.collector, Target.host);
         }
         if (!context.collector.hasErrors)
         {
@@ -208,7 +208,7 @@ version (unittest)
         auto irPath = buildPath(workDirectory, c.name ~ ".ll");
         auto exePath = executablePath(buildPath(workDirectory, c.name));
         write(irPath, ir);
-        auto linked = linkExecutable(toolchain, irPath, exePath);
+        auto linked = linkExecutable(toolchain, irPath, exePath, lowered.libraries);
         if (!linked.succeeded)
         {
             return "linking failed (IR kept at " ~ irPath ~ "):\n" ~ linked.output;

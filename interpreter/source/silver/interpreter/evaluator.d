@@ -1,5 +1,6 @@
 module silver.interpreter.evaluator;
 
+import std.format : format;
 import std.meta : AliasSeq;
 import std.sumtype : has, match;
 import std.traits : isSigned;
@@ -9,6 +10,7 @@ import silver.sema;
 import silver.core;
 import silver.interpreter.errors;
 import silver.interpreter.stack : checkStack, runOnLargeStack;
+import silver.interpreter.foreign : foreignFunctions;
 import silver.interpreter.values;
 
 private alias IntegerTypes = AliasSeq!(byte, short, int, long, ubyte, ushort, uint, ulong);
@@ -63,7 +65,8 @@ final class Evaluator
             (const Block block) => evaluate(block, frame),
             (const IntLit literal) => Value(literal.value),
             (const FloatLit literal) => Value(literal.value),
-            (const NativeCall call) => evaluate(e, call, frame),
+            (const ForeignCall call) => evaluate(e, call, frame),
+            (const IntrinsicCall call) => evaluate(e, call, frame),
             (const Prim prim) => evaluate(e, prim, frame),
             (other) => notImplemented(typeof(other).stringof, e.span),
         ));
@@ -256,27 +259,40 @@ final class Evaluator
         return new CodedException(DiagnosticCode.IntegerOverflow, "Integer overflow");
     }
 
-    private Value evaluate(const Expr e, const NativeCall call, Frame frame)
+    private Value evaluate(const Expr e, const IntrinsicCall call, Frame frame)
     {
         import std.algorithm : map;
         import std.range : array;
 
-        Value[] args = call.args.map!(arg=>evaluate(arg, frame)).array;
-
-        switch(call.name)
+        Value[] args = call.args.map!(arg => evaluate(arg, frame)).array;
+        switch (call.intrinsic)
         {
-            case "print":
+            case Intrinsic.print:
                 write(valueToString(args[0], call.args[0].type));
-                break;
-            case "printl":
+                return Value(Unit());
+            case Intrinsic.printl:
                 write(valueToString(args[0], call.args[0].type), true);
-                break;
+                return Value(Unit());
             default:
-                throw new RuntimeError(Diagnostic(DiagnosticCode.InternalError, e.span,
-                    "Unknown method: " ~ call.name));
+                return notImplemented("the intrinsic `%s`".format(call.intrinsic), e.span);
         }
+    }
 
-        return Value(Unit());
+    /// A call to a C function, which only the standard library's natives can reach for now: the
+    /// interpreter has each of them built in.
+    private Value evaluate(const Expr e, const ForeignCall call, Frame frame)
+    {
+        import std.algorithm : map;
+        import std.range : array;
+
+        auto native = call.symbol in foreignFunctions;
+        if (native is null)
+        {
+            throw new RuntimeError(Diagnostic(DiagnosticCode.MissingNativeBinding, e.span,
+                "`%s` can't be called when interpreting: only the standard library's natives can be, for now"
+                    .format(call.symbol)));
+        }
+        return (*native)(call.args.map!(arg => evaluate(arg, frame)).array);
     }
 
     private string valueToString(Value value, Type type)
@@ -294,7 +310,7 @@ final class Evaluator
             (bool b) => b.to!string,
             (double d) =>  d != d ? "nan" : d.to!string,
             (string s) => s,
-            (_) => assert(0, "lowering only passes primitives to a native"),
+            (_) => assert(0, "lowering only passes primitives to an intrinsic"),
         );
     }
 
@@ -318,7 +334,7 @@ final class Evaluator
         );
     }
 
-    /// What the program prints, for the natives that print.
+    /// What the program prints, for the intrinsics that print.
     private void write(string text, bool newLine = false)
     {
         import std.stdio : stdout;

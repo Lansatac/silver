@@ -27,12 +27,24 @@ import silver.sema : analyze;
 /// so every failure here is about lowering or codegen.
 string generateSource(string source, string file = __FILE__, size_t line = __LINE__)
 {
+    string[] libraries;
+    return generateSource(source, libraries, file, line);
+}
+
+/// ditto, with the libraries the program has to be linked with.
+string generateSource(string source, out string[] libraries, string file = __FILE__, size_t line = __LINE__)
+{
     auto context = new SourceContext;
     auto program = load(source, "main.ag", [standardLibraryPath()], context);
     if (!context.collector.hasErrors)
     {
         auto analysis = analyze(program, context.collector);
-        if (!context.collector.hasErrors) return generate(lowerProgram(program, analysis), program.sources);
+        if (!context.collector.hasErrors)
+        {
+            auto lowered = lowerProgram(program, analysis);
+            libraries = lowered.libraries.dup;
+            return generate(lowered, program.sources);
+        }
     }
     throw new AssertError("The test program failed to load or analyze:\n"
         ~ context.collector.errors.map!(d => formatDiagnostic(d, context.sources)).join("\n"), file, line);
@@ -50,7 +62,8 @@ struct Run
 /// result. A link failure fails the test and keeps the IR on disk for inspection.
 bool compileAndRun(string source, out Run run, string file = __FILE__, size_t line = __LINE__)
 {
-    auto ir = generateSource(source, file, line);
+    string[] libraries;
+    auto ir = generateSource(source, libraries, file, line);
 
     Toolchain toolchain;
     if (auto missing = findToolchain(toolchain))
@@ -65,7 +78,7 @@ bool compileAndRun(string source, out Run run, string file = __FILE__, size_t li
     auto exePath = executablePath(buildPath(directory, "main"));
     write(irPath, ir);
 
-    auto linked = linkExecutable(toolchain, irPath, exePath);
+    auto linked = linkExecutable(toolchain, irPath, exePath, libraries);
     if (!linked.succeeded)
     {
         throw new AssertError("Linking failed (IR kept at " ~ irPath ~ "):\n" ~ linked.output
@@ -181,4 +194,81 @@ unittest
     Run run;
     if (!compileAndRun(source, run)) return;
     run.output.should.equal("2.5\n-1.5\nfalse\n");
+}
+
+@("codegen declares a native from its signature and calls it with the C calling convention")
+unittest
+{
+    auto source = "import std.math\nimport std.time\ndef main(): Unit {\n    printl(sqrt(16.0))\n    val now = nowNanos()\n"
+        ~ "    printl(now > 1600000000000000000)\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("declare ccc double @sqrt(double)");
+    ir.should.contain("call ccc double @sqrt(double 0x4030000000000000)");
+    ir.should.contain("declare ccc i64 @silver_nowNanos()");
+    ir.should.not.contain("silver_sqrt");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("4\ntrue\n");
+}
+
+// C passes `bool` and integers narrower than `int` extended to 32 bits, and LLVM leaves that to
+// the attributes, so without them the callee can read garbage in the upper bits.
+@("codegen extends Bool and small integers at the C boundary, on parameters and results")
+unittest
+{
+    auto ir = generateSource("native def f(a: Int8, b: UInt16, c: Bool, d: Int32, e: UInt64): UInt8\n"
+        ~ "native def g(): Int16\nnative def h(): Bool\n"
+        ~ "def main(): Unit {\n    val x = f(-1, 2, true, 3, 4)\n    val y = g()\n    val z = h()\n}");
+
+    ir.should.contain("declare ccc zeroext i8 @f(signext i8, zeroext i16, zeroext i1, i32, i64)");
+    ir.should.contain("call ccc zeroext i8 @f(signext i8 -1, zeroext i16 2, zeroext i1 true, i32 3, i64 4)");
+    ir.should.contain("declare ccc signext i16 @g()");
+    ir.should.contain("declare ccc zeroext i1 @h()");
+}
+
+@("codegen calls a native returning Unit as void, and one returning Never as noreturn")
+unittest
+{
+    auto source = "native def srand(seed: UInt32): Unit\nnative def exit(status: Int32): Never\n"
+        ~ "def main(): Unit {\n    srand(7)\n    printl(1)\n    exit(3)\n    printl(2)\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("declare ccc void @srand(i32)\n");
+    ir.should.contain("call ccc void @srand(i32 7)");
+    ir.should.contain("declare ccc void @exit(i32) noreturn");
+    ir.should.contain("call ccc void @exit(i32 3)\n  unreachable");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.status.should.equal(3);
+    run.output.should.equal("1\n");}
+
+@("codegen reports two natives that bind one symbol with different signatures")
+unittest
+{
+    import std.exception : collectException;
+
+    auto error = collectException!DiagnosticException(generateSource(
+        "native(\"abs\") def a(x: Int32): Int32\nnative(\"abs\") def b(x: Int64): Int64\n"
+        ~ "def main(): Unit {\n    val x = a(1)\n    val y = b(2)\n}"));
+    assert(error !is null);
+    error.diagnostic.code.should.equal(DiagnosticCode.NotImplemented);
+}
+
+version (linux)
+{
+    @("codegen links the native library a program's natives come from")
+    unittest
+    {
+        string[] libraries;
+        auto source = "native library \"m\"\nnative def cbrt(x: Float): Float\ndef main(): Unit {\n    printl(cbrt(27.0))\n}";
+        generateSource(source, libraries);
+        libraries.should.equal(["m"]);
+
+        Run run;
+        if (!compileAndRun(source, run)) return;
+        run.output.should.equal("3\n");
+    }
 }

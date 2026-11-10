@@ -72,9 +72,11 @@ struct LinkResult
     string output;
 }
 
-/// Compiles the IR at `irPath` and links it with the runtime into the executable
-/// `outputPath`. `extraFlags` go to clang's compile step, e.g. `-O2`.
-LinkResult linkExecutable(const Toolchain toolchain, string irPath, string outputPath, string[] extraFlags = [])
+/// Compiles the IR at `irPath` and links it with the runtime and `libraries`, which are named as
+/// `native library` names them, into the executable `outputPath`. `extraFlags` go to clang's
+/// compile step, e.g. `-O2`.
+LinkResult linkExecutable(const Toolchain toolchain, string irPath, string outputPath, const string[] libraries = [],
+    string[] extraFlags = [])
 {
     BuiltRuntime runtime;
     if (auto failure = buildRuntime(toolchain, runtime))
@@ -92,8 +94,21 @@ LinkResult linkExecutable(const Toolchain toolchain, string irPath, string outpu
         return LinkResult(false, compiled.output);
     }
 
-    auto linked = execute([toolchain.dmd, objPath, runtime.entryObject, runtime.library, "-of=" ~ outputPath]);
+    auto linked = execute(linkCommand(toolchain, objPath, runtime, libraries, outputPath));
     return LinkResult(linked.status == 0, linked.output);
+}
+
+/// The dmd command that links `objPath` with the runtime and `libraries` into `outputPath`.
+string[] linkCommand(const Toolchain toolchain, string objPath, const BuiltRuntime runtime, const string[] libraries,
+    string outputPath)
+{
+    import std.algorithm : map;
+    import std.array : array;
+
+    // dmd hands a `.lib` argument to link.exe as it is, and `-L` flags to the Unix linker.
+    version (Windows) auto linked = libraries.map!(l => l ~ ".lib").array;
+    else auto linked = libraries.map!(l => "-L-l" ~ l).array;
+    return [toolchain.dmd, objPath, runtime.entryObject, runtime.library] ~ linked ~ ["-of=" ~ outputPath];
 }
 
 /// The compiled runtime, under `runtimePath()/build`.
@@ -221,4 +236,14 @@ unittest
     assert(run.status == 0, run.output);
     // The runtime writes the platform's newline.
     assert(run.output.replace("\r\n", "\n") == "42\n2.5\nfalse\nhi()\n", run.output);
+}
+
+@("the link command names each native library the way the platform's linker takes it")
+unittest
+{
+    auto runtime = BuiltRuntime("rt.a", "entry.o");
+    auto command = linkCommand(Toolchain("clang", "dmd"), "main.o", runtime, ["SDL2", "m"], "main");
+    version (Windows) auto expected = ["SDL2.lib", "m.lib"];
+    else auto expected = ["-L-lSDL2", "-L-lm"];
+    assert(command == ["dmd", "main.o", "entry.o", "rt.a"] ~ expected ~ ["-of=main"], command.to!string);
 }

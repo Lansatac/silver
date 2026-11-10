@@ -11,9 +11,12 @@ Silver:
 
     Declaration          <  (
                             / ImportStatement
+                            / NativeLibrary
+                            / IntrinsicAlias
                             / PrivateDeclaration
                             / FunctionDeclaration
                             / NativeFunctionDeclaration
+                            / IntrinsicFunctionDeclaration
                             / TypeDeclaration
                             / AliasDeclaration
                             / ConstantDeclaration
@@ -26,6 +29,7 @@ Silver:
                             / ValueDeclaration
                             / FunctionDeclaration
                             / NativeFunctionDeclaration
+                            / IntrinsicFunctionDeclaration
                             / ReturnStatement
                             / BreakStatement
                             / ContinueStatement
@@ -34,7 +38,7 @@ Silver:
                             / ExpressionStatement
                             )
 
-    PrivateDeclaration   < :PRIVATE Nl? (FunctionDeclaration / NativeFunctionDeclaration / TypeDeclaration / AliasDeclaration / ConstantDeclaration)
+    PrivateDeclaration   < :PRIVATE Nl? (FunctionDeclaration / NativeFunctionDeclaration / IntrinsicFunctionDeclaration / IntrinsicAlias / TypeDeclaration / AliasDeclaration / ConstantDeclaration)
 
     QualifiedName        <- ValueName ('.' ValueName)*
 
@@ -60,7 +64,11 @@ Silver:
 
     FunctionDeclaration  < :DEF Nl? Identifier Nl? :'(' Nl? Params Nl? :')' TypeAnnotation Nl? (:'=>' Nl? Expression / Block)
 
-    NativeFunctionDeclaration < :NATIVE Nl? :DEF Nl? Identifier Nl? :'(' Nl? Params Nl? :')' TypeAnnotation
+    NativeFunctionDeclaration < :NATIVE Nl? NativeSymbol? :DEF Nl? Identifier Nl? :'(' Nl? Params Nl? :')' TypeAnnotation
+    NativeSymbol         < :'(' Nl? StringLiteral Nl? :')'
+    IntrinsicFunctionDeclaration < :INTRINSIC Nl? :DEF Nl? Identifier Nl? :'(' Nl? Params Nl? :')' TypeAnnotation
+    NativeLibrary        < :NATIVE Nl? :LIBRARY Nl? StringLiteral
+    IntrinsicAlias       < :INTRINSIC Nl? :ALIAS Nl? TypeName
     Params               < (Param (Nl? ',' Nl? Param)*)?
     Param                < (MUTABLE Nl?)? Identifier TypeAnnotation
 
@@ -221,6 +229,8 @@ Silver:
     DEF                 <- Kword("def")
     TYPE                <- Kword("type")
     NATIVE              <- Kword("native")
+    INTRINSIC           <- Kword("intrinsic")
+    LIBRARY             <- Kword("library")
     PRIVATE             <- Kword("private")
     WHILE               <- Kword("while")
     FOR                 <- Kword("for")
@@ -239,7 +249,7 @@ Silver:
     ALIAS               <- Kword("alias")
     UNDERSCORE          <- Kword("_")
 
-    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / PRIVATE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / WITH / UNDERSCORE
+    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / INTRINSIC / PRIVATE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / WITH / UNDERSCORE
     IdentChar           <- [a-zA-Z0-9_]
     Identifier          <- !Keyword ValueName
 

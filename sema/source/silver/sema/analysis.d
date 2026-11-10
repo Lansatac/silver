@@ -4,6 +4,7 @@ import silver.ast;
 import silver.sema.check;
 import silver.sema.constant : ConstValue;
 import silver.sema.resolve;
+import silver.sema.target : Intrinsic, intrinsicNamed, Target;
 import silver.sema.type;
 
 import std.sumtype : match;
@@ -288,16 +289,32 @@ final class Analysis
     {
         return _resolution.declarations.functionModules[func];
     }
+
+    /// The library a `native def` is found in: its module's `native library`, or null for the
+    /// C library and the runtime.
+    string libraryOf(Id!FunctionDecl native) const
+    {
+        auto library = moduleOf(native) in _resolution.nativeLibraries;
+        return library is null ? null : *library;
+    }
+
+    /// The operation an `intrinsic def` names, which sema has checked the compiler implements.
+    Intrinsic intrinsicOf(Id!FunctionDecl intrinsic) const
+    {
+        auto decl = declarationOf(intrinsic);
+        assert(decl.kind == FunctionKind.intrinsic, decl.name ~ " isn't an intrinsic");
+        return *intrinsicNamed(decl.name);
+    }
 }
 
 /// Analyzes every module in `program`, reporting problems to `collector`.
-Analysis analyze(const ref Program program, Collector collector)
+Analysis analyze(const ref Program program, Collector collector, Target target = Target.host)
 {
     import silver.sema.entry : checkEntryPoint, checkEntryPointReturn;
     import silver.sema.resolve : resolveNames;
 
     auto entryPoint = checkEntryPoint(program, collector);
-    auto resolution = resolveNames(program, collector);
+    auto resolution = resolveNames(program, collector, target);
     auto typing = checkTypes(program, resolution, collector);
     checkEntryPointReturn(entryPoint, resolution, typing, collector);
     return new Analysis(resolution, typing, entryPoint);

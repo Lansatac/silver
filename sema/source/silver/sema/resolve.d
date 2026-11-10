@@ -9,6 +9,7 @@ import std.string;
 import std.sumtype;
 
 import silver.ast;
+import silver.sema.target : intrinsicAlias, intrinsicNamed, Target;
 
 /// An `Id!AliasDecl` is only ever in a scope: a use of one records what it stands for.
 alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module, Id!TypeDecl, Id!ConstDecl, Id!AliasDecl);
@@ -79,6 +80,8 @@ package struct Resolution
     /// checker decides whether it's used, since a field of `x` comes first.
     MethodLookup[Id!Expr] methodLookups;
     Declarations declarations;
+    /// The `native library` of each module that names one.
+    string[string] nativeLibraries;
 }
 
 /// The builtin or declared type `symbol` is another name for. It's still an alias if it stands
@@ -106,9 +109,9 @@ package struct MethodLookup
 }
 
 /// Resolves every name in `program`, reporting problems to `collector`.
-package Resolution resolveNames(const ref Program program, Collector collector)
+package Resolution resolveNames(const ref Program program, Collector collector, Target target)
 {
-    return new NameResolver(collector).resolveProgram(program);
+    return new NameResolver(collector, target).resolveProgram(program);
 }
 
 private immutable Scope universal = new Scope(builtinTypes);
@@ -258,9 +261,13 @@ private final class NameResolver
     /// The module being resolved, which is the one that sees its own private declarations.
     private string _currentModule;
 
-    this(Collector collector)
+    private Target _target;
+    private string[string] _nativeLibraries;
+
+    this(Collector collector, Target target)
     {
         _collector = collector;
+        _target = target;
     }
 
     Resolution resolveProgram(const Program program)
@@ -284,12 +291,14 @@ private final class NameResolver
         {
             resolveModule(mod.name, mod);
         }
-        return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _declarations);
+        return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _declarations,
+            _nativeLibraries);
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
     {
         string[] visible = hasPrelude && name != preludeName ? [preludeName] : [];
+        if (mod.library !is null) _nativeLibraries[name] = mod.library.name;
         foreach (decl; mod.declarations)
         {
             decl.kind.match!(
@@ -314,6 +323,8 @@ private final class NameResolver
                 (ref const FunctionDecl func) {
                     _declarations.functions[func.id] = &func;
                     _declarations.functionModules[func.id] = name;
+                    if (func.kind == FunctionKind.intrinsic) checkIntrinsic(name, func.nameSpan, "intrinsic def",
+                        intrinsicNamed(func.name) !is null);
                     if (func.isPrivate && func.name == "main")
                     {
                         _collector.reportError(DiagnosticCode.MainInvalidDefinition, func.nameSpan,
@@ -358,6 +369,8 @@ private final class NameResolver
                 },
                 (ref const AliasDecl alias_) {
                     _declarations.aliases[alias_.id] = &alias_;
+                    if (alias_.intrinsic) checkIntrinsic(name, alias_.nameSpan, "intrinsic alias",
+                        intrinsicAlias(alias_.name, _target) !is null);
                     if (moduleScope.resolveLocalType(alias_.name) !is null)
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, alias_.nameSpan,
@@ -404,6 +417,26 @@ private final class NameResolver
         }
     }
 
+    /// Reports an intrinsic declared outside the standard library, or one the compiler doesn't implement.
+    private void checkIntrinsic(string moduleName, Span nameSpan, string form, bool known)
+    {
+        if (!isStandardLibrary(moduleName))
+        {
+            _collector.reportError(DiagnosticCode.IntrinsicOutsideStandardLibrary, nameSpan,
+                "`%s` is only available in the standard library".format(form));
+        }
+        else if (!known)
+        {
+            _collector.reportError(DiagnosticCode.UnknownIntrinsic, nameSpan,
+                "The compiler has no `%s` with this name".format(form));
+        }
+    }
+
+    private static bool isStandardLibrary(string moduleName)
+    {
+        return moduleName == preludeName || moduleName == "std" || moduleName.startsWith("std.");
+    }
+
     private void resolveAliases(string name, const Module mod)
     {
         _currentModule = name;
@@ -411,6 +444,11 @@ private final class NameResolver
         {
             decl.kind.match!(
                 (const AliasDecl alias_) {
+                    if (alias_.intrinsic)
+                    {
+                        if (auto builtin = intrinsicAlias(alias_.name, _target)) _typeResolutions[alias_.target.id] = TypeSymbol(*builtin);
+                        return;
+                    }
                     resolveTypeExpr(alias_.target, _moduleScopes[name]);
                     if (!alias_.isPrivate) reportPrivateType(alias_.target, "a public alias");
                 },
@@ -812,8 +850,8 @@ private final class NameResolver
                 declarePattern(patternDecl.pattern, scopeTable);
             },
             (const FunctionDecl funcDecl) {
-                _collector.reportError(DiagnosticCode.InternalError, funcDecl.nameSpan,
-                    "A native function has to be declared at the top level");
+                _collector.reportError(DiagnosticCode.InternalError, funcDecl.nameSpan, "%s function has to be declared at the top level"
+                    .format(funcDecl.kind == FunctionKind.native ? "A native" : "An intrinsic"));
             },
         );
     }

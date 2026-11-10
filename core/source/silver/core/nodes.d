@@ -4,7 +4,7 @@ import std.sumtype;
 import std.typecons : Rebindable;
 
 import silver.ast : Span;
-import silver.sema : Type, TypeTable;
+import silver.sema : Intrinsic, Type, TypeTable;
 
 /// A whole program as Core: everything a backend needs, with no AST or Analysis behind it.
 struct Program
@@ -14,6 +14,8 @@ struct Program
     Function[] functions;
     /// Where `main` is in `functions`.
     size_t entryPoint;
+    /// What `native library` names in the modules whose natives are called, for the linker.
+    string[] libraries;
 }
 
 /// A variable. It has an identity of its own because lowering invents temporaries that no
@@ -49,7 +51,7 @@ struct Expr
     ExprKind kind;
 }
 
-alias ExprKind = SumType!(UnitLit, BoolLit, IntLit, FloatLit, LocalRef, Call, NativeCall, Prim, If, Block, Loop, Break, Continue);
+alias ExprKind = SumType!(UnitLit, BoolLit, IntLit, FloatLit, LocalRef, Call, ForeignCall, IntrinsicCall, Prim, If, Block, Loop, Break, Continue);
 
 /// `()`.
 struct UnitLit
@@ -86,13 +88,20 @@ struct Call
     Expr[] args;
 }
 
-/// A call to a `native def`, named as in the source. The runtime's symbol for it adds a suffix
-/// for each `Any` parameter, which is the argument's type, so only codegen needs it.
-struct NativeCall
+/// A call to a `native def`: the C function `symbol`, through the C calling convention. Every
+/// argument is an integer, `Float` or `Bool`, and so is the result, unless it's `Unit` or `Never`.
+struct ForeignCall
 {
-    string name;
+    string symbol;
     Expr[] args;
-    /// Which of `args` fill an `Any` parameter.
+}
+
+/// A call to an `intrinsic def`, an operation each backend implements itself.
+struct IntrinsicCall
+{
+    Intrinsic intrinsic;
+    Expr[] args;
+    /// Which of `args` fill an `Any` parameter, so the backend has to look at the argument's type.
     bool[] anyArgs;
 }
 

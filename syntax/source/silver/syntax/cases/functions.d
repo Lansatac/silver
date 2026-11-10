@@ -51,3 +51,39 @@ immutable Case[] functions = [
     parsesAs("if (a) => 1 else 2", "(if a 1 2)"),
     parsesAs("if val b = a => 1 else 2", "(if (val b a) 1 2)"),
 ];
+
+immutable Case[] natives = [
+    declaresAs("native def sqrt(x: Float): Float", "(native def sqrt (x: Float): Float)"),
+    declaresAs(`native("atan2") def angle(y: Float, x: Float): Float`, `(native("atan2") def angle (y: Float, x: Float): Float)`),
+    declaresAs(`native ( "SDL_Init" ) def init(flags: UInt32): Int32`, `(native("SDL_Init") def init (flags: UInt32): Int32)`),
+    declaresAs(`native("f") def f(): Int`, "(native def f (): Int)"),
+    declaresAs("native\n(\"f\") def g(): Int", `(native("f") def g (): Int)`),
+    rejectsDeclaration(`native("f")` ~ "\ndef g(): Int"), // `)` can end a statement
+    rejectsDeclaration(`native(f) def g(): Int`),
+    rejectsDeclaration(`native("f") def g(): Int => 1`),
+    declaresAs(`private native("f") def g(): Int`, `(private (native("f") def g (): Int))`),
+
+    declaresAs("intrinsic def panic(message: String): Never", "(intrinsic def panic (message: String): Never)"),
+    declaresAs("intrinsic\ndef\nlength(values: Any): Int", "(intrinsic def length (values: Any): Int)"),
+    declaresAs("private intrinsic def f(): Int", "(private (intrinsic def f (): Int))"),
+    rejectsDeclaration("intrinsic def f(): Int => 1"),
+    rejectsDeclaration(`intrinsic("f") def f(): Int`),
+    rejects("val intrinsic = 1"),
+    parsesAs("val library = 1", "(val library 1)"),
+
+    declaresAs("intrinsic alias CLong", "(intrinsic alias CLong)"),
+    declaresAs("intrinsic\nalias\nCLong", "(intrinsic alias CLong)"),
+    declaresAs("private intrinsic alias CLong", "(private (intrinsic alias CLong))"),
+    rejectsDeclaration("intrinsic alias CLong = Int"),
+    rejectsDeclaration("intrinsic alias cLong"),
+
+    declaresAs(`native library "SDL2"`, `(native library "SDL2")`),
+    declaresAs("module sdl.video\nnative library \"SDL2\"\nnative(\"SDL_Init\") def init(flags: UInt32): Int32", [
+        "(module sdl.video)",
+        `(native library "SDL2")`,
+        `(native("SDL_Init") def init (flags: UInt32): Int32)`,
+    ]),
+    declaresAs("native\nlibrary\n\"m\"", `(native library "m")`),
+    rejectsDeclaration("native library SDL2"),
+    rejectsDeclaration(`private native library "SDL2"`),
+];

@@ -137,7 +137,7 @@ private final class TypeChecker
             {
                 decl.kind.match!(
                     (const FunctionDecl f) {
-                        if (f.native && f.name == "length") _arrayLength = f.id;
+                        if (f.kind == FunctionKind.intrinsic && f.name == "length") _arrayLength = f.id;
                     },
                     (_) {},
                 );
@@ -643,16 +643,34 @@ private final class TypeChecker
         {
             _symbolTypes[SymbolId(param.id)] = params[i];
         }
-        if (func.native)
+        auto returnType = resolveType(func.returnType);
+        if (func.kind != FunctionKind.ordinary)
         {
             foreach (param; func.params.filter!(p => p.mutable))
             {
-                _collector.reportError(DiagnosticCode.MutableNativeParameter, param.nameSpan,
-                    "A native function can't take a `mutable` parameter");
+                _collector.reportError(DiagnosticCode.MutableNativeParameter, param.nameSpan, "%s function can't take a `mutable` parameter"
+                    .format(func.kind == FunctionKind.native ? "A native" : "An intrinsic"));
             }
         }
-        _symbolTypes[SymbolId(func.id)] = _types.function_(params, resolveType(func.returnType),
-            func.params.map!(p => p.mutable).array);
+        if (func.kind == FunctionKind.native)
+        {
+            foreach (i, param; func.params)
+            {
+                requireNativeType(params[i], param.type.span, false);
+            }
+            requireNativeType(returnType, func.returnType.span, true);
+        }
+        _symbolTypes[SymbolId(func.id)] = _types.function_(params, returnType, func.params.map!(p => p.mutable).array);
+    }
+
+    /// Reports a type in a native's signature that has no C equivalent.
+    private void requireNativeType(Type type, Span span, bool isReturn)
+    {
+        if (type == _types.error || _types.isInteger(type) || type == _types.float_ || type == _types.bool_) return;
+        if (isReturn && (type == _types.unit || type == _types.never)) return;
+        _collector.reportError(DiagnosticCode.InvalidNativeType, span,
+            "`%s` can't cross into C; a native function takes integers, `Float` and `Bool`%s".format(_types.describe(type),
+                isReturn ? ", and can also return `Unit` or `Never`" : ""));
     }
 
     private void declareSum(const TypeDecl decl)
@@ -913,7 +931,7 @@ private final class TypeChecker
                             .format(_types.describe(type)));
                 }
             },
-            // A nested `def` lowers to a VarDecl, and name resolution reports a nested native one.
+            // A nested `def` lowers to a VarDecl, and name resolution reports a nested native or intrinsic.
             (const FunctionDecl _) {},
             (const ReturnStmt ret) {
                 if (ctx.inferred is null)

@@ -50,3 +50,23 @@ unittest
     }
 `).should.equal("3\n10\n6\n");
 }
+
+@("a native from the standard library is called by its symbol")
+unittest
+{
+    run("import std.math\nimport std.time\ndef main(): Unit {\n    printl(sqrt(16))\n    printl(pow(2, 10))\n"
+        ~ "    val now = nowNanos()\n    printl(now > 1600000000000000000)\n}").should.equal("4\n1024\ntrue\n");
+}
+
+@("calling a native the interpreter doesn't have is a diagnostic, not a crash")
+unittest
+{
+    import std.exception : collectException;
+    import silver.ast : DiagnosticCode;
+    import silver.interpreter.errors : RuntimeError;
+
+    auto error = collectException!RuntimeError(run("native def cbrt(x: Float): Float\ndef main(): Unit {\n    printl(cbrt(8.0))\n}"));
+    assert(error !is null);
+    error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
+    error.diagnostic.message.should.contain("cbrt");
+}

@@ -3,7 +3,7 @@ module silver.syntax.parse_tests.helpers;
 version (unittest):
 
 import fluent.asserts;
-import silver.ast : BlockExpr, FunctionDecl, Module, NodeIds, printDecl, printExpr, printModuleDeclaration,
+import silver.ast : BlockExpr, FunctionDecl, Module, NodeIds, printDecl, printExpr, printModuleDeclaration, printNativeLibrary,
     printStmt;
 import silver.syntax.parse : parse, ParseException;
 import silver.syntax.cases.core;
@@ -81,6 +81,7 @@ private string[] printCase(Module m, Case c)
     {
     case Level.declarations:
         auto header = m.declaration is null ? [] : [printModuleDeclaration(*m.declaration)];
+        if (m.library !is null) header ~= printNativeLibrary(*m.library);
         return header ~ m.declarations.map!printDecl.array;
     case Level.statements:
         auto block = m.declarations[0].kind.get!FunctionDecl.body.kind.get!BlockExpr;

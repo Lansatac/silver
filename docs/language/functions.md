@@ -19,7 +19,7 @@ Functions at the top level of a module can be used before they are declared. A f
 
 `return` exits the innermost function or lambda. A bare `return` returns `()`.
 
-`native def` declares a function implemented outside Silver. It has a signature and no body.
+`native def` declares a function implemented outside Silver. It has a signature and no body. See [Native functions](native.md).
 
 ## Tail calls
 

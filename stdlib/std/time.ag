@@ -1,4 +1,4 @@
 module std.time
 
 // Wall-clock nanoseconds since the Unix epoch. The clock can jump, so this doesn't measure durations reliably.
-native def nowNanos(): Int
+native("silver_nowNanos") def nowNanos(): Int

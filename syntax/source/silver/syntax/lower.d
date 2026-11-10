@@ -46,6 +46,7 @@ private final class Lowering
 
         // Both the module line and the declarations are optional.
         ModuleDeclaration* header;
+        NativeLibrary* library;
         Decl[] declarations;
         foreach (child; tree[0].children)
         {
@@ -57,6 +58,11 @@ private final class Lowering
             case "Silver.Declarations":
                 foreach (declaration; child.children)
                 {
+                    if (declaration[0].name == "Silver.NativeLibrary")
+                    {
+                        library = convertNativeLibrary(declaration[0], library);
+                        continue;
+                    }
                     declarations ~= convertDeclaration(declaration);
                 }
                 declarations ~= implicitMarkers(declarations);
@@ -65,7 +71,7 @@ private final class Lowering
                 throw new Exception("Unexpected '%s' in module".format(child.name));
             }
         }
-        return Module(ids.next!Module, moduleName, spanOf(tree, file), declarations, header);
+        return Module(ids.next!Module, moduleName, spanOf(tree, file), declarations, header, library);
     }
 
     /// `a.b.c` as ["a", "b", "c"].
@@ -153,6 +159,7 @@ private final class Lowering
             return [Decl(spanOf(cst, file), DeclKind(ImportStmt(ids.next!ImportStmt, path)))];
         case "Silver.FunctionDeclaration":
         case "Silver.NativeFunctionDeclaration":
+        case "Silver.IntrinsicFunctionDeclaration":
             return [Decl(spanOf(cst, file), DeclKind(convertFunctionDeclaration(cst)))];
         case "Silver.TypeDeclaration":
             return convertTypeDeclaration(cst);
@@ -161,6 +168,11 @@ private final class Lowering
             return [Decl(spanOf(cst, file), DeclKind(alias_))];
         case "Silver.ConstantDeclaration":
             return [Decl(spanOf(cst, file), DeclKind(convertConstantDeclaration(cst)))];
+        case "Silver.IntrinsicAlias":
+            auto nameSpan = spanOf(cst[0], file);
+            auto placeholder = TypeExpr(ids.next!TypeExpr, nameSpan, TypeExprKind(NamedType([cst[0].matches[0]], null)));
+            auto intrinsic = AliasDecl(ids.next!AliasDecl, cst[0].matches[0], nameSpan, placeholder, false, true);
+            return [Decl(spanOf(cst, file), DeclKind(intrinsic))];
         default:
             throw new Exception("lower: declaration '%s' not supported yet".format(cst.name));
         }
@@ -226,8 +238,9 @@ private final class Lowering
             return Stmt(spanOf(cst, file), StmtKind(AssignStmt(target, expr)));
         case "Silver.FunctionDeclaration":
         case "Silver.NativeFunctionDeclaration":
+        case "Silver.IntrinsicFunctionDeclaration":
             auto decl = convertFunctionDeclaration(cst);
-            if (decl.native) return Stmt(spanOf(cst, file), StmtKind(decl));
+            if (decl.kind != FunctionKind.ordinary) return Stmt(spanOf(cst, file), StmtKind(decl));
             auto binding = ids.next!VarDecl;
             auto nested = Expr(ids.next!Expr, spanOf(cst, file),
                 ExprKind(Lambda(decl.params, boxed(decl.returnType), decl.body, decl.name, binding)));
@@ -724,7 +737,7 @@ private final class Lowering
     }
 
     /// `DEF Identifier Params? TypeAnnotation ('=>' Expression / Block)`,
-    /// or `NATIVE DEF Identifier Params? TypeAnnotation` with no body.
+    /// or a native or intrinsic declaration, which has no body.
     /// Params is absent rather than empty when there are no params,
     /// so children are matched by name.
     private Expr convertLambda(ParseTree cst)
@@ -753,12 +766,26 @@ private final class Lowering
 
     private FunctionDecl convertFunctionDeclaration(ParseTree cst)
     {
-        auto native = cst.name == "Silver.NativeFunctionDeclaration";
-        if (!native)
+        FunctionKind kind;
+        switch (cst.name)
         {
+        case "Silver.NativeFunctionDeclaration":
+            kind = FunctionKind.native;
+            break;
+        case "Silver.IntrinsicFunctionDeclaration":
+            kind = FunctionKind.intrinsic;
+            break;
+        default:
             cst.validateNodeIs("Silver.FunctionDeclaration");
         }
+        string symbol;
+        if (cst[0].name == "Silver.NativeSymbol")
+        {
+            symbol = plainString(cst[0][0], "A native's symbol");
+            cst.children = cst.children[1 .. $];
+        }
         auto name = cst[0].matches[0];
+        if (kind == FunctionKind.native && symbol is null) symbol = name;
 
         Param[] params;
         Expr* body;
@@ -787,7 +814,32 @@ private final class Lowering
                 throw new Exception("Unexpected '%s' in function declaration".format(child.name));
             }
         }
-        return FunctionDecl(ids.next!FunctionDecl, name, spanOf(cst[0], file), params, body, returnType, native);
+        return FunctionDecl(ids.next!FunctionDecl, name, spanOf(cst[0], file), params, body, returnType, kind, symbol);
+    }
+
+    /// `NATIVE LIBRARY StringLiteral`. `previous` is the one the module already has, if any.
+    private NativeLibrary* convertNativeLibrary(ParseTree cst, NativeLibrary* previous)
+    {
+        auto span = spanOf(cst, file);
+        if (previous !is null)
+        {
+            throw new ParseException(Diagnostic(DiagnosticCode.ParseError, span,
+                "A module can name only one `native library`", Severity.Error));
+        }
+        return new NativeLibrary(plainString(cst[0], "A library name"), span);
+    }
+
+    /// The text of a string literal that has to be known as written, with no holes.
+    private string plainString(ParseTree cst, string what)
+    {
+        auto literal = convertStringLiteral(cst);
+        auto text = literal.kind.match!((ref StringLiteral s) => s.value, (ref _) => cast(string) null);
+        if (text.length == 0)
+        {
+            throw new ParseException(Diagnostic(DiagnosticCode.ParseError, literal.span,
+                what ~ " has to be a string with no holes, and can't be empty", Severity.Error));
+        }
+        return text;
     }
 
     /// `type Name`, `type Name()`, `type Name(fields)` or `type Name = members`, and for a sum a
@@ -1096,4 +1148,25 @@ unittest
     assert(text(ifExpr.condition.span) == "c");
     assert(text(ifExpr.trueBody.span) == "{ 1 }");
     assert(text((*body).span) == "if c /* why */ { 1 } // one\n else { 2 }");
+}
+
+@("a module names at most one native library, and a native's symbol and library are plain strings")
+unittest
+{
+    import std.exception : collectException;
+    import silver.syntax.parse : parse;
+
+    void rejected(string source)
+    {
+        auto error = collectException!ParseException(parse(source, "test", new NodeIds));
+        assert(error !is null, source);
+        assert(error.diagnostic.code == DiagnosticCode.ParseError, source);
+    }
+
+    rejected("native library \"a\"\nnative library \"b\"");
+    rejected("native library \"{name}\"");
+    rejected("native library \"\"");
+    rejected("native(\"\") def f(): Int");
+    rejected("native(\"f{x}\") def f(): Int");
+    assert(collectException!ParseException(parse("native library \"a\"\nnative(\"b\") def f(): Int", "test", new NodeIds)) is null);
 }

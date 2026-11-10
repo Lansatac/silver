@@ -1,0 +1,33 @@
+import std.math
+
+def main(): Unit {
+    val root = sqrt(2.0) * sqrt(2.0) - 2.0
+    printl(root * root < 1e-24)
+    printl(sqrt(16.0))
+    printl(std.math.sqrt(9.0))
+    val nan = sqrt(-1.0)
+    printl(nan != nan)
+
+    printl(exp(0.0))
+    val e = exp(1.0) - 2.718281828459045
+    printl(e * e < 1e-24)
+    printl(log(1.0))
+    val logarithm = log(exp(2.0)) - 2.0
+    printl(logarithm * logarithm < 1e-24)
+
+    printl(sin(0.0))
+    val sine = sin(1.0) - 0.8414709848078965
+    printl(sine * sine < 1e-24)
+    // Wrong in x87's `fsin`, which returns the argument itself.
+    val far = sin(1e22) + 0.8522008497671888
+    printl(far * far < 1e-24)
+    printl(cos(0.0))
+    val cosine = cos(1.0) - 0.5403023058681398
+    printl(cosine * cosine < 1e-24)
+    val quarter = atan(1.0) * 4.0 - 3.141592653589793
+    printl(quarter * quarter < 1e-24)
+
+    printl(pow(2.0, 10.0))
+    val fraction = pow(2.0, 0.5) - sqrt(2.0)
+    printl(fraction * fraction < 1e-24)
+}

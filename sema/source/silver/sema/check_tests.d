@@ -12,6 +12,7 @@ import silver.ast;
 import silver.sema.check : FieldInfo;
 import silver.sema.constant : ConstInt, ConstUInt, ConstUnit;
 import silver.sema.resolution_tests;
+import silver.sema.target : Target;
 
 /// Asserts that the expression whose source is exactly the `nth` occurrence of `text` has type `expected`.
 void shouldHaveType(const Analyzed a, string text, size_t nth, string expected,
@@ -117,7 +118,7 @@ unittest
 @("type checking records function and parameter types from their annotations")
 unittest
 {
-    auto a = analyzed(`native def f(x: Int, g: (Int) -> Bool): String?
+    auto a = analyzed(`def f(x: Int, g: (Int) -> Bool): String? => None
 def main(): Unit => ()`);
     a.shouldDeclareType(At("f", 1), "(Int, (Int) -> Bool) -> String?");
     a.shouldDeclareType(At("x", 1), "Int");
@@ -2348,12 +2349,71 @@ unittest
         .shouldReport(DiagnosticCode.TypeMismatch, At("step", 2));
 }
 
-@("a native can't take a mutable parameter")
+@("a native or an intrinsic can't take a mutable parameter")
 unittest
 {
     analyzed("native def f(mutable x: Int): Unit\ndef main(): Unit { }")
         .shouldReport(DiagnosticCode.MutableNativeParameter, At("x", 1));
+    analyzed("import std.extra\ndef main(): Unit { }", ["std/extra.ag": "module std.extra\nintrinsic def print(mutable x: Int): Unit"])
+        .shouldReport(DiagnosticCode.MutableNativeParameter, At("x", 1, "std.extra"));
 }
+
+@("a native's signature has only types with a C equivalent")
+unittest
+{
+    enum point = "type Point(x: Int)\n";
+    foreach (type; ["Int8", "Int16", "Int32", "Int", "UInt8", "UInt16", "UInt32", "UInt", "Float", "Bool"])
+    {
+        analyzed("native def f(x: " ~ type ~ "): " ~ type ~ "\ndef main(): Unit { }").shouldHaveNoDiagnostics();
+    }
+    analyzed("native def f(): Unit\nnative def g(): Never\ndef main(): Unit { }").shouldHaveNoDiagnostics();
+    analyzed("import std.c\nnative def f(x: CInt, y: CLong, z: CSize): CUChar\ndef main(): Unit { }").shouldHaveNoDiagnostics();
+
+    foreach (type; ["String", "Any", "Int?", "[Int]", "(Int, Bool)", "Point", "(Int) -> Int", "()", "Unit", "Never"])
+    {
+        analyzed(point ~ "native def f(x: " ~ type ~ "): Int\ndef main(): Unit { }")
+            .shouldReport(DiagnosticCode.InvalidNativeType, At(type, type == "Point" ? 2 : 1));
+    }
+    foreach (type; ["String", "Float?", "[UInt8]", "Point"])
+    {
+        analyzed(point ~ "native def f(): " ~ type ~ "\ndef main(): Unit { }")
+            .shouldReport(DiagnosticCode.InvalidNativeType, At(type, type == "Point" ? 2 : 1));
+    }
+}
+
+@("an intrinsic is declared only in the standard library, and only for one the compiler implements")
+unittest
+{
+    analyzed("intrinsic def print(value: Any): Unit\ndef main(): Unit { }")
+        .shouldReport(DiagnosticCode.IntrinsicOutsideStandardLibrary, At("print", 1));
+    analyzed("intrinsic alias CLong\ndef main(): Unit { }")
+        .shouldReport(DiagnosticCode.IntrinsicOutsideStandardLibrary, At("CLong", 1));
+    analyzed("import stdx\ndef main(): Unit { }", ["stdx.ag": "module stdx\nintrinsic def printl(value: Any): Unit"])
+        .shouldReport(DiagnosticCode.IntrinsicOutsideStandardLibrary, At("printl", 1, "stdx"));
+
+    analyzed("import std.extra\ndef main(): Unit { }", ["std/extra.ag": "module std.extra\nintrinsic def sqrt(x: Float): Float"])
+        .shouldReport(DiagnosticCode.UnknownIntrinsic, At("sqrt", 1, "std.extra"));
+    analyzed("import std.extra\ndef main(): Unit { }", ["std/extra.ag": "module std.extra\nintrinsic alias CWord"])
+        .shouldReport(DiagnosticCode.UnknownIntrinsic, At("CWord", 1, "std.extra"));
+    analyzed("import std.extra\ndef main(): Unit { }", ["std/extra.ag": "module std.extra\nintrinsic def panic(message: String): Never"])
+        .shouldHaveNoDiagnostics();
+}
+
+@("std.c's long is as wide as the target says, and its other types are the same everywhere")
+unittest
+{
+    enum source = "import std.c\ndef f(x: CLong): Int64 => x\ndef g(x: CULong): UInt32 => x\ndef h(x: CInt, y: CSize): (Int32, UInt64) => (x, y)\ndef main(): Unit { }";
+    analyzed(source, null, Target(64)).shouldReport(DiagnosticCode.TypeMismatch, At("x", 4));
+    analyzed(source, null, Target(32)).shouldReport(DiagnosticCode.TypeMismatch, At("x", 2));
+}
+
+@("a native can't be called while a constant is evaluated")
+unittest
+{
+    analyzed("native def f(): Int\nval c: Int = f()\ndef main(): Unit { }")
+        .shouldReport(DiagnosticCode.NonConstantInitializer, At("f", 2));
+}
+
 
 @("with checks each value against its field, and has the object's type")
 unittest

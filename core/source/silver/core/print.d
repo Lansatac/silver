@@ -13,6 +13,10 @@ import silver.sema.type : Type, TypeTable;
 string print(const Program program)
 {
     auto printer = Printer(program.types, program.functions);
+    foreach (library; program.libraries)
+    {
+        printer.output ~= "library \"%s\"\n\n".format(library);
+    }
     printer.function_(program.functions[program.entryPoint]);
     foreach (i, func; program.functions)
     {
@@ -79,8 +83,12 @@ private struct Printer
                 output ~= functions[call.target].name;
                 arguments(call.args);
             },
-            (const NativeCall call) {
-                output ~= "native " ~ call.name;
+            (const ForeignCall call) {
+                output ~= "foreign \"%s\"".format(call.symbol);
+                arguments(call.args);
+            },
+            (const IntrinsicCall call) {
+                output ~= "intrinsic %s".format(call.intrinsic);
                 arguments(call.args);
             },
             (const If if_) {

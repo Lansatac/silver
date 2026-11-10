@@ -1,0 +1,16 @@
+// C's integer types, as the Silver type of the same width on the platform being compiled for.
+module std.c
+
+// Every supported platform has a signed `char`.
+alias CChar = Int8
+alias CUChar = UInt8
+alias CShort = Int16
+alias CUShort = UInt16
+alias CInt = Int32
+alias CUInt = UInt32
+// 32 bits on Windows and 64 on Linux.
+intrinsic alias CLong
+intrinsic alias CULong
+alias CLongLong = Int64
+alias CULongLong = UInt64
+alias CSize = UInt64

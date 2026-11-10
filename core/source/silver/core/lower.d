@@ -1,5 +1,6 @@
 module silver.core.lower;
 
+import std.algorithm : canFind;
 import std.format : format;
 import std.sumtype : match;
 import std.typecons : rebindable;
@@ -26,7 +27,7 @@ Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis)
     auto lowering = new Lowering(analysis);
     auto entry = lowering.slotFor(root);
     lowering.lowerPending();
-    return Program(rebindable(analysis.types), lowering.functions, entry);
+    return Program(rebindable(analysis.types), lowering.functions, entry, lowering.libraries);
 }
 
 private final class Lowering
@@ -41,6 +42,8 @@ private final class Lowering
     Function[] functions;
     private size_t[Id!(ast.FunctionDecl)] _slots;
     private Id!(ast.FunctionDecl)[] _pending;
+    /// Each `native library` a call has needed, in the order first needed.
+    string[] libraries;
 
     this(const Analysis analysis)
     {
@@ -71,7 +74,7 @@ private final class Lowering
 
     private Function lowerFunction(const ast.FunctionDecl func)
     {
-        assert(!func.native, "a call to a native is a NativeCall, so natives never get a slot");
+        assert(func.kind == ast.FunctionKind.ordinary, "a call to a native or an intrinsic has a node of its own, so they never get a slot");
         _span = func.nameSpan;
         auto signature = _analysis.signatureOf(func.id);
         Local[] params;
@@ -330,12 +333,27 @@ private final class Lowering
             if (signature.isMutable(i)) args ~= mutableArgument(arg);
             else args ~= lowerExpr(arg);
             anyArgs ~= signature.params[i] == types.any;
-            if (decl.native && anyArgs[$ - 1]) checkNativeArgument(args[$ - 1]);
+            if (decl.kind == ast.FunctionKind.intrinsic && anyArgs[$ - 1]) checkAnyArgument(args[$ - 1]);
         }
 
-        auto lowered = decl.native
-            ? nativeCall(signature.ret, decl.name, args, anyArgs, e.span)
-            : callExpr(signature.ret, slotFor(*calleeId), args, e.span);
+        Expr lowered;
+        final switch (decl.kind)
+        {
+            case ast.FunctionKind.ordinary:
+                lowered = callExpr(signature.ret, slotFor(*calleeId), args, e.span);
+                break;
+            case ast.FunctionKind.native:
+                if (auto library = _analysis.libraryOf(*calleeId))
+                {
+                    if (!libraries.canFind(library)) libraries ~= library;
+                }
+                lowered = Expr(signature.ret, e.span, ExprKind(ForeignCall(decl.symbol, args)));
+                break;
+            case ast.FunctionKind.intrinsic:
+                auto intrinsic = IntrinsicCall(_analysis.intrinsicOf(*calleeId), args, anyArgs);
+                lowered = Expr(signature.ret, e.span, ExprKind(intrinsic));
+                break;
+        }
         if (statements.length == 0) return lowered.kind;
         return ExprKind(Block(statements, boxed(lowered)));
     }
@@ -348,13 +366,13 @@ private final class Lowering
         return lowerExpr(arg);
     }
 
-    /// A value passed to a native's `Any` parameter reaches the runtime as a primitive. Anything
+    /// A value passed to an intrinsic's `Any` parameter reaches the runtime as a primitive. Anything
     /// else is formatted to a String first, which waits on formatting being lowered.
-    private void checkNativeArgument(const Expr arg)
+    private void checkAnyArgument(const Expr arg)
     {
         if (!isPrimitive(arg.type))
         {
-            notLowered("passing a `%s` to a native".format(types.describe(arg.type)));
+            notLowered("passing a `%s` to an intrinsic".format(types.describe(arg.type)));
         }
     }
 
@@ -421,11 +439,6 @@ private final class Lowering
     private Expr loop(Expr* body, Span span)
     {
         return Expr(types.unit, span, ExprKind(Loop(body)));
-    }
-
-    private Expr nativeCall(Type returnType, string name, Expr[] args, bool[] anyArgs, Span span)
-    {
-        return Expr(returnType, span, ExprKind(NativeCall(name, args, anyArgs)));
     }
 
     private Expr callExpr(Type returnType, size_t target, Expr[] args, Span span)
@@ -497,7 +510,7 @@ version (unittest)
     import silver.ast : formatDiagnostic, SourceContext;
     import silver.core.print : print;
     import silver.loader : load, standardLibraryPath;
-    import silver.sema : analyze;
+    import silver.sema : analyze, Intrinsic;
 
     alias Lowered = Tuple!(Program, "program", Analysis, "analysis");
 
@@ -765,7 +778,7 @@ def f(): Int { 2 }
     result.program.functions.length.should.equal(1);
 }
 
-@("a call to a native keeps its source name")
+@("a call to an intrinsic names the operation, and marks the arguments that fill an Any")
 unittest
 {
     auto result = loweredFunction(`
@@ -776,9 +789,46 @@ def f(x: Int8, s: String): () {
 `, "f");
     print(result.program).should.equal(
 `def f(x: Int8, s: String): Unit {
-    native printl(x)
-    native print(s)
+    intrinsic printl(x)
+    intrinsic print(s)
 }`);
+    auto first = result.program.functions[0].body.kind.match!(
+        (const Block b) => b.statements[0].kind.match!((const Eval e) => e.expr, _ => Expr.init),
+        _ => Expr.init,
+    );
+    first.kind.match!(
+        (const IntrinsicCall call) {
+            call.intrinsic.should.equal(Intrinsic.printl);
+            call.anyArgs.should.equal([true]);
+        },
+        (_) { assert(0, "expected an IntrinsicCall"); },
+    );
+}
+
+@("a call to a native is a foreign call of its symbol, and its module's library is linked")
+unittest
+{
+    auto result = loweredFunction(`
+native library "m"
+native def hypot(x: Float, y: Float): Float
+native("atan2") def angle(y: Float, x: Float): Float
+def f(x: Float): Float => hypot(x, angle(x, 1))
+`, "f");
+    print(result.program).should.equal(
+`library "m"
+
+def f(x: Float): Float foreign "hypot"(x, foreign "atan2"(x, 1.0))`);
+}
+
+@("a library is linked only when one of its natives is called")
+unittest
+{
+    auto result = loweredFunction(`
+native library "m"
+native def hypot(x: Float, y: Float): Float
+def f(x: Float): Float => x
+`, "f");
+    result.program.libraries.length.should.equal(0);
 }
 
 @("a method call passes its receiver first")
