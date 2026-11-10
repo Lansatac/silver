@@ -1,59 +1,114 @@
 module silver.core.lower;
 
+import std.format : format;
 import std.sumtype : match;
+import std.typecons : rebindable;
 
 import ast = silver.ast;
 import silver.ast : Span;
 import silver.core.nodes;
-import silver.sema : Analysis, SymbolId, Type, TypeTable;
+import silver.ast : Id;
+import silver.sema : Analysis, Primitive, SymbolId, Type, TypeTable;
 
-/// `func` as Core. Panics on any construct that isn't lowered yet.
-Function lowerFunction(const ast.FunctionDecl func, const Analysis analysis)
+/// `program` as Core, starting from its `main`. `analysis` must have no errors.
+/// Throws: DiagnosticException (`NotImplemented`) at the first construct that isn't lowered yet.
+Program lowerProgram(const ref ast.Program program, const Analysis analysis)
 {
-    return new Lowering(analysis).lowerFunction(func);
+    auto mains = ast.mainFunctions(program);
+    assert(mains.length == 1, "sema reports a program without exactly one `main`");
+    return lowerFrom(mains[0].id, analysis);
+}
+
+/// `root` and every function it calls, directly or not, as a Program whose entry point is
+/// `root`.
+Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis)
+{
+    auto lowering = new Lowering(analysis);
+    auto entry = lowering.slotFor(root);
+    lowering.lowerPending();
+    return Program(rebindable(analysis.types), lowering.functions, entry);
 }
 
 private final class Lowering
 {
     private const Analysis _analysis;
     private Local[SymbolId] _locals;
+    /// The node being lowered, for reporting what isn't lowered yet.
+    private Span _span;
+
+    /// What becomes `Program.functions`. A function gets its slot when a call first names it,
+    /// and is lowered later from `_pending`, so recursion never lowers a function twice.
+    Function[] functions;
+    private size_t[Id!(ast.FunctionDecl)] _slots;
+    private Id!(ast.FunctionDecl)[] _pending;
 
     this(const Analysis analysis)
     {
         _analysis = analysis;
     }
 
-    Function lowerFunction(const ast.FunctionDecl func)
+    /// Where `func` is in `functions`, giving it a slot and queueing it the first time.
+    size_t slotFor(Id!(ast.FunctionDecl) func)
     {
-        Local[] params;
-        foreach (ref param; func.params)
+        if (auto existing = func in _slots) return *existing;
+        auto slot = functions.length;
+        functions ~= Function.init;
+        _slots[func] = slot;
+        _pending ~= func;
+        return slot;
+    }
+
+    void lowerPending()
+    {
+        while (_pending.length > 0)
         {
-            auto local = new Local(param.name, _analysis.typeOf(param.id));
+            auto func = _pending[0];
+            _pending = _pending[1 .. $];
+            auto lowered = lowerFunction(*_analysis.declarationOf(func));
+            functions[_slots[func]] = lowered;
+        }
+    }
+
+    private Function lowerFunction(const ast.FunctionDecl func)
+    {
+        assert(!func.native, "a call to a native is a NativeCall, so natives never get a slot");
+        _span = func.nameSpan;
+        auto signature = _analysis.signatureOf(func.id);
+        Local[] params;
+        foreach (i, ref param; func.params)
+        {
+            auto local = new Local(param.name, signature.params[i], signature.isMutable(i));
             _locals[SymbolId(param.id)] = local;
             params ~= local;
         }
-        auto signature = _analysis.signatureOf(func.id);
-        return Function(func.name, params, signature.ret, lowerExpr(*func.body));
+        return Function(func.name, _analysis.moduleOf(func.id), params, signature.ret, lowerExpr(*func.body));
     }
 
     private Expr lowerExpr(const ast.Expr e)
     {
+        auto outer = _span;
+        _span = e.span;
+        scope (exit) _span = outer;
+
         // Every promotion gets wrapped here, once both exist.
         if (_analysis.promotionOf(e.id) !is null || _analysis.constructedMemberOf(e.id) !is null)
         {
             notLowered("promotion");
         }
-        return Expr(_analysis.typeOf(e.id), e.span, e.kind.match!(
+        auto type = _analysis.typeOf(e.id);
+        return Expr(type, e.span, e.kind.match!(
             (const ast.UnitLiteral _) => ExprKind(UnitLit()),
             (const ast.BoolLiteral literal) => ExprKind(BoolLit(literal.value)),
-            (const ast.IntLiteral literal) => ExprKind(IntLit(literal.value)),
+            (const ast.IntLiteral literal) => numberLiteral(literal.value, false, type),
+            (const ast.FloatLiteral literal) => ExprKind(FloatLit(literal.value)),
             (const ast.Identifier _) => ExprKind(LocalRef(localFor(e))),
-            (const ast.UnaryExpr unary) => ExprKind(lowerUnary(unary)),
-            (const ast.BinaryExpr binary) => ExprKind(lowerBinary(binary)),
+            (const ast.UnaryExpr unary) => lowerUnary(unary, type),
+            (const ast.BinaryExpr binary) => lowerBinary(binary, e),
             (const ast.IfExpr if_) => ExprKind(lowerIf(if_, e.span)),
             (const ast.BlockExpr block) => ExprKind(lowerBlock(block)),
             (const ast.WhileExpr while_) => ExprKind(lowerWhile(while_, e.span)),
             (const ast.ForExpr for_) => ExprKind(lowerFor(for_, e.span)),
+            (const ast.CallExpr call) => lowerCall(e, call),
             (other) => notLowered(typeof(other).stringof),
         ));
     }
@@ -67,28 +122,104 @@ private final class Lowering
         assert(0);
     }
 
-    private Prim lowerUnary(const ast.UnaryExpr unary)
+    /// A literal of `type`, which may be `Float` when an integer literal adapted to one.
+    private ExprKind numberLiteral(ulong magnitude, bool negative, Type type)
     {
-        if (unary.op != ast.UnaryOp.Not) notLowered("operator " ~ unary.op);
-        return Prim(PrimOp.Not, [lowerExpr(*unary.operand)]);
+        if (type == types.float_)
+        {
+            double value = magnitude;
+            return ExprKind(FloatLit(negative ? -value : value));
+        }
+        return ExprKind(IntLit(negative ? 0UL - magnitude : magnitude));
     }
 
-    private Prim lowerBinary(const ast.BinaryExpr binary)
+    private ExprKind lowerUnary(const ast.UnaryExpr unary, Type type)
     {
-        return Prim(primOp(binary.op), [lowerExpr(*binary.left), lowerExpr(*binary.right)]);
+        final switch (unary.op)
+        {
+            case ast.UnaryOp.Plus:
+                return lowerExpr(*unary.operand).kind;
+            case ast.UnaryOp.Minus:
+                // A negated literal is one value: `-128` is an Int8, though `128` alone isn't.
+                auto negated = unary.operand.kind.match!(
+                    (const ast.IntLiteral literal) => [numberLiteral(literal.value, true, type)],
+                    (const ast.FloatLiteral literal) => [ExprKind(FloatLit(-literal.value))],
+                    _ => null,
+                );
+                if (negated !is null) return negated[0];
+                return ExprKind(Prim(PrimOp.Negate, [lowerExpr(*unary.operand)]));
+            case ast.UnaryOp.Not:
+                return ExprKind(Prim(PrimOp.Not, [lowerExpr(*unary.operand)]));
+            case ast.UnaryOp.BitNot:
+                return ExprKind(Prim(PrimOp.BitNot, [lowerExpr(*unary.operand)]));
+        }
+    }
+
+    private ExprKind lowerBinary(const ast.BinaryExpr binary, const ast.Expr e)
+    {
+        import std.algorithm : map;
+        import std.array : array;
+
+        switch (binary.op)
+        {
+            // Short-circuiting: the right side runs only when the left doesn't decide.
+            case ast.BinaryOp.And:
+                return ExprKind(If(boxed(lowerExpr(*binary.left)), boxed(lowerExpr(*binary.right)),
+                    boxed(boolLiteral(false, e.span))));
+            case ast.BinaryOp.Or:
+                return ExprKind(If(boxed(lowerExpr(*binary.left)), boxed(boolLiteral(true, e.span)),
+                    boxed(lowerExpr(*binary.right))));
+            // Sema flattens a chain of `~` into one list of operands, so it's one allocation.
+            case ast.BinaryOp.Concat:
+                return ExprKind(Prim(PrimOp.Concat, _analysis.concatOperands(e.id).map!(o => lowerExpr(o)).array));
+            case ast.BinaryOp.Coalesce:
+                return notLowered("`??`");
+            case ast.BinaryOp.Equal, ast.BinaryOp.NotEqual, ast.BinaryOp.Less, ast.BinaryOp.LessEqual,
+                ast.BinaryOp.Greater, ast.BinaryOp.GreaterEqual:
+                auto operandType = _analysis.valueTypeOf(binary.left.id);
+                if (!isPrimitive(operandType))
+                {
+                    notLowered("`%s` on `%s`".format(cast(string) binary.op, types.describe(operandType)));
+                }
+                goto default;
+            default:
+                return ExprKind(Prim(primOp(binary.op), [lowerExpr(*binary.left), lowerExpr(*binary.right)]));
+        }
     }
 
     private PrimOp primOp(ast.BinaryOp op)
     {
-        switch (op)
+        final switch (op)
         {
             case ast.BinaryOp.Add: return PrimOp.Add;
-            case ast.BinaryOp.Less: return PrimOp.Less;
-            case ast.BinaryOp.Greater: return PrimOp.Greater;
+            case ast.BinaryOp.Subtract: return PrimOp.Subtract;
+            case ast.BinaryOp.Multiply: return PrimOp.Multiply;
+            case ast.BinaryOp.Divide: return PrimOp.Divide;
+            case ast.BinaryOp.Modulo: return PrimOp.Modulo;
+            case ast.BinaryOp.WrappingAdd: return PrimOp.WrappingAdd;
+            case ast.BinaryOp.WrappingSubtract: return PrimOp.WrappingSubtract;
+            case ast.BinaryOp.WrappingMultiply: return PrimOp.WrappingMultiply;
+            case ast.BinaryOp.BitAnd: return PrimOp.BitAnd;
+            case ast.BinaryOp.BitOr: return PrimOp.BitOr;
+            case ast.BinaryOp.BitXor: return PrimOp.BitXor;
+            case ast.BinaryOp.ShiftLeft: return PrimOp.ShiftLeft;
+            case ast.BinaryOp.ShiftRight: return PrimOp.ShiftRight;
             case ast.BinaryOp.Equal: return PrimOp.Equal;
-            default: notLowered("operator " ~ op);
+            case ast.BinaryOp.NotEqual: return PrimOp.NotEqual;
+            case ast.BinaryOp.Less: return PrimOp.Less;
+            case ast.BinaryOp.LessEqual: return PrimOp.LessEqual;
+            case ast.BinaryOp.Greater: return PrimOp.Greater;
+            case ast.BinaryOp.GreaterEqual: return PrimOp.GreaterEqual;
+            case ast.BinaryOp.Append: return PrimOp.Append;
+            case ast.BinaryOp.And, ast.BinaryOp.Or, ast.BinaryOp.Coalesce, ast.BinaryOp.Concat:
+                assert(0, "lowered without a primitive of its own");
         }
-        assert(0);
+    }
+
+    /// Whether `type` is built in and has no structure, so comparing two is one primitive.
+    private bool isPrimitive(Type type)
+    {
+        return types[type].match!((const Primitive _) => true, _ => false);
     }
 
     private If lowerIf(const ast.IfExpr if_, Span span)
@@ -110,6 +241,9 @@ private final class Lowering
 
     private Stmt lowerStmt(const ast.Stmt statement)
     {
+        auto outer = _span;
+        _span = statement.span;
+        scope (exit) _span = outer;
         return Stmt(statement.span, statement.kind.match!(
             (const ast.VarDecl decl) => StmtKind(lowerVar(decl)),
             (const ast.AssignStmt assign) => StmtKind(lowerAssign(assign)),
@@ -171,6 +305,57 @@ private final class Lowering
         return finalBlock;
     }
 
+    
+    /// A call to a function sema has picked. Statements that have to run before it, which a
+    /// mutable field-path argument will need, make it a block; otherwise it's the call alone.
+    private ExprKind lowerCall(const ast.Expr e, const ast.CallExpr call)
+    {
+        if (_analysis.constructionOf(e.id) !is null) return notLowered("construction");
+        if (_analysis.isConversion(e.id)) return notLowered("conversion");
+        if (_analysis.isArrayLength(e.id)) return notLowered("`length`");
+        auto calleeId = _analysis.calleeOf(e.id);
+        if (calleeId is null) return notLowered("a call through a function value");
+
+        // `x.f(y)` is `f(x, y)`, which sema has built.
+        auto method = _analysis.methodCallOf(e.id);
+        auto written = method is null ? call.args : method.args;
+
+        auto decl = _analysis.declarationOf(*calleeId);
+        auto signature = _analysis.signatureOf(*calleeId);
+        Stmt[] statements;
+        Expr[] args;
+        foreach (i, ref arg; written)
+        {
+            if (signature.isMutable(i)) args ~= mutableArgument(arg);
+            else args ~= lowerExpr(arg);
+            if (decl.native && signature.params[i] == types.any) checkNativeArgument(args[$ - 1]);
+        }
+
+        auto lowered = decl.native
+            ? nativeCall(signature.ret, decl.name, args, e.span)
+            : callExpr(signature.ret, slotFor(*calleeId), args, e.span);
+        if (statements.length == 0) return lowered.kind;
+        return ExprKind(Block(statements, boxed(lowered)));
+    }
+
+    /// The local a mutable parameter writes back to. Sema has checked it's a mutable place.
+    private Expr mutableArgument(const ast.Expr arg)
+    {
+        auto isLocal = arg.kind.match!((const ast.Identifier _) => true, _ => false);
+        if (!isLocal) notLowered("a mutable argument that isn't a local");
+        return lowerExpr(arg);
+    }
+
+    /// A value passed to a native's `Any` parameter reaches the runtime as a primitive. Anything
+    /// else is formatted to a String first, which waits on formatting being lowered.
+    private void checkNativeArgument(const Expr arg)
+    {
+        if (!isPrimitive(arg.type))
+        {
+            notLowered("passing a `%s` to a native".format(types.describe(arg.type)));
+        }
+    }
+
     // Helpers for building Core. The nodes lowering makes up have no AST node to ask sema about,
     // so these supply the types.
 
@@ -210,6 +395,11 @@ private final class Lowering
         return Expr(type, span, ExprKind(IntLit(value)));
     }
 
+    private Expr boolLiteral(bool value, Span span)
+    {
+        return Expr(types.bool_, span, ExprKind(BoolLit(value)));
+    }
+
     private Expr breakExpr(Span span)
     {
         return Expr(types.never, span, ExprKind(Break()));
@@ -229,6 +419,16 @@ private final class Lowering
     private Expr loop(Expr* body, Span span)
     {
         return Expr(types.unit, span, ExprKind(Loop(body)));
+    }
+
+    private Expr nativeCall(Type returnType, string name, Expr[] args, Span span)
+    {
+        return Expr(returnType, span, ExprKind(NativeCall(name, args)));
+    }
+
+    private Expr callExpr(Type returnType, size_t target, Expr[] args, Span span)
+    {
+        return Expr(returnType, span, ExprKind(Call(target, args)));
     }
 
     /// Leaves the enclosing loop when `condition` is false.
@@ -279,7 +479,10 @@ private final class Lowering
 
     private Result notLowered(Result = ExprKind)(string what)
     {
-        assert(0, "Not lowered to Core yet: " ~ what);
+        import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException;
+
+        throw new DiagnosticException(Diagnostic(DiagnosticCode.NotImplemented, _span,
+            "Not lowered to Core yet: " ~ what));
     }
 }
 
@@ -294,9 +497,10 @@ version (unittest)
     import silver.loader : load, standardLibraryPath;
     import silver.sema : analyze;
 
-    alias Lowered = Tuple!(Function, "func", Analysis, "analysis");
+    alias Lowered = Tuple!(Program, "program", Analysis, "analysis");
 
-    /// The function `name` in `source`, lowered, with the analysis it was lowered from.
+    /// The function `name` in `source` and everything it calls, lowered, with the analysis it
+    /// was lowered from.
     private Lowered loweredFunction(string source, string name)
     {
         auto context = new SourceContext;
@@ -306,14 +510,14 @@ version (unittest)
                 .map!(d => formatDiagnostic(d, context.sources)).join("\n"));
         foreach (decl; program.modules["test"].declarations)
         {
-            Function* found;
+            Id!(ast.FunctionDecl)[] found;
             decl.kind.match!(
-                (ref ast.FunctionDecl func) {
-                    if (func.name == name) found = [lowerFunction(func, analysis)].ptr;
+                (ref const ast.FunctionDecl func) {
+                    if (func.name == name) found = [func.id];
                 },
                 (ref _) {},
             );
-            if (found !is null) return Lowered(*found, analysis);
+            if (found.length > 0) return Lowered(lowerFrom(found[0], analysis), analysis);
         }
         assert(0, "no function " ~ name);
     }
@@ -329,7 +533,7 @@ def add(a: Int, b: Int): Int {
 }
 `, "add");
 
-    print(result.func, result.analysis.types).should.equal(
+    print(result.program).should.equal(
 `def add(a: Int, b: Int): Int {
     let c: Int = Add(a, b)
     if (Greater(c, 10)) {
@@ -355,7 +559,7 @@ def f(a: Int): Int {
 }
 `, "f");
 
-    print(result.func, result.analysis.types).should.equal(
+    print(result.program).should.equal(
 `def f(a: Int): Int {
     if (Greater(a, 0)) {
         let c: Int = a
@@ -384,7 +588,7 @@ def f(n: Int): Int {
 }
 `, "f");
 
-    print(result.func, result.analysis.types).should.equal(
+    print(result.program).should.equal(
 `def f(n: Int): Int {
     let mutable i: Int = 0
     let mutable total: Int = 0
@@ -419,7 +623,7 @@ def f(n: Int): Int {
 }
 `, "f");
 
-    print(result.func, result.analysis.types).should.equal(
+    print(result.program).should.equal(
 `def f(n: Int): Int {
     let mutable total: Int = 0
     {
@@ -452,7 +656,7 @@ def f(a: UInt8, b: UInt8): UInt8 {
 }
 `, "f");
 
-    print(result.func, result.analysis.types).should.equal(
+    print(result.program).should.equal(
 `def f(a: UInt8, b: UInt8): UInt8 {
     let mutable last: UInt8 = a
     {
@@ -466,5 +670,153 @@ def f(a: UInt8, b: UInt8): UInt8 {
         }
     }
     last
+}`);
+}
+
+@("a negated literal is one value, so the most negative of a type doesn't overflow")
+unittest
+{
+    auto result = loweredFunction(`
+def f(a: Int8): Int8 {
+    val least: Int8 = -128
+    -a +% least
+}
+`, "f");
+
+    print(result.program).should.equal(
+`def f(a: Int8): Int8 {
+    let least: Int8 = -128
+    WrappingAdd(Negate(a), least)
+}`);
+}
+
+@("&& and || short-circuit through an if")
+unittest
+{
+    auto result = loweredFunction(`def f(a: Bool, b: Bool, c: Bool): Bool => a && b || !c`, "f");
+
+    print(result.program).should.equal(
+        `def f(a: Bool, b: Bool, c: Bool): Bool if (if (a) b else false) true else Not(c)`);
+}
+
+@("an integer literal that adapted to Float is a float literal")
+unittest
+{
+    auto result = loweredFunction(`def f(x: Float): Float => -2.0 * x + 10 / 4.0`, "f");
+
+    print(result.program).should.equal(
+        `def f(x: Float): Float Add(Multiply(-2.0, x), Divide(10.0, 4.0))`);
+}
+
+@("a chain of ~ is one Concat, and ~= is an Append")
+unittest
+{
+    auto chain = loweredFunction(`def f(a: String, b: String, c: String): String => a ~ b ~ c`, "f");
+    print(chain.program).should.equal(
+        `def f(a: String, b: String, c: String): String Concat(a, b, c)`);
+
+    auto append = loweredFunction(`
+def f(a: String, b: String): String {
+    mutable val s = a
+    s ~= b
+    s
+}
+`, "f");
+    print(append.program).should.equal(
+`def f(a: String, b: String): String {
+    let mutable s: String = a
+    s = Append(s, b)
+    s
+}`);
+}
+
+@("a call names its target, which is lowered once even when it recurses")
+unittest
+{
+    auto result = loweredFunction(`
+def f(n: Int): Int {
+    if n > 0 => g(n - 1) else 0
+}
+
+def g(n: Int): Int {
+    f(n) + f(n)
+}
+`, "f");
+    print(result.program).should.equal(
+`def f(n: Int): Int {
+    if (Greater(n, 0)) g(Subtract(n, 1)) else 0
+}
+
+def g(n: Int): Int {
+    Add(f(n), f(n))
+}`);
+}
+
+@("a function nothing calls isn't lowered")
+unittest
+{
+    auto result = loweredFunction(`
+def unused(): Int { 1 }
+
+def f(): Int { 2 }
+`, "f");
+    result.program.functions.length.should.equal(1);
+}
+
+@("a call to a native keeps its source name")
+unittest
+{
+    auto result = loweredFunction(`
+def f(x: Int8, s: String): () {
+    printl(x)
+    print(s)
+}
+`, "f");
+    print(result.program).should.equal(
+`def f(x: Int8, s: String): Unit {
+    native printl(x)
+    native print(s)
+}`);
+}
+
+@("a method call passes its receiver first")
+unittest
+{
+    auto result = loweredFunction(`
+def twice(x: Int): Int { x * 2 }
+
+def f(y: Int): Int { y.twice() }
+`, "f");
+    print(result.program).should.equal(
+`def f(y: Int): Int {
+    twice(y)
+}
+
+def twice(x: Int): Int {
+    Multiply(x, 2)
+}`);
+}
+
+@("a mutable argument is the local the callee writes back to")
+unittest
+{
+    auto result = loweredFunction(`
+def bump(mutable n: Int): () { n = n + 1 }
+
+def f(): Int {
+    mutable val count = 0
+    bump(mutable count)
+    count
+}
+`, "f");
+    print(result.program).should.equal(
+`def f(): Int {
+    let mutable count: Int = 0
+    bump(count)
+    count
+}
+
+def bump(mutable n: Int): Unit {
+    n = Add(n, 1)
 }`);
 }

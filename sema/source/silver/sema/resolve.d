@@ -55,6 +55,8 @@ private TypeSymbol[string] builtinTypes() pure
 package struct Declarations
 {
     const(FunctionDecl)*[Id!FunctionDecl] functions;
+    /// The module each function is declared in.
+    string[Id!FunctionDecl] functionModules;
     const(TypeDecl)*[Id!TypeDecl] types;
     const(ConstDecl)*[Id!ConstDecl] constants;
     const(AliasDecl)*[Id!AliasDecl] aliases;
@@ -311,6 +313,7 @@ private final class NameResolver
             decl.kind.match!(
                 (ref const FunctionDecl func) {
                     _declarations.functions[func.id] = &func;
+                    _declarations.functionModules[func.id] = name;
                     if (func.isPrivate && func.name == "main")
                     {
                         _collector.reportError(DiagnosticCode.MainInvalidDefinition, func.nameSpan,

@@ -8,26 +8,25 @@ import std.sumtype : match;
 import silver.core.nodes;
 import silver.sema.type : Type, TypeTable;
 
-/// `func` as text, for tests and debugging. Two locals that share a name print as `x` and `x.1`,
-/// since Core tells them apart by identity.
-string print(const Function func, const TypeTable types)
+/// `program`'s functions as text, the entry point first, for tests and debugging. Two locals
+/// that share a name print as `x` and `x.1`, since Core tells them apart by identity.
+string print(const Program program)
 {
-    auto printer = Printer(types);
-    printer.function_(func);
-    return printer.output[];
-}
-
-/// ditto, for an expression on its own.
-string print(const Expr expr, const TypeTable types)
-{
-    auto printer = Printer(types);
-    printer.expr(expr);
+    auto printer = Printer(program.types, program.functions);
+    printer.function_(program.functions[program.entryPoint]);
+    foreach (i, func; program.functions)
+    {
+        if (i == program.entryPoint) continue;
+        printer.output ~= "\n\n";
+        printer.function_(func);
+    }
     return printer.output[];
 }
 
 private struct Printer
 {
     const TypeTable types;
+    const(Function)[] functions;
     Appender!string output;
     private int _indent;
     private string[const Local] _names;
@@ -35,10 +34,14 @@ private struct Printer
 
     void function_(const Function func)
     {
+        // Locals belong to one function, so each starts with every name free.
+        _names = null;
+        _taken = null;
         output ~= "def %s(".format(func.name);
         foreach (i, param; func.params)
         {
             if (i > 0) output ~= ", ";
+            if (param.mutable) output ~= "mutable ";
             declaration(param);
         }
         output ~= "): %s ".format(types.describe(func.returnType));
@@ -50,7 +53,17 @@ private struct Printer
         e.kind.match!(
             (const UnitLit _) { output ~= "()"; },
             (const BoolLit literal) { output ~= literal.value.to!string; },
-            (const IntLit literal) { output ~= literal.value.to!string; },
+            (const IntLit literal) {
+                auto signed = types.isInteger(e.type) && types.integerOf(e.type).signed;
+                output ~= signed ? (cast(long) literal.value).to!string : literal.value.to!string;
+            },
+            (const FloatLit literal) {
+                import std.algorithm : canFind;
+
+                // `10.0` and `10` would print alike, hiding where a literal adapted to Float.
+                auto text = literal.value.to!string;
+                output ~= text.canFind!(c => c == '.' || c == 'e' || c == 'n') ? text : text ~ ".0";
+            },
             (const Break _) { output ~= "break"; },
             (const Continue _) { output ~= "continue"; },
             (const Loop loop) {
@@ -59,13 +72,16 @@ private struct Printer
             },
             (const LocalRef use) { output ~= name(use.local); },
             (const Prim prim) {
-                output ~= "%s(".format(prim.op);
-                foreach (i, arg; prim.args)
-                {
-                    if (i > 0) output ~= ", ";
-                    expr(arg);
-                }
-                output ~= ")";
+                output ~= "%s".format(prim.op);
+                arguments(prim.args);
+            },
+            (const Call call) {
+                output ~= functions[call.target].name;
+                arguments(call.args);
+            },
+            (const NativeCall call) {
+                output ~= "native " ~ call.name;
+                arguments(call.args);
             },
             (const If if_) {
                 output ~= "if (";
@@ -110,6 +126,17 @@ private struct Printer
             },
             (const Eval eval) { expr(eval.expr); },
         );
+    }
+
+    private void arguments(const Expr[] args)
+    {
+        output ~= "(";
+        foreach (i, arg; args)
+        {
+            if (i > 0) output ~= ", ";
+            expr(arg);
+        }
+        output ~= ")";
     }
 
     /// Where `local` is introduced, which is the one place its type is shown.

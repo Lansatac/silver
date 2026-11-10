@@ -282,6 +282,12 @@ final class Analysis
     {
         return _resolution.declarations.params[param];
     }
+
+    /// The name of the module `func` is declared in.
+    string moduleOf(Id!FunctionDecl func) const
+    {
+        return _resolution.declarations.functionModules[func];
+    }
 }
 
 /// Analyzes every module in `program`, reporting problems to `collector`.

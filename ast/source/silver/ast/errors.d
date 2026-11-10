@@ -79,6 +79,8 @@ enum DiagnosticCode : string
 
     /// Something the implementation doesn't handle yet, or a broken invariant.
     InternalError = "I0001",
+    /// A construct that lowering to Core, or a backend running Core, doesn't handle yet.
+    NotImplemented = "I0002",
 }
 
 // Two members sharing a code would make the code ambiguous, and `to!string` would

@@ -1,5 +1,5 @@
-/// The LLVM backend. `generate` turns an analyzed Program into textual LLVM IR;
-/// the toolchain module links that IR and the C runtime into an executable with clang.
+/// The LLVM backend. `generate` turns a Core program into textual LLVM IR;
+/// the toolchain module links that IR and the runtime into an executable.
 module silver.codegen;
 
 public import silver.codegen.gen;

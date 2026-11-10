@@ -12,8 +12,9 @@ version (unittest)
     import std.range : chunks;
     import std.stdio : File, stdin, writeln;
     import std.string : lineSplitter, replace, startsWith, strip;
-    import silver.ast : formatDiagnostic, Program, SourceContext;
+    import silver.ast : DiagnosticException, formatDiagnostic, Program, SourceContext;
     import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Toolchain;
+    import silver.core : lowerProgram, CoreProgram = Program;
     import silver.interpreter.evaluator : Evaluator;
     import silver.loader : load, standardLibraryPath;
     import silver.sema : analyze, Analysis;
@@ -89,10 +90,35 @@ version (unittest)
             ~ context.collector.errors.map!(d => formatDiagnostic(d, context.sources)).join("\n");
     }
 
-    /// Names of the cases the compiler isn't expected to pass yet, from `compiled-pending.txt`.
-    string[] pendingCompiledCases()
+    /// Loads, analyzes and lowers `c` to Core. Returns why that failed, or null if it worked.
+    string prepare(Case c, SourceContext context, out Program program, out CoreProgram lowered)
     {
-        auto path = buildPath(conformanceDirectory, "compiled-pending.txt");
+        Analysis analysis;
+        if (auto failure = loadAndAnalyze(c, context, program, analysis))
+        {
+            return failure;
+        }
+        try
+        {
+            lowered = lowerProgram(program, analysis);
+        }
+        catch (DiagnosticException e)
+        {
+            return "lowering failed: " ~ formatDiagnostic(e.diagnostic, context.sources);
+        }
+        // Throwable, so a failed assertion counts against its case alone.
+        catch (Throwable e)
+        {
+            return "lowering threw: " ~ e.msg ~ " (" ~ e.file ~ ":" ~ e.line.to!string ~ ")";
+        }
+        return null;
+    }
+
+    /// The cases a backend isn't expected to pass yet, from `file` in conformance/. Each passing
+    /// case is removed from its list, and one that passes while still listed is a failure.
+    string[] pendingCases(string file)
+    {
+        auto path = buildPath(conformanceDirectory, file);
         if (!exists(path))
         {
             return [];
@@ -101,6 +127,50 @@ version (unittest)
             .map!(line => line.strip)
             .filter!(line => line.length > 0 && !line.startsWith("#"))
             .array;
+    }
+
+    enum interpretedPending = "interpreted-pending.txt";
+    enum compiledPending = "compiled-pending.txt";
+
+    /// Why each case in `items` failed, by name, from `results` in the same order.
+    string[string] failuresByName(Case[] items, string[] results)
+    {
+        string[string] failures;
+        foreach (i, c; items)
+        {
+            if (results[i] !is null)
+            {
+                failures[c.name] = results[i];
+            }
+        }
+        return failures;
+    }
+
+    /// What's wrong with a run of `all` that had `failed` against the pending list `file`, or
+    /// null if nothing is: every failure is pending, and every pending case failed.
+    string pendingProblems(string what, Case[] all, string[string] failed, string file)
+    {
+        auto pending = pendingCases(file);
+        string[] failures;
+        foreach (name; failed.keys.sort)
+        {
+            if (!pending.canFind(name))
+            {
+                failures ~= name ~ ": " ~ failed[name];
+            }
+        }
+        auto unexpectedPasses = all.map!(c => c.name).filter!(name => pending.canFind(name) && name !in failed).array;
+
+        string message;
+        if (failures.length > 0)
+        {
+            message ~= what ~ " failures:\n\n" ~ failures.join("\n\n") ~ "\n\n";
+        }
+        if (unexpectedPasses.length > 0)
+        {
+            message ~= "These now pass; remove them from " ~ file ~ ": " ~ unexpectedPasses.join(", ");
+        }
+        return message.length == 0 ? null : message;
     }
 
     struct CompiledRun
@@ -114,8 +184,8 @@ version (unittest)
     {
         auto context = new SourceContext();
         Program program;
-        Analysis analysis;
-        if (auto failure = loadAndAnalyze(c, context, program, analysis))
+        CoreProgram lowered;
+        if (auto failure = prepare(c, context, program, lowered))
         {
             return failure;
         }
@@ -123,17 +193,16 @@ version (unittest)
         string ir;
         try
         {
-            ir = generate(program, analysis, context.collector);
+            ir = generate(lowered, program.sources);
+        }
+        catch (DiagnosticException e)
+        {
+            return "codegen failed: " ~ formatDiagnostic(e.diagnostic, context.sources);
         }
         // Throwable, so a failed assertion in codegen counts against its case alone.
         catch (Throwable e)
         {
             return "codegen threw: " ~ e.msg ~ " (" ~ e.file ~ ":" ~ e.line.to!string ~ ")";
-        }
-        if (context.collector.hasErrors)
-        {
-            return "codegen reported errors:\n"
-                ~ context.collector.errors.map!(d => formatDiagnostic(d, context.sources)).join("\n");
         }
 
         auto irPath = buildPath(workDirectory, c.name ~ ".ll");
@@ -186,19 +255,6 @@ version (unittest)
         return results;
     }
 
-    /// `name: failure` for each item that failed.
-    string[] failureMessages(Case[] items, string[] results)
-    {
-        string[] messages;
-        foreach (i, c; items)
-        {
-            if (results[i] !is null)
-            {
-                messages ~= c.name ~ ": " ~ results[i];
-            }
-        }
-        return messages;
-    }
 
     enum bundleSize = 12;
     enum bundleEntry = "conformanceEntry";
@@ -343,17 +399,15 @@ version (unittest)
     /// Interprets the panic case `c`, and returns why it didn't fail as expected, or null.
     string runInterpretedPanic(Case c)
     {
-        import silver.ast : DiagnosticException;
-
         auto context = new SourceContext();
         Program program;
-        Analysis analysis;
-        if (auto failure = loadAndAnalyze(c, context, program, analysis))
+        CoreProgram lowered;
+        if (auto failure = prepare(c, context, program, lowered))
         {
             return failure;
         }
 
-        auto evaluator = new Evaluator(program, analysis);
+        auto evaluator = new Evaluator(lowered);
         try
         {
             runWithInput(c, evaluator);
@@ -372,17 +426,15 @@ version (unittest)
     /// Interprets `c` and returns why its output didn't match, or null if it did.
     string runInterpreted(Case c)
     {
-        import silver.ast : DiagnosticException;
-
         auto context = new SourceContext();
         Program program;
-        Analysis analysis;
-        if (auto failure = loadAndAnalyze(c, context, program, analysis))
+        CoreProgram lowered;
+        if (auto failure = prepare(c, context, program, lowered))
         {
             return failure;
         }
 
-        auto evaluator = new Evaluator(program, analysis);
+        auto evaluator = new Evaluator(lowered);
         try
         {
             runWithInput(c, evaluator);
@@ -410,8 +462,9 @@ version (unittest)
 unittest
 {
     auto all = cases;
-    auto failures = failureMessages(all, inParallel(all, (Case c) => runInterpreted(c)));
-    assert(failures.length == 0, "Interpreted conformance failures:\n\n" ~ failures.join("\n\n"));
+    auto failed = failuresByName(all, inParallel(all, (Case c) => runInterpreted(c)));
+    auto problems = pendingProblems("Interpreted conformance", all, failed, interpretedPending);
+    assert(problems is null, problems);
 }
 
 @("Compiled conformance programs match their expected output")
@@ -427,43 +480,24 @@ unittest
     auto workDirectory = buildPath(tempDir, "silver-conformance-" ~ thisProcessID.to!string);
     mkdirRecurse(workDirectory);
 
-    auto pending = pendingCompiledCases();
     auto all = cases;
-    auto failed = compiledFailures(all, pending, toolchain, workDirectory);
-    string[] failures;
-    foreach (name; failed.keys.sort)
-    {
-        if (!pending.canFind(name))
-        {
-            failures ~= name ~ ": " ~ failed[name];
-        }
-    }
-    auto unexpectedPasses = all.map!(c => c.name).filter!(name => pending.canFind(name) && name !in failed).array;
-
-    string message;
-    if (failures.length > 0)
-    {
-        message ~= "Compiled conformance failures:\n\n" ~ failures.join("\n\n") ~ "\n\n";
-    }
-    if (unexpectedPasses.length > 0)
-    {
-        message ~= "These now pass when compiled; remove them from compiled-pending.txt: "
-            ~ unexpectedPasses.join(", ");
-    }
+    auto failed = compiledFailures(all, pendingCases(compiledPending), toolchain, workDirectory);
+    auto problems = pendingProblems("Compiled conformance", all, failed, compiledPending);
     // Failures keep their IR for inspection; a clean run leaves nothing behind.
-    if (message.length == 0)
+    if (problems is null)
     {
         rmdirRecurse(workDirectory);
     }
-    assert(message.length == 0, message);
+    assert(problems is null, problems);
 }
 
 @("Interpreted programs that panic report the expected error")
 unittest
 {
     auto all = panicCases;
-    auto failures = failureMessages(all, inParallel(all, (Case c) => runInterpretedPanic(c)));
-    assert(failures.length == 0, "Interpreted panic failures:\n\n" ~ failures.join("\n\n"));
+    auto failed = failuresByName(all, inParallel(all, (Case c) => runInterpretedPanic(c)));
+    auto problems = pendingProblems("Interpreted panic", all, failed, interpretedPending);
+    assert(problems is null, problems);
 }
 
 @("Compiled programs that panic report the expected error and exit with status 1")
@@ -480,10 +514,11 @@ unittest
     mkdirRecurse(workDirectory);
 
     auto all = panicCases;
-    auto failures = failureMessages(all, inParallel(all, (Case c) => runCompiledPanic(c, toolchain, workDirectory)));
-    if (failures.length == 0)
+    auto failed = failuresByName(all, inParallel(all, (Case c) => runCompiledPanic(c, toolchain, workDirectory)));
+    auto problems = pendingProblems("Compiled panic", all, failed, compiledPending);
+    if (problems is null)
     {
         rmdirRecurse(workDirectory);
     }
-    assert(failures.length == 0, "Compiled panic failures:\n\n" ~ failures.join("\n\n"));
+    assert(problems is null, problems);
 }

@@ -6,6 +6,7 @@ import std.range;
 
 import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, SourceContext;
 import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Toolchain;
+import silver.core : lowerProgram;
 import silver.interpreter.evaluator : Evaluator;
 import silver.loader : load, standardLibraryPath;
 import silver.sema : analyze, Analysis;
@@ -44,7 +45,7 @@ int interpret(string programFile, string[] importPaths)
 
     try
     {
-        auto evaluator = new Evaluator(program, analysis, true);
+        auto evaluator = new Evaluator(lowerProgram(program, analysis), true);
         evaluator.run();
     }
     catch (DiagnosticException e)
@@ -71,13 +72,20 @@ string compileToIr(string programFile, string[] importPaths)
     auto context = new SourceContext();
     Program program;
     auto analysis = loadAndAnalyze(programFile, importPaths, context, program);
-    string ir;
-    if (!context.collector.hasErrors)
-    {
-        ir = generate(program, analysis, context.collector);
-    }
     printDiagnostics(context);
-    return context.collector.hasErrors ? null : ir;
+    if (context.collector.hasErrors)
+    {
+        return null;
+    }
+    try
+    {
+        return generate(lowerProgram(program, analysis), program.sources);
+    }
+    catch (DiagnosticException e)
+    {
+        printDiagnostic(e.diagnostic, context);
+        return null;
+    }
 }
 
 /// Compiles the program in `programFile` to the executable `outputPath`. False after printing why it failed.

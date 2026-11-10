@@ -2,6 +2,7 @@
 	"name": "conformance",
 	"targetType": "library",
 	"dependencies": {
+		"silver:core": "*",
 		"silver:interpreter": "*",
 		"silver:loader": "*",
 		"silver:sema": "*",

@@ -17,6 +17,7 @@
 	"name": "silver",
 	"description": "A simple experimental programming language.",
 	"dependencies": {
+		"silver:core": "*",
 		"silver:interpreter": "*",
 		"silver:sema": "*",
 		"silver:loader": "*",

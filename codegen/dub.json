@@ -4,6 +4,7 @@
 	"targetType": "library",
 	"dependencies": {
 		"silver:ast": "*",
+		"silver:core": "*",
 		"silver:sema": "*"
 	},
 	"configurations": [

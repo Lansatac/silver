@@ -1,6 +1,15 @@
 module silver.interpreter.errors;
 
-import silver.ast : DiagnosticCode;
+import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException;
+
+/// A failure while running a program, located at the node that was being evaluated.
+class RuntimeError : DiagnosticException
+{
+    this(Diagnostic diagnostic)
+    {
+        super(diagnostic);
+    }
+}
 
 /// A runtime error that knows its code but not yet its span; the evaluator adds the
 /// span of the node being evaluated when it turns this into a RuntimeError.
