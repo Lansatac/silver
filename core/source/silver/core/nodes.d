@@ -92,6 +92,8 @@ struct NativeCall
 {
     string name;
     Expr[] args;
+    /// Which of `args` fill an `Any` parameter.
+    bool[] anyArgs;
 }
 
 /// An operation each backend implements itself. Arithmetic is checked, panicking on overflow

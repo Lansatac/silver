@@ -324,15 +324,17 @@ private final class Lowering
         auto signature = _analysis.signatureOf(*calleeId);
         Stmt[] statements;
         Expr[] args;
+        bool[] anyArgs;
         foreach (i, ref arg; written)
         {
             if (signature.isMutable(i)) args ~= mutableArgument(arg);
             else args ~= lowerExpr(arg);
-            if (decl.native && signature.params[i] == types.any) checkNativeArgument(args[$ - 1]);
+            anyArgs ~= signature.params[i] == types.any;
+            if (decl.native && anyArgs[$ - 1]) checkNativeArgument(args[$ - 1]);
         }
 
         auto lowered = decl.native
-            ? nativeCall(signature.ret, decl.name, args, e.span)
+            ? nativeCall(signature.ret, decl.name, args, anyArgs, e.span)
             : callExpr(signature.ret, slotFor(*calleeId), args, e.span);
         if (statements.length == 0) return lowered.kind;
         return ExprKind(Block(statements, boxed(lowered)));
@@ -421,9 +423,9 @@ private final class Lowering
         return Expr(types.unit, span, ExprKind(Loop(body)));
     }
 
-    private Expr nativeCall(Type returnType, string name, Expr[] args, Span span)
+    private Expr nativeCall(Type returnType, string name, Expr[] args, bool[] anyArgs, Span span)
     {
-        return Expr(returnType, span, ExprKind(NativeCall(name, args)));
+        return Expr(returnType, span, ExprKind(NativeCall(name, args, anyArgs)));
     }
 
     private Expr callExpr(Type returnType, size_t target, Expr[] args, Span span)
