@@ -23,9 +23,6 @@ string generate(const Program program, const SourceMap sources)
 /// whatever block the parent places it in and ends in `endBlock`.
 private struct Fragment
 {
-    /// Hoisted to the top of the entry block, so each slot is made once per call and mem2reg
-    /// can promote it.
-    string[] allocas;
     /// Instructions and labels in order, instructions already indented.
     string[] code;
     /// A temp (`%.t3`), a constant (`42`) or a global (`@.str.0`). Null for a value with no
@@ -38,18 +35,12 @@ private struct Fragment
     /// A value that needs no code.
     static Fragment constant(string operand)
     {
-        return Fragment(null, null, operand);
+        return Fragment(null, operand);
     }
 
     static Fragment instruction(string text, string value = null)
     {
-        return Fragment(null, ["  " ~ text], value);
-    }
-
-    /// The stack slot `slot`, of `type`, whose name is the fragment's value.
-    static Fragment alloca(string slot, string type)
-    {
-        return Fragment(["  %s = alloca %s".format(slot, type)], null, slot);
+        return Fragment(["  " ~ text], value);
     }
 
     static Fragment store(string type, string value, string pointer)
@@ -60,7 +51,7 @@ private struct Fragment
     /// Starts block `name`: everything sequenced after this is in it.
     static Fragment label(string name)
     {
-        return Fragment(null, [name ~ ":"], null, name);
+        return Fragment([name ~ ":"], null, name);
     }
 
     /// Ends the current block by branching on the `i1` operand `condition`.
@@ -90,14 +81,48 @@ private struct Fragment
     /// This fragment followed by `next`, with `next`'s value.
     Fragment then(Fragment next) const
     {
-        return Fragment(allocas ~ next.allocas, code ~ next.code, next.value,
+        return Fragment(code ~ next.code, next.value,
             next.endBlock !is null ? next.endBlock : endBlock);
     }
 
     /// The same code, with another value, or none for a statement.
     Fragment withValue(string newValue) const
     {
-        return Fragment(allocas.dup, code.dup, newValue, endBlock);
+        return Fragment(code.dup, newValue, endBlock);
+    }
+}
+
+/// Where each local of one function lives: a pointer for every local with an operand, which is
+/// its own stack slot, or for a mutable param, its caller's.
+private struct Slots
+{
+    string[const Local] pointers;
+    /// The `alloca` of each stack slot, for the top of the entry block.
+    string[] allocas;
+    /// How many locals of each name have a slot, so a reused name gets a slot of its own.
+    private int[string] _named;
+
+    /// A stack slot of `type` for `local`.
+    void allocate(const Local local, string type)
+    {
+        auto count = _named.require(local.name, 0);
+        _named[local.name] = count + 1;
+        auto slot = count == 0 ? "%%%s.addr".format(local.name) : "%%%s.addr.%s".format(local.name, count);
+        pointers[local] = slot;
+        allocas ~= "  %s = alloca %s".format(slot, type);
+    }
+
+    /// `pointer`, which already points at a slot of `local`'s type, as where it lives.
+    void bind(const Local local, string pointer)
+    {
+        pointers[local] = pointer;
+    }
+
+    /// Where `local` lives, or null for one with no operand.
+    string opIndex(const Local local) const
+    {
+        auto pointer = local in pointers;
+        return pointer is null ? null : *pointer;
     }
 }
 
@@ -105,11 +130,15 @@ private struct Fragment
 /// A fresh one per function.
 private final class FunctionState
 {
-    /// Each local's stack slot, or for a mutable param, the pointer to its caller's.
-    string[const Local] slots;
+    /// Where every local lives, fixed before any of the function's code is generated.
+    const Slots slots;
     private int _nextTemp;
     private int _nextLabel;
-    private int[string] _slotNames;
+
+    this(Slots slots)
+    {
+        this.slots = slots;
+    }
 
     /// A fresh SSA name. Silver identifiers can't contain `.`, so names that start with one
     /// never clash with anything taken from source.
@@ -121,22 +150,6 @@ private final class FunctionState
     string newLabel(string hint)
     {
         return "%s.%s".format(hint, _nextLabel++);
-    }
-
-    /// A new stack slot for `local`, recorded as where it lives.
-    Fragment newSlot(const Local local, string type)
-    {
-        auto count = _slotNames.require(local.name, 0);
-        _slotNames[local.name] = count + 1;
-        auto slot = count == 0 ? "%%%s.addr".format(local.name) : "%%%s.addr.%s".format(local.name, count);
-        slots[local] = slot;
-        return Fragment.alloca(slot, type);
-    }
-
-    /// Makes `pointer`, which already points at a slot of `local`'s type, its slot.
-    void bindSlot(const Local local, string pointer)
-    {
-        slots[local] = pointer;
     }
 
     /// `text` as an instruction whose result goes in a new temp, or in `name` if given, which is
@@ -233,7 +246,7 @@ private final class Generator
 
     private string emitFunction(const Function func)
     {
-        _function = new FunctionState;
+        _function = new FunctionState(planSlots(func));
         auto returnType = llvmType(func.returnType, func.body.span);
         auto stackCheck = emitStackCheck(func.body.span);
 
@@ -243,16 +256,9 @@ private final class Generator
         {
             auto type = paramType(param, func.body.span);
             if (type is null) continue;
-            auto incoming = "%" ~ param.name;
-            params ~= type ~ " " ~ incoming;
-            // A mutable param is a pointer to the caller's slot, so reads and writes go through it.
-            if (param.mutable)
-            {
-                _function.bindSlot(param, incoming);
-                continue;
-            }
-            auto slot = _function.newSlot(param, type);
-            receive ~= slot.then(Fragment.store(type, incoming, slot.value));
+            params ~= type ~ " " ~ incoming(param);
+            // A mutable param's slot is its caller's, which it was passed.
+            if (!param.mutable) receive ~= Fragment.store(type, incoming(param), _function.slots[param]);
         }
 
         auto body = emitExpr(func.body);
@@ -263,8 +269,76 @@ private final class Generator
             .then(Fragment.ret(returnType, body.value));
 
         // The allocas go right after the entry label.
-        auto lines = whole.code[0 .. 1] ~ whole.allocas ~ whole.code[1 .. $];
+        auto lines = whole.code[0 .. 1] ~ _function.slots.allocas ~ whole.code[1 .. $];
         return "define %s %s(%s) {\n%s\n}\n".format(returnType, mangled(func), params.join(", "), lines.join("\n"));
+    }
+
+    /// The LLVM parameter that receives `param`.
+    private static string incoming(const Local param)
+    {
+        return "%" ~ param.name;
+    }
+
+    /// Where every local of `func` lives. Slots are allocated in the order their code will be
+    /// generated, a `Let`'s after its value's, so a reused name is numbered as it's met.
+    private Slots planSlots(const Function func)
+    {
+        Slots slots;
+        foreach (param; func.params)
+        {
+            auto type = paramType(param, func.body.span);
+            if (type is null) continue;
+            if (param.mutable) slots.bind(param, incoming(param));
+            else slots.allocate(param, type);
+        }
+        planSlots(slots, func.body);
+        return slots;
+    }
+
+    /// Every node is listed, so a new kind of Core node can't be skipped by accident.
+    private void planSlots(ref Slots slots, const Expr e)
+    {
+        void all(const Expr[] exprs)
+        {
+            foreach (ref expr; exprs) planSlots(slots, expr);
+        }
+
+        e.kind.match!(
+            (const UnitLit _) {},
+            (const BoolLit _) {},
+            (const IntLit _) {},
+            (const FloatLit _) {},
+            (const LocalRef _) {},
+            (const Break _) {},
+            (const Continue _) {},
+            (const Call call) => all(call.args),
+            (const ForeignCall call) => all(call.args),
+            (const IntrinsicCall call) => all(call.args),
+            (const Prim prim) => all(prim.args),
+            (const If if_) {
+                planSlots(slots, *if_.condition);
+                planSlots(slots, *if_.trueBody);
+                planSlots(slots, *if_.falseBody);
+            },
+            (const Block block) {
+                foreach (ref statement; block.statements) planSlots(slots, statement);
+                if (block.result !is null) planSlots(slots, *block.result);
+            },
+            (const Loop loop) => planSlots(slots, *loop.body),
+        );
+    }
+
+    private void planSlots(ref Slots slots, const Stmt s)
+    {
+        s.kind.match!(
+            (const Let let) {
+                planSlots(slots, let.value);
+                auto type = llvmType(let.local.type, s.span);
+                if (type != "void") slots.allocate(let.local, type);
+            },
+            (const Assign assign) => planSlots(slots, assign.value),
+            (const Eval eval) => planSlots(slots, eval.expr),
+        );
     }
 
     private Fragment emitExpr(const Expr e)
@@ -301,9 +375,9 @@ private final class Generator
     /// A local's value, loaded from its slot. A local with no operand, like a Unit one, has no slot.
     private Fragment emit(const Expr e, const LocalRef use)
     {
-        auto slot = use.local in _function.slots;
+        auto slot = _function.slots[use.local];
         if (slot is null) return Fragment.init;
-        return _function.load(llvmType(use.local.type, e.span), *slot);
+        return _function.load(llvmType(use.local.type, e.span), slot);
     }
 
     private Fragment emit(const Expr e, const Call call)
@@ -645,14 +719,14 @@ private final class Generator
         return notImplemented("Assign", s.span);
     }
 
-    /// A Unit or Never value has no operand, so its local gets no slot.
+    /// A Unit or Never value has no operand, so its local has no slot.
     private Fragment emit(const Stmt s, const Let let)
     {
         auto value = emitExpr(let.value);
-        if (value.value is null) return value;
-        auto type = llvmType(let.local.type, s.span);
-        auto slot = _function.newSlot(let.local, type);
-        return value.then(slot).then(Fragment.store(type, value.value, slot.value));
+        auto slot = _function.slots[let.local];
+        assert((slot is null) == (value.value is null), "a local has a slot exactly when its value has an operand");
+        if (slot is null) return value;
+        return value.then(Fragment.store(llvmType(let.local.type, s.span), value.value, slot));
     }
 
     /// Every function checks on entry that it has room on the stack, and panics if not. Its

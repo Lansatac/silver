@@ -339,3 +339,19 @@ version (linux)
         run.output.should.equal("3\n");
     }
 }
+
+@("codegen gives a reused name a slot of its own, and a let's slot comes after those in its value")
+unittest
+{
+    auto source = "def main(): Unit {\n    {\n        val c = 1\n        printl(c)\n    }\n    {\n        val c = 2\n        printl(c)\n    }\n"
+        ~ "    val a = {\n        val b = 3\n        b\n    }\n    printl(a)\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("store i64 1, ptr %c.addr\n");
+    ir.should.contain("store i64 2, ptr %c.addr.1\n");
+    ir.should.contain("  %c.addr = alloca i64\n  %c.addr.1 = alloca i64\n  %b.addr = alloca i64\n  %a.addr = alloca i64\n");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("1\n2\n3\n");
+}
