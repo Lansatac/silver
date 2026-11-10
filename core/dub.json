@@ -1,0 +1,21 @@
+{
+	"name": "core",
+	"description": "Silver's Core: the typed tree both backends run from.",
+	"targetType": "library",
+	"dependencies": {
+		"silver:ast": "*",
+		"silver:sema": "*"
+	},
+	"configurations": [
+		{ "name": "library" },
+		{
+			"name": "unittest",
+			"dependencies": {
+				"silly": "~>1.2.0-dev.2",
+				"fluent-asserts": "~>2.1",
+				"silver:loader": "*"
+			},
+			"libs-windows": ["psapi"]
+		}
+	]
+}

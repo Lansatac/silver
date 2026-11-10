@@ -49,12 +49,12 @@ def main(): Unit {
     // ending before it has to copy, or it would write over elements other values hold.
     mutable val whole: [Int] = []
     whole ~= [1, 2, 3, 4]
-    mutable val tail = whole[2..4]
-    tail ~= [5]
+    mutable val rest = whole[2..4]
+    rest ~= [5]
     mutable val middle = whole[1..2]
     middle ~= [9]
     printl(whole)
-    printl(tail)
+    printl(rest)
     printl(middle)
 
     // Likewise an empty slice, including one at the very end of its buffer.

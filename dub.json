@@ -7,6 +7,7 @@
 		"./syntax/",
 		"./loader/",
 		"./sema/",
+		"./core/",
 		"./interpreter/",
 		"./codegen/",
 		"./conformance/"

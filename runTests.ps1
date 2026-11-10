@@ -1,5 +1,5 @@
 # Runs every package's tests, then the root's. Extra arguments go to each `dub test`.
-$packages = 'silver:ast', 'silver:syntax', 'silver:loader', 'silver:sema', 'silver:interpreter', 'silver:codegen', 'silver:conformance', 'silver'
+$packages = 'silver:ast', 'silver:syntax', 'silver:loader', 'silver:sema', 'silver:core', 'silver:interpreter', 'silver:codegen', 'silver:conformance', 'silver'
 $failed = @()
 
 Push-Location $PSScriptRoot
