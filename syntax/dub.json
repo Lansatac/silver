@@ -6,6 +6,11 @@
 		"silver:ast": "*"
 	},
 	"targetType": "library",
+	"preGenerateCommands": [
+		"dub run --single --quiet \"$PACKAGE_DIR/tools/generate_grammar.d\" -- \"$PACKAGE_DIR/source/silver/syntax/Silver.peg\" \"$PACKAGE_DIR/generated/silver/syntax/grammar.d\""
+	],
+	"importPaths": ["source", "generated"],
+	"sourceFiles": ["generated/silver/syntax/grammar.d"],
 	"configurations": [
 		{
 			"targetType": "library",

@@ -1,27 +1,15 @@
-module silver.syntax.grammar;
+module silver.syntax.detached;
 
-import pegged.grammar;
-
-debug import std.stdio;
+import pegged.peg : ParseTree;
+static import pegged.peg;
 
 /// Works around a bug in Pegged 0.4.9: when a sequence fails, `failedChildFixup` rewrites the
 /// child that failed furthest, writing through children arrays shared with the memo table, so a
 /// failed AssignmentStatement leaks its last PostfixOp attempt into the Postfix that
-/// ExpressionStatement reuses when `..` or `??` follows. Every sequence gets its children through
-/// `detached`, which copies the arrays the fixup can reach first. This can go once Pegged no
-/// longer writes through them.
-private string withDetachedSequences(string parser)
-{
-    import std.array : replace;
-    import std.string : indexOf;
-
-    enum sequence = "pegged.peg.and!(";
-    assert(parser.indexOf(sequence) >= 0,
-        "Pegged's generated code changed; check whether the workaround is still needed");
-    return parser.replace(sequence, "detachedAnd!(");
-}
-
-private template detachedAnd(rules...)
+/// ExpressionStatement reuses when `..` or `??` follows. The generated grammar gets every
+/// sequence's children through `detached`, which copies the arrays the fixup can reach first
+/// (see `syntax/tools/generate_grammar.d`). This can go once Pegged no longer writes through them.
+package template detachedAnd(rules...)
 {
     import std.meta : staticMap;
 
@@ -48,5 +36,3 @@ private ParseTree detach(ParseTree tree, size_t failEnd) @safe pure nothrow
     }
     return tree;
 }
-
-mixin(withDetachedSequences(pegged.grammar.grammar(import("Silver.peg"))));

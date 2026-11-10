@@ -29,3 +29,8 @@ runtime/build/
 /exploration/
 /scratch/
 /scratch.ag
+
+# Generated from Silver.peg before each build of silver:syntax.
+/syntax/generated/*
+!/syntax/generated/.gitkeep
+/syntax/tools/generate_grammar
