@@ -11,11 +11,13 @@ final class Local
 {
     string name;
     Type type;
+    bool mutable;
 
-    this(string name, Type type)
+    this(string name, Type type, bool mutable = false)
     {
         this.name = name;
         this.type = type;
+        this.mutable = mutable;
     }
 }
 
@@ -34,7 +36,17 @@ struct Expr
     ExprKind kind;
 }
 
-alias ExprKind = SumType!(IntLit, LocalRef, Prim, If, Block);
+alias ExprKind = SumType!(UnitLit, BoolLit, IntLit, LocalRef, Prim, If, Block, Loop, Break, Continue);
+
+/// `()`.
+struct UnitLit
+{
+}
+
+struct BoolLit
+{
+    bool value;
+}
 
 struct IntLit
 {
@@ -50,7 +62,10 @@ struct LocalRef
 enum PrimOp
 {
     Add,
+    Less,
     Greater,
+    Equal,
+    Not,
 }
 
 struct Prim
@@ -66,6 +81,22 @@ struct If
     Expr* falseBody;
 }
 
+/// Runs `body` until a `Break` leaves it. Every kind of source loop becomes one of these.
+struct Loop
+{
+    Expr* body;
+}
+
+/// Leaves the innermost `Loop`. Type `Never`, so it can be an `If` arm.
+struct Break
+{
+}
+
+/// Starts the innermost `Loop`'s body again. Type `Never`.
+struct Continue
+{
+}
+
 struct Block
 {
     Stmt[] statements;
@@ -79,10 +110,23 @@ struct Stmt
     StmtKind kind;
 }
 
-alias StmtKind = SumType!(Let);
+alias StmtKind = SumType!(Let, Assign, Eval);
 
 struct Let
 {
     Local local;
     Expr value;
+}
+
+/// Sets a mutable `Local`.
+struct Assign
+{
+    Local local;
+    Expr value;
+}
+
+/// Evaluates `expr` and drops its value.
+struct Eval
+{
+    Expr expr;
 }

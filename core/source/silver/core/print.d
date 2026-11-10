@@ -48,7 +48,15 @@ private struct Printer
     void expr(const Expr e)
     {
         e.kind.match!(
+            (const UnitLit _) { output ~= "()"; },
+            (const BoolLit literal) { output ~= literal.value.to!string; },
             (const IntLit literal) { output ~= literal.value.to!string; },
+            (const Break _) { output ~= "break"; },
+            (const Continue _) { output ~= "continue"; },
+            (const Loop loop) {
+                output ~= "loop ";
+                expr(*loop.body);
+            },
             (const LocalRef use) { output ~= name(use.local); },
             (const Prim prim) {
                 output ~= "%s(".format(prim.op);
@@ -91,11 +99,16 @@ private struct Printer
     {
         s.kind.match!(
             (const Let let) {
-                output ~= "let ";
+                output ~= let.local.mutable ? "let mutable " : "let ";
                 declaration(let.local);
                 output ~= " = ";
                 expr(let.value);
             },
+            (const Assign assign) {
+                output ~= name(assign.local) ~ " = ";
+                expr(assign.value);
+            },
+            (const Eval eval) { expr(eval.expr); },
         );
     }
 
