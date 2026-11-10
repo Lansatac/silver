@@ -1,21 +1,12 @@
 module silver.interpreter.evaluator;
 
 import std.sumtype : match;
-import std.variant : Variant;
 
 import silver.ast : Diagnostic, DiagnosticCode, Span;
 import silver.core;
 import silver.interpreter.errors;
 import silver.interpreter.stack : checkStack, runOnLargeStack;
-
-/// A Silver value while the program runs.
-alias Value = Variant;
-
-/// The value of `()`.
-struct Unit
-{
-    string toString() const => "()";
-}
+import silver.interpreter.values;
 
 /// Runs a Core program by walking its tree.
 final class Evaluator
