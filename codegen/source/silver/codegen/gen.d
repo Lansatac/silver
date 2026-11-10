@@ -1,7 +1,7 @@
 module silver.codegen.gen;
 
 import std.algorithm : map;
-import std.array : join;
+import std.array : array, join;
 import std.format : format;
 import std.sumtype : match;
 
@@ -41,9 +41,74 @@ private final class FunctionState
         lines ~= "  " ~ text;
     }
 
+    /// Starts block `name`: everything emitted after this is in it.
     void label(string name)
     {
         lines ~= name ~ ":";
+    }
+
+    /// Emits `text` as an instruction whose result goes in a new temp, or in `name` if given,
+    /// and returns it.
+    string result(string text, string name = null)
+    {
+        if (name is null) name = newTemp();
+        instruction(name ~ " = " ~ text);
+        return name;
+    }
+
+    string load(string type, string pointer)
+    {
+        return result("load %s, ptr %s".format(type, pointer));
+    }
+
+    void store(string type, string value, string pointer)
+    {
+        instruction("store %s %s, ptr %s".format(type, value, pointer));
+    }
+
+    /// `value` of `from` converted to `to` by the cast instruction `op`, e.g. `sext` or `trunc`.
+    string convert(string op, string from, string value, string to)
+    {
+        return result("%s %s %s to %s".format(op, from, value, to));
+    }
+
+    /// Element `index` of `aggregate`, a value of the struct type `type`.
+    string extract(string type, string aggregate, size_t index)
+    {
+        return result("extractvalue %s %s, %s".format(type, aggregate, index));
+    }
+
+    /// Calls `callee` with `arguments`, each already written with its type (`i64 %x`), and returns
+    /// the result's temp, or null for a `void` function. `convention` is written before the
+    /// return type when given.
+    string call(string returnType, string callee, const string[] arguments, string convention = null)
+    {
+        auto text = "call %s%s %s(%s)".format(convention is null ? "" : convention ~ " ", returnType, callee,
+            arguments.join(", "));
+        if (returnType == "void")
+        {
+            instruction(text);
+            return null;
+        }
+        return result(text);
+    }
+
+    /// Ends the current block by branching on the `i1` operand `condition`.
+    void branch(string condition, string ifTrue, string ifFalse)
+    {
+        instruction("br i1 %s, label %%%s, label %%%s".format(condition, ifTrue, ifFalse));
+    }
+
+    /// Ends the current block, which control can't reach the end of.
+    void unreachable()
+    {
+        instruction("unreachable");
+    }
+
+    /// Returns `value`, which is `type`; a `void` function returns nothing.
+    void ret(string type, string value)
+    {
+        instruction(type == "void" ? "ret void" : "ret %s %s".format(type, value));
     }
 
     string[const Local] slots;
@@ -59,6 +124,12 @@ private final class FunctionState
         slots[local] = slot;
         allocas ~= "  %s = alloca %s".format(slot, type);
         return slot;
+    }
+
+    /// Makes `pointer`, which already points at a slot of `local`'s type, its slot.
+    void bindSlot(const Local local, string pointer)
+    {
+        slots[local] = pointer;
     }
 }
 
@@ -121,18 +192,26 @@ private final class Generator
     private string emitFunction(const Function func)
     {
         _function = new FunctionState;
-        if (func.params.length > 0) notImplemented("parameters", func.body.span);
         auto returnType = llvmType(func.returnType, func.body.span);
 
         _function.label("entry");
         emitStackCheck(func.body.span);
-        auto result = emitExpr(func.body);
-        if (returnType == "void") _function.instruction("ret void");
-        else _function.instruction("ret %s %s".format(returnType, result));
+        string[] params;
+        foreach (param; func.params)
+        {
+            auto type = paramType(param, func.body.span);
+            if (type is null) continue;
+            auto incoming = "%" ~ param.name;
+            params ~= type ~ " " ~ incoming;
+            // A mutable param is a pointer to the caller's slot, so reads and writes go through it.
+            if (param.mutable) _function.bindSlot(param, incoming);
+            else _function.store(type, incoming, _function.slotFor(param, type));
+        }
+        _function.ret(returnType, emitExpr(func.body));
 
         // The allocas go at the top of the entry block, so each slot is made once per call.
         auto lines = _function.lines[0 .. 1] ~ _function.allocas ~ _function.lines[1 .. $];
-        return "define %s %s() {\n%s\n}\n".format(returnType, mangled(func), lines.join("\n"));
+        return "define %s %s(%s) {\n%s\n}\n".format(returnType, mangled(func), params.join(", "), lines.join("\n"));
     }
 
     /// Emits `e` into the current function, and returns its value as an operand: a temp, a
@@ -173,15 +252,50 @@ private final class Generator
     {
         auto slot = use.local in _function.slots;
         if (slot is null) return null;
-        auto type = llvmType(use.local.type, e.span);
-        auto value = _function.newTemp();
-        _function.instruction("%s = load %s, ptr %s".format(value, type, *slot));
-        return value;
+        return _function.load(llvmType(use.local.type, e.span), *slot);
     }
 
-    private string emit(const Expr e, const Call)
+    private string emit(const Expr e, const Call call)
     {
-        return notImplemented("Call", e.span);
+        auto func = _program.functions[call.target];
+        string[] args;
+        foreach (i, ref arg; call.args)
+        {
+            auto param = func.params[i];
+            auto type = paramType(param, arg.span);
+            if (param.mutable)
+            {
+                // Core passes a mutable local here, and the callee writes through its slot.
+                auto local = arg.kind.match!((const LocalRef use) => use.local, _ => cast(const(Local)) null);
+                assert(local !is null, "lowering passes a local to a mutable param");
+                if (type !is null) args ~= type ~ " " ~ _function.slots[local];
+                continue;
+            }
+            // Evaluated even when it has no operand, for what it does.
+            auto value = emitExpr(arg);
+            if (type !is null) args ~= type ~ " " ~ value;
+        }
+        auto result = _function.call(llvmType(func.returnType, e.span), mangled(func), args);
+        if (func.returnType == _program.types.never) emitNoReturn();
+        return result;
+    }
+
+    /// How `param` is passed: as its LLVM type, as a `ptr` to the caller's slot when it's mutable,
+    /// or not at all, which is null, when its type has no operand. Definitions and calls agree
+    /// because both ask this.
+    private string paramType(const Local param, Span span)
+    {
+        auto type = llvmType(param.type, span);
+        if (type == "void") return null;
+        return param.mutable ? "ptr" : type;
+    }
+
+    /// Ends the block after a call that doesn't return. Whatever follows is never reached, but it
+    /// still needs a block to be in.
+    private void emitNoReturn()
+    {
+        _function.unreachable();
+        _function.label(_function.newLabel("after.noreturn"));
     }
 
     /// A call to the C function `call.symbol`, declared from the types at the call.
@@ -209,22 +323,8 @@ private final class Generator
         }
         _foreign[call.symbol] = declaration;
 
-        auto instruction = "call ccc %s @%s(%s)".format(returnType, call.symbol, operands.join(", "));
-        if (e.type == _program.types.never)
-        {
-            _function.instruction(instruction);
-            _function.instruction("unreachable");
-            // Whatever follows is never reached, but it still needs a block to be in.
-            _function.label(_function.newLabel("after.noreturn"));
-            return null;
-        }
-        if (returnType == "void")
-        {
-            _function.instruction(instruction);
-            return null;
-        }
-        auto result = _function.newTemp();
-        _function.instruction(result ~ " = " ~ instruction);
+        auto result = _function.call(returnType, "@" ~ call.symbol, operands, "ccc");
+        if (e.type == _program.types.never) emitNoReturn();
         return result;
     }
 
@@ -289,10 +389,7 @@ private final class Generator
     {
         auto info = _program.types.integerOf(type);
         if (info.bits == 64) return value;
-        auto result = _function.newTemp();
-        _function.instruction("%s = %s %s %s to i64".format(result, info.signed ? "sext" : "zext",
-            llvmType(type, span), value));
-        return result;
+        return _function.convert(info.signed ? "sext" : "zext", llvmType(type, span), value, "i64");
     }
 
     /// A Prim's operands share one type, except a shift's amount, so the first one's type says
@@ -322,9 +419,7 @@ private final class Generator
         /// `op` on the operands, written after it, into a new temp.
         string instruction(string op, string operands)
         {
-            auto result = _function.newTemp();
-            _function.instruction("%s = %s %s %s".format(result, op, type, operands));
-            return result;
+            return _function.result("%s %s %s".format(op, type, operands));
         }
         auto both = operands.length == 2 ? operands[0] ~ ", " ~ operands[1] : null;
 
@@ -383,14 +478,12 @@ private final class Generator
         auto llType = llvmType(type, span);
         auto name = op == PrimOp.Add ? "add" : op == PrimOp.Subtract ? "sub" : "mul";
         auto intrinsic = "llvm.%s%s.with.overflow.%s".format(_program.types.integerOf(type).signed ? "s" : "u", name, llType);
-        _usedIntrinsics["declare { %s, i1 } @%s(%s, %s)".format(llType, intrinsic, llType, llType)] = true;
+        auto pairType = "{ %s, i1 }".format(llType);
+        useIntrinsic("declare %s @%s(%s, %s)".format(pairType, intrinsic, llType, llType));
 
-        auto pair = _function.newTemp();
-        auto value = _function.newTemp();
-        auto overflowed = _function.newTemp();
-        _function.instruction("%s = call { %s, i1 } @%s(%s %s, %s %s)".format(pair, llType, intrinsic, llType, lhs, llType, rhs));
-        _function.instruction("%s = extractvalue { %s, i1 } %s, 0".format(value, llType, pair));
-        _function.instruction("%s = extractvalue { %s, i1 } %s, 1".format(overflowed, llType, pair));
+        auto pair = _function.call(pairType, "@" ~ intrinsic, [llType ~ " " ~ lhs, llType ~ " " ~ rhs]);
+        auto value = _function.extract(pairType, pair, 0);
+        auto overflowed = _function.extract(pairType, pair, 1);
         emitPanicIf(overflowed, span, "Integer overflow");
         return value;
     }
@@ -400,17 +493,13 @@ private final class Generator
     {
         auto info = _program.types.integerOf(type);
         auto llType = llvmType(type, span);
-        auto isZero = _function.newTemp();
-        _function.instruction("%s = icmp eq %s %s, 0".format(isZero, llType, rhs));
+        auto isZero = _function.result("icmp eq %s %s, 0".format(llType, rhs));
         emitPanicIf(isZero, span, "Division by zero");
         if (!info.signed) return;
 
-        auto isMin = _function.newTemp();
-        auto isMinusOne = _function.newTemp();
-        auto overflows = _function.newTemp();
-        _function.instruction("%s = icmp eq %s %s, -%s".format(isMin, llType, lhs, info.minMagnitude));
-        _function.instruction("%s = icmp eq %s %s, -1".format(isMinusOne, llType, rhs));
-        _function.instruction("%s = and i1 %s, %s".format(overflows, isMin, isMinusOne));
+        auto isMin = _function.result("icmp eq %s %s, -%s".format(llType, lhs, info.minMagnitude));
+        auto isMinusOne = _function.result("icmp eq %s %s, -1".format(llType, rhs));
+        auto overflows = _function.result("and i1 %s, %s".format(isMin, isMinusOne));
         emitPanicIf(overflows, span, "Integer overflow");
     }
 
@@ -420,26 +509,28 @@ private final class Generator
     {
         auto bits = _program.types.integerOf(type).bits;
         auto wide = widened(amountType, amount, span);
-        auto tooFar = _function.newTemp();
-        _function.instruction("%s = icmp uge i64 %s, %s".format(tooFar, wide, bits));
+        auto tooFar = _function.result("icmp uge i64 %s, %s".format(wide, bits));
         emitPanicIf(tooFar, span, "Shift amount is out of range");
         if (bits == 64) return wide;
-        auto count = _function.newTemp();
-        _function.instruction("%s = trunc i64 %s to %s".format(count, wide, llvmType(type, span)));
-        return count;
+        return _function.convert("trunc", "i64", wide, llvmType(type, span));
     }
 
     /// Panics with `message` and the location of `span` if the `i1` operand `condition` is true.
     private void emitPanicIf(string condition, Span span, string message)
     {
-        auto text = cString("%s: %s".format(located(span), message));
         auto panicLabel = _function.newLabel("panic");
         auto okLabel = _function.newLabel("ok");
-        _function.instruction("br i1 %s, label %%%s, label %%%s".format(condition, panicLabel, okLabel));
+        _function.branch(condition, panicLabel, okLabel);
         _function.label(panicLabel);
-        callRuntime("silver_panic", [text]);
-        _function.instruction("unreachable");
+        emitPanic(span, message);
         _function.label(okLabel);
+    }
+
+    /// Panics with `message` and the location of `span`, ending the current block.
+    private void emitPanic(Span span, string message)
+    {
+        callRuntime("silver_panic", [cString("%s: %s".format(located(span), message))]);
+        _function.unreachable();
     }
 
     private string emit(const Expr e, const If)
@@ -491,24 +582,28 @@ private final class Generator
         auto value = emitExpr(let.value);
         if (value is null) return;            // Unit or Never: no slot
         auto type = llvmType(let.local.type, s.span);
-        auto slot = _function.slotFor(let.local, type);  // records it, adds the alloca to the entry block
-        _function.instruction("store %s %s, ptr %s".format(type, value, slot));
+        _function.store(type, value, _function.slotFor(let.local, type));
     }
 
-    /// Every function checks on entry that it has room on the stack, and panics if not.
+    /// Every function checks on entry that it has room on the stack, and panics if not. Its
+    /// names are fixed, since each function has one, so it uses none of the numbered temps.
     private void emitStackCheck(Span span)
     {
-        _usedIntrinsics["declare ptr @llvm.frameaddress.p0(i32 immarg)"] = true;
-        _usedIntrinsics["@silver_stack_limit = external global ptr"] = true;
-        auto message = cString("%s: Stack overflow".format(located(span)));
-        _function.instruction("%.frame = call ptr @llvm.frameaddress.p0(i32 0)");
-        _function.instruction("%.limit = load ptr, ptr @silver_stack_limit");
-        _function.instruction("%.too.deep = icmp ult ptr %.frame, %.limit");
-        _function.instruction("br i1 %.too.deep, label %stack.overflow, label %stack.ok");
+        useIntrinsic("declare ptr @llvm.frameaddress.p0(i32 immarg)");
+        useIntrinsic("@silver_stack_limit = external global ptr");
+        auto frame = _function.result("call ptr @llvm.frameaddress.p0(i32 0)", "%.frame");
+        auto limit = _function.result("load ptr, ptr @silver_stack_limit", "%.limit");
+        auto tooDeep = _function.result("icmp ult ptr %s, %s".format(frame, limit), "%.too.deep");
+        _function.branch(tooDeep, "stack.overflow", "stack.ok");
         _function.label("stack.overflow");
-        callRuntime("silver_panic", [message]);
-        _function.instruction("unreachable");
+        emitPanic(span, "Stack overflow");
         _function.label("stack.ok");
+    }
+
+    /// Declares an LLVM intrinsic, or another module-level line, once at the top of the module.
+    private void useIntrinsic(string declaration)
+    {
+        _usedIntrinsics[declaration] = true;
     }
 
     /// Calls the runtime function `name` with `operands`, typed from its binding. Returns the
@@ -520,16 +615,8 @@ private final class Generator
         auto binding = runtime[name];
         assert(operands.length == binding.params.length, "the wrong number of operands for " ~ name);
         _usedRuntime[name] = true;
-        auto args = zip(binding.params, operands).map!(p => p[0] ~ " " ~ p[1]).join(", ");
-        auto call = "call %s @%s(%s)".format(binding.returnType, name, args);
-        if (binding.returnType == "void")
-        {
-            _function.instruction(call);
-            return null;
-        }
-        auto result = _function.newTemp();
-        _function.instruction(result ~ " = " ~ call);
-        return result;
+        auto args = zip(binding.params, operands).map!(p => p[0] ~ " " ~ p[1]).array;
+        return _function.call(binding.returnType, "@" ~ name, args);
     }
 
     /// A NUL-terminated global holding `text`, for the runtime's C-string parameters.

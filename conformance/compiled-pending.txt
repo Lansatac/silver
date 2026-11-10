@@ -86,7 +86,6 @@ option-return-promotes
 overflow-add
 overflow-compound
 overflow-factorial
-overflow-negate-mid-block
 overflow-powint
 panic-explicit
 powint-zero-negative
@@ -119,11 +118,9 @@ tuple-element-panics
 tuple-equality
 types-construction
 types-constructor-values
-types-declarations
 types-equality
 types-field-assignment
 types-function-fields
-types-imported
 types-imported-construction
 types-markers
 types-markers-same-name

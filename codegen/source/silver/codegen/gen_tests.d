@@ -243,7 +243,74 @@ unittest
     Run run;
     if (!compileAndRun(source, run)) return;
     run.status.should.equal(3);
-    run.output.should.equal("1\n");}
+    run.output.should.equal("1\n");
+}
+
+@("codegen calls a Silver function directly, passing its arguments and using its result")
+unittest
+{
+    auto source = "def add(a: Int, b: Int): Int => a + b\ndef answer(): Int => 42\n"
+        ~ "def main(): Unit {\n    printl(add(3, 4))\n    printl(answer())\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("define i64 @\"main.add\"(i64 %a, i64 %b)");
+    ir.should.contain("call i64 @\"main.add\"(i64 3, i64 4)");
+    ir.should.contain("call i64 @\"main.answer\"()");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.status.should.equal(0);
+    run.output.should.equal("7\n42\n");
+}
+
+@("codegen leaves a Unit parameter out of the definition and the call, but still evaluates its argument")
+unittest
+{
+    auto source = "def second(u: Unit, x: Int): Int => x\n"
+        ~ "def main(): Unit {\n    printl(second(printl(1), 2))\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("define i64 @\"main.second\"(i64 %x)");
+    ir.should.contain("call i64 @\"main.second\"(i64 2)");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("1\n2\n");
+}
+
+@("codegen passes a mutable argument as a pointer to its slot, which the callee reads through")
+unittest
+{
+    auto source = "def show(mutable n: Int): Unit => printl(n)\n"
+        ~ "def forward(mutable n: Int): Unit => show(mutable n)\n"
+        ~ "def main(): Unit {\n    mutable val count = 5\n    forward(mutable count)\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("define void @\"main.show\"(ptr %n)");
+    ir.should.contain("load i64, ptr %n");
+    ir.should.not.contain("%n.addr");
+    ir.should.contain("call void @\"main.forward\"(ptr %count.addr)");
+    ir.should.contain("call void @\"main.show\"(ptr %n)");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("5\n");
+}
+
+@("codegen ends the block after a call to a Silver function that returns Never")
+unittest
+{
+    auto source = "native def exit(status: Int32): Never\ndef stop(): Never => exit(3)\n"
+        ~ "def main(): Unit {\n    stop()\n    printl(1)\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("call void @\"main.stop\"()\n  unreachable");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.status.should.equal(3);
+    run.output.should.equal("");
+}
 
 @("codegen reports two natives that bind one symbol with different signatures")
 unittest
