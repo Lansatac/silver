@@ -1,0 +1,38 @@
+// A Ref prints as its contents would in a product, and its operations are ordinary functions.
+import std.ref
+
+type Node(value: Int, next: Ref<Node?>)
+
+def map<T, U>(values: [T], f: (T) -> U): [U] {
+    mutable val result: [U] = []
+    for value in values {
+        result ~= [f(value)]
+    }
+    result
+}
+
+def main(): Unit {
+    printl(Ref(2))
+    printl(Ref([1, 2]))
+    val maybe: Ref<Int?> = Ref(None)
+    printl(maybe)
+    maybe.set(Some(4))
+    printl("now {maybe}")
+    printl(Ref(Ref("nested")))
+
+    val tail = Node(2, Ref(None))
+    val head = Node(1, Ref(Some(tail)))
+    printl(head)
+    tail.next.set(Some(Node(3, Ref(None))))
+    printl(head)
+
+    val cells = [1, 2, 3].map(Ref<Int>)
+    printl(cells)
+    _ = cells.map((cell: Ref<Int>) => cell.set(cell.get() * 10))
+    printl(cells.map(get<Int>))
+    val setter: (Ref<Int>, Int) -> Unit = set
+    setter(cells[0], 0)
+    val updater: (Ref<Int>, (Int) -> Int) -> Unit = update
+    updater(cells[2], n => n + 1)
+    printl(cells)
+}

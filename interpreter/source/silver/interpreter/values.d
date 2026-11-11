@@ -8,7 +8,8 @@ import std.sumtype;
 /// - Every integer type is a `long` holding the value's 64-bit two's complement, as `IntLit`
 ///   stores it. The `Expr`'s type says which width and signedness the bits mean.
 /// - Tuples, user types and sums, options among them, are all a `Record`.
-alias Value = SumType!(Unit, bool, long, double, string, ArrayValue, Record, Closure);
+/// - A `Ref` is a `CellValue`, the one value that changes after it's built.
+alias Value = SumType!(Unit, bool, long, double, string, ArrayValue, Record, Closure, CellValue);
 
 /// The value of `()`.
 struct Unit
@@ -30,6 +31,18 @@ struct Record
 {
     size_t tag;
     Value[] fields;
+}
+
+/// A `Ref`, which every copy of the value shares. `full` is false while an `update` holds the contents.
+final class CellValue
+{
+    Value contents;
+    bool full = true;
+
+    this(Value contents)
+    {
+        this.contents = contents;
+    }
 }
 
 /// A function value: the Core function `target`, and the values its captures take.
@@ -54,4 +67,8 @@ unittest
     assert(numbers.as!ArrayValue.elements[1].as!Record.fields[1].as!long == 2);
     assert(Value(true).as!bool);
     assert(Value(Unit()).has!Unit);
+    auto cell = new CellValue(Value(1L));
+    auto copy = Value(cell);
+    cell.contents = Value(2L);
+    assert(copy.as!CellValue.contents.as!long == 2);
 }

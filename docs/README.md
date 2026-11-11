@@ -20,7 +20,7 @@ These documents describe the language as designed. Where the implementation does
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, invariants, `match` | Implemented, except invariants |
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
-| [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Not implemented |
+| [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
 | [Modules](language/modules.md) | Files, imports, visibility | Partial: no import forms beyond `import a.b` |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the standard library's natives |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, the test runner | Not implemented |

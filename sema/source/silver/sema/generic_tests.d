@@ -296,11 +296,12 @@ unittest
     analyzedGeneric("    mutable val r = [1]\n    _ = length(mutable r)").shouldReport(DiagnosticCode.MutabilityMismatch, At("r", 2));
 }
 
-@("an intrinsic can only be called, generic or not")
+@("an intrinsic is a value like any function, unless it takes an Any")
 unittest
 {
-    analyzedGeneric("    val qf = length").shouldReport(DiagnosticCode.NotSupportedYet, At("length", 2));
-    analyzedGeneric("    val qf = length<Int>").shouldReport(DiagnosticCode.NotSupportedYet, At("length", 2));
+    analyzedGeneric("    val qf = length<Int>").shouldHaveNoDiagnostics();
+    analyzedGeneric("    val qf: ([Bool]) -> Int = length").shouldHaveNoDiagnostics();
+    analyzedGeneric("    val qf = printl").shouldReport(DiagnosticCode.NotSupportedYet, At("printl", 1));
 }
 
 @("a constructor pattern sees an instance's fields, and coverage works on instances")

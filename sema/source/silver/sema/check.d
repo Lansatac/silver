@@ -795,14 +795,20 @@ private final class TypeChecker
             return _types.error;
         }
 
-        auto isIntrinsic = symbol.match!(
-            (const Id!FunctionDecl f) => _resolutions.declarations.functions[f].kind == FunctionKind.intrinsic,
-            _ => false,
-        );
-        if (!isIntrinsic) return symbolType(symbol);
+        if (!takesAnyIntrinsically(symbol)) return symbolType(symbol);
         _collector.reportError(DiagnosticCode.NotSupportedYet, span,
             "`%s` is built into the compiler, so it can only be called for now".format(symbolName(symbol)));
         return _types.error;
+    }
+
+    /// Whether `symbol` is an intrinsic with an `Any` parameter, which has no function type to be a value of.
+    private bool takesAnyIntrinsically(SymbolId symbol)
+    {
+        return symbol.match!(
+            (const Id!FunctionDecl f) => _resolutions.declarations.functions[f].kind == FunctionKind.intrinsic
+                && _types[symbolType(symbol)].match!((const FunctionData data) => data.params.canFind(_types.any), _ => false),
+            _ => false,
+        );
     }
 
     private string symbolName(SymbolId symbol)
@@ -1046,6 +1052,8 @@ private final class TypeChecker
         {
             if (decl in visited) return true;
             visited[decl] = true;
+            // A `Ref` could be compared by identity or by contents, and neither is settled.
+            if (_declarer.isIntrinsic(decl)) return false;
             return _typing.fields[decl].all!(f => isComparable(f.type, visited))
                 && _typing.members.get(decl, null).all!(m => isComparable(m, visited));
         }
@@ -2966,12 +2974,8 @@ private final class TypeChecker
     /// What `name`, which resolution found to be `symbol`, is as a value.
     private Type namedValue(const Expr name, SymbolId symbol, Type expected)
     {
-        auto isIntrinsic = symbol.match!(
-            (const Id!FunctionDecl f) => _resolutions.declarations.functions[f].kind == FunctionKind.intrinsic,
-            _ => false,
-        );
         auto generic = genericNamed(name);
-        if (generic.found && !isIntrinsic) return instantiateValue(name, generic, expected);
+        if (generic.found && !takesAnyIntrinsically(symbol)) return instantiateValue(name, generic, expected);
         if (generic.found) _declarer.resolveTypeArguments(generic.written);
         else rejectTypeArguments(typeArgsOf(name), spelling(name), name.span);
         return symbolValue(symbol, name.span);
@@ -3378,6 +3382,13 @@ private final class TypeChecker
             checkArgumentsAsUnknown();
             return reportPattern(pattern.span, "`%s` has no constructor; bind a value of it with `name: %s`"
                 .format(printTypeExpr(constructor.type), printTypeExpr(constructor.type)));
+        }
+
+        if (_declarer.isIntrinsic(decl))
+        {
+            checkArgumentsAsUnknown();
+            return reportPattern(pattern.span, "A `%s` isn't taken apart by a pattern; bind it with a name and read it with `get`"
+                .format(printTypeExpr(constructor.type)));
         }
 
         // A generic type takes the arguments of the instance the subject is or holds.

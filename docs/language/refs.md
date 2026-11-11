@@ -74,4 +74,4 @@ A constant can't be a `Ref`, or have a type that contains one. A `Ref` at module
 
 ## Current implementation
 
-None of this is implemented.
+All of this is implemented on both backends. Using a `Ref` from inside its own `update` panics with "Ref is being updated" (`R0010`).

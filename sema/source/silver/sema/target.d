@@ -26,6 +26,15 @@ enum Intrinsic
     read,
     length,
     panic,
+    get,
+    set,
+    update,
+}
+
+/// Whether the compiler implements an `intrinsic type` named `name`.
+bool isIntrinsicType(string name)
+{
+    return name == "Ref";
 }
 
 /// The intrinsic named `name`, or null if the compiler doesn't implement one.

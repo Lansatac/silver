@@ -9,7 +9,7 @@ import std.string;
 import std.sumtype;
 
 import silver.ast;
-import silver.sema.target : intrinsicAlias, intrinsicNamed, Target;
+import silver.sema.target : intrinsicAlias, intrinsicNamed, isIntrinsicType, Target;
 
 /// An `Id!AliasDecl` is only ever in a scope: a use of one records what it stands for.
 alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module, Id!TypeDecl, Id!ConstDecl, Id!AliasDecl);
@@ -370,6 +370,7 @@ private final class NameResolver
                 },
                 (ref const TypeDecl type) {
                     _declarations.types[type.id] = &type;
+                    if (type.intrinsic) checkIntrinsic(name, type.nameSpan, "intrinsic type", isIntrinsicType(type.name));
                     if (moduleScope.resolveLocalType(type.name) !is null || moduleScope.resolveLocal(type.name) !is null)
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan, type.implicitMarker

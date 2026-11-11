@@ -93,6 +93,8 @@ enum DiagnosticCode : string
     /// The program called `panic`.
     ExplicitPanic = "R0008",
     StackOverflow = "R0009",
+    /// A `Ref` used from inside its own `update`.
+    RefInUpdate = "R0010",
 
     /// Something the implementation doesn't handle yet, or a broken invariant.
     InternalError = "I0001",

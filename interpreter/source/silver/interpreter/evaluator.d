@@ -118,6 +118,7 @@ final class Evaluator
                 (const Index index) => evaluate(index, frame),
                 (const Slice slice) => evaluate(slice, frame),
                 (const Length length) => Value(cast(long) evaluate(*length.array, frame).as!ArrayValue.elements.length),
+                (const Cell cell) => evaluate(cell, frame),
             );
         }
         catch (CodedException error)
@@ -259,6 +260,35 @@ final class Evaluator
             throw new CodedException(DiagnosticCode.IndexOutOfRange, "Slice is out of range");
         }
         return Value(ArrayValue(elements[cast(size_t) start .. cast(size_t) end]));
+    }
+
+    private Value evaluate(const Cell cell, Frame frame)
+    {
+        auto args = all(cell.args, frame);
+        if (cell.op == CellOp.New) return Value(new CellValue(args[0]));
+        auto target = args[0].as!CellValue;
+        if (cell.op == CellOp.Fill)
+        {
+            target.contents = args[1];
+            target.full = true;
+            return Value(Unit());
+        }
+        if (!target.full) throw new CodedException(DiagnosticCode.RefInUpdate, "Ref is being updated");
+        final switch (cell.op)
+        {
+            case CellOp.Get:
+                return target.contents;
+            case CellOp.Set:
+                target.contents = args[1];
+                return Value(Unit());
+            case CellOp.Take:
+                target.full = false;
+                auto contents = target.contents;
+                target.contents = Value.init;
+                return contents;
+            case CellOp.New, CellOp.Fill:
+                assert(0, "handled above");
+        }
     }
 
     /// A Prim's operands share one type, except a shift's amount, so the first one's type says
@@ -551,8 +581,8 @@ final class Evaluator
                 return Value(Record(1, [Value(line)]));
             case Intrinsic.panic:
                 throw new CodedException(DiagnosticCode.ExplicitPanic, args[0].as!string);
-            case Intrinsic.length:
-                assert(0, "lowering makes `length` a Length");
+            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update:
+                assert(0, "lowering makes `length` a Length, and the others operations on a Cell");
         }
     }
 

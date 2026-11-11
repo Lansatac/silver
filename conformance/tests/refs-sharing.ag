@@ -1,0 +1,36 @@
+// Every copy of a Ref is the same cell, wherever the copy went.
+import std.ref
+
+type Account(name: String, balance: Ref<Int>)
+
+def deposit(account: Account, amount: Int): Unit => account.balance.update(b => b + amount)
+
+def main(): Unit {
+    val counter = Ref(0)
+    val bump = () => counter.update(n => n + 1)
+    bump()
+    bump()
+    printl(counter.get())
+
+    val same = counter
+    same.set(10)
+    printl(counter.get())
+
+    // A binding that isn't mutable can still have its cell changed, and a mutable one can name another cell.
+    mutable val which = Ref(1)
+    val first = which
+    which = Ref(2)
+    first.set(3)
+    printl(first.get())
+    printl(which.get())
+
+    val account = Account("a", Ref(5))
+    val copy = account
+    deposit(copy, 7)
+    printl(account.balance.get())
+
+    val cells = [Ref(1), Ref(2)]
+    val again = cells
+    cells[1].set(20)
+    printl(again[1].get())
+}

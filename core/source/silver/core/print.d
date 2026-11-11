@@ -157,6 +157,10 @@ private struct Printer
                 output ~= "length";
                 arguments([*length.array]);
             },
+            (const Cell cell) {
+                output ~= "cell.%s".format(cell.op);
+                arguments(cell.args);
+            },
             (const ForeignCall call) {
                 output ~= "foreign \"%s\"".format(call.symbol);
                 arguments(call.args);

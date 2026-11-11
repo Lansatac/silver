@@ -1,0 +1,12 @@
+// A cell holding a value that can be replaced, which every copy of the `Ref` shares.
+module std.ref
+
+intrinsic type Ref<T>(value: T)
+
+// What the cell holds now.
+intrinsic def get<T>(ref: Ref<T>): T
+// Replaces what the cell holds.
+intrinsic def set<T>(ref: Ref<T>, value: T): Unit
+// Replaces what the cell holds with `change` applied to it, without copying it first. The cell
+// is empty while `change` runs, so using `ref` from inside it panics.
+intrinsic def update<T>(ref: Ref<T>, change: (T) -> T): Unit

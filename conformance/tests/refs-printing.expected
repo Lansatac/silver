@@ -1,0 +1,10 @@
+Ref(2)
+Ref([1, 2])
+Ref(None)
+now Ref(Some(4))
+Ref(Ref(nested))
+Node(1, Ref(Some(Node(2, Ref(None)))))
+Node(1, Ref(Some(Node(2, Ref(Some(Node(3, Ref(None))))))))
+[Ref(1), Ref(2), Ref(3)]
+[10, 20, 30]
+[Ref(0), Ref(20), Ref(31)]

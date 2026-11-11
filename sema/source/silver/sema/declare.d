@@ -208,10 +208,12 @@ package final class Declarer
     }
 
     /// The fields of `type` with its type arguments filled in, or none if it isn't a declared type.
+    /// An intrinsic type has none, though its constructor has parameters.
     package FieldInfo[] fieldsOf(Type type)
     {
         return _types[type].match!(
             (const NominalData nominal) {
+                if (isIntrinsic(nominal.decl)) return FieldInfo[].init;
                 auto declared = _typing.fields.get(nominal.decl, null);
                 if (nominal.args.length == 0) return declared;
                 auto substitution = substitutionOf(type);
@@ -219,6 +221,12 @@ package final class Declarer
             },
             _ => FieldInfo[].init,
         );
+    }
+
+    /// Whether `decl` is an `intrinsic type`.
+    package bool isIntrinsic(Id!TypeDecl decl)
+    {
+        return _resolutions.declarations.types[decl].intrinsic;
     }
 
     package Type aliasType(Id!AliasDecl id)

@@ -431,6 +431,7 @@ private final class Generator
                 planSlots(slots, *slice.end);
             },
             (const Length length) => planSlots(slots, *length.array),
+            (const Cell cell) => all(cell.args),
         );
     }
 
@@ -736,8 +737,8 @@ private final class Generator
                 return emitRead();
             case Intrinsic.panic:
                 return emitExplicitPanic(call.args[0], e.span);
-            case Intrinsic.length:
-                assert(0, "lowering makes `length` a Length");
+            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update:
+                assert(0, "lowering makes `length` a Length, and the others operations on a Cell");
         }
     }
 
@@ -1539,6 +1540,50 @@ private final class Generator
         return array.then(_function.extract(sliceLayout, array.value, 1));
     }
 
+    // Cells. A `Ref` points to a `{ i1, T }` on the heap, laid out as an option is: the `i1` says
+    // whether the cell holds its value, which it doesn't while `update` runs.
+
+    private Fragment emit(const Expr e, const Cell cell)
+    {
+        string[] operands;
+        auto args = emitAll(cell.args, operands);
+        auto contents = llvmType(_program.cellContents[cell.op == CellOp.New ? e.type : cell.args[0].type], e.span);
+        auto layout = optionLayout(contents);
+
+        Fragment fill(string target, string value)
+        {
+            auto flag = fieldPointer(layout, target, 0);
+            auto code = flag.then(Fragment.store("i1", "true", flag.value));
+            if (contents == "void") return code;
+            auto pointer = fieldPointer(layout, target, 1);
+            return code.then(pointer).then(Fragment.store(contents, value, pointer.value));
+        }
+
+        if (cell.op == CellOp.New)
+        {
+            auto object = alloc(layout);
+            return args.then(object).then(fill(object.value, operands[0])).withValue(object.value);
+        }
+        auto target = operands[0];
+        if (cell.op == CellOp.Fill) return args.then(fill(target, operands[1])).withValue(null);
+
+        auto flag = fieldPointer(layout, target, 0);
+        auto full = _function.load("i1", flag.value);
+        auto empty = _function.result("xor i1 %s, true".format(full.value));
+        auto code = args.then(flag).then(full).then(empty).then(emitPanicIf(empty.value, e.span, "Ref is being updated"));
+        if (cell.op == CellOp.Set)
+        {
+            if (contents == "void") return code.withValue(null);
+            auto pointer = fieldPointer(layout, target, 1);
+            return code.then(pointer).then(Fragment.store(contents, operands[1], pointer.value)).withValue(null);
+        }
+        if (cell.op == CellOp.Take) code = code.then(Fragment.store("i1", "false", flag.value));
+        if (contents == "void") return code.withValue(null);
+        auto pointer = fieldPointer(layout, target, 1);
+        return code.then(pointer).then(_function.load(contents, pointer.value));
+    }
+
+
     // Helpers
 
     /// Room on the heap for one `layout`; the operand is its address.
@@ -1615,6 +1660,7 @@ private final class Generator
         if (types.isOption(type)) return optionLayout(llvmType(types.optionInner(type), span));
         if (types.isTuple(type)) return recordLayout(type, span);
         if (type in _program.recordFields) return "ptr";
+        if (type in _program.cellContents) return "ptr";
         if (type in _program.sumMembers) return isAllMarkers(type, span) ? "i32" : "{ i32, ptr }";
         return notImplemented!string("the type " ~ types.describe(type), span);
     }

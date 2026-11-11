@@ -157,6 +157,8 @@ private final class Lowering
     /// A constructor used as a value, by the function type it has.
     private size_t[Type] _constructors;
     private size_t[Id!(ast.FunctionDecl)] _nativeWrappers;
+    /// An intrinsic used as a value, by the instance it is.
+    private size_t[InstanceKey] _intrinsicWrappers;
 
     this(const Analysis analysis)
     {
@@ -276,6 +278,13 @@ private final class Lowering
             if (types.depth(type) > instanceNestingLimit) reportTypeNesting(type);
             types[type].match!(
                 (const NominalData nominal) {
+                    if (isCellType(type))
+                    {
+                        auto contents = cellContents(type);
+                        program.cellContents[type] = contents;
+                        visitType(contents);
+                        return;
+                    }
                     auto members = _analysis.membersOf(type);
                     if (members.length > 0)
                     {
@@ -361,6 +370,7 @@ private final class Lowering
                     visitExpr(*slice.end);
                 },
                 (const Length length) => visitExpr(*length.array),
+                (const Cell cell) => all(cell.args),
                 (_) {},
             );
         }
@@ -468,8 +478,33 @@ private final class Lowering
             case ast.FunctionKind.native:
                 return Expr(type, span, ExprKind(MakeClosure(nativeWrapper(func), null)));
             case ast.FunctionKind.intrinsic:
-                return notLowered!Expr("an intrinsic used as a value");
+                return Expr(type, span, ExprKind(MakeClosure(intrinsicWrapper(func, type, typeArgs), null)));
         }
+    }
+
+    /// A function that does what the intrinsic `func` does, for using it as a value of the
+    /// function type `type`.
+    private size_t intrinsicWrapper(Id!(ast.FunctionDecl) func, Type type, immutable(Type)[] typeArgs)
+    {
+        auto key = InstanceKey(func, typeArgs);
+        if (auto existing = key in _intrinsicWrappers) return *existing;
+        auto slot = reserveSlot();
+        _intrinsicWrappers[key] = slot;
+        auto decl = _analysis.declarationOf(func);
+        auto signature = functionData(type);
+        Local[] params;
+        foreach (i, ref param; decl.params) params ~= new Local(param.name, signature.params[i]);
+        auto body = intrinsicCall(_analysis.intrinsicOf(func), params.map!(p => use(p, _span)).array, signature, _span);
+        functions[slot] = Function(instanceName(key), _analysis.moduleOf(func), params, null, signature.ret, body,
+            FunctionOrigin.derived);
+        return slot;
+    }
+
+    /// A value of `type`, a tuple or a declared type that isn't a sum, built from `fields`.
+    private Expr construct(Type type, Expr[] fields, Span span)
+    {
+        if (isCellType(type)) return Expr(type, span, ExprKind(Cell(CellOp.New, fields)));
+        return Expr(type, span, ExprKind(Construct(fields)));
     }
 
     /// A function that calls the native `func`, for using it as a value.
@@ -515,7 +550,7 @@ private final class Lowering
         }
         Local[] params;
         foreach (field; _analysis.fieldsOf(record)) params ~= new Local(field.name, field.type);
-        Expr body = Expr(record, _span, ExprKind(Construct(params.map!(p => use(p, _span)).array)));
+        Expr body = construct(record, params.map!(p => use(p, _span)).array, _span);
         if (signature.ret != record) body = inject(_analysis.memberIndexFor(signature.ret, record), body, signature.ret);
         functions[slot] = Function(typeName(record) ~ typeArgumentsOf(record), _moduleName, params, null, signature.ret,
             body, FunctionOrigin.derived);
@@ -1154,7 +1189,7 @@ private final class Lowering
         auto span = e.span;
         if (_analysis.constructionOf(e.id) !is null)
         {
-            return Expr(type, span, ExprKind(Construct(call.args.map!(a => lowerExpr(a)).array)));
+            return construct(type, call.args.map!(a => lowerExpr(a)).array, span);
         }
         if (_analysis.isConversion(e.id)) return lowerConversion(lowerExpr(call.args[0]), type, span);
         // `x.f(y)` is `f(x, y)`, which sema has built.
@@ -1197,26 +1232,49 @@ private final class Lowering
         }
     }
 
-    /// An intrinsic's arguments are values; one filling an `Any` that isn't a primitive is
-    /// formatted to a String first.
     private Expr lowerIntrinsic(Id!(ast.FunctionDecl) callee, const ast.Expr[] written, FunctionData signature, Span span)
     {
-        if (_analysis.intrinsicOf(callee) == Intrinsic.length)
+        return intrinsicCall(_analysis.intrinsicOf(callee), written.map!(a => lowerExpr(a)).array, signature, span);
+    }
+
+    /// What `intrinsic` does with `args`, which are values. One filling an `Any` that isn't a
+    /// primitive is formatted to a String first.
+    private Expr intrinsicCall(Intrinsic intrinsic, Expr[] args, FunctionData signature, Span span)
+    {
+        final switch (intrinsic)
         {
-            return Expr(types.int_, span, ExprKind(Length(boxed(lowerExpr(written[0])))));
+            case Intrinsic.length:
+                return Expr(types.int_, span, ExprKind(Length(boxed(args[0]))));
+            case Intrinsic.get:
+                return Expr(signature.ret, span, ExprKind(Cell(CellOp.Get, args)));
+            case Intrinsic.set:
+                return Expr(types.unit, span, ExprKind(Cell(CellOp.Set, args)));
+            case Intrinsic.update:
+                return updateCell(args[0], args[1], span);
+            case Intrinsic.print, Intrinsic.printl, Intrinsic.read, Intrinsic.panic:
+                break;
         }
-        Expr[] args;
         bool[] anyArgs;
-        foreach (i, ref arg; written)
+        foreach (i, ref value; args)
         {
-            auto value = lowerExpr(arg);
             auto isAny = signature.params[i] == types.any;
             if (isAny && !isPrimitive(value.type)) value = formatted(value);
-            args ~= value;
             anyArgs ~= isAny;
         }
-        auto intrinsic = IntrinsicCall(_analysis.intrinsicOf(callee), args, anyArgs);
-        return Expr(signature.ret, span, ExprKind(intrinsic));
+        return Expr(signature.ret, span, ExprKind(IntrinsicCall(intrinsic, args, anyArgs)));
+    }
+
+    /// `update(cell, change)`. The contents are taken out of the cell while `change` runs, so
+    /// nothing else holds them and `change` can extend them in place.
+    private Expr updateCell(Expr cell, Expr change, Span span)
+    {
+        auto heldCell = temp("ref", cell.type);
+        auto heldChange = temp("change", change.type);
+        auto contents = cellContents(cell.type);
+        auto taken = Expr(contents, span, ExprKind(Cell(CellOp.Take, [use(heldCell, span)])));
+        auto changed = Expr(contents, span, ExprKind(CallClosure(boxed(use(heldChange, span)), [taken])));
+        auto fill = Expr(types.unit, span, ExprKind(Cell(CellOp.Fill, [use(heldCell, span), changed])));
+        return Expr(types.unit, span, ExprKind(Block([let(heldCell, cell), let(heldChange, change), eval(fill)], null)));
     }
 
     /// A call of `signature` with `written` as its arguments, made by `call` from the lowered
@@ -1451,6 +1509,11 @@ private final class Lowering
             }
             body = chain;
         }
+        else if (isCellType(type))
+        {
+            auto contents = Expr(cellContents(type), span, ExprKind(Cell(CellOp.Get, [value()])));
+            body = concat(text(typeName(type) ~ "("), formatted(contents), text(")"));
+        }
         else
         {
             auto fields = fieldTypes(type);
@@ -1482,6 +1545,21 @@ private final class Lowering
     private bool isPrimitive(Type type)
     {
         return types[type].match!((const Primitive _) => true, _ => false);
+    }
+
+    /// Whether `type` is a `Ref`, the one intrinsic type.
+    private bool isCellType(Type type)
+    {
+        return types[type].match!(
+            (const NominalData nominal) => _analysis.declarationOf(nominal.decl).intrinsic,
+            _ => false,
+        );
+    }
+
+    /// What a value of the `Ref` type `type` holds.
+    private Type cellContents(Type type)
+    {
+        return _analysis.fieldsOf(type)[0].type;
     }
 
     private bool isSum(Type type)
@@ -2420,4 +2498,29 @@ def f(): Unit => grow(1)
     assert(error !is null, "expected the nesting limit");
     error.diagnostic.code.should.equal(DiagnosticCode.InstanceNestingTooDeep);
     error.diagnostic.message.canFind("f\n    -> grow<Int>\n    -> grow<[Int]>").should.equal(true);
+}
+
+@("a Ref is a cell, and update takes the contents out while its change runs")
+unittest
+{
+    auto result = loweredFunction(`import std.ref
+def f(): () {
+    val r = Ref(1)
+    r.update(n => n + r.get())
+    printl(r)
+}`, "f");
+    print(result.program).should.equal(
+`def f(): Unit {
+    let r: Ref<Int> = cell.New(1)
+    {
+        let ref: Ref<Int> = r
+        let change: (Int) -> Int = closure lambda(r)
+        cell.Fill(ref, call change(cell.Take(ref)))
+    }
+    intrinsic printl(format.Ref<Int>(r))
+}
+
+def lambda(n: Int): Int Add(n, cell.Get(r))
+
+def format.Ref<Int>(value: Ref<Int>): String Concat("Ref(", Format(cell.Get(value)), ")")`);
 }

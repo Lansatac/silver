@@ -13,6 +13,7 @@ Silver:
                             / ImportStatement
                             / NativeLibrary
                             / IntrinsicAlias
+                            / IntrinsicType
                             / PrivateDeclaration
                             / FunctionDeclaration
                             / NativeFunctionDeclaration
@@ -38,7 +39,7 @@ Silver:
                             / ExpressionStatement
                             )
 
-    PrivateDeclaration   < :PRIVATE Nl? (FunctionDeclaration / NativeFunctionDeclaration / IntrinsicFunctionDeclaration / IntrinsicAlias / TypeDeclaration / AliasDeclaration / ConstantDeclaration)
+    PrivateDeclaration   < :PRIVATE Nl? (FunctionDeclaration / NativeFunctionDeclaration / IntrinsicFunctionDeclaration / IntrinsicAlias / IntrinsicType / TypeDeclaration / AliasDeclaration / ConstantDeclaration)
 
     QualifiedName        <- ValueName ('.' ValueName)*
 
@@ -69,6 +70,7 @@ Silver:
     IntrinsicFunctionDeclaration < :INTRINSIC Nl? :DEF Nl? Identifier (Nl? TypeParameters)? Nl? :'(' Nl? Params Nl? :')' TypeAnnotation
     NativeLibrary        < :NATIVE Nl? :LIBRARY Nl? StringLiteral
     IntrinsicAlias       < :INTRINSIC Nl? :ALIAS Nl? TypeName
+    IntrinsicType        < :INTRINSIC Nl? :TYPE Nl? TypeName (Nl? TypeParameters)? Nl? Fields
     TypeParameters       < :'<' Nl? TypeParameter (Nl? :',' Nl? TypeParameter)* Nl? :'>'
     TypeParameter        < TypeName
     Params               < (Param (Nl? ',' Nl? Param)*)?

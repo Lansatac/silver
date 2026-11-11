@@ -22,6 +22,8 @@ struct Program
     /// What each sum the program uses can be, in order, which is what a tag indexes. An option
     /// isn't here: it has two members, `None` (0) with no payload and `Some` (1).
     const(Type)[][Type] sumMembers;
+    /// What each `Ref` type the program uses holds.
+    Type[Type] cellContents;
 }
 
 /// A variable. It has an identity of its own because lowering invents temporaries that no
@@ -75,7 +77,7 @@ struct Expr
 
 alias ExprKind = SumType!(UnitLit, BoolLit, IntLit, FloatLit, StringLit, LocalRef, Call, CallClosure, MakeClosure,
     ForeignCall, IntrinsicCall, Prim, Convert, If, Block, Loop, Break, Continue, Return, Construct, Field, Update,
-    Inject, IsMember, Payload, ArrayLit, Index, Slice, Length);
+    Inject, IsMember, Payload, ArrayLit, Index, Slice, Length, Cell);
 
 /// `()`.
 struct UnitLit
@@ -307,6 +309,29 @@ struct Slice
 struct Length
 {
     Expr* array;
+}
+
+/// What a `Ref` is: a place on the heap holding a value, which every copy of the `Ref` shares. A
+/// cell is empty while `update` runs, and using it then panics, except to `Fill` it.
+enum CellOp
+{
+    /// A new cell holding the argument, of the expression's `Ref` type.
+    New,
+    /// What the cell holds.
+    Get,
+    /// Replaces what the cell holds with the second argument, which is evaluated first. Type `Unit`.
+    Set,
+    /// What the cell holds, leaving it empty.
+    Take,
+    /// Puts the second argument in the cell, which is empty. Type `Unit`.
+    Fill,
+}
+
+/// An operation on a cell, the first argument except for `New`.
+struct Cell
+{
+    CellOp op;
+    Expr[] args;
 }
 
 struct Block

@@ -77,6 +77,12 @@ immutable Case[] natives = [
     rejectsDeclaration("intrinsic alias CLong = Int"),
     rejectsDeclaration("intrinsic alias cLong"),
 
+    declaresAs("intrinsic type Ref<T>(value: T)", "(intrinsic type Ref<T> (value: T))"),
+    declaresAs("intrinsic\ntype\nRef<T>\n(value: T)", "(intrinsic type Ref<T> (value: T))"),
+    declaresAs("private intrinsic type Cell(value: Int)", "(private (intrinsic type Cell (value: Int)))"),
+    rejectsDeclaration("intrinsic type Ref<T>"),
+    rejectsDeclaration("intrinsic type Ref<T> = A | B"),
+
     declaresAs(`native library "SDL2"`, `(native library "SDL2")`),
     declaresAs("module sdl.video\nnative library \"SDL2\"\nnative(\"SDL_Init\") def init(flags: UInt32): Int32", [
         "(module sdl.video)",

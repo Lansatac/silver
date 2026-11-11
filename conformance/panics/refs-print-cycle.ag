@@ -1,0 +1,11 @@
+// A cell that leads back to itself can't be printed.
+import std.ref
+
+type Loop(next: Ref<Loop?>)
+
+def main(): Unit {
+    val start = Loop(Ref(None))
+    start.next.set(Some(start))
+    printl("before")
+    printl(start)
+}

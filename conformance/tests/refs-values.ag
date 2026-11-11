@@ -1,0 +1,41 @@
+// A value read from a Ref is a value like any other, and `update` changes the cell in terms of what it held.
+import std.ref
+
+def counterFrom(start: Int): () -> Int {
+    val count = Ref(start)
+    () => {
+        count.update(n => n + 1)
+        count.get()
+    }
+}
+
+def main(): Unit {
+    val names = Ref(["a"])
+    val before = names.get()
+    names.update(all => all ~ ["b"])
+    printl(before)
+    printl(names.get())
+
+    mutable val taken = names.get()
+    taken ~= ["c"]
+    printl(names.get())
+    printl(taken)
+
+    val next = counterFrom(5)
+    _ = next()
+    printl(next())
+    val other = counterFrom(0)
+    printl(other())
+    printl(next())
+
+    val log = Ref("")
+    for i in 0..3 {
+        log.update(text => text ~ "{i};")
+    }
+    printl(log.get())
+
+    val unit = Ref(())
+    unit.update(u => u)
+    unit.set(())
+    printl(unit.get())
+}

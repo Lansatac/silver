@@ -691,6 +691,9 @@ struct TypeDecl
     /// For a member a generic sum declares inline: `typeParams` are the sum's own nodes, the ones
     /// its fields mention, in the sum's order.
     bool inheritsParams;
+    /// `intrinsic type Name(params)`, which the compiler implements. `fields` are its
+    /// constructor's parameters; a value of it has no fields.
+    bool intrinsic;
 }
 
 /// `alias Name = Type`, a second name for a type. Sema expands it, so the backends never see one.
@@ -865,6 +868,10 @@ private string printTypeDecl(const TypeDecl t)
     import std.array : join;
 
     auto name = t.name ~ printTypeParams(t.typeParams);
+    if (t.intrinsic)
+    {
+        return "(intrinsic type " ~ name ~ " (" ~ t.fields.map!(f => f.name ~ ": " ~ printTypeExpr(f.type)).join(", ") ~ "))";
+    }
     if (t.members.length > 0)
     {
         return "(type " ~ name ~ " = " ~ t.members.map!(m => printTypeExpr(m.type)).join(" | ") ~ ")";

@@ -1,0 +1,10 @@
+// Using a Ref from inside its own update panics, since the cell is empty while the change runs.
+import std.ref
+
+def main(): Unit {
+    val r = Ref(1)
+    r.update(n => n + 1)
+    printl(r.get())
+    r.update(n => n + r.get())
+    printl(r.get())
+}

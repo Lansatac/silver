@@ -174,6 +174,11 @@ private final class Lowering
             return [Decl(spanOf(cst, file), DeclKind(alias_))];
         case "Silver.ConstantDeclaration":
             return [Decl(spanOf(cst, file), DeclKind(convertConstantDeclaration(cst)))];
+        case "Silver.IntrinsicType":
+            auto intrinsicType = convertProduct(cst[0], cst.children[$ - 1]);
+            if (cst.children.length > 2) intrinsicType.typeParams = convertTypeParameters(cst[1]);
+            intrinsicType.intrinsic = true;
+            return [Decl(spanOf(cst, file), DeclKind(intrinsicType))];
         case "Silver.IntrinsicAlias":
             auto nameSpan = spanOf(cst[0], file);
             auto placeholder = TypeExpr(ids.next!TypeExpr, nameSpan, TypeExprKind(NamedType([cst[0].matches[0]], null)));
