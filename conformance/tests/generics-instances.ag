@@ -26,6 +26,19 @@ def exchange<T>(mutable slot: T, value: T): T {
 
 def apply<T, U>(value: T, f: (T) -> U): U => f(value)
 
+def unfold<S, T>(state: S, step: (S) -> (T, S)?): [T] {
+    mutable val out: [T] = []
+    mutable val s = state
+    while val pair = step(s) {
+        val (item, after) = pair
+        out ~= [item]
+        s = after
+    }
+    return out
+}
+
+def lift<T>(x: Int, f: (Int) -> T?): T? => f(x)
+
 def main(): Unit {
     printl(twice(1))
     printl(twice(()))
@@ -57,4 +70,16 @@ def main(): Unit {
     printl(apply(4, n => n * 2))
     printl(apply(Box(4), b => b.value > 3))
     printl(apply("a", identity<String>))
+
+    // A lambda's result is promoted to the option its parameter returns, once inference knows it.
+    printl(unfold(0, n => if n == 4 => None else (n * n, n + 1)))
+    printl(unfold((0, 1), (s: (Int, Int)) => {
+        val (a, b) = s
+        if a > 20 {
+            return None
+        }
+        (a, (b, a + b))
+    }))
+    printl(lift(3, x => "x{x}"))
+    printl(lift(3, x => Some(x)))
 }

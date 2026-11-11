@@ -220,6 +220,24 @@ unittest
     analyzedGeneric("    val r = apply(Box(2), b => b.value)").shouldHaveNoDiagnostics();
 }
 
+@("a lambda's inferred result is promoted to the option its parameter returns")
+unittest
+{
+    enum decls = "def unfold<S, T>(state: S, step: (S) -> (T, S)?): T? => None\n"
+        ~ "def lift<T>(x: Int, f: (Int) -> T?): T? => f(x)\n";
+    auto a = analyzedGeneric(`    val pairs = unfold(0, n => (n, n + 1))
+    val early = unfold(0, n => if n > 3 => None else (n, n + 1))
+    val already = lift(1, x => Some(x))
+    val plain = lift(1, x => "a")
+    val nested = lift(1, x => lift(x, y => y))`, decls);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("pairs", 1), "Int?");
+    a.shouldDeclareType(At("early", 1), "Int?");
+    a.shouldDeclareType(At("already", 1), "Int?");
+    a.shouldDeclareType(At("plain", 1), "String?");
+    a.shouldDeclareType(At("nested", 1), "Int?");
+}
+
 @("the first thing that determines a type parameter decides it, with no search for a common type")
 unittest
 {

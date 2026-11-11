@@ -83,7 +83,7 @@ When type arguments aren't written, each type parameter is found from the call a
 
 1. The arguments that have a type of their own, left to right. An argument of type `A` where `T?` is expected gives `T = A`, unless `A` is an option.
 2. The expected type, where there is one, for any parameter still unknown. It's matched against the return type.
-3. The remaining arguments: integer literals, lambdas, `None` and `[]`. A literal whose type is still open takes its default type. A lambda needs its parameter types to be known by now, or annotated, and its body then gives its return type.
+3. The remaining arguments: integer literals, lambdas, `None` and `[]`. A literal whose type is still open takes its default type. A lambda needs its parameter types to be known by now, or annotated, and its body then gives its return type. When the parameter returns an option, as in `(S) -> (T, S)?`, that return type is an option too, so a body ending in `(a, b)` returns `Some((a, b))`, just as it would if the type were written out.
 
 The first thing that determines a parameter decides it. There is no search for a common type, so `pair(1, 2.0)` with `pair<T>(a: T, b: T)` is a type mismatch at the second argument.
 

@@ -263,7 +263,9 @@ private final class TypeChecker
     }
 
     /// The function type of `lambda`, checking its body. `expected` supplies what it leaves out.
-    private Type typeLambda(const Expr expr, const Lambda lambda, const(FunctionData)* expected)
+    /// `optional` says the return it's expected to have is an option whose type isn't known yet, so
+    /// an inferred return that isn't one is promoted to one.
+    private Type typeLambda(const Expr expr, const Lambda lambda, const(FunctionData)* expected, bool optional = false)
     {
         auto wrongCount = expected !is null && expected.params.length != lambda.params.length;
         if (wrongCount)
@@ -300,7 +302,7 @@ private final class TypeChecker
             : expected !is null ? expected.ret : Type.init;
         if (ret == Type.init)
         {
-            ret = inferReturn(*lambda.body);
+            ret = inferReturn(*lambda.body, optional);
         }
         else
         {
@@ -314,8 +316,9 @@ private final class TypeChecker
         return type;
     }
 
-    /// The common type of everything `body` can return, each promoted to it as needed.
-    private Type inferReturn(const Expr body)
+    /// The common type of everything `body` can return, each promoted to it as needed. With
+    /// `optional`, that type is an option, so a body that returns `(a, b)` returns `(a, b)?`.
+    private Type inferReturn(const Expr body, bool optional = false)
     {
         InferredReturn inferred;
         auto bodyType = synthesize(body, BodyContext(_types.error, false, &inferred));
@@ -332,6 +335,8 @@ private final class TypeChecker
             joined = join(joined, _types.none, span, "Return values");
         }
         joined = _declarer.requireTyped(joined, body.span);
+        if (joined == _types.error) return joined;
+        if (optional && joined != _types.never && !_types.isOption(joined)) joined = _declarer.optionOf(joined, body.span);
         if (joined == _types.error) return joined;
 
         foreach (i, type; inferred.types)
@@ -2320,7 +2325,9 @@ private final class TypeChecker
                         // Against a bare parameter, a lambda is its own type when it says all of it.
                         auto annotated = !_types.isFunction(signature.params[i]) && lambda.params.all!(p => p.annotated);
                         if (expectation is null && !annotated) continue;
-                        typed[i] = typeLambda(arg, lambda, expectation);
+                        auto optional = expectation !is null && expectation.ret == Type.init
+                            && _types.isOption(signatureOf(signature.params[i]).ret);
+                        typed[i] = typeLambda(arg, lambda, expectation, optional);
                         bindParams(signature.params[i], typed[i], params, bound);
                         progress = true;
                     }
