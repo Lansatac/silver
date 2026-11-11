@@ -1877,6 +1877,19 @@ unittest
         .shouldReport(DiagnosticCode.AssignToImmutable, At("xs", 2));
 }
 
+@("only a whole element of a named array can be assigned, not a nested one, a slice or a field of one")
+unittest
+{
+    analyzedMain(`mutable val g = [[1]]
+    g[0][0] = 2`).shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("g[0][0]", 1));
+    analyzedMain(`mutable val xs = [1, 2]
+    xs[0..1] = [3]`).shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("xs[0..1]", 1));
+    analyzed("type P(h: [Int])\ndef main(): Unit {\n    mutable val ps = [P([1])]\n    ps[0].h = [2]\n}")
+        .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("ps[0]", 1));
+    analyzed("type P(h: [Int])\ndef main(): Unit {\n    mutable val ps = [P([1])]\n    ps[0].h ~= [2]\n}")
+        .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("ps[0]", 1));
+}
+
 @("~ joins two of the same array or String, and never takes a bare element")
 unittest
 {

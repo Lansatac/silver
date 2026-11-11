@@ -561,15 +561,16 @@ private final class TypeChecker
 
     /// Reports `target` unless it's a mutable binding, a chain of fields rooted at one, or, when
     /// assigned to, an element of one. `use` is what's being done to it, for the message:
-    /// "assigned to", or "passed as `mutable`".
-    private bool checkAssignable(const Expr target, string use = "assigned to")
+    /// "assigned to", or "passed as `mutable`". Within a field path `whole` is false, since an
+    /// element can't be the root of one.
+    private bool checkAssignable(const Expr target, string use = "assigned to", bool whole = true)
     {
         return target.kind.match!(
             (const Identifier _) => checkBindingMutable(target, use),
-            (const MemberAccess access) => checkAssignable(*access.object, use),
+            (const MemberAccess access) => checkAssignable(*access.object, use, false),
             (const IndexExpr index) {
                 auto named = index.object.kind.match!((const Identifier _) => true, _ => false);
-                if (use == "assigned to" && named && asRange(index.index) is null)
+                if (whole && use == "assigned to" && named && asRange(index.index) is null)
                 {
                     return checkBindingMutable(*index.object, use);
                 }
