@@ -15,7 +15,7 @@ A source file has the extension `.ag`. Its top level holds declarations only: `m
 
 Case is significant and enforced. A name starting with an uppercase letter is a type or constructor. A name starting with a lowercase letter or `_` is a value, binding or module.
 
-The reserved words are `alias`, `break`, `continue`, `def`, `else`, `false`, `for`, `if`, `import`, `in`, `intrinsic`, `match`, `module`, `mutable`, `native`, `private`, `return`, `tail`, `true`, `type`, `val`, `while`, `with` and `_`.
+The reserved words are `alias`, `break`, `continue`, `def`, `else`, `false`, `for`, `if`, `import`, `in`, `intrinsic`, `invariant`, `match`, `module`, `mutable`, `native`, `private`, `return`, `tail`, `true`, `type`, `val`, `while`, `with` and `_`.
 
 `test` is reserved only in one position: at the top level, followed by a string. It remains usable as a name everywhere else.
 
@@ -84,4 +84,4 @@ The condition of an `if` or `while`, the iterable of a `for` and the subject of 
 ## Current implementation
 
 - `test` declarations aren't available.
-- `tail` isn't reserved yet.
+- `tail` and `invariant` aren't reserved yet.

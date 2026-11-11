@@ -12,14 +12,15 @@ These documents describe the language as designed. Where the implementation does
 | [Types](language/types.md) | Built-in types, promotion, equality, printing | Mostly implemented |
 | [Numbers](language/numbers.md) | Numeric types, literals, operators, overflow, conversions | Implemented |
 | [Bindings](language/bindings.md) | `val`, `mutable val`, discards, shadowing, constants | Implemented |
-| [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading | Partial: no overloading or tail calls |
+| [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading | Partial: no tail calls |
 | [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented |
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, maps | Implemented, except maps and element assignment |
 | [Strings](language/strings.md) | Text, interpolation, views | Partial: no byte or character views |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
-| [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, `match` | Implemented |
+| [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, invariants, `match` | Implemented, except invariants |
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
+| [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Not implemented |
 | [Modules](language/modules.md) | Files, imports, visibility | Partial: no import forms beyond `import a.b` |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the standard library's natives |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, the test runner | Not implemented |
@@ -31,5 +32,4 @@ These areas are expected but have no settled design, so the documents mention th
 - Interfaces and bounds on type parameters
 - Compile-time evaluation
 - Ranges as values
-- Shared mutable references
 - Program arguments and exit codes

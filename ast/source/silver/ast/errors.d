@@ -75,6 +75,12 @@ enum DiagnosticCode : string
     CannotInferTypeArgument = "T0031",
     /// Something generic code can't do with a value whose type mentions a type parameter.
     OpaqueTypeParameter = "T0032",
+    /// A call or function value that none of the functions of its name fits.
+    NoMatchingOverload = "T0033",
+    /// A call or function value that more than one function of its name fits equally well.
+    AmbiguousOverload = "T0034",
+    /// Two functions of one name in a module that a call couldn't tell apart.
+    DuplicateOverload = "T0035",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

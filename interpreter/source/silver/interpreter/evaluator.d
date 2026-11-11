@@ -586,8 +586,9 @@ final class Evaluator
             (bool b) => b.to!string,
             (double d) => d != d ? "nan" : d.to!string,
             (string s) => s,
-            // An instance is shown as its function is named, without its type arguments.
-            (Closure c) => _program.functions[c.target].name.until('<').to!string,
+            // An instance or overload is shown as its function is named, without its type arguments
+            // or parameter types.
+            (Closure c) => _program.functions[c.target].name.until!(ch => ch == '<' || ch == '(').to!string,
             (_) => assert(0, "lowering formats anything else itself"),
         );
     }

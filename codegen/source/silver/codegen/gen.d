@@ -1628,14 +1628,15 @@ private final class Generator
     }
 
     /// A declared function is named for its module and name. Anything else can share a name, and
-    /// so can two instances whose type arguments name types of different modules alike, so its
-    /// index is added.
+    /// so can two instances or overloads whose types name types of different modules alike, so
+    /// its index is added.
     private string mangled(size_t index)
     {
         import std.string : replace;
 
         auto func = _program.functions[index];
-        if (func.origin == FunctionOrigin.declared && !func.name.canFind('<')) return "@\"%s.%s\"".format(func.moduleName, func.name);
+        auto plain = !func.name.canFind('<') && !func.name.canFind('(');
+        if (func.origin == FunctionOrigin.declared && plain) return "@\"%s.%s\"".format(func.moduleName, func.name);
         return "@\"%s.%s.%s\"".format(func.moduleName, func.name.replace("\"", "'").replace("\\", "/"), index);
     }
 

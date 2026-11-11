@@ -1,0 +1,103 @@
+// Functions of one name, chosen by the types of their arguments.
+
+import overloading_support.shapes
+
+type Point(x: Int, y: Int)
+
+def describe(x: Int): String => "Int {x}"
+def describe(x: String): String => "String {x}"
+def describe(x: Int?): String => if val v = x => "some {v}" else "none"
+def describe(p: Point): String => "Point {p.x} {p.y}"
+def describe<T>(xs: [T]): String => "{length(xs)} values"
+def describe<T>(x: T): String => "something"
+
+def combine(a: Int, b: Int): Int => a + b
+def combine(a: String, b: String): String => a ~ b
+def combine(a: [Int], b: Int): [Int] => a ~ [b]
+
+def apply(f: (Int) -> Int): Int => f(10)
+def apply(f: (Int, Int) -> Int): Int => f(10, 20)
+
+def bump(mutable n: Int): Unit {
+    n += 1
+}
+def bump(mutable s: String): Unit {
+    s = s ~ "!"
+}
+
+def small(x: UInt8): String => "UInt8 {x}"
+def small(x: Bool): String => "Bool {x}"
+
+def wrapped(x: Int?): String => describe(x)
+
+// Calls this module's `printl` when it fits, and the prelude's otherwise.
+def printl(p: Point): Unit => printl("({p.x}, {p.y})")
+
+// An overload of an imported name.
+def area(side: Int): Int => side * side
+
+def main(): Unit {
+    // By the argument's type
+    val maybe: Int? = 2
+    printl(describe(1))
+    printl(describe("a"))
+    printl(describe(maybe))
+    printl(describe(None))
+    printl(describe(Point(1, 2)))
+    printl(describe(true))
+
+    // A more specific generic wins
+    printl(describe([1, 2, 3]))
+    printl(describe(["x"]))
+
+    // A literal adapts to the one overload it fits
+    printl(small(200))
+    printl(small(false))
+
+    // Several arguments
+    printl(combine(1, 2))
+    printl(combine("a", "b"))
+    printl(combine([1], 2))
+
+    // A lambda by its number of parameters
+    printl(apply(x => x + 1))
+    printl(apply((a, b) => a * b))
+
+    // Mutable arguments
+    mutable val n = 1
+    mutable val s = "hi"
+    bump(mutable n)
+    bump(mutable s)
+    printl(n)
+    printl(s)
+
+    // This module's first, then imports
+    printl(Point(3, 4))
+    printl(5)
+    printl(area(Square(2)))
+    printl(area(Circle(1)))
+    printl(area(4))
+    printl(label(Square(1)))
+
+    // Method calls choose the same way, and the receiver is promoted
+    val i = 7
+    printl(i.describe())
+    printl("b".describe())
+    printl(i.wrapped())
+    printl(Circle(2).area())
+
+    // A function value by its expected type
+    val f: (String) -> String = describe
+    val g: (Int?) -> String = describe
+    printl(f("value"))
+    printl(g(None))
+    printl([1, 2].each(describe))
+}
+
+def each(xs: [Int], f: (Int) -> String): [String] {
+    mutable val out: [String] = []
+    for x in xs {
+        out ~= [f(x)]
+    }
+    out
+}

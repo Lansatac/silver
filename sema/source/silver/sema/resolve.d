@@ -16,6 +16,11 @@ alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module, Id!T
 
 alias TypeSymbol = SumType!(Builtin, Id!TypeDecl, Id!AliasDecl, Id!TypeParam);
 
+private bool isFunction(const SymbolId symbol)
+{
+    return symbol.match!((const Id!FunctionDecl _) => true, _ => false);
+}
+
 private bool isConversion(Builtin builtin)
 {
     static immutable Builtin[] notConversions = [Builtin.Never, Builtin.Unit, Builtin.Bool, Builtin.Any];
@@ -77,9 +82,12 @@ package struct Resolution
     const(SymbolId)[][Id!Expr] captures;
     /// Calls like `UInt8(x)`, by the type they convert to.
     Builtin[Id!Expr] conversions;
-    /// For a call `x.f(...)` on a value, what a plain `f` finds at module level. The type
-    /// checker decides whether it's used, since a field of `x` comes first.
-    MethodLookup[Id!Expr] methodLookups;
+    /// For a call `x.f(...)` on a value, the functions a plain `f` finds at module level. The type
+    /// checker decides whether one is used, since a field of `x` comes first.
+    Candidates[Id!Expr] methodLookups;
+    /// Names that could be more than one function, by the name's expression. The type checker
+    /// chooses, so these have no entry in `resolutions`.
+    Candidates[Id!Expr] overloads;
     Declarations declarations;
     /// The `native library` of each module that names one.
     string[string] nativeLibraries;
@@ -102,11 +110,13 @@ package TypeSymbol expandAlias(TypeSymbol symbol, const(AliasDecl*[Id!AliasDecl]
     return symbol;
 }
 
-package struct MethodLookup
+/// The functions a name could be. `groups[0]` is the current module's, which may be empty, and
+/// each later group is one imported module's.
+package struct Candidates
 {
-    const(SymbolId)[] found;
-    /// The module of each entry of `found`, when it's more than one import.
-    string[] owners;
+    Id!FunctionDecl[][] groups;
+
+    size_t count() const => groups.map!(g => g.length).sum;
 }
 
 /// Resolves every name in `program`, reporting problems to `collector`.
@@ -125,6 +135,8 @@ package final class Scope
     /// The modules visible from here: the enclosing module's imports, plus the prelude.
     private const(string)[] _visibleModules;
     private TypeSymbol[string] _typeTable;
+    /// Every function of each name, in declaration order, for a module's scope.
+    private Id!FunctionDecl[][string] _functions;
     /// The lambda this is the outermost scope of, if any, and the local that lambda is bound to
     /// when it's a nested `def`.
     Id!Expr lambda;
@@ -205,6 +217,17 @@ package final class Scope
         _typeTable[name] = type;
     }
 
+    void declareFunction(string name, Id!FunctionDecl func)
+    {
+        if (name !in _scopeTable) _scopeTable[name] = SymbolId(func);
+        _functions[name] ~= func;
+    }
+
+    Id!FunctionDecl[] functionsNamed(string name) const
+    {
+        return _functions.get(name, null).dup;
+    }
+
     override string toString() const
     {
         import std.algorithm : map;
@@ -249,7 +272,8 @@ private final class NameResolver
     private Id!TypeDecl[Id!Expr] _constructions;
     private const(SymbolId)[][Id!Expr] _captures;
     private Builtin[Id!Expr] _conversions;
-    private MethodLookup[Id!Expr] _methodLookups;
+    private Candidates[Id!Expr] _methodLookups;
+    private Candidates[Id!Expr] _overloads;
     private Declarations _declarations;
     private Collector _collector;
     /// Each module's own top-level declarations, by module name.
@@ -292,8 +316,8 @@ private final class NameResolver
         {
             resolveModule(mod.name, mod);
         }
-        return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _declarations,
-            _nativeLibraries);
+        return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
+            _declarations, _nativeLibraries);
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
@@ -331,14 +355,17 @@ private final class NameResolver
                         _collector.reportError(DiagnosticCode.MainInvalidDefinition, func.nameSpan,
                             "`main` can't be private");
                     }
-                    if (moduleScope.resolveLocal(func.name) !is null)
+                    // Overloads with the same parameter types are reported once types are known.
+                    auto existing = moduleScope.resolveLocal(func.name);
+                    auto overloads = existing !is null && func.name != "main" && isFunction(*existing);
+                    if (existing !is null && !overloads)
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, func.nameSpan,
                             "'%s' is already declared in this module".format(func.name));
                     }
                     else
                     {
-                        moduleScope.declare(func.name, SymbolId(func.id));
+                        moduleScope.declareFunction(func.name, func.id);
                     }
                 },
                 (ref const TypeDecl type) {
@@ -636,11 +663,38 @@ private final class NameResolver
         );
     }
 
-    /// What the name `name` is in module `m`, if the module being resolved can see it.
+    /// What the name `name` is in module `m`, if the module being resolved can see it: the first
+    /// visible function, for a name of functions.
     private const(SymbolId)* visibleSymbol(string m, string name)
     {
         auto symbol = _moduleScopes[m].resolveLocal(name);
-        return symbol !is null && isVisible(*symbol, m) ? symbol : null;
+        if (symbol is null) return null;
+        if (isFunction(*symbol))
+        {
+            auto functions = visibleFunctions(m, name);
+            return functions.length == 0 ? null : new SymbolId(functions[0]);
+        }
+        return isVisible(*symbol, m) ? symbol : null;
+    }
+
+    /// The functions named `name` in module `m` that the module being resolved can see.
+    private Id!FunctionDecl[] visibleFunctions(string m, string name)
+    {
+        return _moduleScopes[m].functionsNamed(name).filter!(f => isVisible(SymbolId(f), m)).array;
+    }
+
+    /// The visible functions named `name` in each imported module that has any, a group per module.
+    private Id!FunctionDecl[][] importedFunctions(string name, const Scope scopeTable)
+    {
+        return scopeTable.visibleModules.map!(m => visibleFunctions(m, name)).filter!(g => g.length > 0).array;
+    }
+
+    /// Records `expr` as naming one of `candidates`, or as naming the function when there's one.
+    private Path recordFunctions(const Expr expr, string name, Candidates candidates)
+    {
+        if (candidates.count == 1) return recordValue(expr, name, SymbolId(candidates.groups.joiner.front));
+        _overloads[expr.id] = candidates;
+        return Path(Path.Kind.Value);
     }
 
     private const(TypeSymbol)* visibleType(string m, string name)
@@ -938,7 +992,7 @@ private final class NameResolver
                         (_) {},
                     );
                 }
-                else
+                else if (call.callee.id !in _overloads)
                 {
                     (*call.callee).kind.match!(
                         (const MemberAccess access) => lookUpMethod(expr.id, access.member, scopeTable),
@@ -1115,24 +1169,18 @@ private final class NameResolver
         }
     }
 
-    /// What `f` would be in `x.f(...)`. Own declarations beat imports, as for a plain name.
+    /// The functions `f` could be in `x.f(...)`, grouped as for a plain name. Anything else of this
+    /// module's named `f` hides imported functions, and leaves `f` to be a field.
     private void lookUpMethod(Id!Expr call, string name, const Scope scopeTable)
     {
-        if (auto own = scopeTable.resolveInModule(name))
+        Id!FunctionDecl[] own;
+        if (auto symbol = scopeTable.resolveInModule(name))
         {
-            _methodLookups[call] = MethodLookup([*own]);
-            return;
+            if (!isFunction(*symbol)) return;
+            own = visibleFunctions(_currentModule, name);
         }
-        MethodLookup lookup;
-        foreach (m; scopeTable.visibleModules)
-        {
-            if (auto symbol = visibleSymbol(m, name))
-            {
-                lookup.found ~= *symbol;
-                lookup.owners ~= m;
-            }
-        }
-        if (lookup.found.length > 0) _methodLookups[call] = lookup;
+        auto candidates = Candidates(own ~ importedFunctions(name, scopeTable));
+        if (candidates.count > 0) _methodLookups[call] = candidates;
     }
 
     /// Resolves an identifier or a member access chain, which may start with a module path.
@@ -1160,6 +1208,13 @@ private final class NameResolver
     {
         if (auto local = scopeTable.resolve(name))
         {
+            // A nested def is a local, so a function found here is one of this module's, and
+            // imported functions of the name are tried when none of this module's fits.
+            if (isFunction(*local))
+            {
+                auto own = visibleFunctions(_currentModule, name);
+                return recordFunctions(expr, name, Candidates(own ~ importedFunctions(name, scopeTable)));
+            }
             recordCapture(*local, name, expr.span, scopeTable);
             return recordValue(expr, name, *local);
         }
@@ -1173,6 +1228,10 @@ private final class NameResolver
                 found ~= *symbol;
                 owners ~= m;
             }
+        }
+        if (found.length > 0 && found.all!(f => isFunction(f)))
+        {
+            return recordFunctions(expr, name, Candidates([cast(Id!FunctionDecl[]) null] ~ importedFunctions(name, scopeTable)));
         }
         if (found.length == 1)
         {
@@ -1293,6 +1352,10 @@ private final class NameResolver
             }
             if (auto symbol = visibleSymbol(object.name, access.member))
             {
+                if (isFunction(*symbol))
+                {
+                    return recordFunctions(expr, access.member, Candidates([visibleFunctions(object.name, access.member)]));
+                }
                 return recordValue(expr, access.member, *symbol);
             }
             // `a.b` on the way to `a.b.c`, when `a` and `a.b.c` are imported but `a.b` isn't.

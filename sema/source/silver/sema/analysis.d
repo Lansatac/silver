@@ -135,16 +135,24 @@ final class Analysis
     /// left unresolved (e.g. `x.f` on a value, which types decide).
     const(SymbolId)* resolutionOf(Id!Expr use) const
     {
+        if (auto chosen = use in _typing.chosenSymbols) return chosen;
         return use in _resolution.resolutions;
     }
 
     /// The function a call invokes directly, or null for a call through a value (e.g. a
-    /// function-typed param). Kept apart from `resolutionOf` so that overloading, if added,
-    /// only changes who picks the entry: the type checker.
+    /// function-typed param). The type checker chooses it when the name is overloaded.
     const(Id!FunctionDecl)* calleeOf(Id!Expr call) const
     {
         if (auto method = call in _typing.methodCallees) return method;
+        if (auto chosen = call in _typing.chosenCallees) return chosen;
         return call in _resolution.callees;
+    }
+
+    /// Whether `func` shares its name with another function of its module, so a name built from
+    /// its own isn't enough to tell them apart.
+    bool isOverloaded(Id!FunctionDecl func) const
+    {
+        return (func in _typing.overloaded) !is null;
     }
 
     /// The call `f(x, y)` that `x.f(y)` means, or null if `call` isn't one of those. Its callee is

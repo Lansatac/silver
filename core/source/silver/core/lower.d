@@ -198,12 +198,18 @@ private final class Lowering
                 .format(instanceNestingLimit) ~ "would need endlessly many instances:\n    %-(%s\n    -> %)".format(elided)));
     }
 
-    /// `first<Int>`, or the plain name of a function that isn't generic.
+    /// `first<Int>`, or the plain name of a function that isn't generic. An overloaded one adds its
+    /// declared parameter types, as in `show(Int)`.
     private string instanceName(InstanceKey key)
     {
-        auto name = _analysis.declarationOf(key.decl).name;
-        if (key.args.length == 0) return name;
-        return "%s<%-(%s, %)>".format(name, key.args.map!(a => types.describe(a)));
+        import std.range : iota;
+
+        string name = _analysis.declarationOf(key.decl).name;
+        if (key.args.length > 0) name = "%s<%-(%s, %)>".format(name, key.args.map!(a => types.describe(a)));
+        if (!_analysis.isOverloaded(key.decl)) return name;
+        auto declared = _analysis.signatureOf(key.decl);
+        auto params = declared.params.length.iota.map!(i => (declared.isMutable(i) ? "mutable " : "") ~ types.describe(declared.params[i]));
+        return "%s(%-(%s, %))".format(name, params);
     }
 
     private size_t reserveSlot()
@@ -2323,6 +2329,26 @@ def f(): Int {
 def identity<Int>(x: Int): Int x
 
 def identity<String>(x: String): String x`);
+}
+
+@("each overload is a function of its own, named with its parameter types")
+unittest
+{
+    auto result = loweredFunction(`
+def show(x: Int): Int => x
+def show(x: Bool): Int => 0
+def show<T>(x: [T]): Int => length(x)
+
+def f(): Int => show(1) + show(true) + show(["a"])
+`, "f");
+    print(result.program).should.equal(
+`def f(): Int Add(Add(show(Int)(1), show(Bool)(true)), show<String>([String])(["a"]))
+
+def show(Int)(x: Int): Int x
+
+def show(Bool)(x: Bool): Int 0
+
+def show<String>([String])(x: [String]): Int length(x)`);
 }
 
 @("an instance's body, lambdas and types have no type parameter left in them")

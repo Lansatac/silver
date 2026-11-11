@@ -112,15 +112,39 @@ The receiver behaves as any first argument does. It takes part in overload selec
 
 ## Overloading
 
-Functions can be overloaded on all of their parameters, and `f(x)` and `x.f()` select in the same way.
+Functions can be overloaded on all of their parameters, and `f(x)` and `x.f()` choose in the same way.
 
+```silver
+def describe(x: Int): String => "Int {x}"
+def describe(x: String): String => "String {x}"
+def describe<T>(xs: [T]): String => "{length(xs)} values"
+
+describe(1)        // describe(Int)
+describe("a")      // describe(String)
+describe([true])   // describe<T>([T])
+```
+
+- Two `def`s of one name in a scope are allowed when their parameter types differ. A different return type doesn't make them differ, and neither does `mutable` alone, an alias of the same type, or other names for the type parameters.
 - A local or parameter holding a function wins outright and isn't overloaded.
-- Candidates in the current module are tried before imports, so a new overload in a library can at worst cause an ambiguity error and can never silently change a call.
-- Two `def`s of one name in a scope are allowed when their parameter types differ.
+- The type a call is expected to have never chooses, since functions aren't overloaded on their return type.
+
+A call chooses among the functions of its name like this:
+
+1. Only those taking as many arguments are candidates, and as many type arguments when some are written. If that leaves one, it's called as a function with no overloads would be.
+2. Each argument that has a type of its own is typed, once. Some arguments' types depend on where they go, and those are compared with each candidate's parameter by their shape instead: literals, `None`, `[]`, lambdas, names of generic or overloaded functions, and arrays, tuples and `Some`s made only of these. They're checked against the chosen function's parameters afterwards. A lambda fits a function parameter that takes as many parameters as it does, with the types it annotates.
+3. An argument fits its parameter exactly, or by a conversion: promotion to an option, becoming a member of a sum, or a literal taking a type other than its default. A candidate that fits every argument beats another if it fits each argument at least as well and one of them better. When two fit every argument equally well, a function that isn't generic beats a generic one, and a generic function beats another that takes everything it takes, as `f<T>(x: [T])` beats `f<T>(x: T)`.
+4. If no candidate fits, or more than one fits better than all the others, the call is an error.
+
+The current module's functions come first. Imported functions are only tried when none of the current module's fits, and then only one imported module's functions may fit: if functions from two modules fit, the call is ambiguous even if one fits better, and qualifying it resolves that. So a new overload in a library can at worst cause an ambiguity error, and can never silently change a call. It also means a module can declare its own `printl(p: Point)` and still call the prelude's `printl` with anything else.
+
+An overloaded function used as a value is the one whose type is exactly the expected type, so it needs one:
+
+```silver
+val show: (String) -> String = describe
+```
 
 ## Open questions
 
-- Details of overload selection, as currently proposed: no overloading on the return type or on `mutable` alone; each argument is typed at most once; arguments with a type select first, and a lambda is then checked against the one remaining candidate; exact matches beat adaptation and promotion, and a literal prefers its default type; two equally good matches are an error; a function used as a value needs an expected type when overloaded.
 - Whether `x.f()` can drop its parentheses.
 - Whether a method call can have a `mutable` receiver.
 - Method calls through `?.`, as in `a?.f()`.
@@ -129,8 +153,10 @@ Functions can be overloaded on all of their parameters, and `f(x)` and `x.f()` s
 ## Current implementation
 
 - A nested function can call itself and those declared before it, but not one declared after it.
-- Overloading isn't available, so every call is resolved by name alone.
-- In a method call, the receiver must be exactly the first parameter's type, with no adaptation or promotion, and its type doesn't choose between functions. For a generic function, that's the type once the type arguments are found, with the receiver as the first argument for inference.
+- Only module-level functions can be overloaded. Two nested `def`s of one name in a block are an error.
+- When more than one candidate is left, an argument with a type of its own is typed before any is chosen, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.
+- A method call's receiver needs a type of its own, so `None.f()` and `[].f()` are errors. An integer literal receiver adapts, as in `(200).f()` with `f(x: UInt8)`.
+- Two native functions of one name in a module have to bind different C symbols, and two intrinsics can't share a name.
 - A `mutable` first parameter is rejected for a method call. A later `mutable` argument is fine.
 - A native function can't be used as a function value in compiled programs.
 - `tail` isn't available.

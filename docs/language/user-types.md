@@ -38,6 +38,47 @@ val chained = point with (x = 1) with (y = 2)
 
 The result has the original's type. Each value is checked against its field, so literals adapt and options promote. There must be at least one update, and two updates can't overlap. `with` can't be used on tuples or on a sum value.
 
+### Invariants
+
+A product can state a condition that every value of it meets:
+
+```silver
+type Percent(value: Int) invariant 0 <= value && value <= 100
+type Span(low: Int, high: Int) invariant low <= high
+type NonEmpty<T>(items: [T]) invariant length(items) > 0
+```
+
+The invariant is a `Bool` expression over the fields. A name in it refers to a field first, and otherwise resolves as it would in a function of the module, so it can call functions and use constants, private ones included. A marker has no fields and can't have one.
+
+A value that would break its invariant is never produced: the program panics instead, with a message naming the type and showing the invariant. So a function that receives a `Span` never checks it again. The invariant is checked wherever a value of the type comes about, in the type's own module as much as anywhere else:
+
+- **Construction**, including through an alias and through the constructor used as a function value. When every argument is a literal and the invariant uses only what a constant's initializer may, a violation is a compile error, as `UInt8(256)` is.
+- **`with`**, once, after every update is applied. `span with (low = 5, high = 9)` is fine even where `low = 5` alone would cross `high`, which makes `with` the way to change several fields together.
+- **Assigning a field** of a `mutable val` or a mutable parameter, after the write. Assigning through a path such as `line.start.x = 2` checks each type along the path, innermost first.
+- **A `mutable` argument written back**, for the types around the place it's written to. After `advance(mutable line.start)`, `Line` is checked; `advance` has already kept `Point`'s.
+
+Reading a field, matching and destructuring check nothing. Equality and printing are unchanged.
+
+An invariant should have no effects. How many times it's evaluated isn't specified, so a check that can't fail, such as one after assigning a field the invariant doesn't mention, may be skipped.
+
+A construction that can fail without stopping the program is an ordinary function that returns an option, sharing the condition with the invariant by name:
+
+```silver
+def isPercent(value: Int): Bool => 0 <= value && value <= 100
+
+type Percent(value: Int) invariant isPercent(value)
+
+def percent(value: Int): Percent? => if isPercent(value) => Percent(value) else None
+```
+
+In a generic type the invariant is checked once, where it's written, like a generic function's body. So it can't compare, order or print a value whose type mentions a type parameter.
+
+A member that a sum declares inline can have an invariant, written in parentheses, since `|` would otherwise read as the operator:
+
+```silver
+type Shape = Circle(radius: Float) invariant (radius > 0.0) | Square(side: Float) | Nothing
+```
+
 ## Sums
 
 Every member of a sum is a type.
@@ -124,7 +165,11 @@ val r = if val Circle(radius) = shape => radius else 0.0
 - Guards on match arms
 - Named patterns, alongside named arguments
 - A one-member sum over an existing type, such as `type Id = Int`, is a nominal wrapper with implicit injection. It may be rejected if it proves a footgun.
+- A built-in checked construction that returns `T?` where the invariant doesn't hold.
+- Whether the panic for a broken invariant shows the value's fields.
+- An invariant that's costly to check, or that a module maintains step by step, such as a sorted array. Checking it at every construction is too slow. This is what `opaque type` is for; see [Modules](modules.md).
 
 ## Current implementation
 
-Everything above is implemented.
+- Invariants aren't available, and `invariant` isn't reserved yet.
+- Everything else above is implemented.

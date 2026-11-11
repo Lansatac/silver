@@ -17,7 +17,7 @@ def computeQualified(): Float => some.library.helper(1.0)
 `import a.b` gives both unqualified access (`name`) and qualified access (`a.b.name`).
 
 - A module's own declarations beat imports.
-- A name provided by two imports is an error only where it is used, and qualifying it resolves that.
+- A name provided by two imports is an error only where it is used, and qualifying it resolves that. For functions, that's a call that functions of both fit: see [overloading](functions.md#overloading).
 - Imports are private, so they aren't transitive.
 - Module paths exist only at compile time and aren't values.
 - Each module runs once per program.
@@ -62,7 +62,7 @@ Imports can also be renamed. A symbol's identity is its declaring module, so rea
 - How source roots are found. The leaning is that the compiler takes named roots only for other packages, and a file's own root comes from its declaration.
 - The syntax for renamed imports.
 - A visibility level wider than a file and narrower than public.
-- How a module keeps a type's invariants. A type's fields are all public, so anyone can construct it or use `with` on it. An `opaque type`, with a public name and a constructor, fields and patterns private to its module, is the leading candidate.
+- How a module hides a type's representation. A type's fields are all public, so anyone can construct it, read it or use `with` on it. A condition on the fields is an [invariant](user-types.md#invariants). What that can't cover is a representation that should be free to change, or a condition too costly to check at every construction. An `opaque type`, with a public name and a constructor, fields and patterns private to its module, is the planned answer, to follow invariants.
 
 ## Current implementation
 

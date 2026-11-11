@@ -2479,12 +2479,13 @@ unittest
     analyzed(f ~ "    val r = qq.f(zz)\n}").shouldReport(DiagnosticCode.MutabilityMismatch, At("zz", 2));
 }
 
-@("a receiver has to be exactly the first parameter's type")
+@("a receiver is promoted as any first argument is, but a value doesn't convert")
 unittest
 {
     analyzed("def f(x: UInt8): Int => 1\ndef main(): Unit {\n    val qq = 1\n    val r = qq.f()\n}")
         .shouldReport(DiagnosticCode.TypeMismatch, At("qq", 2));
-    analyzed("def f(x: Int?): Int => 1\ndef main(): Unit {\n    val qq = 1\n    val r = qq.f()\n}")
+    analyzed("def f(x: Int?): Int => 1\ndef main(): Unit {\n    val qq = 1\n    val r = qq.f()\n}").shouldHaveNoDiagnostics();
+    analyzed("def f(x: Int): Int => 1\ndef main(): Unit {\n    val qq: Int? = 1\n    val r = qq.f()\n}")
         .shouldReport(DiagnosticCode.TypeMismatch, At("qq", 2));
 }
 

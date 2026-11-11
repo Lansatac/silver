@@ -31,6 +31,12 @@ package struct Typing
     const(Expr)[][Id!Expr] concatOperands;
     const(CallExpr)*[Id!Expr] methodCalls;
     Id!FunctionDecl[Id!Expr] methodCallees;
+    /// For each overloaded name, the function chosen, by the name's expression.
+    SymbolId[Id!Expr] chosenSymbols;
+    /// For each call of an overloaded name, the function chosen, by the call.
+    Id!FunctionDecl[Id!Expr] chosenCallees;
+    /// The functions that share their name with another of their module.
+    bool[Id!FunctionDecl] overloaded;
     Type[Id!TypeDecl] nominalTypes;
     Type[][Id!TypeDecl] members;
     Type[Id!Expr] constructedMembers;
@@ -116,6 +122,9 @@ private final class TypeChecker
     private Type[][Id!Expr] _typeArguments;
     private const(CallExpr)*[Id!Expr] _methodCalls;
     private Id!FunctionDecl[Id!Expr] _methodCallees;
+    private SymbolId[Id!Expr] _chosenSymbols;
+    private Id!FunctionDecl[Id!Expr] _chosenCallees;
+    private bool[Id!FunctionDecl] _overloaded;
     private const(Expr)[][Id!Expr] _concatOperands;
     /// What each sum's values can be, in declaration order.
     private Type[][Id!TypeDecl] _members;
@@ -179,6 +188,11 @@ private final class TypeChecker
 
         foreach (mod; programModules)
         {
+            checkOverloads(mod);
+        }
+
+        foreach (mod; programModules)
+        {
             foreach (decl; mod.declarations)
             {
                 decl.kind.match!(
@@ -215,7 +229,7 @@ private final class TypeChecker
         }
 
         return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes, _updatePaths, _constants, _promotions,
-            _typeArguments, _concatOperands, _methodCalls, _methodCallees, _nominalTypes, _members, _constructedMembers,
+            _typeArguments, _concatOperands, _methodCalls, _methodCallees, _chosenSymbols, _chosenCallees, _overloaded, _nominalTypes, _members, _constructedMembers,
             _patternSubjects, _patternMembers, _patternConstructors);
     }
 
@@ -2094,17 +2108,623 @@ private final class TypeChecker
 
     private Type synthesizeCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected)
     {
+        Type[] typed;
+        if (auto candidates = call.callee.id in _resolutions.overloads)
+        {
+            typed = new Type[call.args.length];
+            auto chosen = chooseFunction(*call.callee, spelling(*call.callee), typeArgsOf(*call.callee), *candidates,
+                call, typed, false, ctx);
+            if (!chosen.isValid)
+            {
+                _exprTypes[call.callee.id] = _types.error;
+                typeUnchosen(call, typed, ctx);
+                return _types.error;
+            }
+            _chosenSymbols[call.callee.id] = SymbolId(chosen);
+            _chosenCallees[expr.id] = chosen;
+        }
         auto generic = genericUse(expr);
-        if (generic.found) return applyGeneric(expr, generic, call, expected, ctx);
+        if (generic.found) return applyGeneric(expr, generic, call, expected, ctx, typed);
         // A function named directly is called, not used as a value, so an intrinsic can be.
-        if (auto function_ = expr.id in _resolutions.callees)
+        if (auto function_ = calleeOf(expr.id))
         {
             rejectTypeArguments(typeArgsOf(*call.callee), spelling(*call.callee), call.callee.span);
             auto calleeType = symbolType(SymbolId(*function_));
             _exprTypes[call.callee.id] = calleeType;
-            return applyCallee(calleeType, call, expr.span, ctx);
+            return applyCallee(calleeType, call, expr.span, ctx, typed);
         }
         return applyCallee(synthesize(*call.callee, ctx), call, expr.span, ctx);
+    }
+
+    /// Whether `expr` names an overloaded function or calls one, which are chosen as they're checked.
+    private bool isOverloadedUse(const Expr expr)
+    {
+        if (expr.id in _resolutions.overloads) return true;
+        return expr.kind.match!((const CallExpr call) => (call.callee.id in _resolutions.overloads) !is null, _ => false);
+    }
+
+    private const(SymbolId)* resolutionOf(Id!Expr name)
+    {
+        if (auto chosen = name in _chosenSymbols) return chosen;
+        return name in _resolutions.resolutions;
+    }
+
+    private const(Id!FunctionDecl)* calleeOf(Id!Expr call)
+    {
+        if (auto chosen = call in _chosenCallees) return chosen;
+        return call in _resolutions.callees;
+    }
+
+    /// How well an argument fits a parameter, worst first.
+    private enum Fit { none, converted, exact }
+
+    /// One candidate of an overloaded call, tried against its arguments.
+    private struct Trial
+    {
+        Id!FunctionDecl func;
+        Fit[] fits;
+        /// Why it doesn't fit, or null when it does.
+        string problem;
+
+        bool fitsAll() const => problem is null;
+    }
+
+    /// Chooses which of `candidates` a call of `name` invokes, reporting it when none or several
+    /// do. Each argument with a type of its own is synthesized first, once, and its type is left
+    /// in `typed`; the rest only have to have the right shape, and are checked once one is chosen.
+    private Id!FunctionDecl chooseFunction(const Expr name, string spelled, const(TypeExpr)[] written,
+        const Candidates candidates, const CallExpr call, Type[] typed, bool hasReceiver, BodyContext ctx)
+    {
+        auto args = call.args;
+        Trial[][] groups;
+        foreach (group; candidates.groups)
+        {
+            groups ~= group.map!(f => arityTrial(f, args.length, written.length)).array;
+        }
+        auto plausible = groups.joiner.filter!(t => t.fitsAll).array;
+        // One candidate is called as a lone function is, so its arguments can adapt to it.
+        if (plausible.length == 1) return plausible[0].func;
+        if (plausible.length == 0)
+        {
+            reportNoOverload(name.span, spelled, groups);
+            return Id!FunctionDecl.init;
+        }
+
+        foreach (i, arg; args)
+        {
+            if (typed[i] == Type.init && (call.isMutable(i) || !isShaped(arg))) typed[i] = synthesize(arg, ctx);
+        }
+        auto writtenTypes = written.map!(w => quietlyResolved(w)).array;
+        foreach (ref group; groups)
+        {
+            foreach (ref trial; group)
+            {
+                if (trial.fitsAll) fitTrial(trial, call, typed, writtenTypes, hasReceiver);
+            }
+        }
+        // An argument whose type is already an error fits anything, so it would only add to it.
+        auto reportable = !typed.any!(t => t != Type.init && _types.mentionsError(t));
+
+        auto own = groups[0].filter!(t => t.fitsAll).array;
+        if (own.length > 0) return bestTrial(own, name.span, spelled, reportable);
+        auto imported = groups[1 .. $].map!(g => g.filter!(t => t.fitsAll).array).filter!(g => g.length > 0).array;
+        if (imported.length == 1) return bestTrial(imported[0], name.span, spelled, reportable);
+        if (imported.length > 1)
+        {
+            if (reportable) reportImportedOverloads(name.span, spelled, imported.map!(g => g[0].func).array);
+            return Id!FunctionDecl.init;
+        }
+        if (reportable) reportNoOverload(name.span, spelled, groups);
+        return Id!FunctionDecl.init;
+    }
+
+    /// `f` as a candidate for a call with `count` arguments and `written` type arguments, failed
+    /// already if those can't fit it.
+    private Trial arityTrial(Id!FunctionDecl f, size_t count, size_t written)
+    {
+        auto trial = Trial(f);
+        auto params = signatureOf(f).params.length;
+        auto typeParams = _resolutions.declarations.functions[f].typeParams.length;
+        if (params != count)
+        {
+            trial.problem = "takes %s argument%s".format(params, params == 1 ? "" : "s");
+        }
+        else if (written > 0 && typeParams != written)
+        {
+            trial.problem = typeParams == 0 ? "isn't generic" : "takes %s type arguments".format(typeParams);
+        }
+        return trial;
+    }
+
+    /// Fills in how well each argument fits `trial`'s function, or why one doesn't.
+    private void fitTrial(ref Trial trial, const CallExpr call, const(Type)[] typed, const(Type)[] written, bool hasReceiver)
+    {
+        auto params = _resolutions.declarations.functions[trial.func].typeParams;
+        auto signature = signatureOf(trial.func);
+        Substitution bound;
+        foreach (i, type; written) bound[params[i].id] = type;
+        foreach (i, type; typed)
+        {
+            if (type != Type.init && !isIntLiteral(call.args[i])) bindParams(signature.params[i], type, params, bound);
+        }
+
+        string argument(size_t i) => hasReceiver && i == 0 ? "the receiver" : "argument %s".format(hasReceiver ? i : i + 1);
+        trial.fits = new Fit[call.args.length];
+        foreach (i, arg; call.args)
+        {
+            if (call.isMutable(i) != signature.isMutable(i))
+            {
+                trial.problem = call.isMutable(i)
+                    ? "%s is passed as `mutable`, and its parameter isn't".format(argument(i))
+                    : "%s has to be passed as `mutable`".format(argument(i));
+                return;
+            }
+            auto param = _types.substitute(signature.params[i], bound);
+            // A literal receiver has been synthesized to look for a field, but still adapts.
+            auto byShape = typed[i] == Type.init || isIntLiteral(arg);
+            auto fit = byShape ? shapeFit(arg, param, params) : typedFit(typed[i], param, params, call.isMutable(i));
+            if (fit == Fit.none)
+            {
+                auto type = typed[i] == Type.init ? literalType(arg) : typed[i];
+                trial.problem = type == Type.init
+                    ? "%s can't be `%s`".format(argument(i), _types.describe(param))
+                    : "%s is `%s`, not `%s`".format(argument(i), _types.describe(type), _types.describe(param));
+                return;
+            }
+            trial.fits[i] = fit;
+        }
+    }
+
+    /// How well an argument of type `actual` fits `param`, which may still mention some of the
+    /// candidate's own `params`.
+    private Fit typedFit(Type actual, Type param, const(TypeParam)[] params, bool mutable)
+    {
+        if (actual == _types.error || actual == _types.never || _types.mentionsError(param)) return Fit.exact;
+        if (mentionsAny(param, params)) return couldBe(param, actual, params) ? Fit.exact : Fit.none;
+        if (actual == param) return Fit.exact;
+        if (mutable) return Fit.none;
+        return isAssignable(actual, param) ? Fit.converted : Fit.none;
+    }
+
+    private bool mentionsAny(Type type, const(TypeParam)[] params)
+    {
+        return params.any!(p => _types.mentionsParameter(type, p.id));
+    }
+
+    /// Whether `declared`, in which any of `params` could be any type, could take a value of `actual`.
+    private bool couldBe(Type declared, Type actual, const(TypeParam)[] params)
+    {
+        if (actual == _types.error || actual == _types.never) return true;
+        if (!mentionsAny(declared, params)) return isAssignable(actual, declared);
+        auto data = _types[actual];
+        return _types[declared].match!(
+            (const TypeParamData _) => true,
+            (const OptionData o) => (_types.isOption(actual) && couldBe(o.inner, _types.optionInner(actual), params))
+                || couldBe(o.inner, actual, params),
+            (const ArrayData a) => actual == _types.emptyArray
+                || _types.isArray(actual) && couldBe(a.element, _types.arrayElement(actual), params),
+            (const TupleData t) => data.match!(
+                (const TupleData u) => u.elements.length == t.elements.length
+                    && t.elements.length.iota.all!(i => couldBe(t.elements[i], u.elements[i], params)),
+                _ => false,
+            ),
+            (const FunctionData f) => data.match!(
+                (const FunctionData g) => g.params.length == f.params.length && g.mutables == f.mutables
+                    && f.params.length.iota.all!(i => couldBe(f.params[i], g.params[i], params))
+                    && couldBe(f.ret, g.ret, params),
+                _ => false,
+            ),
+            (const NominalData n) => data.match!(
+                (const NominalData m) => m.decl == n.decl
+                    ? n.args.length.iota.all!(i => couldBe(n.args[i], m.args[i], params))
+                    : _members.get(n.decl, null).any!(member => declOf(member) == m.decl),
+                _ => false,
+            ),
+            _ => false,
+        );
+    }
+
+    /// An argument that isn't synthesized to choose an overload, because its type depends on where
+    /// it goes, or because it can be compared with a parameter as it's written: a literal, `None`,
+    /// `[]`, a lambda, a generic or overloaded name, or an array, tuple or `Some` of those.
+    private bool isShaped(const Expr arg)
+    {
+        if (isUntyped(arg)) return true;
+        return arg.kind.match!(
+            (const BoolLiteral _) => true,
+            (const FloatLiteral _) => true,
+            (const StringLiteral _) => true,
+            (const UnitLiteral _) => true,
+            (const ArrayLiteral literal) => literal.elements.all!(e => isShaped(e)),
+            (const TupleLiteral literal) => literal.elements.all!(e => isShaped(e)),
+            (const SomeExpr some) => isShaped(*some.value),
+            _ => false,
+        );
+    }
+
+    /// How well `arg`, one that `isShaped`, fits `param`, which may still mention `params`.
+    private Fit shapeFit(const Expr arg, Type param, const(TypeParam)[] params)
+    {
+        if (_types.mentionsError(param)) return Fit.exact;
+        if (param == _types.any) return Fit.converted;
+        auto bare = _types[param].match!((const TypeParamData p) => params.canFind!(q => q.id == p.param), _ => false);
+        auto members = membersOf(param);
+        bool sumHas(bool delegate(Type) test) => members.any!(m => test(m));
+        // Inside an option, a fit is at best a conversion, since the value is promoted.
+        Fit inOption(Fit delegate(Type) inner)
+        {
+            if (!_types.isOption(param)) return inner(param);
+            return min(inner(_types.optionInner(param)), Fit.converted);
+        }
+
+        if (isIntLiteral(arg))
+        {
+            if (bare || param == _types.int_) return Fit.exact;
+            auto inner = _types.isOption(param) ? innermost(param) : param;
+            auto numeric = isNumeric(inner) || params.canFind!(p => inner == parameterType(p))
+                || sumHas(m => isNumeric(m));
+            return numeric ? Fit.converted : Fit.none;
+        }
+        if (isLambda(arg))
+        {
+            auto lambda = arg.kind.match!((const Lambda l) => l, (_) => Lambda.init);
+            if (bare) return lambda.params.all!(p => p.annotated) ? Fit.exact : Fit.none;
+            bool annotationsFit(const FunctionData f)
+            {
+                foreach (i, p; lambda.params)
+                {
+                    if (!p.annotated) continue;
+                    auto annotated = quietlyResolved(p.type);
+                    auto fits = mentionsAny(f.params[i], params) ? couldBe(f.params[i], annotated, params) : annotated == f.params[i];
+                    if (!fits && annotated != _types.error) return false;
+                }
+                return true;
+            }
+            return inOption((Type t) => _types[t].match!(
+                (const FunctionData f) => f.params.length == lambda.params.length && annotationsFit(f) ? Fit.exact : Fit.none,
+                _ => Fit.none,
+            ));
+        }
+        if (auto candidates = arg.id in _resolutions.overloads)
+        {
+            if (bare) return Fit.none;
+            return inOption((Type t) => _types[t].match!(
+                (const FunctionData f) => candidates.groups.joiner.any!(c => signatureOf(c).params.length == f.params.length)
+                    ? Fit.exact : Fit.none,
+                _ => Fit.none,
+            ));
+        }
+        auto generic = isUntyped(arg) ? genericNamed(arg) : Generic.init;
+        if (generic.found)
+        {
+            if (bare) return Fit.converted;
+            return inOption((Type t) {
+                if (_types.isFunction(generic.type)) return _types.isFunction(t)
+                    && signatureOf(t).params.length == signatureOf(generic.type).params.length ? Fit.exact : Fit.none;
+                auto decl = declOf(t);
+                return decl == declOf(generic.member) || generic.owner != Type.init && decl == declOf(generic.owner)
+                    ? Fit.exact : Fit.none;
+            });
+        }
+        return arg.kind.match!(
+            (const NoneLiteral _) => bare || _types.isOption(param) || sumHas(m => _types.isOption(m)) ? Fit.converted : Fit.none,
+            (const ArrayLiteral literal) {
+                if (literal.elements.length == 0)
+                {
+                    auto array = _types.isArray(param) || _types.isOption(param) && _types.isArray(_types.optionInner(param));
+                    return bare || array || sumHas(m => _types.isArray(m)) ? Fit.converted : Fit.none;
+                }
+                if (bare) return Fit.exact;
+                if (sumHas(m => _types.isArray(m))) return Fit.converted;
+                return inOption((Type t) => _types.isArray(t)
+                    ? literal.elements.map!(e => shapeFit(e, _types.arrayElement(t), params)).fold!min(Fit.exact)
+                    : Fit.none);
+            },
+            (const TupleLiteral literal) {
+                if (bare) return Fit.exact;
+                if (sumHas(m => _types.isTuple(m))) return Fit.converted;
+                return inOption((Type t) {
+                    if (!_types.isTuple(t) || _types.tupleElements(t).length != literal.elements.length) return Fit.none;
+                    auto elements = _types.tupleElements(t);
+                    return literal.elements.length.iota.map!(i => shapeFit(literal.elements[i], elements[i], params))
+                        .fold!min(Fit.exact);
+                });
+            },
+            (const SomeExpr some) {
+                if (bare) return Fit.exact;
+                if (_types.isOption(param)) return shapeFit(*some.value, _types.optionInner(param), params);
+                return sumHas(m => _types.isOption(m)) ? Fit.converted : Fit.none;
+            },
+            _ => literalType(arg) != Type.init ? typedFit(literalType(arg), param, params, false)
+                : assert(0, "only an argument that isShaped is fitted by its shape"),
+        );
+    }
+
+    /// The type of a literal that has only one, or `Type.init` for anything else.
+    private Type literalType(const Expr arg)
+    {
+        return arg.kind.match!(
+            (const BoolLiteral _) => _types.bool_,
+            (const FloatLiteral _) => _types.float_,
+            (const StringLiteral _) => _types.string_,
+            (const UnitLiteral _) => _types.unit,
+            _ => Type.init,
+        );
+    }
+
+    /// The one of `trials` that beats each of the others, reporting it when there isn't one.
+    private Id!FunctionDecl bestTrial(const(Trial)[] trials, Span span, string spelled, bool reportable)
+    {
+        auto winners = trials.filter!(t => trials.all!(u => u.func == t.func || beats(t, u))).array;
+        if (winners.length == 1) return winners[0].func;
+        if (!reportable) return Id!FunctionDecl.init;
+        auto tied = trials.filter!(t => !trials.any!(u => beats(u, t))).map!(t => "`" ~ overloadLabel(t.func) ~ "`").array;
+        _collector.reportError(DiagnosticCode.AmbiguousOverload, span,
+            "This call fits more than one `%s` equally well: %s; convert an argument, or annotate it, to choose one"
+                .format(spelled, tied.join(" and ")));
+        return Id!FunctionDecl.init;
+    }
+
+    /// Whether `a` fits a call better than `b`: at least as well for every argument and better for
+    /// one, or, when they fit every argument alike, by being the more specific function.
+    private bool beats(const Trial a, const Trial b)
+    {
+        bool better, worse;
+        foreach (i; 0 .. a.fits.length)
+        {
+            if (a.fits[i] > b.fits[i]) better = true;
+            if (a.fits[i] < b.fits[i]) worse = true;
+        }
+        if (better || worse) return better && !worse;
+        auto aGeneric = isGenericFunction(a.func), bGeneric = isGenericFunction(b.func);
+        if (aGeneric != bGeneric) return bGeneric;
+        return aGeneric && accepts(b.func, a.func) && !accepts(a.func, b.func);
+    }
+
+    private bool isGenericFunction(Id!FunctionDecl f)
+    {
+        return _resolutions.declarations.functions[f].typeParams.length > 0;
+    }
+
+    /// Whether the generic `wider` takes every list of arguments that `narrower` does: its type
+    /// parameters can be bound so its parameters are exactly `narrower`'s.
+    private bool accepts(Id!FunctionDecl wider, Id!FunctionDecl narrower)
+    {
+        auto widerParams = signatureOf(wider).params;
+        auto narrowerParams = signatureOf(narrower).params;
+        auto typeParams = _resolutions.declarations.functions[wider].typeParams;
+        Substitution bound;
+        foreach (i, param; widerParams) bindParams(param, narrowerParams[i], typeParams, bound);
+        return widerParams.length.iota.all!(i => _types.substitute(widerParams[i], bound) == narrowerParams[i]);
+    }
+
+    /// `type` resolved without reporting anything, to look ahead at a type that's resolved again,
+    /// and reported, where it's checked.
+    private Type quietlyResolved(const TypeExpr type)
+    {
+        auto collector = _collector;
+        _collector = new Collector;
+        scope (exit) _collector = collector;
+        return resolveType(type);
+    }
+
+    private FunctionData signatureOf(Id!FunctionDecl f)
+    {
+        return signatureOf(_symbolTypes[SymbolId(f)]);
+    }
+
+    private FunctionData signatureOf(Type functionType)
+    {
+        return _types[functionType].match!((const FunctionData data) => data, _ => FunctionData.init);
+    }
+
+    /// `f(Int, String)`, or `lib.f<T>(mutable T)` for a function of another module.
+    private string overloadLabel(Id!FunctionDecl f, bool qualified = false)
+    {
+        auto decl = _resolutions.declarations.functions[f];
+        auto signature = signatureOf(f);
+        auto params = signature.params.length.iota
+            .map!(i => (signature.isMutable(i) ? "mutable " : "") ~ _types.describe(signature.params[i])).join(", ");
+        auto typeParams = decl.typeParams.length == 0 ? "" : "<" ~ decl.typeParams.map!(p => p.name).join(", ") ~ ">";
+        auto owner = qualified ? _resolutions.declarations.functionModules[f] ~ "." : "";
+        return owner ~ decl.name ~ typeParams ~ "(" ~ params ~ ")";
+    }
+
+    private void reportNoOverload(Span span, string spelled, const(Trial[])[] groups)
+    {
+        string[] lines;
+        foreach (g, group; groups)
+        {
+            foreach (trial; group) lines ~= "%s %s".format(overloadLabel(trial.func, g > 0), trial.problem);
+        }
+        _collector.reportError(DiagnosticCode.NoMatchingOverload, span,
+            "No `%s` takes these arguments:\n    %-(%s\n    %)".format(spelled, lines));
+    }
+
+    /// Reports a call that functions of more than one imported module fit, one from each of `fits`.
+    private void reportImportedOverloads(Span span, string spelled, const(Id!FunctionDecl)[] fits)
+    {
+        auto modules = fits.map!(f => _resolutions.declarations.functionModules[f]).array;
+        _collector.reportError(DiagnosticCode.AmbiguousName, span,
+            "This call fits a `%s` in more than one imported module (%s); qualify it, as in `%s.%s(...)`"
+                .format(spelled, modules.join(", "), modules[0], spelled));
+    }
+
+    /// Gives each argument of a call that couldn't be chosen a type, without reporting it again.
+    private void typeUnchosen(const CallExpr call, const(Type)[] typed, BodyContext ctx)
+    {
+        foreach (i, arg; call.args)
+        {
+            if (typed[i] == Type.init) checkArgument(arg, _types.error, ctx);
+        }
+    }
+
+    /// An overloaded function used as a value, chosen by the function type it's expected to be.
+    private Type overloadedValue(const Expr name, const Candidates candidates, Type expected)
+    {
+        auto spelled = spelling(name);
+        if (expected == _types.error) return _types.error;
+        if (expected == Type.init || !_types.isFunction(expected))
+        {
+            reportOverloadedValue(name);
+            return _types.error;
+        }
+
+        const(Id!FunctionDecl)[][] matching;
+        foreach (group; candidates.groups)
+        {
+            matching ~= group.filter!(f => valueFits(f, typeArgsOf(name), expected)).array;
+        }
+        const(Id!FunctionDecl)[] fits = matching[0];
+        if (fits.length == 0)
+        {
+            auto imported = matching[1 .. $].filter!(g => g.length > 0).array;
+            if (imported.length > 1)
+            {
+                auto modules = imported.map!(g => _resolutions.declarations.functionModules[g[0]]).array;
+                _collector.reportError(DiagnosticCode.AmbiguousName, name.span,
+                    "A `%s` in more than one imported module (%s) is a `%s`; qualify it, as in `%s.%s`"
+                        .format(spelled, modules.join(", "), _types.describe(expected), modules[0], spelled));
+                return _types.error;
+            }
+            if (imported.length == 1) fits = imported[0];
+        }
+        // A function that isn't generic is more specific than one that is.
+        if (fits.length > 1 && fits.any!(f => !isGenericFunction(f))) fits = fits.filter!(f => !isGenericFunction(f)).array;
+        if (fits.length != 1)
+        {
+            auto all = candidates.groups.joiner.map!(f => "`" ~ overloadLabel(f) ~ "`").array;
+            _collector.reportError(fits.length == 0 ? DiagnosticCode.NoMatchingOverload : DiagnosticCode.AmbiguousOverload,
+                name.span, "%s `%s` is a `%s`; there are %s".format(fits.length == 0 ? "No" : "More than one", spelled,
+                    _types.describe(expected), all.join(", ")));
+            return _types.error;
+        }
+        _chosenSymbols[name.id] = SymbolId(fits[0]);
+        return namedValue(name, SymbolId(fits[0]), expected);
+    }
+
+    /// Whether the function `f`, given the type arguments `written`, can be a value of `expected`.
+    private bool valueFits(Id!FunctionDecl f, const(TypeExpr)[] written, Type expected)
+    {
+        auto params = _resolutions.declarations.functions[f].typeParams;
+        auto type = _symbolTypes[SymbolId(f)];
+        if (written.length > 0 && written.length != params.length) return false;
+        Substitution bound;
+        if (written.length > 0)
+        {
+            foreach (i, param; params) bound[param.id] = quietlyResolved(written[i]);
+        }
+        else
+        {
+            bindParams(type, expected, params, bound);
+            if (params.any!(p => p.id !in bound)) return false;
+        }
+        return _types.substitute(type, bound) == expected;
+    }
+
+    private void reportOverloadedValue(const Expr name)
+    {
+        auto spelled = spelling(name);
+        auto first = (name.id in _resolutions.overloads).groups.joiner.front;
+        _collector.reportError(DiagnosticCode.AmbiguousOverload, name.span,
+            "`%s` is overloaded, so as a value it needs a function type to choose by, as in `val f: %s = %s`"
+                .format(spelled, _types.describe(_symbolTypes[SymbolId(first)]), spelled));
+    }
+
+    /// Reports two functions of one name in `mod` that take the same parameters, and notes which
+    /// functions are overloaded.
+    private void checkOverloads(const Module mod)
+    {
+        Id!FunctionDecl[][string] seen;
+        foreach (decl; mod.declarations)
+        {
+            decl.kind.match!(
+                (const FunctionDecl f) {
+                    // A second `main` is reported by name resolution.
+                    if (f.name == "main") return;
+                    auto earlier = seen.get(f.name, null);
+                    seen[f.name] ~= f.id;
+                    if (earlier.length == 0) return;
+                    _overloaded[f.id] = true;
+                    foreach (e; earlier) _overloaded[e] = true;
+                    foreach (e; earlier)
+                    {
+                        if (reportDuplicateOverload(e, f)) break;
+                    }
+                },
+                (_) {},
+            );
+        }
+    }
+
+    /// Reports `later` if it can't be told apart from `earlier`, an overload declared before it.
+    private bool reportDuplicateOverload(Id!FunctionDecl earlier, const FunctionDecl later)
+    {
+        auto first = _resolutions.declarations.functions[earlier];
+        string problem;
+        if (first.kind == FunctionKind.intrinsic && later.kind == FunctionKind.intrinsic)
+        {
+            problem = "`%s` is already an intrinsic, and an intrinsic's name says which one it is";
+        }
+        else if (first.kind == FunctionKind.native && later.kind == FunctionKind.native && first.symbol == later.symbol)
+        {
+            problem = "`%s` already binds the C symbol `" ~ later.symbol ~ "`; give this one another with `native(\"...\")`";
+        }
+        else if (sameParameters(earlier, later.id))
+        {
+            auto a = signatureOf(earlier), b = signatureOf(later.id);
+            problem = "`%s` already takes `" ~ overloadLabel(earlier)[first.name.length .. $] ~ "`; overloads need different parameter types"
+                ~ (a.mutables == b.mutables ? "" : ", and `mutable` alone doesn't make one");
+        }
+        if (problem is null) return false;
+        _collector.reportError(DiagnosticCode.DuplicateOverload, later.nameSpan, problem.format(later.name));
+        return true;
+    }
+
+    /// Whether `a` and `b` take the same parameter types, apart from what they name their type
+    /// parameters and which parameters are `mutable`.
+    private bool sameParameters(Id!FunctionDecl a, Id!FunctionDecl b)
+    {
+        auto aParams = signatureOf(a).params;
+        auto bParams = signatureOf(b).params;
+        if (aParams.length != bParams.length) return false;
+        auto aTypeParams = _resolutions.declarations.functions[a].typeParams;
+        auto bTypeParams = _resolutions.declarations.functions[b].typeParams;
+        Id!TypeParam[Id!TypeParam] renamed;
+        return aParams.length.iota.all!(i => sameUpToRenaming(aParams[i], bParams[i], aTypeParams, bTypeParams, renamed));
+    }
+
+    private bool sameUpToRenaming(Type a, Type b, const(TypeParam)[] aParams, const(TypeParam)[] bParams,
+        ref Id!TypeParam[Id!TypeParam] renamed)
+    {
+        if (a == b) return true;
+        bool same(Type x, Type y) => sameUpToRenaming(x, y, aParams, bParams, renamed);
+        bool allSame(const(Type)[] xs, const(Type)[] ys) => xs.length == ys.length && xs.length.iota.all!(i => same(xs[i], ys[i]));
+        auto other = _types[b];
+        return _types[a].match!(
+            (const TypeParamData p) => other.match!(
+                (const TypeParamData q) {
+                    if (!aParams.canFind!(t => t.id == p.param) || !bParams.canFind!(t => t.id == q.param)) return false;
+                    if (auto existing = p.param in renamed) return *existing == q.param;
+                    if (renamed.byValue.canFind(q.param)) return false;
+                    renamed[p.param] = q.param;
+                    return true;
+                },
+                _ => false,
+            ),
+            (const OptionData o) => _types.isOption(b) && same(o.inner, _types.optionInner(b)),
+            (const ArrayData x) => _types.isArray(b) && same(x.element, _types.arrayElement(b)),
+            (const TupleData t) => _types.isTuple(b) && allSame(t.elements, _types.tupleElements(b)),
+            (const FunctionData f) => other.match!(
+                (const FunctionData g) => f.mutables == g.mutables && allSame(f.params, g.params) && same(f.ret, g.ret),
+                _ => false,
+            ),
+            (const NominalData n) => other.match!(
+                (const NominalData m) => n.decl == m.decl && allSame(n.args, m.args),
+                _ => false,
+            ),
+            _ => false,
+        );
     }
 
     /// A use of a generic function or constructor: what it has to find, and what it is in terms of
@@ -2145,7 +2765,7 @@ private final class TypeChecker
 
     private Generic genericNamed(const Expr name)
     {
-        auto symbol = name.id in _resolutions.resolutions;
+        auto symbol = resolutionOf(name.id);
         if (symbol is null) return Generic.init;
         Generic g;
         g.name = name.id;
@@ -2326,6 +2946,7 @@ private final class TypeChecker
     /// `[]`, and as with `None`, a generic name with no type arguments that isn't called, like `Nil`.
     private bool isUntyped(const Expr expr)
     {
+        if (expr.id in _resolutions.overloads) return true;
         auto genericName = expr.kind.match!(
             (const Identifier id) => id.typeArgs.length == 0,
             (const MemberAccess access) => access.typeArgs.length == 0,
@@ -2360,8 +2981,9 @@ private final class TypeChecker
 
     /// A call of `g` with `call`'s arguments, whose type arguments are written or inferred. With a
     /// `receiver`, the first argument is a method call's, already synthesized.
+    /// `pretyped` is as for `applyCallee`. `hasReceiver` says the first argument is the `x` of `x.f()`.
     private Type applyGeneric(const Expr expr, const Generic g, const CallExpr call, Type expected, BodyContext ctx,
-        Type receiver = Type.init)
+        const(Type)[] pretyped = null, bool hasReceiver = false)
     {
         auto args = call.args;
         auto sum = g.owner != Type.init && !buildsMember(g, expected);
@@ -2369,7 +2991,7 @@ private final class TypeChecker
         auto shape = sum ? withResult(g.type, g.owner) : g.type;
         auto typed = new Type[args.length];
         auto checked = new bool[args.length];
-        if (receiver != Type.init) typed[0] = receiver;
+        foreach (i, type; pretyped) typed[i] = type;
         void typeTheRest()
         {
             resolveTypeArguments(g.written);
@@ -2454,21 +3076,13 @@ private final class TypeChecker
                 }
             }
         }
-        reportUnbound(expr, g, params, sum, signature, args, typed, receiver != Type.init, bound);
+        reportUnbound(expr, g, params, sum, signature, args, typed, hasReceiver, bound);
 
         auto paramTypes = signature.params.map!(p => _types.substitute(p, bound)).array;
         string[][] places;
         Span[] placeSpans;
         foreach (i, arg; args)
         {
-            if (receiver != Type.init && i == 0)
-            {
-                if (receiver != _types.error && receiver != paramTypes[0] && !_types.mentionsError(paramTypes[0]))
-                {
-                    reportReceiver(g.spelled, paramTypes[0], receiver, arg.span);
-                }
-                continue;
-            }
             if (!call.isMutable(i))
             {
                 if (signature.isMutable(i))
@@ -2517,13 +3131,6 @@ private final class TypeChecker
         check(arg, type, ctx);
     }
 
-    private void reportReceiver(string name, Type param, Type receiver, Span span)
-    {
-        _collector.reportError(DiagnosticCode.TypeMismatch, span,
-            "`%s` takes `%s` first, but this is `%s`, and a receiver isn't converted; write `%s(...)`"
-                .format(name, _types.describe(param), _types.describe(receiver), name));
-    }
-
     /// Reports the first of `params` that nothing bound, as the argument that didn't fit when one
     /// should have bound it, and binds each to `error`.
     private void reportUnbound(const Expr expr, const Generic g, const(TypeParam)[] params, bool sum,
@@ -2561,7 +3168,10 @@ private final class TypeChecker
                 arg.kind.match!(
                     (const NoneLiteral _) { reportUntypedNone(arg.span); },
                     (const ArrayLiteral _) { reportUntypedEmptyArray(arg.span); },
-                    (_) { reportUninferredValue(arg, genericNamed(arg), true); },
+                    (_) {
+                        if (arg.id in _resolutions.overloads) reportOverloadedValue(arg);
+                        else reportUninferredValue(arg, genericNamed(arg), true);
+                    },
                 );
                 continue;
             }
@@ -2617,16 +3227,18 @@ private final class TypeChecker
         return _types.substitute(shape, bound);
     }
 
-    /// `checked` is how many leading arguments have already been checked.
-    private Type applyCallee(Type calleeType, const CallExpr call, Span span, BodyContext ctx, size_t checked = 0)
+    /// `typed` has the type of each argument that has already been given one, and is otherwise
+    /// `Type.init`, or empty when none has.
+    private Type applyCallee(Type calleeType, const CallExpr call, Span span, BodyContext ctx, const(Type)[] typed = null)
     {
+        Type typeOf(size_t i) => i < typed.length ? typed[i] : Type.init;
         // Each argument is checked against its parameter when there is one, and synthesized
         // otherwise, so even a wrong call gives every argument a type and its own errors.
         void synthesizeArgs()
         {
-            foreach (arg; call.args[checked .. $])
+            foreach (i, arg; call.args)
             {
-                synthesize(arg, ctx);
+                if (typeOf(i) == Type.init) synthesize(arg, ctx);
             }
         }
         if (calleeType == _types.error)
@@ -2647,7 +3259,7 @@ private final class TypeChecker
                 Span[] placeSpans;
                 foreach (i, arg; call.args)
                 {
-                    if (i < checked) continue;
+                    auto type = typeOf(i);
                     if (!call.isMutable(i))
                     {
                         if (funcData.isMutable(i))
@@ -2655,17 +3267,18 @@ private final class TypeChecker
                             _collector.reportError(DiagnosticCode.MutabilityMismatch, arg.span,
                                 "This parameter is `mutable`, so the call can change the argument; write `mutable` before it");
                         }
-                        check(arg, funcData.params[i], ctx);
+                        if (type == Type.init) check(arg, funcData.params[i], ctx);
+                        else coerce(arg, type, funcData.params[i]);
                         continue;
                     }
                     if (!funcData.isMutable(i))
                     {
-                        synthesize(arg, ctx);
+                        if (type == Type.init) synthesize(arg, ctx);
                         _collector.reportError(DiagnosticCode.MutabilityMismatch, arg.span,
                             "This parameter isn't `mutable`, so the argument can't be passed as `mutable`");
                         continue;
                     }
-                    if (checkMutableArgument(arg, funcData.params[i], ctx))
+                    if (checkMutableArgument(arg, funcData.params[i], ctx, type))
                     {
                         places ~= placePath(arg);
                         placeSpans ~= arg.span;
@@ -2695,8 +3308,8 @@ private final class TypeChecker
     }
 
     /// `object.f(args)`. A field named `f` comes first; otherwise it's `f(object, args)`, with the
-    /// `f` a plain name finds at module level. The receiver has to be exactly the first
-    /// parameter's type, since it was already synthesized to look for the field.
+    /// `f` a plain name finds at module level. The receiver was synthesized to look for the field,
+    /// so it's an argument that already has its type.
     private Type synthesizeMethodCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected)
     {
         auto access = (*call.callee).kind.match!(
@@ -2716,33 +3329,40 @@ private final class TypeChecker
         if (objectType == _types.error || hasField(objectType, access.member)) return asField();
 
         auto lookup = _resolutions.methodLookups[expr.id];
-        if (lookup.found.length > 1)
-        {
-            _collector.reportError(DiagnosticCode.AmbiguousName, call.callee.span,
-                "'%s' is defined in more than one imported module (%s); call it qualified, e.g. '%s.%s(...)'"
-                    .format(access.member, lookup.owners.join(", "), lookup.owners[0], access.member));
-            return applyCallee(_types.error, call, expr.span, ctx);
-        }
-        Id!FunctionDecl function_;
-        lookup.found[0].match!((const Id!FunctionDecl f) { function_ = f; }, (_) {});
-        if (!function_.isValid) return asField();
-
         auto arguments = (cast(Expr*) access.object)[0 .. 1] ~ cast(Expr[]) call.args;
         auto mutables = call.mutableArgs.length > 0 ? false ~ call.mutableArgs.dup : null;
         auto rewritten = new const CallExpr(cast(Expr*) call.callee, arguments, mutables);
+        _methodCalls[expr.id] = rewritten;
+        auto receiver = requireTyped(objectType, access.object.span);
+        auto typed = new Type[arguments.length];
+        typed[0] = receiver;
+
+        Id!FunctionDecl function_;
+        if (lookup.count == 1)
+        {
+            function_ = lookup.groups.joiner.front;
+        }
+        else if (receiver != _types.error)
+        {
+            function_ = chooseFunction(*call.callee, access.member, access.typeArgs, lookup, *rewritten, typed, true, ctx);
+        }
+        if (!function_.isValid)
+        {
+            _exprTypes[call.callee.id] = _types.error;
+            typeUnchosen(*rewritten, typed, ctx);
+            return _types.error;
+        }
         auto functionType = _symbolTypes[SymbolId(function_)];
         _exprTypes[call.callee.id] = functionType;
-        _methodCalls[expr.id] = rewritten;
         _methodCallees[expr.id] = function_;
 
-        auto receiver = requireTyped(objectType, access.object.span);
         auto decl = _resolutions.declarations.functions[function_];
+        if (!receiverFits(access, functionType, receiver, call.callee.span))
+        {
+            return applyCallee(_types.error, *rewritten, expr.span, ctx, typed);
+        }
         if (decl.typeParams.length > 0)
         {
-            if (!receiverFits(access, functionType, receiver, call.callee.span, false))
-            {
-                return applyCallee(_types.error, *rewritten, expr.span, ctx, 1);
-            }
             Generic g;
             g.name = call.callee.id;
             g.span = call.callee.span;
@@ -2750,17 +3370,15 @@ private final class TypeChecker
             g.written = access.typeArgs;
             g.params = decl.typeParams;
             g.type = functionType;
-            return applyGeneric(expr, g, *rewritten, expected, ctx, receiver);
+            return applyGeneric(expr, g, *rewritten, expected, ctx, typed, true);
         }
         rejectTypeArguments(access.typeArgs, access.member, call.callee.span);
-        auto valid = receiverFits(access, functionType, receiver, call.callee.span, true);
-        return applyCallee(valid ? functionType : _types.error, *rewritten, expr.span, ctx, 1);
+        return applyCallee(functionType, *rewritten, expr.span, ctx, typed);
     }
 
     /// Whether a receiver of type `receiver` can be the first argument of a function of type
-    /// `functionType`, reporting why not. A generic function's receiver is matched once its type
-    /// arguments are known, so `exactly` leaves the type alone.
-    private bool receiverFits(const MemberAccess access, Type functionType, Type receiver, Span calleeSpan, bool exactly)
+    /// `functionType`, reporting why not. Its type is checked as any argument's is.
+    private bool receiverFits(const MemberAccess access, Type functionType, Type receiver, Span calleeSpan)
     {
         if (receiver == _types.error) return false;
         auto signature = _types[functionType].match!(
@@ -2778,11 +3396,6 @@ private final class TypeChecker
             _collector.reportError(DiagnosticCode.MutabilityMismatch, access.object.span,
                 "`%s` changes its first argument, so the write has to show at the call; write `%s(mutable ...)`"
                     .format(access.member, access.member));
-            return false;
-        }
-        if (exactly && receiver != signature.params[0] && signature.params[0] != _types.any)
-        {
-            reportReceiver(access.member, signature.params[0], receiver, access.object.span);
             return false;
         }
         return true;
@@ -2867,7 +3480,8 @@ private final class TypeChecker
 
     private Type synthesizeMemberAccess(const Expr expr, const MemberAccess member, BodyContext ctx, Type expected)
     {
-        // `std.math.pow`: resolution already found the declaration.
+        // `std.math.pow`: resolution already found the declaration, or the functions it could be.
+        if (auto candidates = expr.id in _resolutions.overloads) return overloadedValue(expr, *candidates, expected);
         if (auto symbol = expr.id in _resolutions.resolutions) return namedValue(expr, *symbol, expected);
         // `std.math.nope` or `std.nope`: resolution reported it.
         if (isModulePath(*member.object)) return _types.error;
@@ -3100,6 +3714,7 @@ private final class TypeChecker
 
     private Type synthesizeIdentifier(const Expr expr, Type expected)
     {
+        if (auto candidates = expr.id in _resolutions.overloads) return overloadedValue(expr, *candidates, expected);
         if (auto symbol = expr.id in _resolutions.resolutions) return namedValue(expr, *symbol, expected);
         // Name resolution couldn't find it and has already reported that.
         return _types.error;
@@ -3159,7 +3774,10 @@ private final class TypeChecker
         }
         // What's expected can say what a generic use's type arguments are.
         auto isMethod = expr.kind.match!((const CallExpr call) => isMethodCall(expr.id, *call.callee), _ => false);
-        if (isMethod || genericUse(expr).found) return coerce(expr, synthesizeExact(expr, ctx, expected), expected);
+        if (isMethod || genericUse(expr).found || isOverloadedUse(expr))
+        {
+            return coerce(expr, synthesizeExact(expr, ctx, expected), expected);
+        }
         auto constructed = constructedDecl(expr);
         if (auto owner = constructed in _owners)
         {
