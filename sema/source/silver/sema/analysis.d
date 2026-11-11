@@ -164,6 +164,12 @@ final class Analysis
         return null;
     }
 
+    /// The functions the `for` loop `for_` calls, or null if it loops over an array or `a..b`.
+    const(LoopFunctions)* loopOf(Id!Expr for_) const
+    {
+        return for_ in _typing.loops;
+    }
+
     const(Id!TypeDecl)* constructionOf(Id!Expr call) const
     {
         return call in _resolution.constructions;

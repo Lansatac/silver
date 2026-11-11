@@ -60,11 +60,51 @@ for i in 0..10 {
 }
 ```
 
-`for` takes a block, has value `()`, and drops the body's value. The iterable is either an array or a range `a..b` with integer bounds of one type, with literals adapting to the other bound.
+`for` takes a block, has value `()`, and drops the body's value. The iterable is an array, a range `a..b` with integer bounds of one type, with literals adapting to the other bound, or a value of another type that functions named `length` and `at`, or `next`, loop over.
 
 The iterable is evaluated once, before the loop. The loop variable is immutable, fresh on each iteration, and in scope only in the body. `for _ in` works when the value isn't needed.
 
 A range is half-open. One whose start isn't below its end is empty, and a range ending at a type's maximum doesn't overflow.
+
+### Looping over a value of your own
+
+A value of any other type `R` is looped over by index when there are functions `length(r: R): Int` and `at(r: R, index: Int): T`, and otherwise by stepping it with `next(r: R): (T, R)?`, which returns the next element and the rest, or `None` at the end. Each element is a `T`.
+
+```silver
+type Squares(count: Int)
+
+def length(s: Squares): Int => s.count
+def at(s: Squares, index: Int): Int => index * index
+
+type Countdown(from: Int)
+
+def next(c: Countdown): (Int, Countdown)? =>
+    if c.from == 0 => None else Some((c.from, Countdown(c.from - 1)))
+
+for n in Squares(3) {
+    printl(n)    // 0, 1, 4
+}
+for n in Countdown(3) {
+    printl(n)    // 3, 2, 1
+}
+```
+
+By index, `for x in r { body }` calls `length(r)` once, before the loop, then `at(r, i)` for each `i` from `0` up to the length, in order, even when the loop variable is `_`. By stepping, it means:
+
+```silver
+mutable val rest = r
+while val step = next(rest) {
+    val (x, after) = step
+    rest = after
+    body
+}
+```
+
+`rest` is a hidden variable. It has moved on before the body runs, so `continue` goes to the next element. `next` is called once per element, and once more for the `None` that ends the loop.
+
+Each function used is the one a call at the loop would choose, as in `length(r)`, `at(r, 0)` or `next(r)`. Indexing is used when both a `length` and an `at` take an `R`, whether or not there's a `next`, and `next` only when one of them is missing. Each must take exactly `R`, not an option of it or a `mutable` one; `at`'s index must be exactly `Int`; `length` must return `Int`; and `next` must return `(T, R)?`, with the rest of the same type. No declaration says that a type can be looped over, so a module can make a type it didn't write loopable by writing these functions for it.
+
+An array has a `length` and an `at` in the prelude, and is looped over by index, which never calls a `length` or `at` of your own.
 
 ## break and continue
 
@@ -81,3 +121,8 @@ val result = if isValid => compute() else panic("invalid state")
 ```
 
 How deep a program can recurse isn't specified, and differs between the interpreter and compiled programs.
+
+## Open questions
+
+- A tuple pattern as the loop variable, as in `for (i, x) in pairs`.
+- Whether `for` will require a `Range` interface by name once interfaces exist. A type that works with `for` now would still satisfy it.

@@ -1,0 +1,103 @@
+// `for` over anything but an array or `a..b` steps it with `next`.
+
+import for_support.lines
+
+type Countdown(from: Int)
+
+def next(c: Countdown): (Int, Countdown)? {
+    printl("next {c.from}")
+    if c.from == 0 { return None }
+    return (c.from, Countdown(c.from - 1))
+}
+
+type Seq<T>(step: () -> (T, Seq<T>)?)
+
+def next<T>(s: Seq<T>): (T, Seq<T>)? => s.step()
+
+def upTo(from: Int, to: Int): Seq<Int> =>
+    Seq(() => if from >= to => None else Some((from, upTo(from + 1, to))))
+
+def map<T, U>(s: Seq<T>, f: (T) -> U): Seq<U> =>
+    Seq(() => {
+        val (item, rest) = next(s)?
+        Some((f(item), map(rest, f)))
+    })
+
+def sum<T>(s: Seq<T>, weight: (T) -> Int): Int {
+    mutable val total = 0
+    for item in s {
+        total += weight(item)
+    }
+    return total
+}
+
+def firstOver(s: Seq<Int>, limit: Int): Int? {
+    for n in s {
+        if n > limit {
+            return n
+        }
+    }
+    return None
+}
+
+def noisy(): Countdown {
+    printl("evaluated")
+    return Countdown(1)
+}
+
+def main(): Unit {
+    // `next` is called before each iteration, including the one that ends the loop.
+    for n in Countdown(2) {
+        printl(n)
+    }
+
+    // What's looped over is evaluated once.
+    for n in noisy() {
+        printl(n)
+    }
+
+    // Generic sources, and a range used twice gives the same elements.
+    val words = upTo(1, 4).map(i => "w{i}")
+    for w in words {
+        print(w)
+    }
+    printl("")
+    for w in words {
+        print(w)
+    }
+    printl("")
+    printl(sum(upTo(0, 5), (i: Int) => i * i))
+    printl(firstOver(upTo(0, 100), 41))
+    printl(firstOver(upTo(0, 3), 41))
+
+    // `continue` and `break` act on the stepped loop.
+    for i in upTo(0, 10) {
+        if i % 2 == 0 {
+            continue
+        }
+        if i > 6 {
+            break
+        }
+        printl(i)
+    }
+
+    // Nested, with `_`.
+    mutable val pairs = 0
+    for _ in upTo(0, 3) {
+        for _ in upTo(0, 4) {
+            pairs += 1
+        }
+    }
+    printl(pairs)
+
+    // A `next` found in the module that declares the type.
+    for line in Lines(["one", "two"], 0) {
+        printl(line)
+    }
+    for line in Lines([], 0) {
+        printl("unreachable")
+    }
+
+    val unit = for i in upTo(0, 1) { i }
+    printl(unit)
+}

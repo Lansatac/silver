@@ -1,0 +1,9 @@
+module for_support.lines
+
+// A range whose `next` lives with its type, for a module that imports only the type.
+type Lines(text: [String], at: Int)
+
+def next(lines: Lines): (String, Lines)? {
+    if lines.at == length(lines.text) { return None }
+    return (lines.text[lines.at], Lines(lines.text, lines.at + 1))
+}

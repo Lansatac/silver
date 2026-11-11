@@ -1,0 +1,42 @@
+// `for` over a value with `length` and `at` loops by index, ahead of `next`.
+
+type Squares(count: Int)
+
+def length(s: Squares): Int {
+    printl("length")
+    s.count
+}
+def at(s: Squares, index: Int): Int {
+    printl("at {index}")
+    index * index
+}
+// Never used: indexing wins.
+def next(s: Squares): (Int, Squares)? => panic("stepped")
+
+type Window<T>(items: [T], from: Int, to: Int)
+def length<T>(w: Window<T>): Int => w.to - w.from
+def at<T>(w: Window<T>, index: Int): T => w.items.at(w.from + index)
+
+// Only `length`: stepped.
+type Down(n: Int)
+def length(d: Down): Int => d.n
+def next(d: Down): (Int, Down)? => if d.n == 0 => None else Some((d.n, Down(d.n - 1)))
+
+def main(): Unit {
+    for x in Squares(3) {
+        if x == 1 { continue }
+        printl(x)
+    }
+    for _ in Squares(1) { }
+    for w in Window(["a", "b", "c", "d"], 1, 3) { printl(w) }
+    for d in Down(2) { printl(d) }
+    printl([5, 6].at(1))
+    printl(at([7], 0))
+
+    // What's looped over and its length are evaluated once, before the loop.
+    mutable val count = 0
+    for _ in Window([1, 2, 3], 0, 3) {
+        count += 1
+    }
+    printl(count)
+}

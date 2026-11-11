@@ -1,6 +1,6 @@
 # Proposal: ranges
 
-**Status: exploring, nothing decided.** Nothing here is implemented. It builds on [generics](../language/generics.md) and on the [interfaces proposal](interfaces.md), and it changes parts of that proposal; see "What this changes in the interfaces proposal".
+**Status: exploring.** Only `for` over a value of your own is decided and implemented; the rest is undecided. It builds on [generics](../language/generics.md) and on the [interfaces proposal](interfaces.md), and it changes parts of that proposal; see "What this changes in the interfaces proposal".
 
 Each point below is marked:
 
@@ -55,9 +55,9 @@ def next(c: Countdown): (Int, Countdown)? =>
     if c.from == 0 => None else (c.from, Countdown(c.from - 1))
 ```
 
-## `for` (proposed)
+## `for` (decided and implemented, November 2026)
 
-`for x in e` is sugar, expanded once in lowering:
+`for` is structural for now: it uses the functions a call at the loop would choose, with no interface. The rules are in [control flow](../language/control-flow.md#for). In short, a value is looped over by index when a `length(r): Int` and an `at(r, i: Int): T` take it, and otherwise stepped with `next(r): (T, R)?`, expanded in lowering to:
 
 ```silver
 mutable val rest = e
@@ -68,16 +68,14 @@ while val step = next(rest) {
 }
 ```
 
-The compiler would know two names in the prelude and nothing else:
+Indexing is preferred when both fit, so a random-access range gets an index loop rather than a chain of steps. Arrays have `length` and `at` in the prelude and keep their built-in index loop, and `a..b` keeps its own.
 
-- the interface `Range`, which `for` requires of `e`;
-- the constructor that `a..b` builds, the way `Some` is known. The type it builds is an ordinary product with its `next` written in Silver.
+Because interface conformance in [interfaces.md](interfaces.md) is found by the same call-site lookup, any type that works with `for` today would satisfy a `Range` interface, so `for` can be made to require one later without breaking code.
 
-Everything else is library code, so a user's range is never second-class. A loop over an array or a written `a..b` may be lowered to today's index loop, since nothing can observe the difference.
-
-- **Open**: whether `for` should instead be purely structural, calling whatever `next` is in scope with no interface involved. With call-site conformance the two behave almost the same, and differ mostly in the error for something that isn't a range.
+- **Open**: whether `for` should require `Range` by name once interfaces exist. The two differ mostly in the error for something that isn't a range.
 - **Left out on purpose**: a second interface for things that can be turned into a range (Rust's `IntoIterator`). Addable later.
-- A tuple pattern in `for`, as in `for (i, x) in xs.enumerate()`, comes with the desugaring.
+- **Proposed**: a tuple pattern in `for`, as in `for (i, x) in xs.enumerate()`.
+- `a..b` as a value would be a product with `length` and `at`, and the constructor that `a..b` builds would be known by name, the way `Some` is.
 
 ## Adapters
 
@@ -188,12 +186,12 @@ Not needed for ranges: capability queries (`static if R: Sized`), an explicit ad
 
 ## Open questions
 
-- Whether `for` knows `Range` by name or is purely structural.
+- Whether `for` requires `Range` by name once interfaces exist.
 - Whether the element type as an interface parameter reads well in practice.
 - The spelling of the erased form.
 - `a..b` over integer types other than `Int`, which needs a numeric bound.
 - Strings: not ranges by default, with `.bytes` and `.chars`.
-- Capabilities beyond stepping forward: a known length, stepping from the end, indexing.
+- Capabilities beyond stepping forward and indexing (which `for` now uses): stepping from the end, and how an adapter such as `map` keeps its source's indexing.
 - How a stateful source hands its state back.
 
 ## Before deciding

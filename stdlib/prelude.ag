@@ -7,5 +7,7 @@ intrinsic def printl(value: Any): Unit
 intrinsic def read(): String?
 // How many elements an array has.
 intrinsic def length<T>(values: [T]): Int
+// The element at `index`, as `values[index]` reads it.
+def at<T>(values: [T], index: Int): T => values[index]
 // Stops the program with `message`, for what can't happen.
 intrinsic def panic(message: String): Never

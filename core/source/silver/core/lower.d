@@ -9,7 +9,7 @@ import std.typecons : Rebindable, rebindable;
 import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
 import silver.core.nodes;
-import silver.sema : Analysis, ConstInt, ConstUInt, ConstUnit, ConstValue, FunctionData, Intrinsic, NominalData, Primitive,
+import silver.sema : Analysis, LoopFunction, LoopFunctions, ConstInt, ConstUInt, ConstUnit, ConstValue, FunctionData, Intrinsic, NominalData, Primitive,
     Substitution, SymbolId, Type, TypeTable;
 
 /// `program` as Core, starting from its `main`. `analysis` must have no errors.
@@ -98,6 +98,21 @@ private struct Instance
         auto type = new Type;
         *type = concrete(*member);
         return type;
+    }
+
+    /// The functions the `for` loop `for_` calls, with their type arguments for this instance.
+    const(LoopFunctions)* loopOf(Id!(ast.Expr) for_) const
+    {
+        auto loop = analysis.loopOf(for_);
+        if (loop is null) return null;
+        auto instance = new LoopFunctions;
+        *instance = LoopFunctions(concrete(loop.length), concrete(loop.at), concrete(loop.next));
+        return instance;
+    }
+
+    private LoopFunction concrete(const LoopFunction f) const
+    {
+        return LoopFunction(f.func, f.typeArgs.map!(t => concrete(t)).array);
     }
 
     /// What the type parameters of the generic `name` uses stand for in this instance.
@@ -423,7 +438,7 @@ private final class Lowering
             (const ast.IfExpr if_) => lowerIf(if_, type, span),
             (const ast.BlockExpr block) => lowerBlock(block, type, span),
             (const ast.WhileExpr while_) => lowerWhile(while_, span),
-            (const ast.ForExpr for_) => lowerFor(for_, span),
+            (const ast.ForExpr for_) => lowerFor(e, for_, span),
             (const ast.CallExpr call) => lowerCall(e, call, type),
             (const ast.MemberAccess access) => lowerMember(e, access, type),
             (const ast.SomeExpr some) => make(ExprKind(Inject(1, boxed(lowerExpr(*some.value))))),
@@ -980,10 +995,15 @@ private final class Lowering
         return lowerExpr(body);
     }
 
-    private Expr lowerFor(const ast.ForExpr for_, Span span)
+    private Expr lowerFor(const ast.Expr e, const ast.ForExpr for_, Span span)
     {
         auto range = ast.asRange(&for_.binding.value);
-        if (range is null) return lowerForArray(for_, span);
+        if (range is null)
+        {
+            auto functions = _analysis.loopOf(e.id);
+            if (functions is null || functions.indexed) return lowerForIndexed(for_, functions, span);
+            return lowerForStepped(for_, functions.next, span);
+        }
         auto start = lowerExpr(*range.start);
         auto end = lowerExpr(*range.end);
 
@@ -1007,33 +1027,65 @@ private final class Lowering
         ]);
     }
 
-    /// `for x in xs` evaluates `xs` once, and steps an index before the body, so `continue` can't
-    /// skip it.
-    private Expr lowerForArray(const ast.ForExpr for_, Span span)
+    /// `for x in xs` over an array, or a value with `length` and `at` (`functions`), evaluates `xs`
+    /// and its length once, and steps an index before the body, so `continue` can't skip it. An
+    /// array's element isn't read for `_`, since that can't be seen, but `at` is called.
+    private Expr lowerForIndexed(const ast.ForExpr for_, const(LoopFunctions)* functions, Span span)
     {
-        auto array = lowerExpr(for_.binding.value);
-        auto held = temp("array", array.type);
+        auto source = lowerExpr(for_.binding.value);
+        auto held = temp(functions is null ? "array" : "source", source.type);
         auto count = temp("count", types.int_);
         auto next = temp("next", types.int_, true);
-        auto element = types.isArray(array.type) ? types.arrayElement(array.type) : types.never;
-        auto value = Expr(element, span, ExprKind(Index(boxed(use(held, span)), boxed(use(next, span)))));
-        Stmt[] binds;
-        if (for_.binding.name != discardName)
+        Expr length;
+        Expr value;
+        if (functions is null)
         {
-            auto bindingVar = temp(for_.binding.name, element);
-            _locals[SymbolId(for_.binding.id)] = bindingVar;
-            binds = [let(bindingVar, value)];
+            auto element = types.isArray(source.type) ? types.arrayElement(source.type) : types.never;
+            length = Expr(types.int_, span, ExprKind(Length(boxed(use(held, span)))));
+            value = Expr(element, span, ExprKind(Index(boxed(use(held, span)), boxed(use(next, span)))));
         }
+        else
+        {
+            length = callLoopFunction(functions.length, [use(held, span)], span);
+            value = callLoopFunction(functions.at, [use(held, span), use(next, span)], span);
+        }
+        auto binds = functions is null && for_.binding.name == discardName ? null : bindOrDrop(*for_.binding, value);
         auto label = newLabel();
         auto forBody = loopBody(*for_.body, label);
         return block(span, [
-            let(held, array),
-            let(count, Expr(types.int_, span, ExprKind(Length(boxed(use(held, span)))))),
+            let(held, source),
+            let(count, length),
             let(next, intLiteral(types.int_, 0, span)),
             eval(loop(boxed(block(span, [
                 breakUnless(prim(PrimOp.Less, types.bool_, use(next, span), use(count, span)), label),
             ] ~ binds ~ [
                 assign(next, prim(PrimOp.Add, types.int_, use(next, span), intLiteral(types.int_, 1, span))),
+            ] ~ statementsOf(forBody))), span, label)),
+        ]);
+    }
+
+    /// `for x in r` with `next` is `while val step = next(rest)` over a mutable `rest` that starts
+    /// as `r`. `rest` moves on before the body, so `continue` can't skip it.
+    private Expr lowerForStepped(const ast.ForExpr for_, const LoopFunction stepper, Span span)
+    {
+        auto source = lowerExpr(for_.binding.value);
+        auto rest = temp("rest", source.type, true);
+        auto next = callLoopFunction(stepper, [use(rest, span)], span);
+        auto step = temp("step", next.type);
+        auto stepped = payload(use(step, span), 1);
+        auto pair = temp("pair", stepped.type);
+        auto parts = fieldTypes(pair.type);
+        auto binds = bindOrDrop(*for_.binding, field(use(pair, span), 0, parts[0]));
+        auto label = newLabel();
+        auto forBody = loopBody(*for_.body, label);
+        return block(span, [
+            let(rest, source),
+            eval(loop(boxed(block(span, [
+                let(step, next),
+                breakUnless(isMember(use(step, span), 1), label),
+                let(pair, stepped),
+            ] ~ binds ~ [
+                assign(rest, field(use(pair, span), 1, parts[1])),
             ] ~ statementsOf(forBody))), span, label)),
         ]);
     }
@@ -1221,6 +1273,29 @@ private final class Lowering
                     (Expr[] args, Expr* _) => Expr(signature.ret, span, ExprKind(ForeignCall(symbol, args))));
             case ast.FunctionKind.intrinsic:
                 return lowerIntrinsic(*calleeId, written, signature, span);
+        }
+    }
+
+    /// A call of a function a `for` uses, given its arguments as values.
+    private Expr callLoopFunction(const LoopFunction f, Expr[] args, Span span)
+    {
+        return callDirect(f.func, f.typeArgs.idup, args, span);
+    }
+
+    /// A call of the instance of `callee` with `typeArgs`, given its arguments as values.
+    private Expr callDirect(Id!(ast.FunctionDecl) callee, immutable(Type)[] typeArgs, Expr[] args, Span span)
+    {
+        auto decl = _analysis.declarationOf(callee);
+        auto signature = _analysis.signatureOf(callee, typeArgs);
+        final switch (decl.kind)
+        {
+            case ast.FunctionKind.ordinary:
+                return Expr(signature.ret, span, ExprKind(Call(slotFor(callee, typeArgs), args)));
+            case ast.FunctionKind.native:
+                noteLibrary(callee);
+                return Expr(signature.ret, span, ExprKind(ForeignCall(decl.symbol, args)));
+            case ast.FunctionKind.intrinsic:
+                return intrinsicCall(_analysis.intrinsicOf(callee), args, signature, span);
         }
     }
 

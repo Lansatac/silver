@@ -687,7 +687,7 @@ private final class TypeChecker
             (const MemberAccess member) => synthesizeMemberAccess(expr, member, ctx, expected),
             (const WithExpr with_) => synthesizeWith(expr, with_, ctx),
             (const WhileExpr while_) => synthesizeWhile(while_, expr.span, ctx),
-            (const ForExpr for_) => synthesizeFor(for_, ctx),
+            (const ForExpr for_) => synthesizeFor(expr, for_, ctx),
             (const IfExpr if_) => synthesizeIf(if_, expr.span, ctx),
             (const BlockExpr block) => synthesizeBlock(block, expr.span, ctx),
             (const UnitLiteral _) => _types.unit,
@@ -2804,27 +2804,170 @@ private final class TypeChecker
         return _types.unit;
     }
 
-    private Type synthesizeFor(const ForExpr for_, BodyContext ctx)
+    private Type synthesizeFor(const Expr expr, const ForExpr for_, BodyContext ctx)
     {
         auto iterable = &for_.binding.value;
         auto range = asRange(iterable);
         _typing.symbolTypes[SymbolId(for_.binding.id)] = range is null
-            ? synthesizeForArray(*iterable, ctx)
+            ? synthesizeForValue(expr, *iterable, ctx)
             : synthesizeForRange(*iterable, *range, ctx);
         checkLoopBody(*for_.body, ctx);
         return _types.unit;
     }
 
-    /// The element type of what a `for` loops over, which isn't a range.
-    private Type synthesizeForArray(const Expr iterable, BodyContext ctx)
+    /// The element type of what a `for` loops over, which isn't `a..b`: an array, or a value that
+    /// `length` and `at`, or `next`, loop over.
+    private Type synthesizeForValue(const Expr for_, const Expr iterable, BodyContext ctx)
     {
         auto type = _declarer.requireTyped(synthesize(iterable, ctx), iterable.span);
         if (_types.isArray(type)) return _types.arrayElement(type);
         if (type == _types.error || type == _types.never) return type;
+        auto element = loopElement(for_, iterable, type, ctx);
+        if (element != Type.init) return element;
         _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span,
-            "`for` needs an array or a range, got `%s`".format(_types.describe(type)));
+            "`for` needs an array, a range, or a value that `length` and `at`, or `next`, take; got `%s`"
+                .format(_types.describe(type)));
         return _types.error;
     }
+
+    /// A function a `for` calls, as `loopFunction` finds it.
+    private struct LoopUse
+    {
+        LoopFunction use;
+        /// With the type arguments filled in.
+        FunctionData signature;
+        /// Whether finding it was reported as an error.
+        bool failed;
+
+        bool found() const => use.func.isValid;
+    }
+
+    /// What `for` yields from a `type` that isn't an array, with the functions calls at the loop
+    /// would choose. When a `length(r): Int` and an `at(r, i: Int): T` both take a `type`, it loops by
+    /// index, and otherwise steps with a `next(r): (T, type)?`. Each has to take exactly `type`, and
+    /// `T` is the element type. `Type.init` when neither way is there.
+    private Type loopElement(const Expr for_, const Expr iterable, Type type, BodyContext ctx)
+    {
+        auto lookups = for_.id in _resolutions.loopLookups;
+        if (lookups is null) return Type.init;
+        // Never synthesized, since its type is given.
+        auto index = Expr(Id!Expr.init, iterable.span, ExprKind(Identifier("index")));
+
+        auto length = loopFunction(*lookups, "length", [iterable], [type], ctx);
+        auto at = loopFunction(*lookups, "at", [iterable, index], [type, _types.int_], ctx);
+        if (length.failed || at.failed) return _types.error;
+        if (length.found && at.found)
+        {
+            if (!takesExactly("length", length, [type], iterable.span) || !takesExactly("at", at, [type, _types.int_], iterable.span))
+            {
+                return _types.error;
+            }
+            if (length.signature.ret != _types.int_)
+            {
+                _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span,
+                    "`for` loops over `%s` by index with a `length` that returns `Int`, but `%s` returns `%s`"
+                        .format(_types.describe(type), describeUse("length", length), _types.describe(length.signature.ret)));
+                return _types.error;
+            }
+            _typing.loops[for_.id] = LoopFunctions(length.use, at.use);
+            return at.signature.ret;
+        }
+
+        auto next = loopFunction(*lookups, "next", [iterable], [type], ctx);
+        if (next.failed) return _types.error;
+        if (!next.found) return Type.init;
+        if (!takesExactly("next", next, [type], iterable.span)) return _types.error;
+        auto result = next.signature.ret;
+        auto step = _types.isOption(result) ? _types.optionInner(result) : Type.init;
+        auto parts = step != Type.init && _types.isTuple(step) ? _types.tupleElements(step) : null;
+        if (parts.length != 2 || parts[1] != type)
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span,
+                "`for` steps `%s` with a `next` that returns `(T, %s)?`, but `%s` returns `%s`"
+                    .format(_types.describe(type), _types.describe(type), describeUse("next", next), _types.describe(result)));
+            return _types.error;
+        }
+        _typing.loops[for_.id] = LoopFunctions(LoopFunction.init, LoopFunction.init, next.use);
+        return parts[0];
+    }
+
+    /// The function `name` that a call at a `for` with arguments of the types `typed` would choose,
+    /// with its type arguments bound by them. Not found when none takes them; failed when choosing
+    /// reported an error.
+    private LoopUse loopFunction(const Candidates[string] lookups, string name, const(Expr)[] args, Type[] typed,
+        BodyContext ctx)
+    {
+        auto lookup = name in lookups;
+        if (lookup is null) return LoopUse.init;
+        auto call = CallExpr(null, cast(Expr[]) args);
+        Candidates fitting;
+        foreach (group; lookup.groups)
+        {
+            Id!FunctionDecl[] fits;
+            foreach (f; group)
+            {
+                auto trial = arityTrial(f, args.length, 0);
+                if (trial.fitsAll) fitTrial(trial, call, typed, null, false);
+                if (trial.fitsAll) fits ~= f;
+            }
+            fitting.groups ~= fits;
+        }
+        if (fitting.count == 0) return LoopUse.init;
+
+        LoopUse failed;
+        failed.failed = true;
+        auto span = args[0].span;
+        auto imported = fitting.groups[1 .. $].filter!(g => g.length > 0).array;
+        if (fitting.groups[0].length == 0 && imported.length > 1)
+        {
+            auto modules = imported.map!(g => _resolutions.declarations.functionModules[g[0]]).array;
+            _collector.reportError(DiagnosticCode.AmbiguousName, span,
+                ("`for` could use `%s` from more than one imported module (%s); declare one in this module that "
+                    ~ "calls the one you mean, as in `def %s(...) => %s.%s(...)`")
+                    .format(name, modules.join(", "), name, modules[0], name));
+            return failed;
+        }
+        auto function_ = chooseFunction(args[0], name, null, fitting, call, typed, false, ctx);
+        if (!function_.isValid) return failed;
+
+        auto params = _resolutions.declarations.functions[function_].typeParams;
+        auto signature = signatureOf(function_);
+        Substitution bound;
+        foreach (i, type; typed) bindParams(signature.params[i], type, params, bound);
+        auto unbound = params.filter!(p => p.id !in bound);
+        if (!unbound.empty)
+        {
+            _collector.reportError(DiagnosticCode.CannotInferTypeArgument, span,
+                "`for` uses `%s: %s` here, but nothing in `%s` says what its `%s` is".format(name,
+                    _types.describe(symbolType(SymbolId(function_))), _types.describe(typed[0]), unbound.front.name));
+            return failed;
+        }
+        LoopUse found;
+        found.use = LoopFunction(function_, params.map!(p => bound[p.id]).array);
+        found.signature = signatureOf(_types.substitute(symbolType(SymbolId(function_)), bound));
+        return found;
+    }
+
+    /// Whether `use` takes exactly `params`, reporting it when not, since a `for` doesn't convert
+    /// what it passes.
+    private bool takesExactly(string name, const LoopUse use, const(Type)[] params, Span span)
+    {
+        if (use.signature.params == params) return true;
+        auto describe(const(Type)[] types) => types.length == 1
+            ? "`%s`".format(_types.describe(types[0]))
+            : "`(%s)`".format(types.map!(t => _types.describe(t)).join(", "));
+        _collector.reportError(DiagnosticCode.InvalidOperand, span,
+            "`for` calls a `%s` that takes exactly %s, but `%s` takes %s"
+                .format(name, describe(params), describeUse(name, use), describe(use.signature.params)));
+        return false;
+    }
+
+    /// A function a `for` uses, as an error message names it, with its signature.
+    private string describeUse(string name, const LoopUse use)
+    {
+        return "%s: %s".format(name, _types.describe(symbolType(SymbolId(use.use.func))));
+    }
+
 
     /// The type of a `for` range's bounds, which is also its own type and that of each value.
     /// Only integers count, and a literal takes the type of the number beside it.

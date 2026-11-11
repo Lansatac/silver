@@ -88,6 +88,9 @@ package struct Resolution
     /// Names that could be more than one function, by the name's expression. The type checker
     /// chooses, so these have no entry in `resolutions`.
     Candidates[Id!Expr] overloads;
+    /// For each `for`, by name, the functions that calls of `length`, `at` and `next` there would
+    /// choose from, since `for` loops over anything but an array or `a..b` with them.
+    Candidates[string][Id!Expr] loopLookups;
     Declarations declarations;
     /// The `native library` of each module that names one.
     string[string] nativeLibraries;
@@ -274,6 +277,7 @@ private final class NameResolver
     private Builtin[Id!Expr] _conversions;
     private Candidates[Id!Expr] _methodLookups;
     private Candidates[Id!Expr] _overloads;
+    private Candidates[string][Id!Expr] _loopLookups;
     private Declarations _declarations;
     private Collector _collector;
     /// Each module's own top-level declarations, by module name.
@@ -317,7 +321,7 @@ private final class NameResolver
             resolveModule(mod.name, mod);
         }
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
-            _declarations, _nativeLibraries);
+            _loopLookups, _declarations, _nativeLibraries);
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
@@ -1050,6 +1054,11 @@ private final class NameResolver
                 resolveExpr(*whileExpr.body, bodyScope);
             },
             (const ForExpr forExpr) {
+                foreach (name; ["length", "at", "next"])
+                {
+                    auto candidates = moduleFunctions(name, scopeTable);
+                    if (candidates.count > 0) _loopLookups.require(expr.id)[name] = candidates;
+                }
                 auto bodyScope = declareHeadBinding(*forExpr.binding, forExpr.binding, scopeTable);
                 resolveExpr(*forExpr.body, bodyScope);
             },
@@ -1174,14 +1183,20 @@ private final class NameResolver
     /// module's named `f` hides imported functions, and leaves `f` to be a field.
     private void lookUpMethod(Id!Expr call, string name, const Scope scopeTable)
     {
+        auto candidates = moduleFunctions(name, scopeTable);
+        if (candidates.count > 0) _methodLookups[call] = candidates;
+    }
+
+    /// The module-level functions a plain `name` finds, grouped as for a plain name.
+    private Candidates moduleFunctions(string name, const Scope scopeTable)
+    {
         Id!FunctionDecl[] own;
         if (auto symbol = scopeTable.resolveInModule(name))
         {
-            if (!isFunction(*symbol)) return;
+            if (!isFunction(*symbol)) return Candidates.init;
             own = visibleFunctions(_currentModule, name);
         }
-        auto candidates = Candidates(own ~ importedFunctions(name, scopeTable));
-        if (candidates.count > 0) _methodLookups[call] = candidates;
+        return Candidates(own ~ importedFunctions(name, scopeTable));
     }
 
     /// Resolves an identifier or a member access chain, which may start with a module path.

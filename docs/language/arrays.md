@@ -21,7 +21,7 @@ A literal may have a trailing comma, and can span lines.
 
 `xs[a..b]` is the half-open slice from `a` to `b`, whose bounds are of one integer type. It panics when `a > b`, `a < 0`, or `b > length(xs)`.
 
-`length(xs)` is the number of elements, as an `Int`.
+`length(xs)` is the number of elements, as an `Int`, and `at(xs, i)` is `xs[i]` with an `Int` index. Both are prelude functions, so they can be called as methods (`xs.at(i)`), and they're what lets an array be looped over like any value with a `length` and an `at` (see [`for`](control-flow.md#for)).
 
 ## Assigning elements
 

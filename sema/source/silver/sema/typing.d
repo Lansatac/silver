@@ -23,6 +23,8 @@ package struct Typing
     const(Expr)[][Id!Expr] concatOperands;
     const(CallExpr)*[Id!Expr] methodCalls;
     Id!FunctionDecl[Id!Expr] methodCallees;
+    /// For a `for` over something other than an array or `a..b`, the functions it calls, by the `for`.
+    LoopFunctions[Id!Expr] loops;
     /// For each overloaded name, the function chosen, by the name's expression.
     SymbolId[Id!Expr] chosenSymbols;
     /// For each call of an overloaded name, the function chosen, by the call.
@@ -40,3 +42,22 @@ package struct Typing
 }
 
 struct FieldInfo { string name; Type type; }
+
+/// One function a `for` calls, and what its type parameters stand for, in terms of the type
+/// parameters of the function the `for` is in.
+struct LoopFunction
+{
+    Id!FunctionDecl func;
+    Type[] typeArgs;
+}
+
+/// How a `for` loops over a value: by index with `length` and `at` when `at` is set, and otherwise
+/// by stepping it with `next`.
+struct LoopFunctions
+{
+    LoopFunction length;
+    LoopFunction at;
+    LoopFunction next;
+
+    bool indexed() const => at.func.isValid;
+}
