@@ -152,6 +152,8 @@ private final class Lowering
     private string _moduleName;
     /// The node being lowered, for reporting what isn't lowered yet.
     private Span _span;
+    /// Expressions already lowered to these, as the index of `xs[i] += v` is.
+    private Expr[Id!(ast.Expr)] _lowered;
 
     /// What becomes `Program.functions`. A function gets its slot when a call first names it,
     /// and is lowered later from `_pending`, so recursion never lowers a function twice. A
@@ -356,6 +358,10 @@ private final class Lowering
                                 visitExpr(let.value);
                             },
                             (const Assign assign) => visitExpr(assign.value),
+                            (const AssignElement assign) {
+                                visitExpr(assign.index);
+                                visitExpr(assign.value);
+                            },
                             (const Eval eval) => visitExpr(eval.expr),
                         );
                     }
@@ -402,6 +408,7 @@ private final class Lowering
 
     private Expr lowerExpr(const ast.Expr e)
     {
+        if (auto lowered = e.id in _lowered) return *lowered;
         auto outer = _span;
         _span = e.span;
         scope (exit) _span = outer;
@@ -896,7 +903,7 @@ private final class Lowering
         scope (exit) _span = outer;
         return statement.kind.match!(
             (const ast.VarDecl decl) => lowerVar(decl),
-            (const ast.AssignStmt assign) => [Stmt(statement.span, StmtKind(lowerAssign(assign)))],
+            (const ast.AssignStmt assign) => lowerAssign(assign, statement.span),
             (const ast.ExprStmt stmt) => [eval(lowerExpr(stmt.expr))],
             (const ast.BreakStmt _) => [eval(breakExpr(statement.span, _loop))],
             (const ast.ContinueStmt _) => [eval(continueExpr(statement.span, _loop))],
@@ -952,7 +959,35 @@ private final class Lowering
         return let(held, whole) ~ binds;
     }
 
-    private Assign lowerAssign(const ast.AssignStmt assign)
+    private Stmt[] lowerAssign(const ast.AssignStmt assign, Span span)
+    {
+        auto element = assign.target.kind.match!((ref const ast.IndexExpr index) => &index, _ => null);
+        if (element !is null) return lowerAssignElement(assign, *element, span);
+        return [Stmt(span, StmtKind(lowerAssignPlace(assign)))];
+    }
+
+    /// `xs[i] = v`. In `xs[i] += v`, the value's read of `xs[i]` uses the index already evaluated.
+    private Stmt[] lowerAssignElement(const ast.AssignStmt assign, const ast.IndexExpr target, Span span)
+    {
+        auto local = localOf(*target.object);
+        auto index = lowerExpr(*target.index);
+        if (!assign.compound) return [Stmt(span, StmtKind(AssignElement(local, index, lowerExpr(assign.value))))];
+
+        auto read = assign.value.kind.match!(
+            (const ast.BinaryExpr binary) => binary.left.kind.match!(
+                (ref const ast.IndexExpr index) => index.index.id,
+                _ => assert(0, "a compound assignment reads its target"),
+            ),
+            _ => assert(0, "a compound assignment is a binary operation"),
+        );
+        auto held = temp("index", index.type);
+        _lowered[read] = use(held, index.span);
+        scope (exit) _lowered.remove(read);
+        auto value = lowerExpr(assign.value);
+        return [let(held, index), Stmt(span, StmtKind(AssignElement(local, use(held, index.span), value)))];
+    }
+
+    private Assign lowerAssignPlace(const ast.AssignStmt assign)
     {
         Step[] steps;
         auto root = placeOf(assign.target, steps);
@@ -2090,6 +2125,23 @@ def f(a: String, b: String): String {
     let mutable s: String = a
     s = Append(s, b)
     s
+}`);
+}
+
+@("an element assignment names its local, and a compound one evaluates the index once")
+unittest
+{
+    auto result = loweredFunction(`
+def f(mutable xs: [Int], i: UInt8): Unit {
+    xs[i] = 1
+    xs[i + 1] += 2
+}
+`, "f");
+    print(result.program).should.equal(
+`def f(mutable xs: [Int], i: UInt8): Unit {
+    xs[i] = 1
+    let index: UInt8 = Add(i, 1)
+    xs[index] = Add(xs[index], 2)
 }`);
 }
 

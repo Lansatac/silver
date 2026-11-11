@@ -37,6 +37,8 @@ printl(before)    // [1, 2, 3]
 
 An array remains a value: the assignment changes what `xs` holds, and nothing else that held the old array can see it.
 
+The index is evaluated first, then `v`, and then the element is replaced in whatever `xs` holds at that point. Compound assignment works on an element and evaluates the index once, so `xs[next()] += 1` calls `next` once.
+
 Assigning to an array that nothing else holds is meant to take constant time. If the array has been shared, the next assignment may copy it once, after which assignments are constant time again. Exactly when a copy happens isn't part of the language.
 
 ## Concatenation
@@ -76,12 +78,12 @@ Maps share the bracket syntax, with `:` between key and value:
 ## Open questions
 
 - A form of indexing that returns `T?`.
-- Which paths can be assigned beyond a plain variable, such as `game.board[i] = v` and `grid[y][x] = v`, and whether compound assignment and `mutable` arguments work on an element.
+- Which paths can be assigned beyond a plain variable, such as `game.board[i] = v` and `grid[y][x] = v`, and whether `mutable` arguments work on an element.
 - Pre-sizing an array before appending.
 - The semantics of maps.
 
 ## Current implementation
 
 - Map literals parse, but are rejected.
-- `xs[i] = v` isn't available yet.
+- `xs[i] = v` copies the whole array every time, even when nothing else holds it.
 - `length` is built into the compiler, so it can only be called, as `length(xs)` or `xs.length()`, and not used as a function value.

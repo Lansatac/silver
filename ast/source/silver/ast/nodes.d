@@ -594,11 +594,13 @@ const(TupleLiteral)* elementwise(ref const Pattern pattern, ref const Expr value
     );
 }
 
-/// `target = value`. Lowering rewrites `a += 1` to `a = a + 1`.
+/// `target = value`. Lowering rewrites `a += 1` to `a = a + 1` with `compound` set, since
+/// `xs[f()] += 1` calls `f` once.
 struct AssignStmt
 {
     Expr target;
     Expr value;
+    bool compound;
 }
 
 /// An expression evaluated for its effect, e.g. a call or an if.

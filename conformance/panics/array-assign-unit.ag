@@ -1,0 +1,4 @@
+def main(): Unit {
+    mutable val xs = [()]
+    xs[1] = ()
+}

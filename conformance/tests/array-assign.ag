@@ -1,0 +1,99 @@
+import std.ref
+
+type Point(x: Int, y: Int)
+
+def setFirst(mutable xs: [Int], value: Int): Unit {
+    xs[0] = value
+}
+
+def swap(mutable xs: [String], i: Int, j: Int): Unit {
+    val held = xs[i]
+    xs[i] = xs[j]
+    xs[j] = held
+}
+
+def primesBelow(n: Int): [Int] {
+    mutable val composite: [Bool] = []
+    for _ in 0..n {
+        composite ~= [false]
+    }
+    mutable val primes: [Int] = []
+    for i in 2..n {
+        if !composite[i] {
+            primes ~= [i]
+            mutable val j = i * i
+            while j < n {
+                composite[j] = true
+                j += i
+            }
+        }
+    }
+    return primes
+}
+
+def main(): Unit {
+    mutable val xs = [1, 2, 3]
+    val before = xs
+    xs[0] = 9
+    printl(xs)
+    printl(before)
+
+    val small: UInt8 = 2
+    xs[small] = 30
+    xs[1] += 10
+    xs[2] *= 2
+    printl(xs)
+
+    setFirst(mutable xs, 7)
+    printl(xs)
+    printl(before)
+
+    mutable val words = ["a", "b", "c"]
+    swap(mutable words, 0, 2)
+    printl(words)
+
+    mutable val maybe: [Int?] = [None, None]
+    maybe[1] = 5
+    printl(maybe)
+
+    mutable val grid = [[1, 2], [3, 4]]
+    val row = grid[0]
+    grid[0] = row ~ [0]
+    grid[1] = []
+    printl(grid)
+    printl(row)
+
+    mutable val points = [Point(1, 2)]
+    points[0] = points[0] with (x = 5)
+    printl(points[0].x)
+
+    // The value is evaluated before the array is read, so it sees the array as it was.
+    mutable val ys = [1, 2]
+    ys[0] = ys[0] + ys[1]
+    ys[1] = { ys = [10, 20, 30]; 4 }
+    printl(ys)
+
+    // A `for` loops over the array as it was when the loop began.
+    mutable val zs = [1, 2, 3]
+    for z in zs {
+        zs[0] += z
+    }
+    printl(zs)
+
+    mutable val units = [(), ()]
+    units[1] = ()
+    printl(length(units))
+
+    printl(primesBelow(30))
+
+    // A compound assignment evaluates the index once.
+    val calls = Ref(0)
+    def next(): Int {
+        calls.update(c => c + 1)
+        return calls.get()
+    }
+    mutable val counts = [0, 0, 0]
+    counts[next()] += 5
+    printl(counts)
+    printl(calls.get())
+}

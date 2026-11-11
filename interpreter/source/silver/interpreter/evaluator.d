@@ -638,6 +638,15 @@ final class Evaluator
         s.kind.match!(
             (const Let let) { frame.values[let.local] = evaluate(let.value, frame); },
             (const Assign assign) { frame.values[assign.local] = evaluate(assign.value, frame); },
+            (const AssignElement assign) {
+                auto at = position(evaluate(assign.index, frame));
+                auto value = evaluate(assign.value, frame);
+                auto elements = frame.values[assign.local].as!ArrayValue.elements;
+                if (at >= elements.length) throw new CodedException(DiagnosticCode.IndexOutOfRange, "Index is out of range");
+                auto replaced = elements.dup;
+                replaced[cast(size_t) at] = value;
+                frame.values[assign.local] = Value(ArrayValue(replaced));
+            },
             (const Eval eval) { evaluate(eval.expr, frame); },
         );
     }

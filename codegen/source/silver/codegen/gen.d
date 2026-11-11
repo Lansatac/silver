@@ -444,6 +444,10 @@ private final class Generator
                 if (type != "void") slots.allocate(let.local, type);
             },
             (const Assign assign) => planSlots(slots, assign.value),
+            (const AssignElement assign) {
+                planSlots(slots, assign.index);
+                planSlots(slots, assign.value);
+            },
             (const Eval eval) => planSlots(slots, eval.expr),
         );
     }
@@ -1172,6 +1176,29 @@ private final class Generator
     private Fragment emit(const Stmt s, const Assign assign)
     {
         return storeLocal(assign.local, emitExpr(assign.value), s.span);
+    }
+
+    /// The local's array copied with one element replaced, until something says when it can be
+    /// written in place.
+    private Fragment emit(const Stmt s, const AssignElement assign)
+    {
+        auto at = position(assign.index);
+        auto value = emitExpr(assign.value);
+        auto slot = _function.slots[assign.local];
+        auto array = _function.load(sliceLayout, slot);
+        auto parts = sliceParts(array.value);
+        auto outside = _function.result("icmp uge i64 %s, %s".format(at.value, parts.length));
+        auto code = at.then(value).then(array).then(parts.code).then(outside)
+            .then(emitPanicIf(outside.value, s.span, "Index is out of range"));
+        auto layout = llvmType(elementOf(assign.local.type), s.span);
+        if (layout == "void") return code;
+
+        auto copy = emitConcat([array.value], layout, elementSizeOf(layout));
+        auto copied = sliceParts(copy.value);
+        auto pointer = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, copied.data, at.value));
+        return code.then(copy).then(copied.code).then(pointer)
+            .then(Fragment.store(layout, operandOf(assign.value, value), pointer.value))
+            .then(Fragment.store(sliceLayout, copy.value, slot));
     }
 
     private Fragment emit(const Stmt s, const Let let)

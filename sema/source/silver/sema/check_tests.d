@@ -1850,13 +1850,31 @@ unittest
     analyzedMain(`print(length("abc"))`).shouldReport(DiagnosticCode.TypeMismatch, At(`"abc"`, 1));
 }
 
-@("an array's elements can't be assigned, even on a mutable val")
+@("an element of a mutable val or mutable param can be assigned, checked against the element type")
 unittest
 {
     analyzedMain(`mutable val xs = [1]
-    xs[0] = 2`).shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("xs[0]", 1));
+    val i: UInt8 = 0
+    xs[i] = 2
+    xs[0] += 2`).shouldHaveNoDiagnostics();
+    analyzedMain(`mutable val xs: [Int?] = [None]
+    xs[0] = 1
+    mutable val ys = [[1]]
+    ys[0] = []`).shouldHaveNoDiagnostics();
+    analyzed("def f(mutable xs: [Int]): Unit { xs[0] = 1 }\ndef main(): Unit { }").shouldHaveNoDiagnostics();
     analyzedMain(`mutable val xs = [1]
-    xs[0] += 2`).shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("xs[0]", 1));
+    xs[0] = "a"`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
+    analyzedMain(`mutable val xs = [1]
+    xs[1.0] = 2`).shouldReport(DiagnosticCode.TypeMismatch, At("1.0", 1));
+}
+
+@("a val's or an immutable param's elements can't be assigned")
+unittest
+{
+    analyzedMain(`val xs = [1]
+    xs[0] = 2`).shouldReport(DiagnosticCode.AssignToImmutable, At("xs", 2));
+    analyzed("def f(xs: [Int]): Unit { xs[0] = 1 }\ndef main(): Unit { }")
+        .shouldReport(DiagnosticCode.AssignToImmutable, At("xs", 2));
 }
 
 @("~ joins two of the same array or String, and never takes a bare element")

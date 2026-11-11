@@ -347,7 +347,7 @@ struct Stmt
     StmtKind kind;
 }
 
-alias StmtKind = SumType!(Let, Assign, Eval);
+alias StmtKind = SumType!(Let, Assign, AssignElement, Eval);
 
 struct Let
 {
@@ -359,6 +359,17 @@ struct Let
 struct Assign
 {
     Local local;
+    Expr value;
+}
+
+/// Gives a mutable `Local`, an array, its array with element `index` replaced by `value`,
+/// panicking if there's no such element. `index`, of any integer type, is evaluated first, then
+/// `value`, then the local is read. No other value holding the old array sees the change; both
+/// backends copy the array for now, since nothing yet says when it's held only by the local.
+struct AssignElement
+{
+    Local local;
+    Expr index;
     Expr value;
 }
 

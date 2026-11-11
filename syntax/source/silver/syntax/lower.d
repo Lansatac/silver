@@ -246,7 +246,7 @@ private final class Lowering
                 auto binary = BinaryExpr(binaryOp, boxed(read), boxed(expr));
                 expr = Expr(ids.next!Expr, Span(file, target.span.start, expr.span.end), ExprKind(binary));
             }
-            return Stmt(spanOf(cst, file), StmtKind(AssignStmt(target, expr)));
+            return Stmt(spanOf(cst, file), StmtKind(AssignStmt(target, expr, op != "=")));
         case "Silver.FunctionDeclaration":
         case "Silver.NativeFunctionDeclaration":
         case "Silver.IntrinsicFunctionDeclaration":

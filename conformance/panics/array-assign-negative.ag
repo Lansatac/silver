@@ -1,0 +1,8 @@
+def set(mutable xs: [Int], i: Int8): Unit {
+    xs[i] = 0
+}
+
+def main(): Unit {
+    mutable val xs = [1, 2]
+    set(mutable xs, -1)
+}

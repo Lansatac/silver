@@ -1,0 +1,5 @@
+def main(): Unit {
+    mutable val xs = [1, 2]
+    xs[2] = { printl("value first"); 3 }
+    printl(xs)
+}

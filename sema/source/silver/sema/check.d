@@ -559,16 +559,23 @@ private final class TypeChecker
             "`%s` needs to be in the body of a loop".format(keyword));
     }
 
-    /// Reports `target` unless it's a mutable binding or a chain of fields rooted at one. `use` is
-    /// what's being done to it, for the message: "assigned to", or "passed as `mutable`".
+    /// Reports `target` unless it's a mutable binding, a chain of fields rooted at one, or, when
+    /// assigned to, an element of one. `use` is what's being done to it, for the message:
+    /// "assigned to", or "passed as `mutable`".
     private bool checkAssignable(const Expr target, string use = "assigned to")
     {
         return target.kind.match!(
             (const Identifier _) => checkBindingMutable(target, use),
             (const MemberAccess access) => checkAssignable(*access.object, use),
-            (const IndexExpr _) {
-                _collector.reportError(DiagnosticCode.InvalidAssignmentTarget, target.span,
-                    "An array never changes, so its elements can't be %s; rebind the whole array".format(use));
+            (const IndexExpr index) {
+                auto named = index.object.kind.match!((const Identifier _) => true, _ => false);
+                if (use == "assigned to" && named && asRange(index.index) is null)
+                {
+                    return checkBindingMutable(*index.object, use);
+                }
+                _collector.reportError(DiagnosticCode.InvalidAssignmentTarget, target.span, use == "assigned to"
+                    ? "Only an element of an array held by a `mutable val` or a `mutable` parameter can be assigned to, as `xs[i] = v`"
+                    : "An array element can't be %s; pass the whole array, or copy the element into a `mutable val`".format(use));
                 return false;
             },
             (_) => reportInvalidAssignment(target, use),

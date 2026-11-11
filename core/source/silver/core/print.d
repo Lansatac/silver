@@ -210,6 +210,12 @@ private struct Printer
                 output ~= name(assign.local) ~ " = ";
                 expr(assign.value);
             },
+            (const AssignElement assign) {
+                output ~= name(assign.local) ~ "[";
+                expr(assign.index);
+                output ~= "] = ";
+                expr(assign.value);
+            },
             (const Eval eval) { expr(eval.expr); },
         );
     }
