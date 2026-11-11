@@ -1,0 +1,11 @@
+import std.math
+
+def apply(f: (Float) -> Float, x: Float): Float => f(x)
+
+def main(): Unit {
+    printl(apply(sqrt, 16.0))
+    val raise = pow
+    printl(raise(2.0, 10.0))
+    val roots = [sqrt, exp]
+    printl(roots[0](81.0))
+}

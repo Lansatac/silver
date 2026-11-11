@@ -99,6 +99,5 @@ intrinsic def panic(message: String): Never
 
 - `native def`, `native("...")`, `native library`, `intrinsic def`, `intrinsic alias` and `std.c` are available. `native type`, `CString` and its conversions aren't, so a native signature can use only the integer types, `Float` and `Bool`, with `Unit` or `Never` also allowed as the return type.
 - The platform being compiled for is always the one the compiler runs on.
-- A native function can't be used as a function value.
 - Compiled programs call natives directly. The interpreter can call only the standard library's natives, which it has built in; calling any other native while interpreting is an error.
-- A module's `native library` is passed to the linker when the program calls one of that module's natives.
+- A module's `native library` is passed to the linker when the program calls one of that module's natives or uses one as a value.

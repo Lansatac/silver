@@ -355,3 +355,36 @@ unittest
     if (!compileAndRun(source, run)) return;
     run.output.should.equal("1\n2\n3\n");
 }
+
+@("codegen lays an option out as a tag and a payload, a sum as a tag and a pointer, and an all-marker sum as its tag")
+unittest
+{
+    auto source = "type Color = Red | Green\ntype Shape = Circle(r: Float) | Empty\n"
+        ~ "def main(): Unit {\n    val o: Int? = 1\n    val c = Green\n    val s: Shape = Circle(1.0)\n"
+        ~ "    printl(o)\n    printl(c)\n    printl(s)\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("%o.addr = alloca { i1, i64 }");
+    ir.should.contain("%c.addr = alloca i32");
+    ir.should.contain("%s.addr = alloca { i32, ptr }");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("Some(1)\nGreen\nCircle(1)\n");
+}
+
+@("codegen passes a lambda its environment after its params, and calls a named function as a value through a thunk")
+unittest
+{
+    auto source = "def double(x: Int): Int => x * 2\n"
+        ~ "def main(): Unit {\n    val n = 10\n    val add: (Int) -> Int = x => x + n\n    val f = double\n"
+        ~ "    printl(add(1))\n    printl(f(4))\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("(i64 %x, ptr %.env)");
+    ir.should.contain("@\".thunk.");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("11\n8\n");
+}

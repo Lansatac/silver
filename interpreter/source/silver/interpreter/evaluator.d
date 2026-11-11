@@ -43,43 +43,227 @@ final class Evaluator
 
     private void runProgram()
     {
-        call(_program.functions[_program.entryPoint], [], Span.init);
+        try
+        {
+            invoke(_program.entryPoint, [], null, null);
+        }
+        catch (CodedException error)
+        {
+            throw new RuntimeError(Diagnostic(error.code, _program.functions[_program.entryPoint].body.span, error.msg));
+        }
     }
 
-    private Value call(const Function func, Value[] args, Span span)
+    /// Runs function `target` with `args` and, for a lambda, `captures`. When `frame` is given,
+    /// it's set to the callee's locals once the call ends, so mutable params can be written back.
+    private Value invoke(size_t target, Value[] args, Value[] captures, Frame* frame)
     {
-        located(span, () => checkStack());
-        auto frame = new Frame;
+        checkStack();
+        auto func = &_program.functions[target];
+        auto locals = new Frame;
         foreach (i, param; func.params)
         {
-            frame.values[param] = args[i];
+            locals.values[param] = args[i];
         }
-        return evaluate(func.body, frame);
+        foreach (i, capture; func.captures)
+        {
+            locals.values[capture] = captures[i];
+        }
+        Value result;
+        try
+        {
+            result = evaluate(func.body, locals);
+        }
+        catch (ReturnSignal signal)
+        {
+            result = signal.value;
+        }
+        if (frame !is null) *frame = locals;
+        return result;
     }
 
+    /// Throws: RuntimeError, located at the innermost node being evaluated, when a primitive fails.
     private Value evaluate(const Expr e, Frame frame)
     {
-        return located(e.span, () => e.kind.match!(
-            (const UnitLit _) => Value(Unit()),
-            (const LocalRef use) => frame.values[use.local],
-            (const Block block) => evaluate(block, frame),
-            (const IntLit literal) => Value(literal.value),
-            (const FloatLit literal) => Value(literal.value),
-            (const ForeignCall call) => evaluate(e, call, frame),
-            (const IntrinsicCall call) => evaluate(e, call, frame),
-            (const Prim prim) => evaluate(e, prim, frame),
-            (other) => notImplemented(typeof(other).stringof, e.span),
-        ));
+        try
+        {
+            return e.kind.match!(
+                (const UnitLit _) => Value(Unit()),
+                (const BoolLit literal) => Value(literal.value),
+                (const IntLit literal) => Value(cast(long) literal.value),
+                (const FloatLit literal) => Value(literal.value),
+                (const StringLit literal) => Value(literal.value),
+                (const LocalRef use) => frame.values[use.local],
+                (const Block block) => evaluate(block, frame),
+                (const Call call) => evaluate(call, frame),
+                (const CallClosure call) => evaluate(call, frame),
+                (const MakeClosure closure) => Value(Closure(closure.target, all(closure.captures, frame))),
+                (const ForeignCall call) => evaluate(e, call, frame),
+                (const IntrinsicCall call) => evaluate(e, call, frame),
+                (const Prim prim) => evaluate(prim, frame),
+                (const Convert convert) => this.convert(evaluate(*convert.value, frame), convert.value.type, e.type),
+                (const If if_) => evaluate(if_, frame),
+                (const Loop loop) => evaluate(loop, frame),
+                (const Break jump) => this.jump!BreakSignal(jump.label),
+                (const Continue jump) => this.jump!ContinueSignal(jump.label),
+                (const Return return_) => leave(evaluate(*return_.value, frame)),
+                (const Construct construct) => Value(Record(0, all(construct.fields, frame))),
+                (const Field field) => evaluate(*field.object, frame).as!Record.fields[field.index],
+                (const Update update) => evaluate(update, frame),
+                (const Inject inject) => evaluate(inject, frame),
+                (const IsMember test) => Value(evaluate(*test.subject, frame).as!Record.tag == test.member),
+                (const Payload payload) => evaluate(*payload.subject, frame).as!Record.fields[0],
+                (const ArrayLit literal) => Value(ArrayValue(all(literal.elements, frame))),
+                (const Index index) => evaluate(index, frame),
+                (const Slice slice) => evaluate(slice, frame),
+                (const Length length) => Value(cast(long) evaluate(*length.array, frame).as!ArrayValue.elements.length),
+            );
+        }
+        catch (CodedException error)
+        {
+            throw new RuntimeError(Diagnostic(error.code, e.span, error.msg));
+        }
+    }
+
+    /// Each of `exprs`, in order.
+    private Value[] all(const Expr[] exprs, Frame frame)
+    {
+        auto values = new Value[exprs.length];
+        foreach (i, ref expr; exprs)
+        {
+            values[i] = evaluate(expr, frame);
+        }
+        return values;
+    }
+
+    private Value jump(Signal)(size_t label)
+    {
+        throw new Signal(label);
+    }
+
+    private Value leave(Value value)
+    {
+        throw new ReturnSignal(value);
+    }
+
+    private Value evaluate(const Call call, Frame frame)
+    {
+        return callWith(call.target, null, call.args, frame);
+    }
+
+    /// The callee is evaluated before the arguments.
+    private Value evaluate(const CallClosure call, Frame frame)
+    {
+        auto closure = evaluate(*call.callee, frame).as!Closure;
+        return callWith(closure.target, closure.captures, call.args, frame);
+    }
+
+    /// Calls `target` with `args`. An argument for a mutable param is read once the others have
+    /// been evaluated, and gets the param's final value when the call ends.
+    private Value callWith(size_t target, Value[] captures, const Expr[] args, Frame frame)
+    {
+        auto params = _program.functions[target].params;
+        auto values = new Value[args.length];
+        auto anyMutable = false;
+        foreach (i, ref arg; args)
+        {
+            if (params[i].mutable) anyMutable = true;
+            else values[i] = evaluate(arg, frame);
+        }
+        if (!anyMutable) return invoke(target, values, captures, null);
+
+        foreach (i, ref arg; args)
+        {
+            if (params[i].mutable) values[i] = frame.values[mutableLocal(arg)];
+        }
+        Frame callee;
+        auto result = invoke(target, values, captures, &callee);
+        foreach (i, ref arg; args)
+        {
+            if (params[i].mutable) frame.values[mutableLocal(arg)] = callee.values[params[i]];
+        }
+        return result;
+    }
+
+    private static const(Local) mutableLocal(const Expr arg)
+    {
+        return arg.kind.match!(
+            (const LocalRef use) => use.local,
+            (_) => assert(0, "lowering passes a local to a mutable param"),
+        );
+    }
+
+    private Value evaluate(const If if_, Frame frame)
+    {
+        if (evaluate(*if_.condition, frame).as!bool) return evaluate(*if_.trueBody, frame);
+        return evaluate(*if_.falseBody, frame);
+    }
+
+    private Value evaluate(const Loop loop, Frame frame)
+    {
+        while (true)
+        {
+            try
+            {
+                evaluate(*loop.body, frame);
+            }
+            catch (ContinueSignal signal)
+            {
+                if (signal.label != loop.label) throw signal;
+            }
+            catch (BreakSignal signal)
+            {
+                if (signal.label != loop.label) throw signal;
+                break;
+            }
+        }
+        return Value(Unit());
+    }
+
+    private Value evaluate(const Update update, Frame frame)
+    {
+        auto record = evaluate(*update.object, frame).as!Record;
+        auto fields = record.fields.dup;
+        fields[update.index] = evaluate(*update.value, frame);
+        return Value(Record(record.tag, fields));
+    }
+
+    private Value evaluate(const Inject inject, Frame frame)
+    {
+        if (inject.payload is null) return Value(Record(inject.member, null));
+        return Value(Record(inject.member, [evaluate(*inject.payload, frame)]));
+    }
+
+    /// An index of any integer type, as unsigned, so a negative one is too large.
+    private static ulong position(Value index)
+    {
+        return cast(ulong) index.as!long;
+    }
+
+    private Value evaluate(const Index index, Frame frame)
+    {
+        auto elements = evaluate(*index.array, frame).as!ArrayValue.elements;
+        auto at = position(evaluate(*index.index, frame));
+        if (at >= elements.length) throw new CodedException(DiagnosticCode.IndexOutOfRange, "Index is out of range");
+        return elements[cast(size_t) at];
+    }
+
+    private Value evaluate(const Slice slice, Frame frame)
+    {
+        auto elements = evaluate(*slice.array, frame).as!ArrayValue.elements;
+        auto start = position(evaluate(*slice.start, frame));
+        auto end = position(evaluate(*slice.end, frame));
+        if (start > end || end > elements.length)
+        {
+            throw new CodedException(DiagnosticCode.IndexOutOfRange, "Slice is out of range");
+        }
+        return Value(ArrayValue(elements[cast(size_t) start .. cast(size_t) end]));
     }
 
     /// A Prim's operands share one type, except a shift's amount, so the first one's type says
     /// how to read them all.
-    private Value evaluate(const Expr e, const Prim prim, Frame frame)
+    private Value evaluate(const Prim prim, Frame frame)
     {
-        import std.algorithm : map;
-        import std.array : array;
-
-        auto args = prim.args.map!(arg => evaluate(arg, frame)).array;
+        auto args = all(prim.args, frame);
         switch (prim.op)
         {
             case PrimOp.Concat:
@@ -88,6 +272,8 @@ final class Evaluator
                 return append(args[0], args[1]);
             case PrimOp.Not:
                 return Value(!args[0].as!bool);
+            case PrimOp.Format:
+                return Value(formatted(args[0], prim.args[0].type));
             default:
                 break;
         }
@@ -259,22 +445,112 @@ final class Evaluator
         return new CodedException(DiagnosticCode.IntegerOverflow, "Integer overflow");
     }
 
+    /// `value`, of the number type `from`, as `to`. A Float is truncated toward zero first, and
+    /// a value that doesn't fit `to`, NaN among them, panics.
+    private Value convert(Value value, Type from, Type to)
+    {
+        auto types = _program.types;
+        if (to == types.float_)
+        {
+            if (from == types.float_) return value;
+            auto bits = value.as!long;
+            return Value(types.integerOf(from).signed ? cast(double) bits : cast(double) cast(ulong) bits);
+        }
+
+        auto target = types.integerOf(to);
+        foreach (T; IntegerTypes)
+        {
+            if (target.bits != T.sizeof * 8 || target.signed != isSigned!T) continue;
+            if (from == types.float_)
+            {
+                auto number = value.as!double;
+                if (!floatFits!T(number)) throw conversionFailure!T();
+                return Value(cast(long) cast(T) number);
+            }
+            auto source = types.integerOf(from);
+            auto bits = value.as!long;
+            if (source.signed)
+            {
+                if (!integerFits!T(bits)) throw conversionFailure!T();
+            }
+            else
+            {
+                if (!integerFits!T(cast(ulong) bits)) throw conversionFailure!T();
+            }
+            return Value(cast(long) cast(T) bits);
+        }
+        assert(0, "sema only converts numbers");
+    }
+
+    private static CodedException conversionFailure(T)()
+    {
+        auto name = "%sInt%s".format(isSigned!T ? "" : "U", T.sizeof * 8);
+        return new CodedException(DiagnosticCode.InvalidConversion, "Value is out of range for " ~ name);
+    }
+
+    /// Whether `value`, truncated toward zero, is a `T`. False for NaN.
+    private static bool floatFits(T)(double value)
+    {
+        enum bits = T.sizeof * 8;
+        static if (isSigned!T)
+        {
+            enum double limit = 2.0 ^^ (bits - 1);
+            static if (bits == 64)
+            {
+                return value >= -limit && value < limit;
+            }
+            else
+            {
+                return value > -limit - 1 && value < limit;
+            }
+        }
+        else
+        {
+            enum double limit = 2.0 ^^ bits;
+            return value > -1 && value < limit;
+        }
+    }
+
+    private static bool integerFits(T, S)(S value)
+    {
+        static if (isSigned!S)
+        {
+            if (value < 0)
+            {
+                static if (isSigned!T)
+                {
+                    return long(value) >= long(T.min);
+                }
+                else
+                {
+                    return false;
+                }
+            }
+        }
+        return cast(ulong) value <= cast(ulong) T.max;
+    }
+
     private Value evaluate(const Expr e, const IntrinsicCall call, Frame frame)
     {
-        import std.algorithm : map;
-        import std.range : array;
+        import std.stdio : readln;
 
-        Value[] args = call.args.map!(arg => evaluate(arg, frame)).array;
-        switch (call.intrinsic)
+        auto args = all(call.args, frame);
+        final switch (call.intrinsic)
         {
             case Intrinsic.print:
-                write(valueToString(args[0], call.args[0].type));
+                write(formatted(args[0], call.args[0].type));
                 return Value(Unit());
             case Intrinsic.printl:
-                write(valueToString(args[0], call.args[0].type), true);
+                write(formatted(args[0], call.args[0].type), true);
                 return Value(Unit());
-            default:
-                return notImplemented("the intrinsic `%s`".format(call.intrinsic), e.span);
+            case Intrinsic.read:
+                auto line = readln();
+                if (line.length == 0) return Value(Record(0, null));
+                return Value(Record(1, [Value(line)]));
+            case Intrinsic.panic:
+                throw new CodedException(DiagnosticCode.ExplicitPanic, args[0].as!string);
+            case Intrinsic.length:
+                assert(0, "lowering makes `length` a Length");
         }
     }
 
@@ -282,9 +558,6 @@ final class Evaluator
     /// interpreter has each of them built in.
     private Value evaluate(const Expr e, const ForeignCall call, Frame frame)
     {
-        import std.algorithm : map;
-        import std.range : array;
-
         auto native = call.symbol in foreignFunctions;
         if (native is null)
         {
@@ -292,10 +565,11 @@ final class Evaluator
                 "`%s` can't be called when interpreting: only the standard library's natives can be, for now"
                     .format(call.symbol)));
         }
-        return (*native)(call.args.map!(arg => evaluate(arg, frame)).array);
+        return (*native)(all(call.args, frame));
     }
 
-    private string valueToString(Value value, Type type)
+    /// A primitive or function `value` of `type`, as `print` shows it.
+    private string formatted(Value value, Type type)
     {
         import std.conv : to;
 
@@ -308,16 +582,16 @@ final class Evaluator
         return value.match!(
             (Unit _) => "()",
             (bool b) => b.to!string,
-            (double d) =>  d != d ? "nan" : d.to!string,
+            (double d) => d != d ? "nan" : d.to!string,
             (string s) => s,
-            (_) => assert(0, "lowering only passes primitives to an intrinsic"),
+            (Closure c) => _program.functions[c.target].name,
+            (_) => assert(0, "lowering formats anything else itself"),
         );
     }
 
-
     private Value evaluate(const Block block, Frame frame)
     {
-        foreach (statement; block.statements)
+        foreach (ref statement; block.statements)
         {
             execute(statement, frame);
         }
@@ -329,8 +603,8 @@ final class Evaluator
     {
         s.kind.match!(
             (const Let let) { frame.values[let.local] = evaluate(let.value, frame); },
+            (const Assign assign) { frame.values[assign.local] = evaluate(assign.value, frame); },
             (const Eval eval) { evaluate(eval.expr, frame); },
-            (other) { notImplemented!void(typeof(other).stringof, s.span); },
         );
     }
 
@@ -339,7 +613,7 @@ final class Evaluator
     {
         import std.stdio : stdout;
 
-        if(newLine)
+        if (newLine)
         {
             text ~= "\n";
         }
@@ -354,33 +628,47 @@ final class Evaluator
             _output ~= text;
         }
     }
-
-    /// Runs `action`, giving a `CodedException` it throws the location `span`.
-    private T located(T)(Span span, T delegate() action)
-    {
-        try
-        {
-            return action();
-        }
-        catch (RuntimeError error)
-        {
-            throw error;
-        }
-        catch (CodedException error)
-        {
-            throw new RuntimeError(Diagnostic(error.code, span, error.msg));
-        }
-    }
-
-    private T notImplemented(T = Value)(string what, Span span)
-    {
-        throw new RuntimeError(Diagnostic(DiagnosticCode.NotImplemented, span,
-            "Not implemented in the interpreter yet: " ~ what));
-    }
 }
 
 /// The locals of one call. Core's locals are objects, so a nested block needs no scope of its own.
 private final class Frame
 {
     Value[const Local] values;
+}
+
+/// Thrown by `Break`, `Continue` and `Return`, and caught by the loop or call they leave. They're
+/// Throwables rather than Exceptions, so nothing that handles errors catches them by accident.
+private class BreakSignal : Throwable
+{
+    size_t label;
+
+    this(size_t label)
+    {
+        super("break outside of a loop");
+        this.label = label;
+    }
+}
+
+/// ditto
+private class ContinueSignal : Throwable
+{
+    size_t label;
+
+    this(size_t label)
+    {
+        super("continue outside of a loop");
+        this.label = label;
+    }
+}
+
+/// ditto
+private class ReturnSignal : Throwable
+{
+    Value value;
+
+    this(Value value)
+    {
+        super("return outside of a function");
+        this.value = value;
+    }
 }

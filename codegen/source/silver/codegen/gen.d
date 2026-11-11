@@ -1,6 +1,6 @@
 module silver.codegen.gen;
 
-import std.algorithm : fold, map;
+import std.algorithm : all, filter, fold, map;
 import std.array : array, join;
 import std.format : format;
 import std.sumtype : match;
@@ -8,7 +8,7 @@ import std.sumtype : match;
 import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException, SourceMap, Span;
 import silver.codegen.runtime_bindings : runtime;
 import silver.core;
-import silver.sema : Intrinsic, Type;
+import silver.sema : FunctionData, IntegerInfo, Intrinsic, Type;
 
 /// The LLVM IR for `program`, as text. `sources` locates spans for panic messages.
 /// Throws: DiagnosticException (`NotImplemented`) at the first construct codegen doesn't handle yet.
@@ -60,6 +60,12 @@ private struct Fragment
         return instruction("br i1 %s, label %%%s, label %%%s".format(condition, ifTrue, ifFalse));
     }
 
+    /// Ends the current block by going to `target`.
+    static Fragment jump(string target)
+    {
+        return instruction("br label %%%s".format(target));
+    }
+
     /// Ends the current block, which control can't reach the end of.
     static Fragment unreachable()
     {
@@ -70,12 +76,6 @@ private struct Fragment
     static Fragment ret(string type, string value)
     {
         return instruction(type == "void" ? "ret void" : "ret %s %s".format(type, value));
-    }
-
-    /// Every fragment in order, with the last one's value.
-    static Fragment sequence(Fragment[] fragments)
-    {
-        return fragments.fold!((sequenced, next) => sequenced.then(next))(Fragment.init);
     }
 
     /// This fragment followed by `next`, with `next`'s value.
@@ -126,18 +126,36 @@ private struct Slots
     }
 }
 
+/// The blocks a `Loop` jumps to: `head` starts its body again, and `end` leaves it.
+private struct LoopTargets
+{
+    string head;
+    string end;
+}
+
 /// What's unique within one function: the names it has handed out, and where each local lives.
 /// A fresh one per function.
 private final class FunctionState
 {
     /// Where every local lives, fixed before any of the function's code is generated.
     const Slots slots;
+    /// The function's LLVM return type, which `Return` needs.
+    string returnType;
+    /// The blocks of each loop being generated, by its label.
+    LoopTargets[size_t] loops;
+    /// Whether the function has the runtime hand back a String or buffer, which comes through
+    /// these two slots, allocated once at the top of the function.
+    bool usesOutSlots;
     private int _nextTemp;
     private int _nextLabel;
 
-    this(Slots slots)
+    enum outData = "%.out.data";
+    enum outLength = "%.out.length";
+
+    this(Slots slots, string returnType)
     {
         this.slots = slots;
+        this.returnType = returnType;
     }
 
     /// A fresh SSA name. Silver identifiers can't contain `.`, so names that start with one
@@ -147,9 +165,10 @@ private final class FunctionState
         return "%%.t%s".format(_nextTemp++);
     }
 
+    /// A fresh block name, which starts with `.` for the same reason.
     string newLabel(string hint)
     {
-        return "%s.%s".format(hint, _nextLabel++);
+        return ".%s.%s".format(hint, _nextLabel++);
     }
 
     /// `text` as an instruction whose result goes in a new temp, or in `name` if given, which is
@@ -177,6 +196,12 @@ private final class FunctionState
         return result("extractvalue %s %s, %s".format(type, aggregate, index));
     }
 
+    /// `aggregate`, of the struct type `type`, with element `index` set to `value` of `elementType`.
+    Fragment insert(string type, string aggregate, string elementType, string value, size_t index)
+    {
+        return result("insertvalue %s %s, %s %s, %s".format(type, aggregate, elementType, value, index));
+    }
+
     /// Calls `callee` with `arguments`, each already written with its type (`i64 %x`). The value
     /// is the result's temp, or null for a `void` function. `convention` is written before the
     /// return type when given.
@@ -187,6 +212,11 @@ private final class FunctionState
         return returnType == "void" ? Fragment.instruction(text) : result(text);
     }
 }
+
+/// The LLVM type of every String and array: where element zero is, and how many elements.
+private enum sliceLayout = "{ ptr, i64 }";
+/// The LLVM type of every function value: the code, then the environment it takes after its params.
+private enum closureLayout = "{ ptr, ptr }";
 
 private final class Generator
 {
@@ -199,7 +229,12 @@ private final class Generator
     private bool[string] _usedIntrinsics;
     /// The declaration of each C function a native binds, by its symbol.
     private string[string] _foreign;
-    private string[] _strings;
+    private string[] _globals;
+    private string[string] _stringGlobals;
+    /// The thunk letting a function that isn't a lambda be called through a closure, by the
+    /// function's index, once one has been asked for.
+    private string[size_t] _thunks;
+    private string[] _thunkDefinitions;
 
     this(const ref Program program, const SourceMap sources)
     {
@@ -210,19 +245,19 @@ private final class Generator
     string emitProgram()
     {
         string[] functions;
-        foreach (ref func; _program.functions)
+        foreach (i, ref func; _program.functions)
         {
-            functions ~= emitFunction(func);
+            functions ~= emitFunction(i, func);
         }
         // After the functions, so every runtime call and string literal has been seen.
-        return emitDeclares() ~ _strings.map!(s => s ~ "\n").join ~ "\n" ~ functions.join("\n") ~ "\n" ~ emitEntry();
+        return emitDeclares() ~ _globals.map!(s => s ~ "\n").join ~ "\n" ~ functions.join("\n") ~ "\n"
+            ~ _thunkDefinitions.join("\n") ~ "\n" ~ emitEntry();
     }
 
     /// `silver_main`, which the runtime calls once druntime has started.
     private string emitEntry()
     {
-        auto main = _program.functions[_program.entryPoint];
-        return "define void @silver_main() {\nentry:\n  call void %s()\n  ret void\n}\n".format(mangled(main));
+        return "define void @silver_main() {\n.entry:\n  call void %s()\n  ret void\n}\n".format(mangled(_program.entryPoint));
     }
 
     private string emitDeclares()
@@ -244,39 +279,75 @@ private final class Generator
         return text;
     }
 
-    private string emitFunction(const Function func)
+    private string emitFunction(size_t index, const Function func)
     {
-        _function = new FunctionState(planSlots(func));
         auto returnType = llvmType(func.returnType, func.body.span);
+        _function = new FunctionState(planSlots(func), returnType);
         auto stackCheck = emitStackCheck(func.body.span);
 
         string[] params;
-        Fragment[] receive;
+        Fragment receive;
         foreach (param; func.params)
         {
             auto type = paramType(param, func.body.span);
             if (type is null) continue;
             params ~= type ~ " " ~ incoming(param);
             // A mutable param's slot is its caller's, which it was passed.
-            if (!param.mutable) receive ~= Fragment.store(type, incoming(param), _function.slots[param]);
+            if (!param.mutable) receive = receive.then(Fragment.store(type, incoming(param), _function.slots[param]));
+        }
+        if (func.origin == FunctionOrigin.lambda)
+        {
+            params ~= "ptr %.env";
+            receive = receive.then(receiveCaptures(func));
         }
 
         auto body = emitExpr(func.body);
-        auto whole = Fragment.label("entry")
+        auto ending = func.body.type == _program.types.never ? Fragment.unreachable() : Fragment.ret(returnType, body.value);
+        auto whole = Fragment.label(".entry")
             .then(stackCheck)
-            .then(Fragment.sequence(receive))
+            .then(receive)
             .then(body)
-            .then(Fragment.ret(returnType, body.value));
+            .then(ending);
 
         // The allocas go right after the entry label.
-        auto lines = whole.code[0 .. 1] ~ _function.slots.allocas ~ whole.code[1 .. $];
-        return "define %s %s(%s) {\n%s\n}\n".format(returnType, mangled(func), params.join(", "), lines.join("\n"));
+        auto allocas = _function.slots.allocas.dup;
+        if (_function.usesOutSlots)
+        {
+            allocas ~= ["  %s = alloca ptr".format(FunctionState.outData), "  %s = alloca i64".format(FunctionState.outLength)];
+        }
+        auto lines = whole.code[0 .. 1] ~ allocas ~ whole.code[1 .. $];
+        auto linkage = func.origin == FunctionOrigin.declared ? "" : "private ";
+        return "define %s%s %s(%s) {\n%s\n}\n".format(linkage, returnType, mangled(index), params.join(", "), lines.join("\n"));
     }
 
     /// The LLVM parameter that receives `param`.
     private static string incoming(const Local param)
     {
         return "%" ~ param.name;
+    }
+
+    /// The struct a closure's environment points to: each capture with an operand, in order.
+    private string environmentLayout(const Function func)
+    {
+        auto stored = func.captures.map!(c => llvmType(c.type, func.body.span)).filter!(t => t != "void");
+        return "{ %-(%s, %) }".format(stored);
+    }
+
+    /// A lambda's captures, loaded from its environment into their slots.
+    private Fragment receiveCaptures(const Function func)
+    {
+        auto layout = environmentLayout(func);
+        Fragment code;
+        size_t at = 0;
+        foreach (capture; func.captures)
+        {
+            auto type = llvmType(capture.type, func.body.span);
+            if (type == "void") continue;
+            auto pointer = fieldPointer(layout, "%.env", at++);
+            auto value = _function.load(type, pointer.value);
+            code = code.then(pointer).then(value).then(Fragment.store(type, value.value, _function.slots[capture]));
+        }
+        return code;
     }
 
     /// Where every local of `func` lives. Slots are allocated in the order their code will be
@@ -290,6 +361,11 @@ private final class Generator
             if (type is null) continue;
             if (param.mutable) slots.bind(param, incoming(param));
             else slots.allocate(param, type);
+        }
+        foreach (capture; func.captures)
+        {
+            auto type = llvmType(capture.type, func.body.span);
+            if (type != "void") slots.allocate(capture, type);
         }
         planSlots(slots, func.body);
         return slots;
@@ -308,13 +384,20 @@ private final class Generator
             (const BoolLit _) {},
             (const IntLit _) {},
             (const FloatLit _) {},
+            (const StringLit _) {},
             (const LocalRef _) {},
             (const Break _) {},
             (const Continue _) {},
             (const Call call) => all(call.args),
+            (const CallClosure call) {
+                planSlots(slots, *call.callee);
+                all(call.args);
+            },
+            (const MakeClosure closure) => all(closure.captures),
             (const ForeignCall call) => all(call.args),
             (const IntrinsicCall call) => all(call.args),
             (const Prim prim) => all(prim.args),
+            (const Convert convert) => planSlots(slots, *convert.value),
             (const If if_) {
                 planSlots(slots, *if_.condition);
                 planSlots(slots, *if_.trueBody);
@@ -325,6 +408,29 @@ private final class Generator
                 if (block.result !is null) planSlots(slots, *block.result);
             },
             (const Loop loop) => planSlots(slots, *loop.body),
+            (const Return return_) => planSlots(slots, *return_.value),
+            (const Construct construct) => all(construct.fields),
+            (const Field field) => planSlots(slots, *field.object),
+            (const Update update) {
+                planSlots(slots, *update.object);
+                planSlots(slots, *update.value);
+            },
+            (const Inject inject) {
+                if (inject.payload !is null) planSlots(slots, *inject.payload);
+            },
+            (const IsMember test) => planSlots(slots, *test.subject),
+            (const Payload payload) => planSlots(slots, *payload.subject),
+            (const ArrayLit literal) => all(literal.elements),
+            (const Index index) {
+                planSlots(slots, *index.array);
+                planSlots(slots, *index.index);
+            },
+            (const Slice slice) {
+                planSlots(slots, *slice.array);
+                planSlots(slots, *slice.start);
+                planSlots(slots, *slice.end);
+            },
+            (const Length length) => planSlots(slots, *length.array),
         );
     }
 
@@ -346,6 +452,27 @@ private final class Generator
         return e.kind.match!(kind => emit(e, kind));
     }
 
+    /// Each of `exprs` in order, with the operand of each, null for one with none.
+    private Fragment emitAll(const Expr[] exprs, out string[] operands)
+    {
+        Fragment code;
+        foreach (ref expr; exprs)
+        {
+            auto value = emitExpr(expr);
+            code = code.then(value);
+            operands ~= operandOf(expr, value);
+        }
+        return code.withValue(null);
+    }
+
+    /// `value`'s operand, as the parent uses it. A `Never` has none, and the code after it is never
+    /// reached, so `undef` stands in for whatever type the parent wants.
+    private string operandOf(const Expr e, Fragment value)
+    {
+        if (value.value is null && e.type == _program.types.never) return "undef";
+        return value.value;
+    }
+
     private Fragment emit(const Expr e, const UnitLit)
     {
         return Fragment.init;
@@ -357,19 +484,56 @@ private final class Generator
     }
 
     /// Signed, since a negative literal is its two's complement and LLVM accepts a negative
-    /// constant for an integer of any width; an unsigned one is zero-extended, so it's unchanged.
+    /// constant for an integer of any width. An unsigned value too large for the signed type of
+    /// its width is written as the negative number with the same bits.
     private Fragment emit(const Expr e, const IntLit literal)
     {
         import std.conv : to;
 
-        return Fragment.constant((cast(long) literal.value).to!string);
+        auto info = _program.types.integerOf(e.type);
+        auto value = cast(long) literal.value;
+        if (info.bits < 64 && !info.signed && value >= (1L << (info.bits - 1))) value -= 1L << info.bits;
+        return Fragment.constant(value.to!string);
     }
 
     /// As its bits, since a decimal constant has to be exact in LLVM.
     private Fragment emit(const Expr e, const FloatLit literal)
     {
-        double value = literal.value;
-        return Fragment.constant("0x%016X".format(*cast(ulong*) &value));
+        return Fragment.constant(floatConstant(literal.value));
+    }
+
+    private static string floatConstant(double value)
+    {
+        return "0x%016X".format(*cast(ulong*) &value);
+    }
+
+    private Fragment emit(const Expr e, const StringLit literal)
+    {
+        return Fragment.constant(stringConstant(literal.value));
+    }
+
+    /// A String constant: a private global holding `text`'s bytes, with no terminator.
+    private string stringConstant(string text)
+    {
+        if (text.length == 0) return "zeroinitializer";
+        if (auto existing = text in _stringGlobals) return *existing;
+        auto name = "@.str.%s".format(_globals.length);
+        _globals ~= "%s = private unnamed_addr constant [%s x i8] c\"%s\"".format(name, text.length, escaped(text));
+        auto operand = "{ ptr %s, i64 %s }".format(name, text.length);
+        _stringGlobals[text] = operand;
+        return operand;
+    }
+
+    /// The body of an LLVM `c"..."`: printable ASCII as is, every other byte as `\XX`.
+    private static string escaped(string text)
+    {
+        string result;
+        foreach (char c; text)
+        {
+            if (c >= ' ' && c <= '~' && c != '"' && c != '\\') result ~= c;
+            else result ~= "\\%02X".format(cast(ubyte) c);
+        }
+        return result;
     }
 
     /// A local's value, loaded from its slot. A local with no operand, like a Unit one, has no slot.
@@ -383,27 +547,43 @@ private final class Generator
     private Fragment emit(const Expr e, const Call call)
     {
         auto func = _program.functions[call.target];
-        Fragment arguments;
+        auto params = func.params.map!(p => paramType(p, e.span)).array;
+        auto arguments = emitArguments(call.args, params, func.params.map!(p => p.mutable).array);
+        auto called = arguments.code.then(_function.call(llvmType(func.returnType, e.span), mangled(call.target),
+            arguments.operands));
+        return endIfNever(called, e.type);
+    }
+
+    private struct Arguments
+    {
+        Fragment code;
         string[] operands;
-        foreach (i, ref arg; call.args)
+    }
+
+    /// Arguments as a call passes them, and their code. `params` is how each is passed, from
+    /// `passedAs`, with null for one that's left out, and `mutables` which are mutable.
+    private Arguments emitArguments(const Expr[] args, string[] params, const bool[] mutables)
+    {
+        Arguments result;
+        foreach (i, ref arg; args)
         {
-            auto param = func.params[i];
-            auto type = paramType(param, arg.span);
-            if (param.mutable)
+            auto type = params[i];
+            if (mutables[i])
             {
                 // Core passes a mutable local here, and the callee writes through its slot.
+                if (type is null) continue;
                 auto local = arg.kind.match!((const LocalRef use) => use.local, _ => cast(const(Local)) null);
                 assert(local !is null, "lowering passes a local to a mutable param");
-                if (type !is null) operands ~= type ~ " " ~ _function.slots[local];
+                result.operands ~= "ptr " ~ _function.slots[local];
                 continue;
             }
             // Evaluated even when it has no operand, for what it does.
             auto value = emitExpr(arg);
-            arguments = arguments.then(value);
-            if (type !is null) operands ~= type ~ " " ~ value.value;
+            result.code = result.code.then(value);
+            if (type !is null) result.operands ~= type ~ " " ~ operandOf(arg, value);
         }
-        auto called = arguments.then(_function.call(llvmType(func.returnType, e.span), mangled(func), operands));
-        return func.returnType == _program.types.never ? called.then(noReturn()) : called;
+        result.code = result.code.withValue(null);
+        return result;
     }
 
     /// How `param` is passed: as its LLVM type, as a `ptr` to the caller's slot when it's mutable,
@@ -411,16 +591,92 @@ private final class Generator
     /// because both ask this.
     private string paramType(const Local param, Span span)
     {
-        auto type = llvmType(param.type, span);
-        if (type == "void") return null;
-        return param.mutable ? "ptr" : type;
+        return passedAs(param.type, param.mutable, span);
     }
 
-    /// Ends the block after a call that doesn't return. Whatever follows is never reached, but it
-    /// still needs a block to be in.
-    private Fragment noReturn()
+    private string passedAs(Type type, bool mutable, Span span)
     {
-        return Fragment.unreachable().then(Fragment.label(_function.newLabel("after.noreturn")));
+        auto llType = llvmType(type, span);
+        if (llType == "void") return null;
+        return mutable ? "ptr" : llType;
+    }
+
+    /// `code`, followed by the end of its block when `type` is `Never`: whatever follows is never
+    /// reached, but it still needs a block to be in.
+    private Fragment endIfNever(Fragment code, Type type)
+    {
+        if (type != _program.types.never) return code;
+        return code.then(Fragment.unreachable()).then(Fragment.label(_function.newLabel("after.noreturn")));
+    }
+
+    /// A call through a function value: its code takes the arguments, then its environment.
+    private Fragment emit(const Expr e, const CallClosure call)
+    {
+        auto signature = functionData(call.callee.type);
+        auto closure = emitExpr(*call.callee);
+        auto code = _function.extract(closureLayout, closure.value, 0);
+        auto env = _function.extract(closureLayout, closure.value, 1);
+        string[] params;
+        bool[] mutables;
+        foreach (i, param; signature.params)
+        {
+            params ~= passedAs(param, signature.isMutable(i), e.span);
+            mutables ~= signature.isMutable(i);
+        }
+        auto arguments = emitArguments(call.args, params, mutables);
+        auto called = closure.then(code).then(env).then(arguments.code)
+            .then(_function.call(llvmType(signature.ret, e.span), code.value, arguments.operands ~ ("ptr " ~ env.value)));
+        return endIfNever(called, e.type);
+    }
+
+    /// A function value. A lambda's environment is a copy of its captures on the heap; any other
+    /// function goes through a thunk that takes an environment and ignores it.
+    private Fragment emit(const Expr e, const MakeClosure closure)
+    {
+        auto func = _program.functions[closure.target];
+        if (func.origin != FunctionOrigin.lambda)
+        {
+            return Fragment.constant("{ ptr %s, ptr null }".format(thunk(closure.target, e.span)));
+        }
+        auto layout = environmentLayout(func);
+        string[] operands;
+        auto values = emitAll(closure.captures, operands);
+        auto code = mangled(closure.target);
+        if (layout == "{  }") return values.withValue("{ ptr %s, ptr null }".format(code));
+
+        auto env = alloc(layout);
+        auto result = values.then(env);
+        size_t at = 0;
+        foreach (i, capture; func.captures)
+        {
+            if (operands[i] is null) continue;
+            auto pointer = fieldPointer(layout, env.value, at++);
+            result = result.then(pointer).then(Fragment.store(llvmType(capture.type, e.span), operands[i], pointer.value));
+        }
+        return result.then(_function.insert(closureLayout, "{ ptr %s, ptr undef }".format(code), "ptr", env.value, 1));
+    }
+
+    /// The thunk for calling function `target` through a closure.
+    private string thunk(size_t target, Span span)
+    {
+        if (auto existing = target in _thunks) return *existing;
+        auto name = "@\".thunk.%s\"".format(target);
+        _thunks[target] = name;
+
+        auto func = _program.functions[target];
+        string[] declared;
+        foreach (i, param; func.params)
+        {
+            auto type = paramType(param, span);
+            if (type !is null) declared ~= "%s %%.a%s".format(type, i);
+        }
+        auto returned = llvmType(func.returnType, span);
+        auto body = returned == "void"
+            ? "  call void %s(%s)\n  ret void\n".format(mangled(target), declared.join(", "))
+            : "  %%.r = call %s %s(%s)\n  ret %s %%.r\n".format(returned, mangled(target), declared.join(", "), returned);
+        _thunkDefinitions ~= "define private %s %s(%s) {\n.entry:\n%s}\n".format(returned, name,
+            (declared ~ "ptr %.env").join(", "), body);
+        return name;
     }
 
     /// A call to the C function `call.symbol`, declared from the types at the call.
@@ -435,8 +691,9 @@ private final class Generator
             auto param = cType(arg.type, arg.span);
             auto value = emitExpr(arg);
             arguments = arguments.then(value);
+            if (param == "void") continue;
             params ~= param;
-            operands ~= param ~ " " ~ value.value;
+            operands ~= param ~ " " ~ operandOf(arg, value);
         }
 
         auto declaration = "declare ccc %s @%s(%s)%s".format(returnType, call.symbol, params.join(", "),
@@ -452,7 +709,7 @@ private final class Generator
         _foreign[call.symbol] = declaration;
 
         auto called = arguments.then(_function.call(returnType, "@" ~ call.symbol, operands, "ccc"));
-        return e.type == _program.types.never ? called.then(noReturn()) : called;
+        return endIfNever(called, e.type);
     }
 
     /// `type` as a C function takes or returns it: C's ABI wants `bool`, and integers narrower
@@ -469,37 +726,49 @@ private final class Generator
         return llvmType(type, span);
     }
 
-    /// A call to the runtime's `silver_<name>`, with a suffix naming the argument's type for each
-    /// `Any` parameter.
     private Fragment emit(const Expr e, const IntrinsicCall call)
+    {
+        final switch (call.intrinsic)
+        {
+            case Intrinsic.print, Intrinsic.printl:
+                return emitPrint(call);
+            case Intrinsic.read:
+                return emitRead();
+            case Intrinsic.panic:
+                return emitExplicitPanic(call.args[0], e.span);
+            case Intrinsic.length:
+                assert(0, "lowering makes `length` a Length");
+        }
+    }
+
+    /// A call to the runtime's `silver_<name>`, with a suffix naming the type of the `Any` argument.
+    private Fragment emitPrint(const IntrinsicCall call)
     {
         import std.conv : to;
 
         auto types = _program.types;
-        if (call.intrinsic == Intrinsic.panic) return notImplemented("panic", e.span);
-        if (e.type == types.string_ || types.isOption(e.type))
-        {
-            return notImplemented("an intrinsic returning `%s`".format(types.describe(e.type)), e.span);
-        }
-
-        auto name = "silver_" ~ call.intrinsic.to!string;
-        Fragment arguments;
+        auto arg = call.args[0];
+        auto value = emitExpr(arg);
+        if (arg.type == types.never) return value;
+        auto name = "silver_%s_%s".format(call.intrinsic.to!string, runtimeSuffix(arg.type));
         string[] operands;
-        foreach (i, ref arg; call.args)
+        if (arg.type == types.string_)
         {
-            if (arg.type == types.string_) return notImplemented("passing a String to an intrinsic", arg.span);
-            auto value = emitExpr(arg);
-            if (call.anyArgs[i])
-            {
-                name ~= "_" ~ runtimeSuffix(arg.type);
-                if (types.isInteger(arg.type)) value = value.then(widened(arg.type, value.value, arg.span));
-            }
-            arguments = arguments.then(value);
-            if (value.value !is null) operands ~= value.value;
+            auto parts = sliceParts(value.value);
+            value = value.then(parts.code);
+            operands = [parts.data, parts.length];
         }
-
-        if (name !in runtime) return notImplemented("the intrinsic " ~ name, e.span);
-        return arguments.then(callRuntime(name, operands));
+        else if (value.value !is null)
+        {
+            auto argument = value.value;
+            if (types.isInteger(arg.type))
+            {
+                value = value.then(widened(arg.type, argument, arg.span));
+                argument = value.value;
+            }
+            operands = [argument];
+        }
+        return value.then(callRuntime(name, operands)).withValue(null);
     }
 
     /// The suffix for an argument of `type` passed as `Any`. Every integer is `int` or `uint`.
@@ -510,7 +779,50 @@ private final class Generator
         if (type == types.float_) return "float";
         if (type == types.bool_) return "bool";
         if (type == types.unit) return "unit";
+        if (type == types.string_) return "string";
         assert(0, "lowering only passes primitives to an intrinsic's Any");
+    }
+
+    /// A line of input, as a `String?`: the runtime says whether there was one, and hands the
+    /// String back through the out slots.
+    private Fragment emitRead()
+    {
+        _function.usesOutSlots = true;
+        auto present = callRuntime("silver_read", [FunctionState.outData, FunctionState.outLength]);
+        auto text = loadOutSlice();
+        auto layout = optionLayout(sliceLayout);
+        auto tagged = _function.insert(layout, "undef", "i1", present.value, 0);
+        auto whole = _function.insert(layout, tagged.value, sliceLayout, text.value, 1);
+        return present.then(text).then(tagged).then(whole);
+    }
+
+    /// The String or array a runtime call has just written to the out slots.
+    private Fragment loadOutSlice()
+    {
+        auto data = _function.load("ptr", FunctionState.outData);
+        auto length = _function.load("i64", FunctionState.outLength);
+        return data.then(length).then(buildSlice(data.value, length.value));
+    }
+
+    /// A call to the runtime function `name`, which hands back a String through the out slots.
+    private Fragment callRuntimeForString(string name, string[] operands)
+    {
+        _function.usesOutSlots = true;
+        return callRuntime(name, operands ~ [FunctionState.outData, FunctionState.outLength]).then(loadOutSlice());
+    }
+
+    /// `panic(message)`: the message, with the location first, as other panics have.
+    private Fragment emitExplicitPanic(const Expr message, Span span)
+    {
+        auto text = emitExpr(message);
+        auto prefix = stringConstant(located(span) ~ ": ");
+        auto joined = text.then(emitConcat([prefix, text.value], "i8", "1"));
+        auto parts = sliceParts(joined.value);
+        return joined.then(parts.code)
+            .then(callRuntime("silver_panic_message", [parts.data, parts.length]))
+            .then(Fragment.unreachable())
+            .then(Fragment.label(_function.newLabel("after.panic")))
+            .withValue(null);
     }
 
     /// An integer as the runtime takes it: 64 bits, sign- or zero-extended.
@@ -527,22 +839,26 @@ private final class Generator
     {
         auto types = _program.types;
         auto operandType = prim.args[0].type;
-        if (prim.op == PrimOp.Concat || prim.op == PrimOp.Append)
-        {
-            return notImplemented("`~` on `%s`".format(types.describe(operandType)), e.span);
-        }
 
-        Fragment arguments;
         string[] operands;
-        foreach (ref arg; prim.args)
+        auto arguments = emitAll(prim.args, operands);
+
+        switch (prim.op)
         {
-            auto value = emitExpr(arg);
-            arguments = arguments.then(value);
-            operands ~= value.value;
+            case PrimOp.Concat:
+                auto layout = llvmType(elementOf(e.type), e.span);
+                return arguments.then(emitConcat(operands, layout, elementSizeOf(layout)));
+            case PrimOp.Append:
+                return arguments.then(emitAppend(operands[0], operands[1], llvmType(elementOf(e.type), e.span)));
+            case PrimOp.Format:
+                return arguments.then(emitFormat(operandType, operands[0], e.span));
+            default:
+                break;
         }
 
         // `()` has one value, so comparing two is a constant.
         if (operandType == types.unit) return arguments.then(Fragment.constant(prim.op == PrimOp.Equal ? "true" : "false"));
+        if (operandType == types.string_) return arguments.then(emitStringComparison(prim.op, operands[0], operands[1]));
         return arguments.then(operation(prim, operandType, operands, e.span));
     }
 
@@ -591,7 +907,7 @@ private final class Generator
             case PrimOp.Equal, PrimOp.NotEqual, PrimOp.Less, PrimOp.LessEqual, PrimOp.Greater, PrimOp.GreaterEqual:
                 auto predicate = comparison(prim.op, isFloat, isInteger && !signed);
                 return instruction((isFloat ? "fcmp " : "icmp ") ~ predicate, both);
-            case PrimOp.Concat, PrimOp.Append:
+            case PrimOp.Concat, PrimOp.Append, PrimOp.Format:
                 assert(0, "handled by the caller");
         }
     }
@@ -608,6 +924,32 @@ private final class Generator
             case PrimOp.GreaterEqual: return isFloat ? "oge" : unsigned ? "uge" : "sge";
             default: assert(0, "not a comparison");
         }
+    }
+
+    /// `lhs op rhs` for two Strings, from the sign of the runtime's answer.
+    private Fragment emitStringComparison(PrimOp op, string lhs, string rhs)
+    {
+        auto left = sliceParts(lhs);
+        auto right = sliceParts(rhs);
+        auto order = callRuntime("silver_string_compare", [left.data, left.length, right.data, right.length]);
+        auto result = _function.result("icmp %s i32 %s, 0".format(comparison(op, false, false), order.value));
+        return left.code.then(right.code).then(order).then(result);
+    }
+
+    /// A primitive as a String, as `print` shows it.
+    private Fragment emitFormat(Type type, string value, Span span)
+    {
+        auto types = _program.types;
+        if (types.isInteger(type))
+        {
+            auto wide = widened(type, value, span);
+            return wide.then(callRuntimeForString(types.integerOf(type).signed ? "silver_format_int" : "silver_format_uint",
+                [wide.value]));
+        }
+        if (type == types.float_) return callRuntimeForString("silver_format_float", [value]);
+        if (type == types.bool_) return callRuntimeForString("silver_format_bool", [value]);
+        throw new DiagnosticException(Diagnostic(DiagnosticCode.InternalError, span,
+            "A function value can't be printed in compiled code yet"));
     }
 
     /// `lhs op rhs` through LLVM's overflow intrinsic, panicking if the result doesn't fit.
@@ -655,6 +997,74 @@ private final class Generator
         return checked.then(_function.convert("trunc", "i64", wide.value, llvmType(type, span)));
     }
 
+    /// `T(x)`: a number made another number type, panicking if it doesn't fit.
+    private Fragment emit(const Expr e, const Convert convert)
+    {
+        auto types = _program.types;
+        auto value = emitExpr(*convert.value);
+        auto source = convert.value.type;
+        auto target = e.type;
+        if (source == target) return value;
+
+        if (target == types.float_)
+        {
+            auto signed = types.integerOf(source).signed;
+            return value.then(_function.convert(signed ? "sitofp" : "uitofp", llvmType(source, e.span), value.value, "double"));
+        }
+
+        auto to = types.integerOf(target);
+        auto message = "Value is out of range for %sInt%s".format(to.signed ? "" : "U", to.bits);
+        if (source == types.float_)
+        {
+            return value.then(emitFloatToIntegerCheck(value.value, to, e.span, message))
+                .then(_function.convert(to.signed ? "fptosi" : "fptoui", "double", value.value, llvmType(target, e.span)));
+        }
+
+        auto from = types.integerOf(source);
+        auto checks = emitIntegerRangeCheck(value.value, llvmType(source, e.span), from, to, e.span, message);
+        auto converted = value.then(checks);
+        if (from.bits == to.bits) return converted.withValue(value.value);
+        auto opcode = to.bits < from.bits ? "trunc" : from.signed ? "sext" : "zext";
+        return converted.then(_function.convert(opcode, llvmType(source, e.span), value.value, llvmType(target, e.span)));
+    }
+
+    /// Panics unless `value` of `from`'s type is between `to`'s bounds. Each bound is only
+    /// compared when `from` can get past it, so the constant always fits `from`'s type.
+    private Fragment emitIntegerRangeCheck(string value, string llType, IntegerInfo from, IntegerInfo to,
+        Span span, string message)
+    {
+        Fragment checks;
+        if (from.minMagnitude > to.minMagnitude)
+        {
+            auto inRange = _function.result("icmp sge %s %s, %s%s".format(llType, value,
+                to.minMagnitude == 0 ? "" : "-", to.minMagnitude));
+            auto outOfRange = _function.result("xor i1 %s, true".format(inRange.value));
+            checks = checks.then(inRange).then(outOfRange).then(emitPanicIf(outOfRange.value, span, message));
+        }
+        if (from.maxValue > to.maxValue)
+        {
+            auto tooLarge = _function.result("icmp %s %s %s, %s".format(from.signed ? "sgt" : "ugt", llType, value, to.maxValue));
+            checks = checks.then(tooLarge).then(emitPanicIf(tooLarge.value, span, message));
+        }
+        return checks.withValue(null);
+    }
+
+    /// Panics unless `value`, truncated toward zero, fits `to`. The comparisons are ordered,
+    /// so NaN fails them, and `fptosi`/`fptoui` are undefined for anything that gets past them.
+    private Fragment emitFloatToIntegerCheck(string value, IntegerInfo to, Span span, string message)
+    {
+        double limit = 2.0 ^^ (to.signed ? to.bits - 1 : to.bits);
+        // The lowest value that fits, or the highest one below that doesn't.
+        auto lowest = to.signed && to.bits == 64;
+        double lower = !to.signed ? -1.0 : lowest ? -limit : -limit - 1;
+        auto aboveLower = _function.result("fcmp %s double %s, %s".format(lowest ? "oge" : "ogt", value, floatConstant(lower)));
+        auto belowUpper = _function.result("fcmp olt double %s, %s".format(value, floatConstant(limit)));
+        auto fits = _function.result("and i1 %s, %s".format(aboveLower.value, belowUpper.value));
+        auto fails = _function.result("xor i1 %s, true".format(fits.value));
+        return aboveLower.then(belowUpper).then(fits).then(fails).then(emitPanicIf(fails.value, span, message))
+            .withValue(null);
+    }
+
     /// Panics with `message` and the location of `span` if the `i1` operand `condition` is true.
     private Fragment emitPanicIf(string condition, Span span, string message)
     {
@@ -673,9 +1083,32 @@ private final class Generator
             .then(Fragment.unreachable());
     }
 
-    private Fragment emit(const Expr e, const If)
+    /// Either arm's value, through a phi. An arm that leaves, being `Never`, has none, and the
+    /// phi takes `undef` from wherever its dead block ends.
+    private Fragment emit(const Expr e, const If if_)
     {
-        return notImplemented("If", e.span);
+        auto condition = emitExpr(*if_.condition);
+        auto thenLabel = _function.newLabel("then");
+        auto elseLabel = _function.newLabel("else");
+        auto mergeLabel = _function.newLabel("merge");
+        auto trueBody = Fragment.label(thenLabel).then(emitExpr(*if_.trueBody));
+        auto falseBody = Fragment.label(elseLabel).then(emitExpr(*if_.falseBody));
+        auto code = condition
+            .then(Fragment.branch(condition.value, thenLabel, elseLabel))
+            .then(trueBody).then(Fragment.jump(mergeLabel))
+            .then(falseBody).then(Fragment.jump(mergeLabel))
+            .then(Fragment.label(mergeLabel));
+
+        auto type = llvmType(e.type, e.span);
+        if (type == "void") return code.withValue(null);
+        auto phi = _function.result("phi %s [ %s, %%%s ], [ %s, %%%s ]".format(type,
+            orUndef(trueBody.value), trueBody.endBlock, orUndef(falseBody.value), falseBody.endBlock));
+        return code.then(phi);
+    }
+
+    private static string orUndef(string value)
+    {
+        return value is null ? "undef" : value;
     }
 
     private Fragment emit(const Expr e, const Block block)
@@ -688,19 +1121,40 @@ private final class Generator
         return block.result is null ? statements.withValue(null) : statements.then(emitExpr(*block.result));
     }
 
-    private Fragment emit(const Expr e, const Loop)
+    private Fragment emit(const Expr e, const Loop loop)
     {
-        return notImplemented("Loop", e.span);
+        auto targets = LoopTargets(_function.newLabel("loop"), _function.newLabel("loop.end"));
+        _function.loops[loop.label] = targets;
+        return Fragment.jump(targets.head)
+            .then(Fragment.label(targets.head))
+            .then(emitExpr(*loop.body))
+            .then(Fragment.jump(targets.head))
+            .then(Fragment.label(targets.end))
+            .withValue(null);
     }
 
-    private Fragment emit(const Expr e, const Break)
+    private Fragment emit(const Expr e, const Break jump)
     {
-        return notImplemented("Break", e.span);
+        return leaveTo(_function.loops[jump.label].end);
     }
 
-    private Fragment emit(const Expr e, const Continue)
+    private Fragment emit(const Expr e, const Continue jump)
     {
-        return notImplemented("Continue", e.span);
+        return leaveTo(_function.loops[jump.label].head);
+    }
+
+    private Fragment emit(const Expr e, const Return return_)
+    {
+        auto value = emitExpr(*return_.value);
+        return value.then(Fragment.ret(_function.returnType, value.value))
+            .then(Fragment.label(_function.newLabel("after.return")))
+            .withValue(null);
+    }
+
+    /// Goes to `target`. What follows is never reached, but needs a block to be in.
+    private Fragment leaveTo(string target)
+    {
+        return Fragment.jump(target).then(Fragment.label(_function.newLabel("after.jump")));
     }
 
     /// A statement's code, which has no value.
@@ -714,19 +1168,389 @@ private final class Generator
         return emitExpr(eval.expr);
     }
 
-    private Fragment emit(const Stmt s, const Assign)
+    private Fragment emit(const Stmt s, const Assign assign)
     {
-        return notImplemented("Assign", s.span);
+        return storeLocal(assign.local, emitExpr(assign.value), s.span);
+    }
+
+    private Fragment emit(const Stmt s, const Let let)
+    {
+        return storeLocal(let.local, emitExpr(let.value), s.span);
     }
 
     /// A Unit or Never value has no operand, so its local has no slot.
-    private Fragment emit(const Stmt s, const Let let)
+    private Fragment storeLocal(const Local local, Fragment value, Span span)
     {
-        auto value = emitExpr(let.value);
-        auto slot = _function.slots[let.local];
-        assert((slot is null) == (value.value is null), "a local has a slot exactly when its value has an operand");
-        if (slot is null) return value;
-        return value.then(Fragment.store(llvmType(let.local.type, s.span), value.value, slot));
+        auto slot = _function.slots[local];
+        if (slot is null || value.value is null) return value;
+        return value.then(Fragment.store(llvmType(local.type, span), value.value, slot));
+    }
+
+    // Records. A tuple is an LLVM struct by value, and a declared type's value is a pointer to one
+    // on the heap, which never changes once built.
+
+    private bool isTuple(Type type)
+    {
+        return _program.types.isTuple(type);
+    }
+
+    /// The types of a tuple's elements or a declared type's fields.
+    private const(Type)[] fieldTypes(Type type)
+    {
+        if (isTuple(type)) return _program.types.tupleElements(type);
+        auto fields = type in _program.recordFields;
+        assert(fields !is null, "lowering describes every declared type it uses");
+        return *fields;
+    }
+
+    /// The struct holding a record's fields: each with an operand, in order.
+    private string recordLayout(Type type, Span span)
+    {
+        auto stored = fieldTypes(type).map!(f => llvmType(f, span)).filter!(t => t != "void");
+        return "{ %-(%s, %) }".format(stored);
+    }
+
+    /// Where field `index` is in `recordLayout`, or -1 for one with no operand.
+    private ptrdiff_t storedIndex(Type type, size_t index, Span span)
+    {
+        auto fields = fieldTypes(type);
+        if (llvmType(fields[index], span) == "void") return -1;
+        return fields[0 .. index].map!(f => llvmType(f, span)).filter!(t => t != "void").array.length;
+    }
+
+    /// Whether a declared type's values hold nothing, so each is a null pointer.
+    private bool isEmptyRecord(Type type, Span span)
+    {
+        return fieldTypes(type).all!(f => llvmType(f, span) == "void");
+    }
+
+    private Fragment emit(const Expr e, const Construct construct)
+    {
+        string[] operands;
+        auto values = emitAll(construct.fields, operands);
+        auto layout = recordLayout(e.type, e.span);
+        auto fields = fieldTypes(e.type);
+        if (isTuple(e.type))
+        {
+            if (layout == "{  }") return values.withValue("zeroinitializer");
+            Fragment built = Fragment.constant("undef");
+            foreach (i, operand; operands)
+            {
+                auto at = storedIndex(e.type, i, e.span);
+                if (at < 0) continue;
+                built = built.then(_function.insert(layout, built.value, llvmType(fields[i], e.span), operand, at));
+            }
+            return values.then(built);
+        }
+        if (isEmptyRecord(e.type, e.span)) return values.withValue("null");
+
+        auto object = alloc(layout);
+        auto code = values.then(object);
+        foreach (i, operand; operands)
+        {
+            auto at = storedIndex(e.type, i, e.span);
+            if (at < 0) continue;
+            auto pointer = fieldPointer(layout, object.value, at);
+            code = code.then(pointer).then(Fragment.store(llvmType(fields[i], e.span), operand, pointer.value));
+        }
+        return code.withValue(object.value);
+    }
+
+    private Fragment emit(const Expr e, const Field field)
+    {
+        auto object = emitExpr(*field.object);
+        auto type = field.object.type;
+        auto at = storedIndex(type, field.index, e.span);
+        if (at < 0) return object.withValue(null);
+        auto layout = recordLayout(type, e.span);
+        if (isTuple(type)) return object.then(_function.extract(layout, object.value, at));
+        auto pointer = fieldPointer(layout, object.value, at);
+        return object.then(pointer).then(_function.load(llvmType(e.type, e.span), pointer.value));
+    }
+
+    /// A tuple is changed by value; a declared type's value is copied to a new object.
+    private Fragment emit(const Expr e, const Update update)
+    {
+        auto object = emitExpr(*update.object);
+        auto value = emitExpr(*update.value);
+        auto code = object.then(value);
+        auto type = e.type;
+        auto at = storedIndex(type, update.index, e.span);
+        if (at < 0) return code.withValue(object.value);
+        auto layout = recordLayout(type, e.span);
+        auto fieldType = llvmType(fieldTypes(type)[update.index], e.span);
+        if (isTuple(type)) return code.then(_function.insert(layout, object.value, fieldType, value.value, at));
+
+        auto whole = _function.load(layout, object.value);
+        auto changed = _function.insert(layout, whole.value, fieldType, value.value, at);
+        auto copy = alloc(layout);
+        return code.then(whole).then(changed).then(copy).then(Fragment.store(layout, changed.value, copy.value))
+            .withValue(copy.value);
+    }
+
+    // Sums and options. An option is `{ i1, T }`, its tag saying whether there's a payload. A sum is
+    // `{ i32, ptr }`: the member's index, and its value, which is boxed unless it's already a
+    // pointer. A sum whose members are all markers is just the `i32`.
+
+    private bool isOption(Type type)
+    {
+        return _program.types.isOption(type);
+    }
+
+    private const(Type)[] membersOf(Type type)
+    {
+        auto members = type in _program.sumMembers;
+        assert(members !is null, "lowering describes every sum it uses");
+        return *members;
+    }
+
+    private bool isAllMarkers(Type sum, Span span)
+    {
+        return membersOf(sum).all!(m => (m in _program.recordFields) !is null && isEmptyRecord(m, span));
+    }
+
+    private string optionLayout(string payload)
+    {
+        return payload == "void" ? "{ i1 }" : "{ i1, %s }".format(payload);
+    }
+
+    private Fragment emit(const Expr e, const Inject inject)
+    {
+        auto type = e.type;
+        auto layout = llvmType(type, e.span);
+        auto payload = inject.payload is null ? Fragment.init : emitExpr(*inject.payload);
+        if (isOption(type))
+        {
+            if (inject.member == 0) return payload.withValue("zeroinitializer");
+            auto tagged = _function.insert(layout, "undef", "i1", "true", 0);
+            if (payload.value is null) return payload.then(tagged);
+            auto inner = llvmType(_program.types.optionInner(type), e.span);
+            return payload.then(tagged).then(_function.insert(layout, tagged.value, inner, payload.value, 1));
+        }
+        if (isAllMarkers(type, e.span)) return payload.withValue("%s".format(inject.member));
+
+        auto memberLayout = llvmType(membersOf(type)[inject.member], e.span);
+        auto boxed = payload;
+        if (payload.value is null)
+        {
+            boxed = payload.withValue("null");
+        }
+        else if (memberLayout != "ptr")
+        {
+            auto box = alloc(memberLayout);
+            boxed = payload.then(box).then(Fragment.store(memberLayout, payload.value, box.value)).withValue(box.value);
+        }
+        auto tagged = _function.insert(layout, "undef", "i32", "%s".format(inject.member), 0);
+        return boxed.then(tagged).then(_function.insert(layout, tagged.value, "ptr", boxed.value, 1));
+    }
+
+    private Fragment emit(const Expr e, const IsMember test)
+    {
+        auto subject = emitExpr(*test.subject);
+        auto type = test.subject.type;
+        auto layout = llvmType(type, e.span);
+        if (isOption(type))
+        {
+            auto tag = _function.extract(layout, subject.value, 0);
+            if (test.member == 1) return subject.then(tag);
+            return subject.then(tag).then(_function.result("xor i1 %s, true".format(tag.value)));
+        }
+        auto tag = isAllMarkers(type, e.span) ? subject : subject.then(_function.extract(layout, subject.value, 0));
+        return tag.then(_function.result("icmp eq i32 %s, %s".format(tag.value, test.member)));
+    }
+
+    private Fragment emit(const Expr e, const Payload payload)
+    {
+        auto subject = emitExpr(*payload.subject);
+        auto type = payload.subject.type;
+        auto layout = llvmType(type, e.span);
+        auto memberLayout = llvmType(e.type, e.span);
+        if (memberLayout == "void") return subject.withValue(null);
+        if (isOption(type)) return subject.then(_function.extract(layout, subject.value, 1));
+        if (isAllMarkers(type, e.span)) return subject.withValue("null");
+        auto pointer = _function.extract(layout, subject.value, 1);
+        if (memberLayout == "ptr") return subject.then(pointer);
+        return subject.then(pointer).then(_function.load(memberLayout, pointer.value));
+    }
+
+    // Arrays and Strings: `{ ptr, i64 }`, element zero and the length, in a buffer that the
+    // runtime's `silver_array_append` makes and extends. An element with no operand is never
+    // stored, so such an array's pointer is null.
+
+    /// The element type of an array or String type.
+    private Type elementOf(Type type)
+    {
+        auto types = _program.types;
+        if (type == types.string_) return types.uint8;
+        if (types.isArray(type)) return types.arrayElement(type);
+        return types.never;
+    }
+
+    /// The size of an element stored as `layout`, as an `i64` operand, or zero when nothing is.
+    private string elementSizeOf(string layout)
+    {
+        if (layout == "void") return "0";
+        return "ptrtoint (ptr getelementptr (%s, ptr null, i32 1) to i64)".format(layout);
+    }
+
+    private struct SliceParts
+    {
+        Fragment code;
+        string data;
+        string length;
+    }
+
+    private SliceParts sliceParts(string value)
+    {
+        auto data = _function.extract(sliceLayout, value, 0);
+        auto length = _function.extract(sliceLayout, value, 1);
+        return SliceParts(data.then(length), data.value, length.value);
+    }
+
+    private Fragment buildSlice(string data, string length)
+    {
+        auto withData = _function.insert(sliceLayout, "undef", "ptr", data, 0);
+        return withData.then(_function.insert(sliceLayout, withData.value, "i64", length, 1));
+    }
+
+    /// A new buffer with room for `count` elements of `size` bytes, as a slice whose elements the
+    /// caller writes.
+    private Fragment reserve(string count, string size)
+    {
+        _function.usesOutSlots = true;
+        auto call = callRuntime("silver_array_append", ["null", "0", "null", count, size, "false",
+            FunctionState.outData, FunctionState.outLength]);
+        return call.then(loadOutSlice());
+    }
+
+    private Fragment emit(const Expr e, const ArrayLit literal)
+    {
+        string[] operands;
+        auto values = emitAll(literal.elements, operands);
+        auto count = literal.elements.length;
+        if (count == 0) return values.withValue("zeroinitializer");
+        auto layout = llvmType(elementOf(e.type), e.span);
+        if (layout == "void") return values.then(buildSlice("null", "%s".format(count)));
+
+        auto buffer = reserve("%s".format(count), elementSizeOf(layout));
+        auto parts = sliceParts(buffer.value);
+        auto code = values.then(buffer).then(parts.code);
+        foreach (i, operand; operands)
+        {
+            auto pointer = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, parts.data, i));
+            code = code.then(pointer).then(Fragment.store(layout, operand, pointer.value));
+        }
+        return code.withValue(buffer.value);
+    }
+
+    /// `operands`, Strings or arrays whose elements are stored as `layout`, joined into one
+    /// buffer of exactly their total length.
+    private Fragment emitConcat(string[] operands, string layout, string size)
+    {
+        Fragment code;
+        SliceParts[] parts;
+        string total = "0";
+        foreach (operand; operands)
+        {
+            auto part = sliceParts(operand);
+            parts ~= part;
+            auto sum = _function.result("add i64 %s, %s".format(total, part.length));
+            code = code.then(part.code).then(sum);
+            total = sum.value;
+        }
+        if (layout == "void") return code.then(buildSlice("null", total));
+
+        auto buffer = reserve(total, size);
+        auto result = sliceParts(buffer.value);
+        code = code.then(buffer).then(result.code);
+        useIntrinsic("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)");
+        string offset = "0";
+        foreach (part; parts)
+        {
+            auto target = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, result.data, offset));
+            auto bytes = _function.result("mul i64 %s, %s".format(part.length, size));
+            auto copy = Fragment.instruction("call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)".format(
+                target.value, part.data, bytes.value));
+            auto next = _function.result("add i64 %s, %s".format(offset, part.length));
+            code = code.then(target).then(bytes).then(copy).then(next);
+            offset = next.value;
+        }
+        return code.withValue(buffer.value);
+    }
+
+    /// `lhs ~= rhs`'s value: in place at `lhs`'s frontier when there's room, leaving room to grow.
+    private Fragment emitAppend(string lhs, string rhs, string layout)
+    {
+        auto left = sliceParts(lhs);
+        auto right = sliceParts(rhs);
+        auto code = left.code.then(right.code);
+        if (layout == "void")
+        {
+            auto total = _function.result("add i64 %s, %s".format(left.length, right.length));
+            return code.then(total).then(buildSlice("null", total.value));
+        }
+        _function.usesOutSlots = true;
+        auto call = callRuntime("silver_array_append", [left.data, left.length, right.data, right.length,
+            elementSizeOf(layout), "true", FunctionState.outData, FunctionState.outLength]);
+        return code.then(call).then(loadOutSlice());
+    }
+
+    /// An index of any integer type as an unsigned 64-bit one, so a negative one is too large.
+    private Fragment position(const Expr index)
+    {
+        auto value = emitExpr(index);
+        return value.then(widened(index.type, value.value, index.span));
+    }
+
+    private Fragment emit(const Expr e, const Index index)
+    {
+        auto array = emitExpr(*index.array);
+        auto parts = sliceParts(array.value);
+        auto at = position(*index.index);
+        auto outside = _function.result("icmp uge i64 %s, %s".format(at.value, parts.length));
+        auto code = array.then(parts.code).then(at).then(outside).then(emitPanicIf(outside.value, e.span, "Index is out of range"));
+        auto layout = llvmType(e.type, e.span);
+        if (layout == "void") return code.withValue(null);
+        auto pointer = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, parts.data, at.value));
+        return code.then(pointer).then(_function.load(layout, pointer.value));
+    }
+
+    private Fragment emit(const Expr e, const Slice slice)
+    {
+        auto array = emitExpr(*slice.array);
+        auto parts = sliceParts(array.value);
+        auto start = position(*slice.start);
+        auto end = position(*slice.end);
+        auto reversed = _function.result("icmp ugt i64 %s, %s".format(start.value, end.value));
+        auto tooLong = _function.result("icmp ugt i64 %s, %s".format(end.value, parts.length));
+        auto outside = _function.result("or i1 %s, %s".format(reversed.value, tooLong.value));
+        auto code = array.then(parts.code).then(start).then(end).then(reversed).then(tooLong).then(outside)
+            .then(emitPanicIf(outside.value, e.span, "Slice is out of range"));
+        auto length = _function.result("sub i64 %s, %s".format(end.value, start.value));
+        auto layout = llvmType(elementOf(e.type), e.span);
+        if (layout == "void") return code.then(length).then(buildSlice("null", length.value));
+        auto data = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, parts.data, start.value));
+        return code.then(length).then(data).then(buildSlice(data.value, length.value));
+    }
+
+    private Fragment emit(const Expr e, const Length length)
+    {
+        auto array = emitExpr(*length.array);
+        return array.then(_function.extract(sliceLayout, array.value, 1));
+    }
+
+    // Helpers
+
+    /// Room on the heap for one `layout`; the operand is its address.
+    private Fragment alloc(string layout)
+    {
+        return callRuntime("silver_alloc", [elementSizeOf(layout)]);
+    }
+
+    /// The address of the field at `index` of the struct `object` points to.
+    private Fragment fieldPointer(string layout, string object, size_t index)
+    {
+        return _function.result("getelementptr %s, ptr %s, i32 0, i32 %s".format(layout, object, index));
     }
 
     /// Every function checks on entry that it has room on the stack, and panics if not. Its
@@ -739,10 +1563,10 @@ private final class Generator
         auto limit = _function.result("load ptr, ptr @silver_stack_limit", "%.limit");
         auto tooDeep = _function.result("icmp ult ptr %s, %s".format(frame.value, limit.value), "%.too.deep");
         return frame.then(limit).then(tooDeep)
-            .then(Fragment.branch(tooDeep.value, "stack.overflow", "stack.ok"))
-            .then(Fragment.label("stack.overflow"))
+            .then(Fragment.branch(tooDeep.value, ".stack.overflow", ".stack.ok"))
+            .then(Fragment.label(".stack.overflow"))
             .then(emitPanic(span, "Stack overflow"))
-            .then(Fragment.label("stack.ok"));
+            .then(Fragment.label(".stack.ok"));
     }
 
     /// Declares an LLVM intrinsic, or another module-level line, once at the top of the module.
@@ -767,14 +1591,8 @@ private final class Generator
     /// A NUL-terminated global holding `text`, for the runtime's C-string parameters.
     private string cString(string text)
     {
-        string escaped;
-        foreach (char c; text)
-        {
-            if (c >= ' ' && c <= '~' && c != '"' && c != '\\') escaped ~= c;
-            else escaped ~= "\\%02X".format(cast(ubyte) c);
-        }
-        auto name = "@.str.%s".format(_strings.length);
-        _strings ~= "%s = private unnamed_addr constant [%s x i8] c\"%s\\00\"".format(name, text.length + 1, escaped);
+        auto name = "@.cstr.%s".format(_globals.length);
+        _globals ~= "%s = private unnamed_addr constant [%s x i8] c\"%s\\00\"".format(name, text.length + 1, escaped(text));
         return name;
     }
 
@@ -788,16 +1606,36 @@ private final class Generator
     private string llvmType(Type type, Span span)
     {
         auto types = _program.types;
-        if (type == types.unit || type == types.never) return "void";
+        if (type == types.unit || type == types.never || type == types.none) return "void";
         if (type == types.bool_) return "i1";
         if (type == types.float_) return "double";
         if (types.isInteger(type)) return "i%s".format(types.integerOf(type).bits);
+        if (type == types.string_ || type == types.emptyArray || types.isArray(type)) return sliceLayout;
+        if (types.isFunction(type)) return closureLayout;
+        if (types.isOption(type)) return optionLayout(llvmType(types.optionInner(type), span));
+        if (types.isTuple(type)) return recordLayout(type, span);
+        if (type in _program.recordFields) return "ptr";
+        if (type in _program.sumMembers) return isAllMarkers(type, span) ? "i32" : "{ i32, ptr }";
         return notImplemented!string("the type " ~ types.describe(type), span);
     }
 
-    private string mangled(const Function func)
+    private FunctionData functionData(Type type)
     {
-        return "@\"%s.%s\"".format(func.moduleName, func.name);
+        return _program.types[type].match!(
+            (const FunctionData data) => data,
+            (_) => assert(0, "only a function value can be called"),
+        );
+    }
+
+    /// A declared function is named for its module and name. Anything else can share a name, so
+    /// its index is added.
+    private string mangled(size_t index)
+    {
+        import std.string : replace;
+
+        auto func = _program.functions[index];
+        if (func.origin == FunctionOrigin.declared) return "@\"%s.%s\"".format(func.moduleName, func.name);
+        return "@\"%s.%s.%s\"".format(func.moduleName, func.name.replace("\"", "'").replace("\\", "/"), index);
     }
 
     private T notImplemented(T = Fragment)(string what, Span span)

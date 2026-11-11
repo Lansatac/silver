@@ -6,7 +6,7 @@ import std.range;
 
 import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, SourceContext;
 import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Toolchain;
-import silver.core : lowerProgram;
+import silver.core : lowerProgram, printCore = print;
 import silver.interpreter.evaluator : Evaluator;
 import silver.loader : load, standardLibraryPath;
 import silver.sema : analyze, Analysis, Target;
@@ -31,8 +31,8 @@ Analysis loadAndAnalyze(string programFile, string[] importPaths, SourceContext 
     return analyze(program, context.collector, Target.host);
 }
 
-/// Interprets the program in `programFile`.
-int interpret(string programFile, string[] importPaths)
+/// Interprets the program in `programFile`, or with `emitCore`, prints the Core it lowers to.
+int interpret(string programFile, string[] importPaths, bool emitCore = false)
 {
     auto context = new SourceContext();
     Program program;
@@ -45,7 +45,13 @@ int interpret(string programFile, string[] importPaths)
 
     try
     {
-        auto evaluator = new Evaluator(lowerProgram(program, analysis), true);
+        auto lowered = lowerProgram(program, analysis);
+        if (emitCore)
+        {
+            writeln(printCore(lowered));
+            return 0;
+        }
+        auto evaluator = new Evaluator(lowered, true);
         evaluator.run();
     }
     catch (DiagnosticException e)
@@ -183,6 +189,7 @@ int main(string[] args)
     string[] importPaths;
     string outputPath;
     bool emitLlvm;
+    bool emitCore;
     Backend backend;
 	auto arguments = getopt(
     args,
@@ -190,6 +197,7 @@ int main(string[] args)
     "backend|b", "run: how to run the program: interpreter (default) or llvm", &backend,
     "output|o", "build: where to write the executable (or the IR, with --emit-llvm)", &outputPath,
     "emit-llvm", "build: write LLVM IR instead of an executable", &emitLlvm,
+    "emit-core", "print the Core the program lowers to instead of running it", &emitCore,
     );
     immutable building = args.length == 3 && args[1] == "build";
 	if (arguments.helpWanted || !(args.length == 2 || building))
@@ -214,7 +222,7 @@ int main(string[] args)
     }
     final switch (backend)
     {
-        case Backend.interpreter: return interpret(programFile, allImportPaths);
+        case Backend.interpreter: return interpret(programFile, allImportPaths, emitCore);
         case Backend.llvm: return compileAndRun(programFile, allImportPaths);
     }
 }

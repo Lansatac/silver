@@ -8,7 +8,7 @@ import std.sumtype;
 /// - Every integer type is a `long` holding the value's 64-bit two's complement, as `IntLit`
 ///   stores it. The `Expr`'s type says which width and signedness the bits mean.
 /// - Tuples, user types and sums, options among them, are all a `Record`.
-alias Value = SumType!(Unit, bool, long, double, string, ArrayValue, Record);
+alias Value = SumType!(Unit, bool, long, double, string, ArrayValue, Record, Closure);
 
 /// The value of `()`.
 struct Unit
@@ -22,12 +22,21 @@ struct ArrayValue
     Value[] elements;
 }
 
-/// A tuple, an instance of a user type, or a value of a sum. `tag` is which member of a sum the
-/// value is, and 0 for anything that isn't a sum. Fields are in declaration order.
+/// A tuple, an instance of a user type, or a value of a sum. For a sum or option, `tag` is which
+/// member the value is and `fields` holds its payload, if it has one; for anything else `tag`
+/// is 0 and `fields` are in declaration order. Never changed once built, so sharing one can't be
+/// observed.
 struct Record
 {
     size_t tag;
     Value[] fields;
+}
+
+/// A function value: the Core function `target`, and the values its captures take.
+struct Closure
+{
+    size_t target;
+    Value[] captures;
 }
 
 /// `value` as a `T`, which the evaluator already knows from the `Expr`'s type.

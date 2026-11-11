@@ -35,6 +35,8 @@ private struct Printer
     private int _indent;
     private string[const Local] _names;
     private bool[string] _taken;
+    /// The labels of the loops around what's being printed, innermost last.
+    private size_t[] _loops;
 
     void function_(const Function func)
     {
@@ -68,20 +70,92 @@ private struct Printer
                 auto text = literal.value.to!string;
                 output ~= text.canFind!(c => c == '.' || c == 'e' || c == 'n') ? text : text ~ ".0";
             },
-            (const Break _) { output ~= "break"; },
-            (const Continue _) { output ~= "continue"; },
+            (const Break jump) { output ~= "break" ~ outward(jump.label); },
+            (const Continue jump) { output ~= "continue" ~ outward(jump.label); },
             (const Loop loop) {
                 output ~= "loop ";
+                _loops ~= loop.label;
                 expr(*loop.body);
+                _loops = _loops[0 .. $ - 1];
             },
             (const LocalRef use) { output ~= name(use.local); },
             (const Prim prim) {
                 output ~= "%s".format(prim.op);
                 arguments(prim.args);
             },
+            (const StringLit literal) { output ~= "%(%s%)".format([literal.value]); },
             (const Call call) {
                 output ~= functions[call.target].name;
                 arguments(call.args);
+            },
+            (const CallClosure call) {
+                output ~= "call ";
+                expr(*call.callee);
+                arguments(call.args);
+            },
+            (const MakeClosure closure) {
+                output ~= "closure " ~ functions[closure.target].name;
+                if (closure.captures.length > 0) arguments(closure.captures);
+            },
+            (const Convert convert) {
+                output ~= types.describe(e.type);
+                arguments([*convert.value]);
+            },
+            (const Return return_) {
+                output ~= "return ";
+                expr(*return_.value);
+            },
+            (const Construct construct) {
+                output ~= types.describe(e.type);
+                arguments(construct.fields);
+            },
+            (const Field field) {
+                expr(*field.object);
+                output ~= ".%s".format(field.index);
+            },
+            (const Update update) {
+                expr(*update.object);
+                output ~= " with .%s = ".format(update.index);
+                expr(*update.value);
+            },
+            (const Inject inject) {
+                output ~= "%s#%s".format(types.describe(e.type), inject.member);
+                if (inject.payload !is null) arguments([*inject.payload]);
+            },
+            (const IsMember test) {
+                output ~= "is#%s".format(test.member);
+                arguments([*test.subject]);
+            },
+            (const Payload payload) {
+                output ~= "payload#%s".format(payload.member);
+                arguments([*payload.subject]);
+            },
+            (const ArrayLit literal) {
+                output ~= "[";
+                foreach (i, element; literal.elements)
+                {
+                    if (i > 0) output ~= ", ";
+                    expr(element);
+                }
+                output ~= "]";
+            },
+            (const Index index) {
+                expr(*index.array);
+                output ~= "[";
+                expr(*index.index);
+                output ~= "]";
+            },
+            (const Slice slice) {
+                expr(*slice.array);
+                output ~= "[";
+                expr(*slice.start);
+                output ~= "..";
+                expr(*slice.end);
+                output ~= "]";
+            },
+            (const Length length) {
+                output ~= "length";
+                arguments([*length.array]);
             },
             (const ForeignCall call) {
                 output ~= "foreign \"%s\"".format(call.symbol);
@@ -161,6 +235,16 @@ private struct Printer
         _taken[chosen] = true;
         _names[local] = chosen;
         return chosen;
+    }
+
+    /// Nothing for a jump out of the innermost loop, and otherwise how many loops further out it goes.
+    private string outward(size_t label)
+    {
+        import std.algorithm : countUntil;
+        import std.range : retro;
+
+        auto depth = _loops.retro.countUntil(label);
+        return depth == 0 ? "" : " %s".format(depth);
     }
 
     private void newline()
