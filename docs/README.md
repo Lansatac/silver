@@ -19,6 +19,7 @@ These documents describe the language as designed. Where the implementation does
 | [Strings](language/strings.md) | Text, interpolation, views | Partial: no byte or character views |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, `match` | Implemented |
+| [Generics](language/generics.md) | Type parameters on functions and types, inference | Not implemented |
 | [Modules](language/modules.md) | Files, imports, visibility | Partial: no import forms beyond `import a.b` |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the standard library's natives |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, the test runner | Not implemented |
@@ -27,7 +28,7 @@ These documents describe the language as designed. Where the implementation does
 
 These areas are expected but have no settled design, so the documents mention them only where they affect another feature:
 
-- Generics and interfaces
+- Interfaces and bounds on type parameters
 - Compile-time evaluation
 - Ranges as values
 - Shared mutable references
