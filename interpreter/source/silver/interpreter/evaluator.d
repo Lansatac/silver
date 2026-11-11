@@ -649,6 +649,7 @@ private class BreakSignal : Throwable
     {
         super("break outside of a loop");
         this.label = label;
+        info = noTrace;
     }
 }
 
@@ -661,6 +662,7 @@ private class ContinueSignal : Throwable
     {
         super("continue outside of a loop");
         this.label = label;
+        info = noTrace;
     }
 }
 
@@ -673,5 +675,22 @@ private class ReturnSignal : Throwable
     {
         super("return outside of a function");
         this.value = value;
+        info = noTrace;
     }
+}
+
+/// A signal with `info` already set isn't given a stack trace when it's thrown. Capturing one
+/// costs milliseconds on Windows, which a Silver `return` would otherwise pay every time.
+private class NoTrace : Throwable.TraceInfo
+{
+    int opApply(scope int delegate(ref const(char[])) _) const => 0;
+    int opApply(scope int delegate(ref size_t, ref const(char[])) _) const => 0;
+    override string toString() const => "";
+}
+
+private NoTrace noTrace;
+
+static this()
+{
+    noTrace = new NoTrace;
 }
