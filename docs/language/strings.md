@@ -4,7 +4,7 @@ A `String` is an immutable sequence of UTF-8 bytes. It's a distinct type, not an
 
 ## Literals
 
-String literals are written `"..."` on one line. The escapes are `\n`, `\r`, `\t`, `\0`, `\"`, `\\`, `\{` and `\}`. Any other escape is an error.
+String literals are written `"..."` on one line. The escapes are `\n`, `\r`, `\t`, `\0`, `\"`, `\\`, `\{` and `\}`, and `\u{...}` with one to six hex digits naming a Unicode scalar value, which is written as its UTF-8 bytes: `"\u{1b}[31m"` starts with the escape character, and `"caf\u{e9}"` is `"café"`. A surrogate (`D800` to `DFFF`) or anything above `10FFFF` is an error, as is any other escape.
 
 ## Interpolation
 
@@ -47,7 +47,6 @@ Operations that can fail return an option under their own names, and aren't spel
 
 - Raw strings with a prefix, which turn off both backslashes and braces
 - `"""` multi-line strings with indentation stripped
-- `\u{...}` escapes
 
 ## Current implementation
 

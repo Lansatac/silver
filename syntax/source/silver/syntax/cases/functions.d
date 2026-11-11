@@ -19,6 +19,7 @@ immutable Case[] functions = [
     declaresAs("def a(y: Int, mutable x: Int, mutable z: Int): Unit { }", "(def a (y: Int, mutable x: Int, mutable z: Int): Unit (block))"),
     declaresAs("def a(mutable\n    x: Int): Int => x", "(def a (mutable x: Int): Int x)"),
     rejectsDeclaration("def a(x: mutable Int): Int => x"),
+    declaresAs("def a(_: Int, mutable _: Int): Int => 1", "(def a (_: Int, mutable _: Int): Int 1)"),
 
     declaresAs("native def print(value : Any) : Unit", "(native def print (value: Any): Unit)"),
     declaresAs("native def now() : Int", "(native def now (): Int)"),
@@ -41,6 +42,8 @@ immutable Case[] functions = [
     parsesAs("val f = ((x)) + 1", "(val f (Add x 1))"),
     parsesAs("val f = (x => x)(1)", "(val f (call (lambda (x) x) 1))"),
     rejects("val f = x: Int => x"), // parentheses are needed for a type
+    parsesAs("val f = _ => 1", "(val f (lambda (_) 1))"),
+    parsesAs("val f = (_, y: Int, mutable _) => y", "(val f (lambda (_ y _) y))"),
 
     // Neither of these newlines can end a statement.
     parsesAs("val f = x =>\n    x", "(val f (lambda (x) x))"),

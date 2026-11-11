@@ -1,0 +1,7 @@
+// An out-of-range element target panics when it's written, after the whole value is evaluated.
+
+def main(): Unit {
+    mutable val xs = [1, 2]
+    mutable val a = 0
+    (xs[5], a) = (3, { printl("value first"); 9 })
+}

@@ -12,6 +12,13 @@ import silver.core.nodes;
 import silver.sema : Analysis, LoopFunction, LoopFunctions, ConstInt, ConstUInt, ConstUnit, ConstValue, FunctionData, Intrinsic, NominalData, Primitive,
     Substitution, SymbolId, Type, TypeTable;
 
+/// A parameter's local name. Discarded ones get a name no Silver identifier can have, so several
+/// in one function stay distinct where a backend names them.
+private string paramName(string name, size_t index)
+{
+    return name == discardName ? "_.%s".format(index) : name;
+}
+
 /// `program` as Core, starting from its `main`. `analysis` must have no errors.
 /// Throws: DiagnosticException (`NotImplemented`) at the first construct that isn't lowered yet.
 Program lowerProgram(const ref ast.Program program, const Analysis analysis)
@@ -265,7 +272,7 @@ private final class Lowering
         Local[] params;
         foreach (i, ref param; func.params)
         {
-            auto local = new Local(param.name, signature.params[i], signature.isMutable(i));
+            auto local = new Local(paramName(param.name, i), signature.params[i], signature.isMutable(i));
             _locals[SymbolId(param.id)] = local;
             params ~= local;
         }
@@ -515,7 +522,7 @@ private final class Lowering
         auto decl = _analysis.declarationOf(func);
         auto signature = functionData(type);
         Local[] params;
-        foreach (i, ref param; decl.params) params ~= new Local(param.name, signature.params[i]);
+        foreach (i, ref param; decl.params) params ~= new Local(paramName(param.name, i), signature.params[i]);
         auto body = intrinsicCall(_analysis.intrinsicOf(func), params.map!(p => use(p, _span)).array, signature, _span);
         functions[slot] = Function(instanceName(key), _analysis.moduleOf(func), params, null, signature.ret, body,
             FunctionOrigin.derived);
@@ -538,7 +545,7 @@ private final class Lowering
         auto decl = _analysis.declarationOf(func);
         auto signature = _analysis.signatureOf(func);
         Local[] params;
-        foreach (i, ref param; decl.params) params ~= new Local(param.name, signature.params[i]);
+        foreach (i, ref param; decl.params) params ~= new Local(paramName(param.name, i), signature.params[i]);
         auto args = params.map!(p => use(p, _span)).array;
         auto body = Expr(signature.ret, _span, ExprKind(ForeignCall(decl.symbol, args)));
         noteLibrary(func);
@@ -961,6 +968,10 @@ private final class Lowering
 
     private Stmt[] lowerAssign(const ast.AssignStmt assign, Span span)
     {
+        if (assign.target.kind.match!((const ast.TupleLiteral _) => true, _ => false))
+        {
+            return lowerTupleAssign(assign.target, assign.value, span);
+        }
         auto element = assign.target.kind.match!((ref const ast.IndexExpr index) => &index, _ => null);
         if (element !is null) return lowerAssignElement(assign, *element, span);
         return [Stmt(span, StmtKind(lowerAssignPlace(assign)))];
@@ -989,12 +1000,102 @@ private final class Lowering
 
     private Assign lowerAssignPlace(const ast.AssignStmt assign)
     {
+        return assignPlace(assign.target, lowerExpr(assign.value));
+    }
+
+    /// `(a, xs[i], _) = value`. Each element target's index is evaluated, left to right, then every
+    /// part of the value, and only then are the targets written, left to right, so `(a, b) = (b, a)`
+    /// swaps. A tuple literal is taken apart element by element, so no tuple is built.
+    private Stmt[] lowerTupleAssign(const ast.Expr target, const ast.Expr value, Span span)
+    {
+        Stmt[] statements;
+        Local[typeof(target.id)] indices;
+        const(ast.Expr)[] places;
+        Expr[] parts;
+
+        static const(ast.Expr)[] partsOf(const ast.Expr e) =>
+            e.kind.match!((const ast.TupleLiteral t) => t.elements, _ => null);
+        static bool isDiscard(const ast.Expr e) =>
+            e.kind.match!((const ast.Identifier name) => name.name == discardName, _ => false);
+
+        void holdIndices(const ast.Expr t)
+        {
+            t.kind.match!(
+                (const ast.TupleLiteral tuple) {
+                    foreach (ref element; tuple.elements) holdIndices(element);
+                },
+                (const ast.IndexExpr index) {
+                    auto lowered = lowerExpr(*index.index);
+                    auto held = temp("index", lowered.type);
+                    statements ~= let(held, lowered);
+                    indices[t.id] = held;
+                },
+                (_) {},
+            );
+        }
+
+        // `whole` is pure, so each place can take its part with a read of it.
+        void distribute(const ast.Expr t, Expr whole)
+        {
+            if (auto elements = partsOf(t))
+            {
+                foreach (i, ref element; elements)
+                {
+                    distribute(element, field(whole, i, fieldTypes(whole.type)[i]));
+                }
+                return;
+            }
+            if (isDiscard(t)) return;
+            places ~= t;
+            parts ~= whole;
+        }
+
+        void evaluate(const ast.Expr t, const ast.Expr v)
+        {
+            auto elements = partsOf(t);
+            auto literal = partsOf(v);
+            if (elements !is null && literal.length == elements.length)
+            {
+                foreach (i, ref element; elements) evaluate(element, literal[i]);
+                return;
+            }
+            auto lowered = lowerExpr(v);
+            if (isDiscard(t))
+            {
+                statements ~= eval(lowered);
+                return;
+            }
+            auto held = temp(elements is null ? "value" : "tuple", lowered.type);
+            statements ~= let(held, lowered);
+            distribute(t, use(held, lowered.span));
+        }
+
+        holdIndices(target);
+        evaluate(target, value);
+        foreach (i, place; places)
+        {
+            if (auto index = place.id in indices)
+            {
+                auto object = place.kind.match!((const ast.IndexExpr e) => e.object, _ => null);
+                auto write = AssignElement(localOf(*object), use(*index, place.span), parts[i]);
+                statements ~= Stmt(span, StmtKind(write));
+            }
+            else
+            {
+                statements ~= Stmt(span, StmtKind(assignPlace(place, parts[i])));
+            }
+        }
+        return statements;
+    }
+
+    /// `target = value` for a name or a chain of fields rooted at one.
+    private Assign assignPlace(const ast.Expr target, Expr value)
+    {
         Step[] steps;
-        auto root = placeOf(assign.target, steps);
-        auto value = lowerExpr(assign.value);
+        auto root = placeOf(target, steps);
         if (steps.length == 0) return Assign(root, value);
         // `p.x = v` gives `p` a copy of itself with `x` replaced, after `v` is evaluated.
-        auto span = assign.target.span;
+        auto span = target.span;
         auto held = temp("value", value.type);
         auto rebuilt = rebuild(use(root, span), steps, use(held, span));
         return Assign(root, Expr(root.type, span, ExprKind(Block([let(held, value)], boxed(rebuilt)))));
@@ -1240,7 +1341,7 @@ private final class Lowering
         Local[] params;
         foreach (i, ref param; lambda.params)
         {
-            auto local = new Local(param.name, signature.params[i], signature.isMutable(i));
+            auto local = new Local(paramName(param.name, i), signature.params[i], signature.isMutable(i));
             _locals[SymbolId(param.id)] = local;
             params ~= local;
         }

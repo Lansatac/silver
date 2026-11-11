@@ -1558,6 +1558,7 @@ unittest
 
     analyzedMain(`val f = x => x`).shouldReport(DiagnosticCode.UntypedLambdaParameter, At("x", 1));
     analyzedMain(`val f = (x, y: Int) => y`).shouldReport(DiagnosticCode.UntypedLambdaParameter, At("x", 1));
+    analyzedMain(`val f = _ => 1`).shouldReport(DiagnosticCode.UntypedLambdaParameter, At("_", 1));
     analyzedMain(`val f: (Int) -> Int = (x, y) => x`).shouldReport(DiagnosticCode.TypeMismatch, At("(x, y) => x", 1));
     analyzedMain(`val f: (Int) -> Int = (x: String) => 1`).shouldReport(DiagnosticCode.TypeMismatch, At("(x: String) => 1", 1));
     analyzedMain(`val f: (mutable Int) -> Int = x => x`).shouldReport(DiagnosticCode.TypeMismatch, At("x => x", 1));
@@ -1875,6 +1876,59 @@ unittest
     xs[0] = 2`).shouldReport(DiagnosticCode.AssignToImmutable, At("xs", 2));
     analyzed("def f(xs: [Int]): Unit { xs[0] = 1 }\ndef main(): Unit { }")
         .shouldReport(DiagnosticCode.AssignToImmutable, At("xs", 2));
+}
+
+@("a tuple of targets is assigned the parts of a tuple, each checked as its own assignment")
+unittest
+{
+    analyzed("type P(x: Int, y: Int)\ndef pair(): (Int, String) => (1, \"a\")\ndef main(): Unit {
+    mutable val a = 1
+    mutable val m: Int? = None
+    mutable val s = \"\"
+    mutable val xs = [1, 2]
+    mutable val p = P(1, 2)
+    (a, m) = (2, 3)
+    (m, a) = (None, 4)
+    (a, s) = pair()
+    (_, s) = pair()
+    ((a, _), p.x) = ((1, \"b\"), 2)
+    (xs[0], xs[1]) = (xs[1], xs[0])
+    (p.x, p.y) = (p.y, p.x)
+}").shouldHaveNoDiagnostics();
+
+    analyzedMain(`mutable val a = 1
+    (a, b) = (1, 2)`).shouldReport(DiagnosticCode.UnknownName, At("b", 1));
+    analyzedMain(`val a = 1
+    mutable val b = 1
+    (b, a) = (1, 2)`).shouldReport(DiagnosticCode.AssignToImmutable, At("a", 2));
+    analyzedMain(`mutable val a = 1
+    mutable val b = 1
+    (a, b) = (1, "c")`).shouldReport(DiagnosticCode.TypeMismatch, At(`"c"`, 1));
+}
+
+@("a tuple of targets takes apart a value of the same shape, whose parts don't convert")
+unittest
+{
+    enum decls = "def triple(): (Int, Int, Int) => (1, 2, 3)\ndef pair(): (Int, Int) => (1, 2)\n";
+    analyzed(decls ~ "def main(): Unit {\n    mutable val a = 1\n    mutable val b = 1\n    (a, b) = 5\n}")
+        .shouldReport(DiagnosticCode.PatternMismatch, At("(a, b)", 1));
+    analyzed(decls ~ "def main(): Unit {\n    mutable val a = 1\n    mutable val b = 1\n    (a, b) = triple()\n}")
+        .shouldReport(DiagnosticCode.PatternMismatch, At("(a, b)", 1));
+    analyzed(decls ~ "def main(): Unit {\n    mutable val a = 1\n    mutable val b = 1\n    ((a, b), _) = pair()\n}")
+        .shouldReport(DiagnosticCode.PatternMismatch, At("(a, b)", 1));
+    analyzed(decls ~ "def main(): Unit {\n    mutable val a = 1\n    mutable val b: Int? = 1\n    (a, b) = pair()\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("b", 2));
+}
+
+@("targets assigned together can't overlap, except elements of one array")
+unittest
+{
+    enum message = "type P(x: Int, y: Int)\ndef main(): Unit {\n    mutable val a = 1\n    mutable val p = P(1, 2)\n"
+        ~ "    mutable val xs = [1]\n";
+    analyzed(message ~ "    (a, a) = (1, 2)\n}").shouldReport(DiagnosticCode.OverlappingWrites, At("a", 3));
+    analyzed(message ~ "    (p.x, p) = (1, p)\n}").shouldReport(DiagnosticCode.OverlappingWrites, At("p", 3));
+    analyzed(message ~ "    (xs[0], xs) = (1, xs)\n}").shouldReport(DiagnosticCode.OverlappingWrites, At("xs", 3));
+    analyzed(message ~ "    (xs[0], xs[0]) = (1, 2)\n    (p.x, p.y) = (1, 2)\n}").shouldHaveNoDiagnostics();
 }
 
 @("only a whole element of a named array can be assigned, not a nested one, a slice or a field of one")
@@ -2360,6 +2414,19 @@ def main(): Unit {
     analyzedMain(`val (x, y) = 1`).shouldReport(DiagnosticCode.PatternMismatch, At("(x, y)", 1));
     analyzedMain(`val ((x, y), z) = (1, 2)`).shouldReport(DiagnosticCode.PatternMismatch, At("(x, y)", 1));
     analyzedMain(`val (x, y) = (1, 2, 3)`).shouldReport(DiagnosticCode.PatternMismatch, At("(x, y)", 1));
+    analyzedMain(`for (x, y) in [1] { }`).shouldReport(DiagnosticCode.PatternMismatch, At("(x, y)", 1));
+    analyzedMain(`for (x, y) in [(1, 2, 3)] { }`).shouldReport(DiagnosticCode.PatternMismatch, At("(x, y)", 1));
+}
+
+@("a for's pattern binds only in its body, and follows the rules for locals")
+unittest
+{
+    analyzedMain(`for (x, y) in [(1, 2)] { print(x + y) }`).shouldHaveNoDiagnostics();
+    analyzedMain(`val x = 1
+    for (x, y) in [(1, 2)] { }`).shouldReport(DiagnosticCode.ShadowedDeclaration, At("x", 2));
+    analyzedMain(`for (x, x) in [(1, 2)] { }`).shouldReport(DiagnosticCode.DuplicateDeclaration, At("x", 2));
+    analyzedMain(`for (x, y) in [(1, 2)] { }
+    print(x)`).shouldReport(DiagnosticCode.UnknownName, At("x", 2));
 }
 
 @("a pattern's bindings follow the rules for locals")

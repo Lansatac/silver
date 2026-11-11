@@ -395,6 +395,11 @@ private final class TypeChecker
             (const VarDecl var) => checkBinding(var, var.value, ctx),
             (const PatternDecl decl) => checkPattern(decl.pattern, decl.value, ctx),
             (const AssignStmt assign) {
+                if (assign.target.kind.match!((const TupleLiteral _) => true, _ => false))
+                {
+                    checkTupleAssign(assign.target, assign.value, ctx);
+                    return;
+                }
                 auto lhsType = synthesize(assign.target, ctx);
                 if (lhsType != _types.error) checkAssignable(assign.target);
                 check(assign.value, lhsType, ctx);
@@ -639,6 +644,108 @@ private final class TypeChecker
                 break;
             }
         }
+    }
+
+    /// `(a, xs[i], _) = value`. Each target is checked as it would be on its own. A tuple literal's
+    /// elements are checked against their targets, so they adapt; any other value's parts have to
+    /// be exactly their targets' types, since a value doesn't convert. Targets can't overlap,
+    /// except two elements of one array, whose indices aren't known.
+    private void checkTupleAssign(const Expr target, const Expr value, BodyContext ctx)
+    {
+        Type[Id!Expr] placeTypes;
+        const(string[])[] paths;
+        Span[] spans;
+        bool assignable = true;
+        size_t elements;
+
+        bool isDiscard(const Expr e) => e.kind.match!((const Identifier name) => name.name == discardName, _ => false);
+        const(Expr)[] partsOf(const Expr e) => e.kind.match!((const TupleLiteral t) => t.elements, _ => null);
+
+        string[] pathOf(const Expr place) => place.kind.match!(
+            (const IndexExpr index) => placePath(*index.object) ~ "[%s]".format(elements++),
+            _ => placePath(place),
+        );
+        void prepare(const Expr t)
+        {
+            if (auto parts = partsOf(t))
+            {
+                foreach (part; parts) prepare(part);
+                return;
+            }
+            if (isDiscard(t)) return;
+            auto type = synthesize(t, ctx);
+            placeTypes[t.id] = type;
+            if (type == _types.error || !checkAssignable(t))
+            {
+                assignable = false;
+                return;
+            }
+            paths ~= pathOf(t);
+            spans ~= t.span;
+        }
+        prepare(target);
+        if (assignable)
+        {
+            reportOverlaps(paths, spans, "This overlaps a target before it, and one assignment can't change a place twice");
+        }
+
+        // A value that isn't a literal: each place takes its part, which has to be exactly its type.
+        void takeParts(const Expr t, Type type)
+        {
+            if (type == _types.error || type == _types.never || isDiscard(t)) return;
+            auto parts = partsOf(t);
+            if (parts is null)
+            {
+                auto expected = placeTypes[t.id];
+                if (expected != _types.error && type != expected)
+                {
+                    _collector.reportError(DiagnosticCode.TypeMismatch, t.span,
+                        "This part of the value is `%s`, which doesn't convert to `%s`"
+                            .format(_types.describe(type), _types.describe(expected)));
+                }
+                return;
+            }
+            if (!_types.isTuple(type) || _types.tupleElements(type).length != parts.length)
+            {
+                _collector.reportError(DiagnosticCode.PatternMismatch, t.span, _types.isTuple(type)
+                    ? "These are %s targets, but `%s` has %s values"
+                        .format(parts.length, _types.describe(type), _types.tupleElements(type).length)
+                    : "These targets take apart a tuple, but the value is `%s`".format(_types.describe(type)));
+                return;
+            }
+            foreach (i, part; parts) takeParts(part, _types.tupleElements(type)[i]);
+        }
+
+        void assign(const Expr t, const Expr v)
+        {
+            auto parts = partsOf(t);
+            auto literal = v.kind.match!((const TupleLiteral l) => l.elements, _ => null);
+            if (parts !is null && literal.length == parts.length)
+            {
+                Type[] types;
+                foreach (i, part; parts)
+                {
+                    assign(part, literal[i]);
+                    types ~= _typing.promotions.get(literal[i].id, _typing.exprTypes.get(literal[i].id, _types.error));
+                }
+                // Never built, as with a `val` pattern's literal.
+                _typing.exprTypes[v.id] = types.canFind(_types.none) || types.canFind(_types.emptyArray)
+                    ? _types.error : _declarer.tupleOf(types);
+                return;
+            }
+            if (parts !is null)
+            {
+                takeParts(t, synthesize(v, ctx));
+                return;
+            }
+            if (isDiscard(t))
+            {
+                synthesize(v, ctx);
+                return;
+            }
+            check(v, placeTypes[t.id], ctx);
+        }
+        assign(target, value);
     }
 
     /// The declaration `expr` builds a value of, or an invalid ID if it doesn't: a constructor call,

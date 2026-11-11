@@ -64,6 +64,8 @@ for i in 0..10 {
 
 The iterable is evaluated once, before the loop. The loop variable is immutable, fresh on each iteration, and in scope only in the body. `for _ in` works when the value isn't needed.
 
+The loop variable can be a tuple pattern, which takes each element apart as `val` would: `for (name, count) in [("a", 1), ("b", 2)] { ... }`. The pattern is names, `_`, and tuples of those, and it binds only in the body. An element of the wrong shape is an error, as it would be for `val (name, count) = element`.
+
 A range is half-open. One whose start isn't below its end is empty, and a range ending at a type's maximum doesn't overflow.
 
 ### Looping over a value of your own
@@ -124,5 +126,4 @@ How deep a program can recurse isn't specified, and differs between the interpre
 
 ## Open questions
 
-- A tuple pattern as the loop variable, as in `for (i, x) in pairs`.
 - Whether `for` will require a `Range` interface by name once interfaces exist. A type that works with `for` now would still satisfy it.

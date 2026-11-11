@@ -1,0 +1,30 @@
+// A parameter named `_` takes an argument and binds nothing, in a `def` or a lambda.
+
+def second(_: Int, b: Int): Int => b
+def constant(_: Int, _: String): Int => 7
+def ignore(mutable _: Int): Unit { }
+
+def apply(f: (Int, Int) -> Int): Int => f(1, 2)
+
+def main(): Unit {
+    printl(second(1, 2))
+    printl(constant(1, "a"))
+
+    mutable val x = 1
+    ignore(mutable x)
+    printl(x)
+
+    val zero: (Int) -> Int = _ => 0
+    printl(zero(9))
+    printl(apply((_, b) => b))
+    printl(apply((_, _) => 3))
+    printl(apply((a: Int, _) => a))
+
+    val n = 4
+    val capturing = (_: String) => n
+    printl(capturing("x"))
+
+    // As a function value, a discarded parameter still has its type.
+    val f: (Int, String) -> Int = constant
+    printl(f(0, ""))
+}

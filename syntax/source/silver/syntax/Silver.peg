@@ -61,7 +61,9 @@ Silver:
     AssignmentStatement  < AssignTarget Nl? AssignOp Nl? Expression
     AssignOp             < "+=" / "-=" / "*=" / "/=" / "^=" / "~=" / "+%=" / "-%=" / "*%=" / "&=" / "|=" / "<<=" / ">>=" / "=" !"="
 
-    AssignTarget         < Postfix
+    AssignTarget         < AssignTuple &(Nl? AssignOp) / Postfix
+    AssignTuple          < :'(' Nl? AssignElement (Nl? :',' Nl? AssignElement)+ Nl? :')'
+    AssignElement        < AssignTuple / UNDERSCORE / Postfix
 
     FunctionDeclaration  < :DEF Nl? Identifier (Nl? TypeParameters)? Nl? :'(' Nl? Params Nl? :')' TypeAnnotation Nl? (:'=>' Nl? Expression / Block)
 
@@ -74,7 +76,7 @@ Silver:
     TypeParameters       < :'<' Nl? TypeParameter (Nl? :',' Nl? TypeParameter)* Nl? :'>'
     TypeParameter        < TypeName
     Params               < (Param (Nl? ',' Nl? Param)*)?
-    Param                < (MUTABLE Nl?)? Identifier TypeAnnotation
+    Param                < (MUTABLE Nl?)? BindingName TypeAnnotation
 
     Block                < '{' Sep? (Statement (Sep Statement)* Sep?)? '}'
 
@@ -114,10 +116,10 @@ Silver:
     # No lambda, or `if done => 1 else 2` would read the condition as one
     Condition            < MatchExpression / ForExpression / WhileExpression / IfExpression / OrExpression
 
-    Lambda               < (LambdaParams TypeAnnotation? / Identifier) Nl? :'=>' Nl? Expression
+    Lambda               < (LambdaParams TypeAnnotation? / BindingName) Nl? :'=>' Nl? Expression
     # The parens are kept so `()` still has a node
     LambdaParams         < '(' Nl? (LambdaParam (Nl? :',' Nl? LambdaParam)*)? Nl? ')'
-    LambdaParam          < (MUTABLE Nl?)? Identifier TypeAnnotation?
+    LambdaParam          < (MUTABLE Nl?)? BindingName TypeAnnotation?
 
     MatchExpression      < :MATCH Nl? Condition Nl? '{' Sep? (MatchArm (Sep MatchArm)* Sep?)? '}'
     MatchArm             < MatchPattern Nl? :'=>' Nl? Expression
@@ -126,7 +128,7 @@ Silver:
     ConstructorPattern   < TypePath (:'(' Nl? MatchPattern (Nl? :',' Nl? MatchPattern)* Nl? :')')?
     TypedBinding         < BindingName TypeAnnotation
 
-    ForExpression        < :FOR Nl? BindingName Nl? :IN Nl? Condition Nl? Block
+    ForExpression        < :FOR Nl? (TuplePattern / BindingName) Nl? :IN Nl? Condition Nl? Block
     WhileExpression      < :WHILE Nl? (OptionBinding / Condition) Nl? Block
 
     IfExpression         < :IF Nl? (PatternBinding / OptionBinding / Condition) Nl? IfBranch (Nl? :ELSE Nl? ElseBranch)?
@@ -205,7 +207,8 @@ Silver:
     StringLiteral       <- doublequote StringPart* doublequote
     StringPart          <- StringText / EscapeSequence / StringHole
     StringText          <~ (!doublequote !backslash !eol !'{' .)+
-    EscapeSequence      <~ backslash (doublequote / backslash / [nrt0{}])
+    EscapeSequence      <~ backslash (doublequote / backslash / [nrt0{}] / "u{" HexDigit HexDigit? HexDigit? HexDigit? HexDigit? HexDigit? "}")
+    HexDigit            <- [0-9a-fA-F]
     # Not `<`, which would also skip the text's own spaces around the hole. The expression is
     # required, but lowering can say so better than a parse error could; the braces are kept
     # so an empty hole still matches text, as in ListLiteral.

@@ -870,6 +870,7 @@ private final class NameResolver
         functionScope.selfBinding = selfBinding;
         foreach (param; params)
         {
+            if (param.name == discardName) continue;
             declareLocal(param.name, param.nameSpan, SymbolId(param.id), functionScope,
                 DiagnosticCode.DuplicateParameter, "'%s' is already a parameter of this function");
         }
@@ -938,7 +939,7 @@ private final class NameResolver
                 resolveExpr(exprStmt.expr, scopeTable);
             },
             (const AssignStmt assignStmt) {
-                resolveExpr(assignStmt.target, scopeTable);
+                resolveTarget(assignStmt.target, scopeTable);
                 resolveExpr(assignStmt.value, scopeTable);
             },
             (const ReturnStmt returnStmt) {
@@ -1120,6 +1121,20 @@ private final class NameResolver
                     resolveExpr(arm.body, armScope);
                 }
             },
+        );
+    }
+
+    /// Resolves an assignment's target, in which a `_` inside a tuple names nothing.
+    private void resolveTarget(const Expr target, Scope scopeTable)
+    {
+        target.kind.match!(
+            (const TupleLiteral tuple) {
+                foreach (element; tuple.elements) resolveTarget(element, scopeTable);
+            },
+            (const Identifier name) {
+                if (name.name != discardName) resolveExpr(target, scopeTable);
+            },
+            (_) => resolveExpr(target, scopeTable),
         );
     }
 

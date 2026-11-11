@@ -31,6 +31,8 @@ private final class Lowering
 {
     private string file;
     private NodeIds ids;
+    /// How many `for` loops so far take their element apart, for naming the element's local.
+    private size_t _forPatterns;
 
     public this(NodeIds ids, string file)
     {
@@ -232,11 +234,15 @@ private final class Lowering
             return Stmt(spanOf(cst, file), StmtKind(VarDecl(ids.next!VarDecl, discardName,
                 Span(file, cst.begin, cst.begin + discardName.length), discarded, null, false)));
         case "Silver.AssignmentStatement":
-            // The target is a Postfix, so `a.b = 1` keeps its member access.
             cst[0].validateNodeIs("Silver.AssignTarget");
-            auto target = convertExpression(cst[0][0]);
+            auto target = convertAssignTarget(cst[0][0]);
             auto op = cst[1].matches[0];
             auto expr = convertExpression(cst[2]);
+            if (op != "=" && cst[0][0].name == "Silver.AssignTuple")
+            {
+                throw new ParseException(Diagnostic(DiagnosticCode.ParseError, spanOf(cst[1], file),
+                    "`%s` needs one target; only `=` assigns to several at once".format(op), Severity.Error));
+            }
             if (op != "=")
             {
                 // `a += 1` becomes `a = a + 1`, so nothing past lowering sees compound assignment.
@@ -275,6 +281,25 @@ private final class Lowering
             return Stmt(spanOf(cst, file), StmtKind(ExprStmt(convertExpression(cst[0]))));
         default:
             throw new Exception("lower: statement '%s' not supported yet".format(cst.name));
+        }
+    }
+
+    /// An assignment's target. `(a, _) = v` becomes a TupleLiteral target, with each `_` an
+    /// Identifier named `discardName`, which no expression can otherwise be.
+    private Expr convertAssignTarget(ParseTree cst)
+    {
+        switch (cst.name)
+        {
+        case "Silver.AssignTuple":
+            return Expr(ids.next!Expr, spanOf(cst, file),
+                ExprKind(TupleLiteral(cst.children.map!(e => convertAssignTarget(e)).array)));
+        case "Silver.AssignElement":
+            return convertAssignTarget(cst[0]);
+        case "Silver.UNDERSCORE":
+            return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(Identifier(discardName)));
+        default:
+            // The target is a Postfix, so `a.b = 1` keeps its member access.
+            return convertExpression(cst);
         }
     }
 
@@ -602,7 +627,7 @@ private final class Lowering
                 text ~= piece.matches[0];
                 break;
             case "Silver.EscapeSequence":
-                text ~= decodeEscape(piece.matches[0]);
+                text ~= decodeEscape(piece.matches[0], pieceSpan);
                 break;
             default:
                 throw new Exception("Unexpected '%s' in string literal".format(piece.name));
@@ -614,21 +639,33 @@ private final class Lowering
         return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(InterpolatedString(parts)));
     }
 
-    private static char decodeEscape(string escape)
+    private string decodeEscape(string escape, Span span)
     {
         switch (escape[1])
         {
+        case 'u':
+            import std.conv : to;
+            auto scalar = escape[3 .. $ - 1].to!uint(16);
+            if (scalar > 0x10FFFF || (scalar >= 0xD800 && scalar <= 0xDFFF))
+            {
+                throw new ParseException(Diagnostic(DiagnosticCode.ParseError, span,
+                    "`%s` isn't a Unicode scalar value, which is at most 10FFFF and not in D800 to DFFF"
+                        .format(escape), Severity.Error));
+            }
+            char[] encoded;
+            encode(encoded, cast(dchar) scalar);
+            return encoded.idup;
         case 'n':
-            return '\n';
+            return "\n";
         case 'r':
-            return '\r';
+            return "\r";
         case 't':
-            return '\t';
+            return "\t";
         case '0':
-            return '\0';
+            return "\0";
         default:
             // `\"` and `\\` stand for the character itself.
-            return escape[1];
+            return escape[1 .. 2];
         }
     }
 
@@ -681,13 +718,26 @@ private final class Lowering
         return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(WhileExpr(condition, boxed(body), binding)));
     }
 
-    /// `BindingName Expression Block` once the keywords are discarded.
+    /// `(TuplePattern / BindingName) Expression Block` once the keywords are discarded.
+    /// `for (a, b) in xs { ... }` becomes `for t in xs { val (a, b) = t; ... }`, where no source
+    /// can name `t`.
     private Expr convertForExpression(ParseTree cst)
     {
         cst.validateNodeIs("Silver.ForExpression");
-        auto binding = boxed(VarDecl(ids.next!VarDecl, cst[0].matches[0], spanOf(cst[0], file),
-            convertExpression(cst[1]), null, false));
+        auto destructured = cst[0].name == "Silver.TuplePattern";
+        auto name = destructured ? "for.%s".format(_forPatterns++) : cst[0].matches[0];
+        auto nameSpan = spanOf(cst[0], file);
+        auto binding = boxed(VarDecl(ids.next!VarDecl, name, nameSpan, convertExpression(cst[1]), null, false));
         auto body = convertExpression(cst[2]);
+        if (destructured)
+        {
+            auto element = Expr(ids.next!Expr, nameSpan, ExprKind(Identifier(name)));
+            auto unpack = Stmt(nameSpan, StmtKind(PatternDecl(convertPattern(cst[0], false), element)));
+            body.kind.match!(
+                (ref BlockExpr block) { block.statements = unpack ~ block.statements; },
+                (_) { assert(0, "the grammar only allows a block as a `for` body"); },
+            );
+        }
         return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(ForExpr(binding, boxed(body))));
     }
 
@@ -783,7 +833,7 @@ private final class Lowering
     {
         cst.validateNodeIs("Silver.Lambda");
         Param[] params;
-        if (cst[0].name == "Silver.Identifier")
+        if (cst[0].name == "Silver.BindingName")
         {
             params ~= Param(ids.next!Param, cst[0].matches[0], spanOf(cst[0], file), TypeExpr.init, false, false);
         }
@@ -1271,4 +1321,33 @@ unittest
     rejected("native(\"\") def f(): Int");
     rejected("native(\"f{x}\") def f(): Int");
     assert(collectException!ParseException(parse("native library \"a\"\nnative(\"b\") def f(): Int", "test", new NodeIds)) is null);
+}
+
+@("a \\u{...} escape names a Unicode scalar value")
+unittest
+{
+    import std.exception : collectException;
+    import silver.syntax.parse : parse;
+
+    ParseException error(string literal) =>
+        collectException!ParseException(parse("val a: String = " ~ literal, "test", new NodeIds));
+
+    assert(error(`"\u{10FFFF}\u{D7FF}\u{E000}"`) is null);
+    assert(error(`"\u{110000}"`).diagnostic.code == DiagnosticCode.ParseError);
+    assert(error(`"\u{D800}"`).diagnostic.code == DiagnosticCode.ParseError);
+    assert(error(`"\u{dfff}"`).diagnostic.code == DiagnosticCode.ParseError);
+}
+
+@("only `=` assigns to a tuple of targets")
+unittest
+{
+    import std.exception : collectException;
+    import silver.syntax.parse : parse;
+
+    ParseException error(string statement) =>
+        collectException!ParseException(parse("def f(): Unit {\n    " ~ statement ~ "\n}", "test", new NodeIds));
+
+    assert(error("(a, b) = (1, 2)") is null);
+    assert(error("(a, b) += (1, 2)").diagnostic.code == DiagnosticCode.ParseError);
+    assert(error("(a, _) ~= ([1], [2])").diagnostic.code == DiagnosticCode.ParseError);
 }

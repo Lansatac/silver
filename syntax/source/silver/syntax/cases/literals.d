@@ -28,6 +28,12 @@ immutable Case[] stringLiterals = [
     parsesAs(`a = "x" == "y"`, `(assign a (Equal "x" "y"))`),
     rejects(`a = "unterminated`),
     rejects(`a = "unknown \q escape"`),
+    parsesAs(`a = "\u{e9}t\u{E9} \u{1F600}\u{000041}"`, `(assign a "été 😀A")`),
+    rejects(`a = "\u{}"`),
+    rejects(`a = "\u1b"`),
+    rejects(`a = "\u{1b"`),
+    rejects(`a = "\u{0000041}"`),
+    rejects(`a = "\u{g}"`),
     rejects(`a = "\(reserved)"`),
     rejects("a = \"two\nlines\""),
 

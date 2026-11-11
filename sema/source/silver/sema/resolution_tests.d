@@ -615,6 +615,15 @@ def main(): Unit => ()");
     a.shouldReport(DiagnosticCode.DuplicateParameter, At("n", 2));
 }
 
+@("name resolution declares nothing for a parameter named `_`, so any number can appear")
+unittest
+{
+    analyzed("def f(_: Int, _: Int): Int => 1
+def main(): Unit {
+    val g = (_: Int, _: String) => 2
+}").shouldHaveNoDiagnostics();
+}
+
 @("name resolution reports a local or parameter with the same name as a function in its module")
 unittest
 {

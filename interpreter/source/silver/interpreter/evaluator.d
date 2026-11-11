@@ -642,7 +642,11 @@ final class Evaluator
                 auto at = position(evaluate(assign.index, frame));
                 auto value = evaluate(assign.value, frame);
                 auto elements = frame.values[assign.local].as!ArrayValue.elements;
-                if (at >= elements.length) throw new CodedException(DiagnosticCode.IndexOutOfRange, "Index is out of range");
+                if (at >= elements.length)
+                {
+                    // A statement has no expression around it of its own to give the panic its place.
+                    throw new RuntimeError(Diagnostic(DiagnosticCode.IndexOutOfRange, s.span, "Index is out of range"));
+                }
                 auto replaced = elements.dup;
                 replaced[cast(size_t) at] = value;
                 frame.values[assign.local] = Value(ArrayValue(replaced));

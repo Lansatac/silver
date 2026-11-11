@@ -26,7 +26,7 @@ A `mutable val` of an option type can omit its initializer and starts as `None`.
 
 ## Discarding
 
-`val _ = value` evaluates `value` and binds nothing, and `_ = value` is shorthand for it. This is how a value is dropped on purpose. `_` also works in `if val`, `while val`, `for` and destructuring. It declares nothing, so any number can appear in one scope. With no value kept, `_ = None` needs no type.
+`val _ = value` evaluates `value` and binds nothing, and `_ = value` is shorthand for it. This is how a value is dropped on purpose. `_` also works in `if val`, `while val`, `for`, destructuring, a tuple of assignment targets, and as a parameter of a function or lambda. It declares nothing, so any number can appear in one scope or parameter list. With no value kept, `_ = None` needs no type.
 
 ## Top-level constants
 

@@ -39,6 +39,8 @@ An array remains a value: the assignment changes what `xs` holds, and nothing el
 
 The index is evaluated first, then `v`, and then the element is replaced in whatever `xs` holds at that point. Compound assignment works on an element and evaluates the index once, so `xs[next()] += 1` calls `next` once.
 
+Two elements can be swapped with a [tuple of targets](tuples.md#assigning-parts): `(xs[i], xs[j]) = (xs[j], xs[i])`.
+
 Assigning to an array that nothing else holds is meant to take constant time. If the array has been shared, the next assignment may copy it once, after which assignments are constant time again. Exactly when a copy happens isn't part of the language.
 
 ## Concatenation

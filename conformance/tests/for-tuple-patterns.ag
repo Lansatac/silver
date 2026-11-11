@@ -1,0 +1,46 @@
+// A `for` can take each element apart with a tuple pattern, as `val (a, b) = element` would.
+
+type Pairs(count: Int)
+
+def next(p: Pairs): ((Int, String), Pairs)? =>
+    if p.count == 0 => None else Some(((p.count, "p{p.count}"), Pairs(p.count - 1)))
+
+def main(): Unit {
+    for (street, count) in [("Flop", 3), ("Turn", 1), ("River", 1)] {
+        printl("{street}: {count}")
+    }
+
+    // Nested, with a discard and an annotation.
+    for (name, (_, second: Int)) in [("a", (1, 2)), ("b", (3, 4))] {
+        printl("{name} {second}")
+    }
+
+    // Each loop's element is its own, so loops nest, and a later loop can reuse the names.
+    for (a, b) in [(1, [(10, 20)])] {
+        for (c, d) in b {
+            printl(c + d)
+        }
+        printl(a)
+    }
+    for (a, b) in [(5, 6)] {
+        printl(a * b)
+    }
+
+    // By stepping with `next`, and inside a lambda.
+    for (n, label) in Pairs(2) {
+        printl("{n} {label}")
+    }
+    val total = (pairs: [(Int, Int)]) => {
+        mutable val sum = 0
+        for (x, y) in pairs { sum += x * y }
+        sum
+    }
+    printl(total([(1, 2), (3, 4)]))
+
+    // `break` and `continue` work as in any `for`.
+    for (i, word) in [(0, "zero"), (1, "one"), (2, "two"), (3, "three")] {
+        if i == 1 { continue }
+        if i == 3 { break }
+        printl(word)
+    }
+}

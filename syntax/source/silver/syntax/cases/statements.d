@@ -41,6 +41,16 @@ immutable Case[] assignments = [
     parsesAs("variable = 1", "(assign variable 1)"),
     parsesAs("x = reader", "(assign x reader)"),
     parsesAs("natives = 1", "(assign natives 1)"),
+
+    // Several targets at once, which can be any place or `_`.
+    parsesAs("(a, b) = (b, a)", "(assign (tuple a b) (tuple b a))"),
+    parsesAs("(a.x, xs[i], _) = f()", "(assign (tuple (. a x) (index xs i) _) (call f))"),
+    parsesAs("((a, _), c) = v", "(assign (tuple (tuple a _) c) v)"),
+    parsesAs("(a,\n    b) =\n    v", "(assign (tuple a b) v)"),
+    parsesAs("(a, b).c = v", "(assign (. (tuple a b) c) v)"),
+    rejects("(a) , b = v"),
+    rejects("(_) = v"),
+    rejects("(a, b, ) = v"),
 ];
 
 immutable Case[] declarations = [

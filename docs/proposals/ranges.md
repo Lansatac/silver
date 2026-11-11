@@ -74,7 +74,7 @@ Because interface conformance in [interfaces.md](interfaces.md) is found by the 
 
 - **Open**: whether `for` should require `Range` by name once interfaces exist. The two differ mostly in the error for something that isn't a range.
 - **Left out on purpose**: a second interface for things that can be turned into a range (Rust's `IntoIterator`). Addable later.
-- **Proposed**: a tuple pattern in `for`, as in `for (i, x) in xs.enumerate()`.
+- **Decided and implemented** (November 2026): a tuple pattern in `for`, as in `for (i, x) in xs.enumerate()`. See [control flow](../language/control-flow.md#for).
 - `a..b` as a value would be a product with `length` and `at`, and the constructor that `a..b` builds would be known by name, the way `Some` is.
 
 ## Adapters

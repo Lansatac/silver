@@ -1,0 +1,14 @@
+// `\u{...}` writes a Unicode scalar value as UTF-8, with one to six hex digits.
+
+def main(): Unit {
+    printl("\u{41}\u{042}\u{000043}")
+    printl("caf\u{e9} \u{E9}")
+    printl("\u{2665} \u{1F600}")
+    printl("\u{e9}" == "é")
+    printl("\u{1F600}" == "😀")
+    printl("\u{1b}" == "\u{1B}")
+    printl("a\u{0}b" == "a\0b")
+    printl("\u{7F}" < "\u{80}")
+    val name = "x"
+    printl("\u{3c}{name}\u{3e}")
+}

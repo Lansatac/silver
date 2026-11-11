@@ -1,0 +1,74 @@
+// `(a, b) = v` assigns each target its part of `v`. Element indices are evaluated first, left to
+// right, then all of `v`, and then the targets are written left to right.
+
+type P(x: Int, y: Int)
+
+def pair(): (Int, String) => (7, "seven")
+
+def say(label: String, v: Int): Int {
+    printl(label)
+    v
+}
+
+def swapped(mutable xs: [Int], i: Int, j: Int): Unit {
+    (xs[i], xs[j]) = (xs[j], xs[i])
+}
+
+def main(): Unit {
+    mutable val a = 1
+    mutable val b = 2
+    (a, b) = (b, a)
+    printl("{a} {b}")
+
+    mutable val xs = [1, 2, 3]
+    (xs[0], xs[2]) = (xs[2], xs[0])
+    printl(xs)
+    swapped(mutable xs, 0, 1)
+    printl(xs)
+
+    mutable val p = P(1, 2)
+    (p.x, p.y) = (p.y, p.x)
+    printl(p)
+
+    // A value that isn't a literal, taken apart.
+    mutable val n = 0
+    mutable val s = ""
+    (n, s) = pair()
+    printl("{n} {s}")
+
+    // `_` evaluates its part and drops it.
+    (_, s) = ("unused", "kept")
+    (n, _) = (n + 1, printl("dropped"))
+    printl("{n} {s}")
+
+    // Literal parts adapt to their targets.
+    mutable val m: Int? = None
+    mutable val empty: [Int] = [1]
+    (m, empty) = (5, [])
+    printl("{m} {empty}")
+
+    // Nested, from a literal and from a value.
+    mutable val c = 0
+    ((a, b), c) = ((10, 20), 30)
+    printl("{a} {b} {c}")
+    val nested = ((1, 2), 3)
+    ((a, _), c) = nested
+    printl("{a} {b} {c}")
+
+    // The order of evaluation.
+    mutable val ys = [0, 0]
+    (xs[say("i", 0)], ys[say("j", 1)]) = (say("v1", 5), say("v2", 6))
+    printl("{xs} {ys}")
+
+    // Two elements of one array can be written together; the later write wins.
+    (ys[0], ys[0]) = (1, 2)
+    printl(ys)
+
+    // A Fibonacci step, rebinding both from their old values.
+    mutable val f0 = 0
+    mutable val f1 = 1
+    for _ in 0..10 {
+        (f0, f1) = (f1, f0 + f1)
+    }
+    printl(f0)
+}

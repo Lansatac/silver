@@ -15,6 +15,8 @@ def describe(value: Int): String {
 
 When a `Unit` function's body produces a value of another type, the value is dropped.
 
+A parameter named `_` takes an argument and binds nothing, for a function that has to have a signature but doesn't need every argument: `def onKey(_: Key, mutable state: State): Unit`. Any number of parameters can be `_`, in a `def` or a lambda, and each still has its type, so the function's type is unchanged.
+
 Functions at the top level of a module can be used before they are declared. A function nested in a block has the same form as a top-level one, and is equivalent to binding a lambda to a local.
 
 `return` exits the innermost function or lambda. A bare `return` returns `()`.
@@ -48,6 +50,8 @@ A lambda is a parameter list, an optional return type, `=>`, and one expression:
 (x, y) => x + y
 x => x * 2
 x => { val y = x * 2; y + 1 }
+_ => 0
+(_, y) => y
 ```
 
 So a named function is `def name` followed by a lambda, except that a named block body drops the arrow.
