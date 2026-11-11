@@ -13,4 +13,5 @@ mixin AstCases!(
     ifs, blocks, loops,
     discards, assignments, destructuring, declarations, uninitializedDeclarations, typeAnnotations, constantDeclarations, moduleDeclarations, imports,
     functions, natives, typeDeclarations, typeConstruction, tupleTypes, sumDeclarations, matches,
+    generics,
 );

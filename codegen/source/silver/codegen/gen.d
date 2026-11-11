@@ -1,6 +1,6 @@
 module silver.codegen.gen;
 
-import std.algorithm : all, filter, fold, map;
+import std.algorithm : all, canFind, filter, fold, map;
 import std.array : array, join;
 import std.format : format;
 import std.sumtype : match;
@@ -1627,14 +1627,15 @@ private final class Generator
         );
     }
 
-    /// A declared function is named for its module and name. Anything else can share a name, so
-    /// its index is added.
+    /// A declared function is named for its module and name. Anything else can share a name, and
+    /// so can two instances whose type arguments name types of different modules alike, so its
+    /// index is added.
     private string mangled(size_t index)
     {
         import std.string : replace;
 
         auto func = _program.functions[index];
-        if (func.origin == FunctionOrigin.declared) return "@\"%s.%s\"".format(func.moduleName, func.name);
+        if (func.origin == FunctionOrigin.declared && !func.name.canFind('<')) return "@\"%s.%s\"".format(func.moduleName, func.name);
         return "@\"%s.%s.%s\"".format(func.moduleName, func.name.replace("\"", "'").replace("\\", "/"), index);
     }
 

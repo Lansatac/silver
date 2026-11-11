@@ -115,6 +115,7 @@ private final class Lowering
                             (ref _) => cast(string) null,
                         );
                         if (name is null || name in declared || [__traits(allMembers, Builtin)].canFind(name)) continue;
+                        if (sum.typeParams.canFind!(p => p.name == name)) continue;
 
                         member.owned = true;
                         // Named twice in one sum is reported as a repeated member, not a redeclaration.
@@ -164,7 +165,12 @@ private final class Lowering
         case "Silver.TypeDeclaration":
             return convertTypeDeclaration(cst);
         case "Silver.AliasDeclaration":
-            auto alias_ = AliasDecl(ids.next!AliasDecl, cst[0].matches[0], spanOf(cst[0], file), convertTypeExpression(cst[1]));
+            if (cst[1].name == "Silver.TypeParameters")
+            {
+                throw new ParseException(Diagnostic(DiagnosticCode.ParseError, spanOf(cst[1], file),
+                    "An alias can't take type parameters yet; declare a generic `type` instead", Severity.Error));
+            }
+            auto alias_ =AliasDecl(ids.next!AliasDecl, cst[0].matches[0], spanOf(cst[0], file), convertTypeExpression(cst[1]));
             return [Decl(spanOf(cst, file), DeclKind(alias_))];
         case "Silver.ConstantDeclaration":
             return [Decl(spanOf(cst, file), DeclKind(convertConstantDeclaration(cst)))];
@@ -241,6 +247,12 @@ private final class Lowering
         case "Silver.IntrinsicFunctionDeclaration":
             auto decl = convertFunctionDeclaration(cst);
             if (decl.kind != FunctionKind.ordinary) return Stmt(spanOf(cst, file), StmtKind(decl));
+            if (decl.typeParams.length > 0)
+            {
+                throw new ParseException(Diagnostic(DiagnosticCode.ParseError, decl.typeParams[0].span,
+                    "A nested `def` can't take type parameters, but it can use those of the function around it",
+                    Severity.Error));
+            }
             auto binding = ids.next!VarDecl;
             auto nested = Expr(ids.next!Expr, spanOf(cst, file),
                 ExprKind(Lambda(decl.params, boxed(decl.returnType), decl.body, decl.name, binding)));
@@ -711,7 +723,7 @@ private final class Lowering
                 args ~= convertExpression(argument[$ - 1]);
             }
             if (!mutables.canFind(true)) mutables = null;
-            auto isSome = lhs.kind.match!((const Identifier callee) => callee.name == "Some", _ => false);
+            auto isSome = lhs.kind.match!((const Identifier callee) => callee.name == "Some" && callee.typeArgs.length == 0, _ => false);
             if (isSome && args.length == 1 && mutables is null) return Expr(ids.next!Expr, span, ExprKind(SomeExpr(boxed(args[0]))));
             return Expr(ids.next!Expr, span, ExprKind(CallExpr(boxed(lhs), args, mutables)));
         case "Silver.WithUpdate":
@@ -731,6 +743,28 @@ private final class Lowering
             return Expr(ids.next!Expr, span, ExprKind(PropagateExpr(boxed(lhs))));
         case "Silver.IndexArgs":
             return Expr(ids.next!Expr, span, ExprKind(IndexExpr(boxed(lhs), boxed(convertExpression(op[0])))));
+        case "Silver.TypeArguments":
+            auto typeArgs = op.children.map!(a => convertTypeExpression(a)).array;
+            auto named = lhs.kind.match!(
+                (ref Identifier id) {
+                    if (id.typeArgs.length > 0) return false;
+                    id.typeArgs = typeArgs;
+                    return true;
+                },
+                (ref MemberAccess access) {
+                    if (access.typeArgs.length > 0) return false;
+                    access.typeArgs = typeArgs;
+                    return true;
+                },
+                (ref _) => false,
+            );
+            if (!named)
+            {
+                throw new ParseException(Diagnostic(DiagnosticCode.ParseError, spanOf(op, file),
+                    "Type arguments can only follow the name of a function or a type", Severity.Error));
+            }
+            lhs.span = span;
+            return lhs;
         default:
             throw new Exception("Expected call or member access, got '%s'".format(op.name));
         }
@@ -790,10 +824,19 @@ private final class Lowering
         Param[] params;
         Expr* body;
         TypeExpr returnType;
+        TypeParam[] typeParams;
         foreach (child; cst.children[1 .. $])
         {
             switch (child.name)
             {
+            case "Silver.TypeParameters":
+                if (kind == FunctionKind.native)
+                {
+                    throw new ParseException(Diagnostic(DiagnosticCode.ParseError, spanOf(child, file),
+                        "A `native def` can't take type parameters, since a C function has one signature", Severity.Error));
+                }
+                typeParams = convertTypeParameters(child);
+                break;
             case "Silver.Params":
                 foreach (param; child.children)
                 {
@@ -814,7 +857,14 @@ private final class Lowering
                 throw new Exception("Unexpected '%s' in function declaration".format(child.name));
             }
         }
-        return FunctionDecl(ids.next!FunctionDecl, name, spanOf(cst[0], file), params, body, returnType, kind, symbol);
+        return FunctionDecl(ids.next!FunctionDecl, name, spanOf(cst[0], file), params, body, returnType, kind, symbol, false,
+            typeParams);
+    }
+
+    private TypeParam[] convertTypeParameters(ParseTree cst)
+    {
+        cst.validateNodeIs("Silver.TypeParameters");
+        return cst.children.map!(p => TypeParam(ids.next!TypeParam, p.matches[0], spanOf(p, file))).array;
     }
 
     /// `NATIVE LIBRARY StringLiteral`. `previous` is the one the module already has, if any.
@@ -848,11 +898,19 @@ private final class Lowering
     {
         cst.validateNodeIs("Silver.TypeDeclaration");
         auto span = spanOf(cst, file);
+        auto name = cst[0];
+        auto rest = cst.children[1 .. $];
+        TypeParam[] typeParams;
+        if (rest.length > 0 && rest[0].name == "Silver.TypeParameters")
+        {
+            typeParams = convertTypeParameters(rest[0]);
+            rest = rest[1 .. $];
+        }
         Decl[] declarations;
         SumMember[] members;
-        if (cst.children.length > 1 && cst[1].name == "Silver.SumMembers")
+        if (rest.length > 0 && rest[0].name == "Silver.SumMembers")
         {
-            foreach (member; cst[1].children)
+            foreach (member; rest[0].children)
             {
                 member.validateNodeIs("Silver.SumMember");
                 if (member[0].name != "Silver.InlineMember")
@@ -861,14 +919,53 @@ private final class Lowering
                     continue;
                 }
                 auto inline = convertProduct(member[0][0], member[0][1]);
+                inline.typeParams = mentioned(typeParams, inline.fields);
+                inline.inheritsParams = inline.typeParams.length > 0;
                 declarations ~= Decl(spanOf(member[0], file), DeclKind(inline));
-                auto path = [inline.name];
-                members ~= SumMember(TypeExpr(ids.next!TypeExpr, inline.nameSpan, TypeExprKind(NamedType(path, null))), true);
+                auto args = inline.typeParams.map!(p => TypeExpr(ids.next!TypeExpr, inline.nameSpan,
+                    TypeExprKind(NamedType([p.name], null)))).array;
+                members ~= SumMember(TypeExpr(ids.next!TypeExpr, inline.nameSpan, TypeExprKind(NamedType([inline.name], args))), true);
             }
-            auto sum = TypeDecl(ids.next!TypeDecl, cst[0].matches[0], spanOf(cst[0], file), null, false, members);
+            auto sum = TypeDecl(ids.next!TypeDecl, name.matches[0], spanOf(name, file), null, false, members);
+            sum.typeParams = typeParams;
             return declarations ~ Decl(span, DeclKind(sum));
         }
-        return [Decl(span, DeclKind(convertProduct(cst[0], cst.children.length > 1 ? cst[1] : ParseTree.init)))];
+        auto product = convertProduct(name, rest.length > 0 ? rest[0] : ParseTree.init);
+        product.typeParams = typeParams;
+        return [Decl(span, DeclKind(product))];
+    }
+
+    /// The parameters in `params` that a field in `fields` names, in their order. A field can only
+    /// mean one of them by a bare name, since no type can share a parameter's name.
+    private static TypeParam[] mentioned(TypeParam[] params, const(Field)[] fields)
+    {
+        bool[string] named;
+        void visit(const TypeExpr type)
+        {
+            type.kind.match!(
+                (const NamedType n) {
+                    if (n.path.length == 1) named[n.path[0]] = true;
+                    foreach (arg; n.args) visit(arg);
+                },
+                (const OptionType o) => visit(*o.inner),
+                (const ArrayType a) => visit(*a.element),
+                (const FunctionType f) {
+                    foreach (p; f.params) visit(p);
+                    visit(*f.returnType);
+                },
+                (const UnitType _) {},
+                (const TupleType t) {
+                    foreach (e; t.elements) visit(e);
+                },
+            );
+        }
+        foreach (field; fields) visit(field.type);
+        TypeParam[] result;
+        foreach (param; params)
+        {
+            if (param.name in named) result ~= param;
+        }
+        return result;
     }
 
     /// A type named by `name` with the given `Fields`, which is an empty tree for a marker.

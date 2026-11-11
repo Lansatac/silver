@@ -1,0 +1,13 @@
+// A generic type and functions from another module.
+
+import generics_support.stack
+
+def main(): Unit {
+    val numbers = empty<Int>().push(1).push(2)
+    printl(numbers)
+    printl(numbers.top())
+    val words = push(generics_support.stack.empty<String>(), "only")
+    val alsoWords: generics_support.stack.Stack<String> = words
+    printl(alsoWords.top())
+    printl(generics_support.stack.empty<Bool>().top())
+}

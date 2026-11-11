@@ -1,0 +1,82 @@
+// Generic functions over arrays, written here rather than in a library.
+
+def map<T, U>(values: [T], f: (T) -> U): [U] {
+    mutable val out: [U] = []
+    for value in values {
+        out ~= [f(value)]
+    }
+    out
+}
+
+def filter<T>(values: [T], keep: (T) -> Bool): [T] {
+    mutable val out: [T] = []
+    for value in values {
+        if keep(value) { out ~= [value] }
+    }
+    out
+}
+
+def fold<T, A>(values: [T], start: A, step: (A, T) -> A): A {
+    mutable val result = start
+    for value in values {
+        result = step(result, value)
+    }
+    result
+}
+
+def contains<T>(values: [T], wanted: T, same: (T, T) -> Bool): Bool {
+    for value in values {
+        if same(value, wanted) { return true }
+    }
+    false
+}
+
+def first<T>(values: [T]): T? => if length(values) == 0 => None else values[0]
+
+def empty<T>(): [T] => []
+
+def reversed<T>(values: [T]): [T] {
+    mutable val out = empty<T>()
+    mutable val i = values.length()
+    while i > 0 {
+        i -= 1
+        out ~= [values[i]]
+    }
+    out
+}
+
+def main(): Unit {
+    val numbers = [1, 2, 3, 4, 5]
+
+    printl(map(numbers, n => n * n))
+    printl(filter(numbers, n => n % 2 == 1))
+    printl(fold(numbers, 0, (total, n) => total + n))
+    printl(fold(numbers, "", (text, n) => text ~ "{n}"))
+    printl(contains(numbers, 3, (a, b) => a == b))
+    printl(contains(["a", "b"], "c", (a, b) => a == b))
+
+    // Method-call syntax, chained.
+    printl(numbers.filter(n => n > 2).map(n => n * 10).fold(0, (a, b) => a + b))
+    printl(numbers.map(n => "#{n}").reversed())
+    printl([1].length())
+
+    // The receiver is the first argument for inference.
+    val words = ["one", "three", "five"]
+    printl(words.map(w => w ~ "!").first())
+    printl(words.filter(w => w == "two").first())
+
+    // Written out, and as a value.
+    printl(empty<String>())
+    printl(map<Int, Bool>([1, 2], n => n > 1))
+    val square: ([Int], (Int) -> Int) -> [Int] = map
+    printl(square([3], n => n * n))
+    val firstWord = first<String>
+    printl(firstWord(words))
+
+    // An expected option takes the option off: `T` is `Int`, and the result is promoted.
+    val maybe: Int? = first(numbers)
+    printl(maybe)
+    val slices = map([[1, 2], [3]], xs => xs[0..1])
+    printl(slices)
+    printl(map(numbers, n => (n, n > 2))[0])
+}

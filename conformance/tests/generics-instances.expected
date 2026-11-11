@@ -1,0 +1,21 @@
+[1, 1]
+[(), ()]
+[Some(a), Some(a)]
+[[1, 2], [1, 2]]
+[(1, true), (1, true)]
+2
+42
+[Box(Box(3)), Box(Box(3))]
+[None, None]
+3
+pear
+[x, x, x]
+7
+[Box(0), Box(0)]
+first
+second
+Box(1)
+Box(2)
+8
+true
+a

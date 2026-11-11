@@ -55,6 +55,11 @@ void checkEntryPointShape(const ref Program program, Collector collector, const 
                         collector.reportError(DiagnosticCode.MainInvalidDefinition, f.nameSpan,
                             "`main` must not have parameters");
                     }
+                    if (!f.typeParams.empty)
+                    {
+                        collector.reportError(DiagnosticCode.MainInvalidDefinition, f.typeParams[0].span,
+                            "`main` can't take type parameters, since nothing calls it with type arguments");
+                    }
                 }
             },
             (_) {},

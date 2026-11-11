@@ -1,16 +1,16 @@
 module silver.core.lower;
 
-import std.algorithm : canFind, map;
+import std.algorithm : any, canFind, filter, map;
 import std.array : array;
 import std.format : format;
 import std.sumtype : match;
-import std.typecons : rebindable;
+import std.typecons : Rebindable, rebindable;
 
 import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
 import silver.core.nodes;
-import silver.sema : Analysis, ConstInt, ConstUInt, ConstUnit, ConstValue, FunctionData, NominalData, Primitive,
-    SymbolId, Type, TypeTable;
+import silver.sema : Analysis, ConstInt, ConstUInt, ConstUnit, ConstValue, FunctionData, Intrinsic, NominalData, Primitive,
+    Substitution, SymbolId, Type, TypeTable;
 
 /// `program` as Core, starting from its `main`. `analysis` must have no errors.
 /// Throws: DiagnosticException (`NotImplemented`) at the first construct that isn't lowered yet.
@@ -33,6 +33,80 @@ Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis)
     return program;
 }
 
+/// How deeply an instance's type arguments can nest, which only polymorphic recursion reaches.
+enum instanceNestingLimit = 64;
+
+/// A function with its type arguments, which are empty for one that isn't generic.
+private struct InstanceKey
+{
+    Id!(ast.FunctionDecl) decl;
+    immutable(Type)[] args;
+}
+
+/// The Analysis as one instance of a generic function reads it: every type it answers with has
+/// the instance's type arguments filled in, so the rest of lowering only sees concrete types. What
+/// it doesn't override, it answers as the Analysis does.
+private struct Instance
+{
+    Rebindable!(const Analysis) analysis;
+    Substitution substitution;
+
+    const(Analysis) base() const => analysis;
+    alias base this;
+
+    private Type concrete(Type type) const => analysis.instantiate(type, substitution);
+
+    private FunctionData signature(Type type) const
+    {
+        return analysis.types[concrete(type)].match!(
+            (const FunctionData data) => data,
+            (_) => assert(0, "a function's type is a function type"),
+        );
+    }
+
+    Type typeOf(Id!(ast.Expr) id) const => concrete(analysis.typeOf(id));
+    Type typeOf(Id!(ast.Param) id) const => concrete(analysis.typeOf(id));
+    Type typeOf(Id!(ast.VarDecl) id) const => concrete(analysis.typeOf(id));
+    Type typeOf(Id!(ast.ConstDecl) id) const => analysis.typeOf(id);
+    FunctionData signatureOf(Id!(ast.FunctionDecl) id) const => signature(analysis.typeOf(id));
+    FunctionData signatureOf(Id!(ast.Expr) lambda) const => signature(analysis.typeOf(lambda));
+
+    /// The signature of the instance of `func` with `typeArgs`, which are concrete already.
+    FunctionData signatureOf(Id!(ast.FunctionDecl) func, immutable(Type)[] typeArgs) const
+    {
+        Substitution instance;
+        foreach (i, param; analysis.declarationOf(func).typeParams) instance[param.id] = typeArgs[i];
+        return analysis.types[analysis.instantiate(analysis.typeOf(func), instance)].match!(
+            (const FunctionData data) => data,
+            (_) => assert(0, "a function's type is a function type"),
+        );
+    }
+
+    const(Type)* promotionOf(Id!(ast.Expr) id) const
+    {
+        auto option = analysis.promotionOf(id);
+        if (option is null) return null;
+        auto type = new Type;
+        *type = concrete(*option);
+        return type;
+    }
+
+    const(Type)* constructedMemberOf(Id!(ast.Expr) id) const
+    {
+        auto member = analysis.constructedMemberOf(id);
+        if (member is null) return null;
+        auto type = new Type;
+        *type = concrete(*member);
+        return type;
+    }
+
+    /// What the type parameters of the generic `name` uses stand for in this instance.
+    immutable(Type)[] typeArgumentsOf(Id!(ast.Expr) name) const
+    {
+        return analysis.typeArgumentsOf(name).map!(t => concrete(t)).array.idup;
+    }
+}
+
 /// A nested `def` inside its own body, where naming it rebuilds its closure from its captures.
 private struct Self
 {
@@ -49,7 +123,8 @@ private struct Step
 
 private final class Lowering
 {
-    private const Analysis _analysis;
+    /// The Analysis as the function being lowered reads it.
+    private Instance _analysis;
     /// Each local and param of the function being lowered, and each value its closure captures.
     private Local[SymbolId] _locals;
     /// The nested `def` being lowered, which can name itself.
@@ -64,32 +139,71 @@ private final class Lowering
     private Span _span;
 
     /// What becomes `Program.functions`. A function gets its slot when a call first names it,
-    /// and is lowered later from `_pending`, so recursion never lowers a function twice.
+    /// and is lowered later from `_pending`, so recursion never lowers a function twice. A
+    /// generic function gets one per instance.
     Function[] functions;
-    private size_t[Id!(ast.FunctionDecl)] _slots;
-    private Id!(ast.FunctionDecl)[] _pending;
+    private size_t[InstanceKey] _slots;
+    private InstanceKey[] _pending;
+    /// The instance being lowered, and the one each instance was first needed by, for showing how
+    /// an instance nested too deeply came about.
+    private InstanceKey _current;
+    private InstanceKey[InstanceKey] _neededBy;
     /// Each `native library` a call has needed, in the order first needed.
     string[] libraries;
 
     /// The functions lowering makes up, by what they're for, so each is made once.
     private size_t[Type] _equalities;
     private size_t[Type] _formats;
-    private size_t[Id!(ast.TypeDecl)] _constructors;
+    /// A constructor used as a value, by the function type it has.
+    private size_t[Type] _constructors;
     private size_t[Id!(ast.FunctionDecl)] _nativeWrappers;
 
     this(const Analysis analysis)
     {
-        _analysis = analysis;
+        _analysis = Instance(rebindable(analysis), null);
     }
 
-    /// Where `func` is in `functions`, giving it a slot and queueing it the first time.
-    size_t slotFor(Id!(ast.FunctionDecl) func)
+    /// Where `func` with the type arguments `args` is in `functions`, giving it a slot and
+    /// queueing it the first time.
+    size_t slotFor(Id!(ast.FunctionDecl) func, immutable(Type)[] args = null)
     {
-        if (auto existing = func in _slots) return *existing;
+        auto key = InstanceKey(func, args);
+        if (auto existing = key in _slots) return *existing;
+        if (_current != key) _neededBy[key] = _current;
+        if (args.any!(a => types.depth(a) > instanceNestingLimit)) reportNesting(key);
         auto slot = reserveSlot();
-        _slots[func] = slot;
-        _pending ~= func;
+        _slots[key] = slot;
+        _pending ~= key;
         return slot;
+    }
+
+    /// Stops at an instance whose type arguments nest too deeply, showing the instances that
+    /// led to it.
+    private void reportNesting(InstanceKey key)
+    {
+        import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException;
+
+        string[] chain = [instanceName(key)];
+        for (auto at = key; at in _neededBy; at = _neededBy[at])
+        {
+            if (!_neededBy[at].decl.isValid) break;
+            chain = instanceName(_neededBy[at]) ~ chain;
+        }
+        enum shown = 3;
+        auto elided = chain.length > 2 * shown + 1
+            ? chain[0 .. shown] ~ "... %s more ...".format(chain.length - 2 * shown) ~ chain[$ - shown .. $]
+            : chain;
+        throw new DiagnosticException(Diagnostic(DiagnosticCode.InstanceNestingTooDeep, _span,
+            "Type arguments nest more than %s deep, as a generic function that calls itself with a larger type "
+                .format(instanceNestingLimit) ~ "would need endlessly many instances:\n    %-(%s\n    -> %)".format(elided)));
+    }
+
+    /// `first<Int>`, or the plain name of a function that isn't generic.
+    private string instanceName(InstanceKey key)
+    {
+        auto name = _analysis.declarationOf(key.decl).name;
+        if (key.args.length == 0) return name;
+        return "%s<%-(%s, %)>".format(name, key.args.map!(a => types.describe(a)));
     }
 
     private size_t reserveSlot()
@@ -102,16 +216,21 @@ private final class Lowering
     {
         while (_pending.length > 0)
         {
-            auto func = _pending[0];
+            auto key = _pending[0];
             _pending = _pending[1 .. $];
-            auto lowered = lowerFunction(*_analysis.declarationOf(func));
-            functions[_slots[func]] = lowered;
+            auto lowered = lowerFunction(key);
+            functions[_slots[key]] = lowered;
         }
     }
 
-    private Function lowerFunction(const ast.FunctionDecl func)
+    private Function lowerFunction(InstanceKey key)
     {
+        auto func = _analysis.declarationOf(key.decl);
         assert(func.kind == ast.FunctionKind.ordinary, "a call to a native or an intrinsic has a node of its own, so they never get a slot");
+        Substitution substitution;
+        foreach (i, param; func.typeParams) substitution[param.id] = key.args[i];
+        _analysis = Instance(_analysis.analysis, substitution);
+        _current = key;
         _span = func.nameSpan;
         _locals = null;
         _selves = null;
@@ -126,7 +245,18 @@ private final class Lowering
             params ~= local;
         }
         auto body = coerce(lowerExpr(*func.body), signature.ret);
-        return Function(func.name, _moduleName, params, null, signature.ret, body, FunctionOrigin.declared);
+        return Function(instanceName(key), _moduleName, params, null, signature.ret, body, FunctionOrigin.declared);
+    }
+
+    /// Stops at a type nested too deeply, which a generic type whose fields hold ever larger
+    /// instances of itself makes.
+    private void reportTypeNesting(Type type)
+    {
+        import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException;
+
+        throw new DiagnosticException(Diagnostic(DiagnosticCode.InstanceNestingTooDeep, _span,
+            "Type arguments nest more than %s deep, as a generic type whose fields hold ever larger instances of itself "
+                .format(instanceNestingLimit) ~ "would need endlessly many types; the deepest is `%s`".format(types.describe(type))));
     }
 
     /// The types of the declared types `program` uses, which backends need to lay them out.
@@ -137,6 +267,7 @@ private final class Lowering
         {
             if (type in seen) return;
             seen[type] = true;
+            if (types.depth(type) > instanceNestingLimit) reportTypeNesting(type);
             types[type].match!(
                 (const NominalData nominal) {
                     auto members = _analysis.membersOf(type);
@@ -146,7 +277,7 @@ private final class Lowering
                         foreach (member; members) visitType(member);
                         return;
                     }
-                    auto fields = _analysis.fieldsOf(nominal.decl).map!(f => f.type).array;
+                    auto fields = fieldTypes(type);
                     program.recordFields[type] = fields;
                     foreach (field; fields) visitType(field);
                 },
@@ -270,7 +401,7 @@ private final class Lowering
             (const ast.FloatLiteral literal) => make(ExprKind(FloatLit(literal.value))),
             (const ast.StringLiteral literal) => make(ExprKind(StringLit(literal.value))),
             (const ast.InterpolatedString interpolated) => lowerInterpolated(interpolated, span),
-            (const ast.Identifier _) => symbolValue(resolved(e), type, span),
+            (const ast.Identifier _) => symbolValue(resolved(e), type, span, e.id),
             (const ast.UnaryExpr unary) => make(lowerUnary(unary, type)),
             (const ast.BinaryExpr binary) => lowerBinary(binary, e, type),
             (const ast.IfExpr if_) => lowerIf(if_, type, span),
@@ -303,8 +434,9 @@ private final class Lowering
         return *symbol;
     }
 
-    /// The value a name refers to, as an expression of `type`.
-    private Expr symbolValue(SymbolId symbol, Type type, Span span)
+    /// The value a name refers to, as an expression of `type`. `name` is the name's own node, which
+    /// says what a generic function's type arguments are.
+    private Expr symbolValue(SymbolId symbol, Type type, Span span, Id!(ast.Expr) name = Id!(ast.Expr).init)
     {
         if (auto local = symbol in _locals) return use(*local, span);
         if (auto self = symbol in _selves)
@@ -312,21 +444,21 @@ private final class Lowering
             return Expr(type, span, ExprKind(MakeClosure(self.slot, self.captures.map!(c => use(c, span)).array)));
         }
         return symbol.match!(
-            (const Id!(ast.FunctionDecl) func) => functionValue(func, type, span),
+            (const Id!(ast.FunctionDecl) func) => functionValue(func, type, span, _analysis.typeArgumentsOf(name)),
             (const Id!(ast.ConstDecl) constant) => constantValue(constant, span),
             (const Id!(ast.TypeDecl) decl) => typeValue(decl, type, span),
             (_) => notLowered!Expr("a reference to that kind of name"),
         );
     }
 
-    /// A named function used as a value.
-    private Expr functionValue(Id!(ast.FunctionDecl) func, Type type, Span span)
+    /// A named function used as a value, with the type arguments of the instance it is.
+    private Expr functionValue(Id!(ast.FunctionDecl) func, Type type, Span span, immutable(Type)[] typeArgs)
     {
         auto decl = _analysis.declarationOf(func);
         final switch (decl.kind)
         {
             case ast.FunctionKind.ordinary:
-                return Expr(type, span, ExprKind(MakeClosure(slotFor(func), null)));
+                return Expr(type, span, ExprKind(MakeClosure(slotFor(func, typeArgs), null)));
             case ast.FunctionKind.native:
                 return Expr(type, span, ExprKind(MakeClosure(nativeWrapper(func), null)));
             case ast.FunctionKind.intrinsic:
@@ -360,21 +492,40 @@ private final class Lowering
     }
 
     /// A function that builds a value of `decl`, for using its constructor as a value of the
-    /// function type `type`.
+    /// function type `type`. For a generic type, the instance it builds is the one `type` returns,
+    /// or the member of that sum which `decl` declares.
     private size_t constructor(Id!(ast.TypeDecl) decl, Type type)
     {
-        if (auto existing = decl in _constructors) return *existing;
+        if (auto existing = type in _constructors) return *existing;
         auto slot = reserveSlot();
-        _constructors[decl] = slot;
+        _constructors[type] = slot;
         auto signature = functionData(type);
-        auto record = _analysis.typeOf(decl);
+        auto record = signature.ret;
+        if (declOf(record) != decl)
+        {
+            auto members = _analysis.membersOf(record).filter!(m => declOf(m) == decl);
+            assert(!members.empty, "a constructor builds its type, or a member of its sum");
+            record = members.front;
+        }
         Local[] params;
-        foreach (field; _analysis.fieldsOf(decl)) params ~= new Local(field.name, field.type);
+        foreach (field; _analysis.fieldsOf(record)) params ~= new Local(field.name, field.type);
         Expr body = Expr(record, _span, ExprKind(Construct(params.map!(p => use(p, _span)).array)));
         if (signature.ret != record) body = inject(_analysis.memberIndexFor(signature.ret, record), body, signature.ret);
-        functions[slot] = Function(_analysis.declarationOf(decl).name, _moduleName, params, null, signature.ret,
+        functions[slot] = Function(typeName(record) ~ typeArgumentsOf(record), _moduleName, params, null, signature.ret,
             body, FunctionOrigin.derived);
         return slot;
+    }
+
+    private Id!(ast.TypeDecl) declOf(Type type)
+    {
+        return types[type].match!((const NominalData nominal) => nominal.decl, _ => Id!(ast.TypeDecl).init);
+    }
+
+    /// `<Int>` for `Box<Int>`, or nothing for a type that isn't generic.
+    private string typeArgumentsOf(Type type)
+    {
+        auto args = types[type].match!((const NominalData nominal) => nominal.args, _ => (immutable(Type)[]).init);
+        return args.length == 0 ? "" : "<%-(%s, %)>".format(args.map!(a => types.describe(a)));
     }
 
     private Expr constantValue(Id!(ast.ConstDecl) constant, Span span)
@@ -566,7 +717,7 @@ private final class Lowering
     private Expr lowerMember(const ast.Expr e, const ast.MemberAccess access, Type type)
     {
         // `std.math.pi` names a declaration.
-        if (auto symbol = _analysis.resolutionOf(e.id)) return symbolValue(*symbol, type, e.span);
+        if (auto symbol = _analysis.resolutionOf(e.id)) return symbolValue(*symbol, type, e.span, e.id);
         auto object = lowerExpr(*access.object);
         return field(object, _analysis.fieldIndexOf(e.id), type);
     }
@@ -1003,10 +1154,6 @@ private final class Lowering
         // `x.f(y)` is `f(x, y)`, which sema has built.
         auto method = _analysis.methodCallOf(e.id);
         auto written = method is null ? call.args : method.args;
-        if (_analysis.isArrayLength(e.id))
-        {
-            return Expr(type, span, ExprKind(Length(boxed(lowerExpr(written[0])))));
-        }
 
         auto calleeId = _analysis.calleeOf(e.id);
         if (calleeId is null)
@@ -1018,11 +1165,12 @@ private final class Lowering
         }
 
         auto decl = _analysis.declarationOf(*calleeId);
-        auto signature = _analysis.signatureOf(*calleeId);
+        auto typeArgs = _analysis.typeArgumentsOf(call.callee.id);
+        auto signature = _analysis.signatureOf(*calleeId, typeArgs);
         final switch (decl.kind)
         {
             case ast.FunctionKind.ordinary:
-                auto target = slotFor(*calleeId);
+                auto target = slotFor(*calleeId, typeArgs);
                 return callWith(written, signature, type, span, null,
                     (Expr[] args, Expr* _) => Expr(signature.ret, span, ExprKind(Call(target, args))));
             case ast.FunctionKind.native:
@@ -1047,6 +1195,10 @@ private final class Lowering
     /// formatted to a String first.
     private Expr lowerIntrinsic(Id!(ast.FunctionDecl) callee, const ast.Expr[] written, FunctionData signature, Span span)
     {
+        if (_analysis.intrinsicOf(callee) == Intrinsic.length)
+        {
+            return Expr(types.int_, span, ExprKind(Length(boxed(lowerExpr(written[0])))));
+        }
         Expr[] args;
         bool[] anyArgs;
         foreach (i, ref arg; written)
@@ -1147,6 +1299,7 @@ private final class Lowering
     private size_t equalityFunction(Type type)
     {
         if (auto existing = type in _equalities) return *existing;
+        if (types.depth(type) > instanceNestingLimit) reportTypeNesting(type);
         auto slot = reserveSlot();
         _equalities[type] = slot;
 
@@ -1228,6 +1381,7 @@ private final class Lowering
     private size_t formatFunction(Type type)
     {
         if (auto existing = type in _formats) return *existing;
+        if (types.depth(type) > instanceNestingLimit) reportTypeNesting(type);
         auto slot = reserveSlot();
         _formats[type] = slot;
 
@@ -1356,7 +1510,7 @@ private final class Lowering
     {
         if (types.isTuple(type)) return types.tupleElements(type);
         return types[type].match!(
-            (const NominalData nominal) => _analysis.fieldsOf(nominal.decl).map!(f => f.type).array,
+            (const NominalData _) => _analysis.fieldsOf(type).map!(f => f.type).array,
             (_) => assert(0, "only a tuple or a declared type has fields"),
         );
     }
@@ -2143,4 +2297,101 @@ def format.[Int](value: [Int]): String {
     }
     Concat(text, "]")
 }`);
+}
+
+@("each instance of a generic function is lowered once, with its type arguments filled in")
+unittest
+{
+    auto result = loweredFunction(`
+def identity<T>(x: T): T => x
+
+def f(): Int {
+    val a = identity(1)
+    val b = identity(2)
+    val s = identity("s")
+    a + b
+}
+`, "f");
+    print(result.program).should.equal(
+`def f(): Int {
+    let a: Int = identity<Int>(1)
+    let b: Int = identity<Int>(2)
+    let s: String = identity<String>("s")
+    Add(a, b)
+}
+
+def identity<Int>(x: Int): Int x
+
+def identity<String>(x: String): String x`);
+}
+
+@("an instance's body, lambdas and types have no type parameter left in them")
+unittest
+{
+    auto result = loweredFunction(`
+type Box<T>(value: T)
+
+def boxAll<T>(values: [T]): [Box<T>?] {
+    mutable val out: [Box<T>?] = []
+    for value in values {
+        val make = (v: T) => Box(v)
+        out ~= [make(value)]
+    }
+    out
+}
+
+def f(): [Box<UInt8>?] => boxAll<UInt8>([1])
+`, "f");
+    auto printed = print(result.program);
+    printed.canFind("T").should.equal(false);
+    printed.should.equal(
+`def f(): [Box<UInt8>?] boxAll<UInt8>([1])
+
+def boxAll<UInt8>(values: [UInt8]): [Box<UInt8>?] {
+    let mutable out: [Box<UInt8>?] = []
+    {
+        let array: [UInt8] = values
+        let count: Int = length(array)
+        let mutable next: Int = 0
+        loop {
+            if (Not(Less(next, count))) break else ()
+            let value: UInt8 = array[next]
+            next = Add(next, 1)
+            let make: (UInt8) -> Box<UInt8> = closure lambda
+            out = Append(out, [Box<UInt8>?#1(call make(value))])
+        }
+    }
+    out
+}
+
+def lambda(v: UInt8): Box<UInt8> Box<UInt8>(v)`);
+    result.program.recordFields.length.should.equal(1);
+}
+
+@("the functions lowering derives are made per instance of a generic type")
+unittest
+{
+    auto result = loweredFunction(`
+type Box<T>(value: T)
+
+def f(): Bool => Box(1) == Box(2) && Box("a") == Box("b")
+`, "f");
+    auto names = result.program.functions.map!(f => f.name).array;
+    names.should.equal(["f", "equal.Box<Int>", "equal.Box<String>"]);
+}
+
+@("polymorphic recursion stops at the nesting limit, showing the instances that led there")
+unittest
+{
+    import std.exception : collectException;
+    import silver.ast : DiagnosticCode, DiagnosticException;
+
+    auto error = collectException!DiagnosticException(loweredFunction(`
+def grow<T>(x: T): Unit => grow([x])
+
+def f(): Unit => grow(1)
+`, "f"));
+    assert(error !is null, "expected the nesting limit");
+    error.diagnostic.code.should.equal(DiagnosticCode.InstanceNestingTooDeep);
+    error.diagnostic.message.canFind("f\n    -> grow<Int>\n    -> grow<[Int]>").should.equal(true);
 }

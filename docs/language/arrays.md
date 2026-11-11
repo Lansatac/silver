@@ -84,4 +84,4 @@ Maps share the bracket syntax, with `:` between key and value:
 
 - Map literals parse, but are rejected.
 - `xs[i] = v` isn't available yet.
-- `length` is available only as `length(xs)`, and can't be used as a function value.
+- `length` is built into the compiler, so it can only be called, as `length(xs)` or `xs.length()`, and not used as a function value.

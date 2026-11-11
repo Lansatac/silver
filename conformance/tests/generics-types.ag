@@ -1,0 +1,85 @@
+// Generic types: products, sums and a recursive list, on several instances.
+
+type Box<T>(value: T)
+type Pair<A, B>(left: A, right: B)
+type Result<T, E> = Ok(value: T) | Error(error: E)
+type List<T> = Cons(head: T, rest: List<T>) | Nil
+type Tag<T>
+type Shape<T> = Circle(radius: T) | Named(box: Box<T>) | Nothing
+
+def swap<A, B>(pair: Pair<A, B>): Pair<B, A> => Pair(pair.right, pair.left)
+
+def unwrap<T, E>(result: Result<T, E>, fallback: T): T => match result {
+    Ok(value) => value
+    Error(_) => fallback
+}
+
+def size<T>(list: List<T>): Int => match list {
+    Cons(_, rest) => 1 + size(rest)
+    Nil => 0
+}
+
+def listOf<T>(values: [T]): List<T> {
+    mutable val list: List<T> = Nil
+    mutable val i = length(values)
+    while i > 0 {
+        i -= 1
+        list = Cons(values[i], list)
+    }
+    list
+}
+
+def main(): Unit {
+    val box = Box(1)
+    printl(box)
+    printl(box.value + 1)
+    printl(box == Box(1))
+    printl(box != Box(2))
+    printl(box with (value = 5))
+    printl(Box<UInt8>(255))
+    printl(Box(()))
+    printl(Box(Box("nested")))
+    printl(Box([1, 2]) == Box([1, 2]))
+
+    val pair = Pair("left", 2)
+    printl(pair)
+    printl(swap(pair))
+    printl(swap(pair).left * 3)
+    printl(pair with (right = 3) == Pair("left", 3))
+
+    val ok: Result<Int, String> = Ok(1)
+    val error: Result<Int, String> = Error("bad")
+    printl(ok)
+    printl(error)
+    printl(unwrap(ok, 0) + unwrap(error, 10))
+    printl(ok == Ok(1))
+    printl(error == Ok(1))
+    val explicit: Result<String, Int> = Ok<String>("written")
+    printl(explicit)
+    val member: Ok<Bool> = Ok(true)
+    printl(member.value)
+
+    val list = listOf(["a", "b", "c"])
+    printl(list)
+    printl(size(list))
+    printl(list == Cons("a", Cons("b", Cons("c", Nil))))
+    val empty: List<Int> = Nil
+    printl(empty)
+    printl(size(empty))
+    val built: List<Int?> = Cons(None, Cons(Some(2), Nil))
+    printl(built)
+
+    val tag = Tag<Int>
+    printl(tag)
+    printl(tag == Tag<Int>)
+
+    val shapes: [Shape<Float>] = [Circle(1.5), Named(Box(2.0)), Nothing]
+    for shape in shapes {
+        printl(match shape {
+            Circle(radius) => radius * 2.0
+            Named(Box(value)) => value
+            Nothing => 0.0
+        })
+    }
+    printl(shapes)
+}

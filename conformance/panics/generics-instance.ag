@@ -1,0 +1,9 @@
+def only<T>(values: [T]): T {
+    if values.length() != 1 { panic("expected exactly one value") }
+    values[0]
+}
+
+def main(): Unit {
+    printl(only([1]))
+    printl(only(["a", "b"]))
+}

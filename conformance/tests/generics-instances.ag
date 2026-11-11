@@ -1,0 +1,60 @@
+// One generic function and type at many type arguments, and generic code calling itself, other
+// generic code, and lambdas.
+
+type Box<T>(value: T)
+
+def twice<T>(value: T): [T] => [identity(value), value]
+
+def identity<T>(value: T): T => value
+
+def larger<T>(a: T, b: T, less: (T, T) -> Bool): T => if less(a, b) => b else a
+
+def countDown<T>(value: T, n: Int): [T] => if n == 0 => [] else [value] ~ countDown(value, n - 1)
+
+def constant<T>(value: T): () -> T => () => value
+
+def repeat<T>(value: T, times: Int): [T] {
+    def go(left: Int, done: [T]): [T] => if left == 0 => done else go(left - 1, done ~ [value])
+    go(times, [])
+}
+
+def exchange<T>(mutable slot: T, value: T): T {
+    val old = slot
+    slot = value
+    old
+}
+
+def apply<T, U>(value: T, f: (T) -> U): U => f(value)
+
+def main(): Unit {
+    printl(twice(1))
+    printl(twice(()))
+    printl(twice(Some("a")))
+    printl(twice([1, 2]))
+    printl(twice((1, true)))
+    printl(length(twice((n: Int) => n + 1)))
+    printl(twice((n: Int) => n + 1)[1](41))
+    printl(twice(Box(Box(3))))
+    val none: Int? = None
+    printl(twice(none))
+
+    // Typed arguments come first, so the literal adapts to the UInt8.
+    val small: UInt8 = 3
+    printl(larger(1, small, (a, b) => a < b))
+    printl(larger("pear", "apple", (a, b) => a < b))
+
+    printl(countDown("x", 3))
+    printl(constant(7)())
+    printl(repeat(Box(0), 2))
+
+    mutable val held = "first"
+    printl(exchange(mutable held, "second"))
+    printl(held)
+    mutable val box = Box(1)
+    printl(exchange(mutable box, Box(2)))
+    printl(box)
+
+    printl(apply(4, n => n * 2))
+    printl(apply(Box(4), b => b.value > 3))
+    printl(apply("a", identity<String>))
+}

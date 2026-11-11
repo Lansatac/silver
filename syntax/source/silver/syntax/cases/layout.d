@@ -81,6 +81,12 @@ immutable Case[] continuations = [
     declaresAs("def f(): Int\n    => 1", "(def f (): Int 1)"),
     declaresAs("def f()\n    : Int => 1", "(def f (): Int 1)"),
     declaresAs("def\nf\n(): Int => 1", "(def f (): Int 1)"),
+    declaresAs("def f\n<T>(x: T): T => x", "(def f<T> (x: T): T x)"),
+    declaresAs("def f<T>\n(x: T): T => x", "(def f<T> (x: T): T x)"),
+    declaresAs("type Box\n    <T>(value: T)", "(type Box<T> (value: T))"),
+    declaresAs("type Box<T>\n    = Full(value: T) | Empty", ["(type Full<T> (value: T))", "(type Box<T> = Full<T> | Empty)", "(type Empty)"]),
+    parsesAs("val e = empty\n    <Int>()", "(val e (call empty<Int>))"),
+    parsesAs("val e = a.empty\n    <Int>()", "(val e (call (. a empty<Int>)))"),
 
     // After an opening bracket, around commas and before a closing bracket.
     parsesAs("a = [\n    1,\n    2,\n]", "(assign a (array 1 2))"),
@@ -101,6 +107,9 @@ immutable Case[] continuations = [
     parsesAs("val a: List<\n    Int,\n    Int\n> = b", "(val a: List<Int, Int> b)"),
     declaresAs("def f(\n    a: Int,\n    b: Int\n): Int => a", "(def f (a: Int, b: Int): Int a)"),
     declaresAs("type T(\n    a: Int,\n    b: Int\n)", "(type T (a: Int, b: Int))"),
+    declaresAs("def f<\n    A,\n    B\n>(a: A): A => a", "(def f<A, B> (a: A): A a)"),
+    declaresAs("type P<\n    A\n    , B\n>(a: A, b: B)", "(type P<A, B> (a: A, b: B))"),
+    parsesAs("val e = empty<\n    Int,\n    String\n>()", "(val e (call empty<Int, String>))"),
 
     // Both can end and begin a statement, so a newline separates them.
     parsesAs("a\nb", ["a", "b"]),
@@ -110,6 +119,8 @@ immutable Case[] continuations = [
     parsesAs("a = b\n(c)", ["(assign a b)", "c"]),
     parsesAs("a = b\n[c]", ["(assign a b)", "(array c)"]),
     parsesAs("return\na", ["(return ())", "a"]),
+    parsesAs("val w = Box<Int>\n(1)", ["(val w Box<Int>)", "1"]),
+    rejectsDeclaration("type Tag<T>\n(a: Int)"), // a marker, then fields with no type
     rejects("a = [1\n    - 2]"),
     rejects("f(1\n    - 2)"),
 ];

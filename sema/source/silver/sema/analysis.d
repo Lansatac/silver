@@ -7,6 +7,8 @@ import silver.sema.resolve;
 import silver.sema.target : Intrinsic, intrinsicNamed, Target;
 import silver.sema.type;
 
+import std.algorithm : map;
+import std.array : array;
 import std.sumtype : match;
 
 version (unittest) import fluent.asserts;
@@ -165,11 +167,34 @@ final class Analysis
         return (call in _resolution.conversions) !is null;
     }
 
-    /// Whether `call` is the prelude's `length`, which reads an array's length. Sema types it
-    /// until generics can, so it isn't a call to anything.
-    bool isArrayLength(Id!Expr call) const
+    /// What the type parameters of the generic function or constructor that `name` uses stand for,
+    /// in its declaration's order, or null if it isn't one. Inside a generic function they can
+    /// mention its own type parameters.
+    const(Type)[] typeArgumentsOf(Id!Expr name) const
     {
-        return (call in _typing.arrayLengths) !is null;
+        return _typing.typeArguments.get(name, null);
+    }
+
+    /// `type` with the type parameters in `substitution` replaced, which interns types the checker
+    /// never saw, like `Box<[Int]>` for an instance. Interning only adds to the table: no type
+    /// already handed out changes, so this is still a query.
+    Type instantiate(Type type, const Substitution substitution) const
+    {
+        if (substitution.length == 0) return type;
+        return (cast(TypeTable) _typing.types).substitute(type, substitution);
+    }
+
+    /// What each type parameter of the declared type `type` stands for in it.
+    Substitution substitutionOf(Type type) const
+    {
+        Substitution substitution;
+        _typing.types[type].match!(
+            (const NominalData nominal) {
+                foreach (i, param; declarationOf(nominal.decl).typeParams) substitution[param.id] = nominal.args[i];
+            },
+            (_) {},
+        );
+        return substitution;
     }
 
     /// The operands of the `~` chain `concat` heads, flattened, so that `a ~ b ~ c` is one
@@ -190,7 +215,7 @@ final class Analysis
     const(Type)[] membersOf(Type type) const
     {
         return _typing.types[type].match!(
-            (const NominalData nominal) => _typing.members.get(nominal.decl, null),
+            (const NominalData nominal) => _typing.members.get(nominal.decl, null).map!(m => instantiate(m, substitutionOf(type))).array,
             _ => (Type[]).init,
         );
     }
@@ -234,10 +259,14 @@ final class Analysis
         return _typing.patternConstructors[pattern];
     }
 
-    /// The fields of `type`, in declaration order.
-    const(FieldInfo)[] fieldsOf(Id!TypeDecl type) const
+    /// The fields of the declared type `type`, in declaration order, with its type arguments filled in.
+    const(FieldInfo)[] fieldsOf(Type type) const
     {
-        return _typing.fields[type];
+        return _typing.types[type].match!(
+            (const NominalData nominal) => _typing.fields[nominal.decl]
+                .map!(f => FieldInfo(f.name, instantiate(f.type, substitutionOf(type)))).array,
+            (_) => assert(0, "only a declared type has fields"),
+        );
     }
 
     /// Where in `fieldsOf` the field read or assigned by the member access `access` is. Only

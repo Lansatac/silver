@@ -1,0 +1,32 @@
+Box(1)
+2
+true
+true
+Box(5)
+Box(255)
+Box(())
+Box(Box(nested))
+true
+Pair(left, 2)
+Pair(2, left)
+6
+true
+Ok(1)
+Error(bad)
+11
+true
+false
+Ok(written)
+true
+Cons(a, Cons(b, Cons(c, Nil)))
+3
+true
+Nil
+0
+Cons(None, Cons(Some(2), Nil))
+Tag
+true
+3
+2
+0
+[Circle(1.5), Named(Box(2)), Nothing]

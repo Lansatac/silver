@@ -14,7 +14,7 @@ import silver.sema.target : intrinsicAlias, intrinsicNamed, Target;
 /// An `Id!AliasDecl` is only ever in a scope: a use of one records what it stands for.
 alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module, Id!TypeDecl, Id!ConstDecl, Id!AliasDecl);
 
-alias TypeSymbol = SumType!(Builtin, Id!TypeDecl, Id!AliasDecl);
+alias TypeSymbol = SumType!(Builtin, Id!TypeDecl, Id!AliasDecl, Id!TypeParam);
 
 private bool isConversion(Builtin builtin)
 {
@@ -63,6 +63,7 @@ package struct Declarations
     const(AliasDecl)*[Id!AliasDecl] aliases;
     const(VarDecl)*[Id!VarDecl] locals;
     const(Param)*[Id!Param] params;
+    const(TypeParam)*[Id!TypeParam] typeParams;
 }
 
 /// What name resolution produced.
@@ -521,13 +522,14 @@ private final class NameResolver
         foreach (decl; mod.declarations)
         {
             decl.kind.match!(
-                (const FunctionDecl func) {
+                (ref const FunctionDecl func) {
+                    auto declScope = genericScope(func.typeParams, _moduleScopes[name], false);
                     foreach (ref param; func.params)
                     {
                         _declarations.params[param.id] = &param;
-                        resolveTypeExpr(param.type, _moduleScopes[name]);
+                        resolveTypeExpr(param.type, declScope);
                     }
-                    resolveTypeExpr(func.returnType, _moduleScopes[name]);
+                    resolveTypeExpr(func.returnType, declScope);
                     if (!func.isPrivate)
                     {
                         foreach (ref param; func.params)
@@ -539,13 +541,14 @@ private final class NameResolver
 
                     if (func.body !is null)
                     {
-                        resolveBody(func.params, *func.body, _moduleScopes[name]);
+                        resolveBody(func.params, *func.body, declScope);
                     }
                 },
-                (const TypeDecl type) {
+                (ref const TypeDecl type) {
+                    auto declScope = genericScope(type.typeParams, _moduleScopes[name], type.inheritsParams);
                     foreach (member; type.members)
                     {
-                        resolveTypeExpr(member.type, _moduleScopes[name]);
+                        resolveTypeExpr(member.type, declScope);
                         if (!type.isPrivate) reportPrivateType(member.type, "a public sum's members");
                     }
                     if (type.implicitMarker) reportImportedMember(type, _moduleScopes[name]);
@@ -558,7 +561,7 @@ private final class NameResolver
                                 "'%s' is already a field of this type".format(field.name));
                         }
                         seen[field.name] = true;
-                        resolveTypeExpr(field.type, _moduleScopes[name]);
+                        resolveTypeExpr(field.type, declScope);
                         if (!type.isPrivate) reportPrivateType(field.type, "a public field");
                     }
                 },
@@ -570,6 +573,43 @@ private final class NameResolver
                 (const ImportStmt _) {},
             );
         }
+    }
+
+    /// The scope of a declaration with `params`, inside `moduleScope`: the module's own, if it has
+    /// none. Parameters a member inherits from its sum were reported with the sum's.
+    private Scope genericScope(const(TypeParam)[] params, Scope moduleScope, bool inherited)
+    {
+        if (params.length == 0) return moduleScope;
+        auto declScope = new Scope(moduleScope);
+        foreach (ref param; params)
+        {
+            _declarations.typeParams[param.id] = &param;
+            if (inherited)
+            {
+                declScope.declare(param.name, TypeSymbol(param.id));
+                continue;
+            }
+            string problem;
+            if (declScope.resolveLocalType(param.name) !is null)
+            {
+                problem = "`%s` is already a type parameter of this declaration";
+            }
+            else if (universal.resolveLocalType(param.name) !is null || param.name == "Some" || param.name == "None")
+            {
+                problem = "'%s' is a built-in name";
+            }
+            else if (moduleScope.resolveLocalType(param.name) !is null)
+            {
+                problem = "`%s` is already a type in this module, so it can't also name a type parameter";
+            }
+            if (problem !is null)
+            {
+                _collector.reportError(DiagnosticCode.DuplicateDeclaration, param.span, problem.format(param.name));
+                continue;
+            }
+            declScope.declare(param.name, TypeSymbol(param.id));
+        }
+        return declScope;
     }
 
     /// Whether `m`'s declaration `symbol` can be seen from the module being resolved.
@@ -592,6 +632,7 @@ private final class NameResolver
             (const Id!TypeDecl t) => _declarations.types[t].isPrivate,
             (const Id!AliasDecl a) => _declarations.aliases[a].isPrivate,
             (const Builtin _) => false,
+            (const Id!TypeParam _) => false,
         );
     }
 
@@ -620,6 +661,7 @@ private final class NameResolver
                     (const Id!TypeDecl t) => _declarations.types[t].isPrivate,
                     (const Id!AliasDecl a) => _declarations.aliases[a].isPrivate,
                     (const Builtin _) => false,
+                    (const Id!TypeParam _) => false,
                 );
                 if (isPrivate)
                 {
@@ -681,6 +723,7 @@ private final class NameResolver
                     (const Builtin builtin) => builtin != Builtin.Any && builtin != Builtin.Never,
                     (const Id!TypeDecl _) => false,
                     (const Id!AliasDecl a) => (a in _recursiveAliases) !is null || isConstantType(_declarations.aliases[a].target),
+                    (const Id!TypeParam _) => false,
                 );
             },
             _ => false,
@@ -1096,8 +1139,14 @@ private final class NameResolver
     private Path resolvePath(const Expr expr, Scope scopeTable)
     {
         return expr.kind.match!(
-            (const Identifier id) => resolveName(expr, id.name, scopeTable),
-            (const MemberAccess access) => resolveMember(expr, access, scopeTable),
+            (const Identifier id) {
+                foreach (arg; id.typeArgs) resolveTypeExpr(arg, scopeTable);
+                return resolveName(expr, id.name, scopeTable);
+            },
+            (const MemberAccess access) {
+                foreach (arg; access.typeArgs) resolveTypeExpr(arg, scopeTable);
+                return resolveMember(expr, access, scopeTable);
+            },
             (_) {
                 resolveExpr(expr, scopeTable);
                 return Path(Path.Kind.Value);
@@ -1158,6 +1207,14 @@ private final class NameResolver
             return Path(Path.Kind.Value);
         }
 
+        // A value of the type would have to know the alias's type arguments, which a name can't carry.
+        if (auto instance = aliasedInstance(alias_))
+        {
+            _collector.reportError(DiagnosticCode.AliasIsNotAValue, expr.span,
+                "`%s` is an alias of `%s`, and its name can't give a value those type arguments; write `%s` instead"
+                    .format(name, printTypeExpr(*instance), printTypeExpr(*instance)));
+            return Path(Path.Kind.Error);
+        }
         auto isValue = expandAlias(TypeSymbol(alias_), _declarations.aliases, _typeResolutions).match!(
             (const Id!TypeDecl type) { _resolutions[expr.id] = SymbolId(type); return true; },
             (const Builtin builtin) {
@@ -1166,6 +1223,7 @@ private final class NameResolver
                 return true;
             },
             (const Id!AliasDecl _) => false,
+            (const Id!TypeParam _) => false,
         );
         if (isValue) return Path(Path.Kind.Value);
 
@@ -1173,6 +1231,23 @@ private final class NameResolver
             "`%s` is an alias of `%s`, which can't be used as a value here"
                 .format(name, printTypeExpr(_declarations.aliases[alias_].target)));
         return Path(Path.Kind.Error);
+    }
+
+    /// The generic type with type arguments that `alias_` stands for, directly or through other
+    /// aliases, or null if it doesn't stand for one.
+    private const(TypeExpr)* aliasedInstance(Id!AliasDecl alias_)
+    {
+        foreach (_; 0 .. _declarations.aliases.length)
+        {
+            auto target = &_declarations.aliases[alias_].target;
+            auto hasArgs = target.kind.match!((const NamedType n) => n.args.length > 0, _ => false);
+            if (hasArgs) return target;
+            auto next = target.id in _typeResolutions;
+            if (next is null) return null;
+            alias_ = (*next).match!((const Id!AliasDecl a) => a, _ => Id!AliasDecl.init);
+            if (!alias_.isValid) return null;
+        }
+        return null;
     }
 
     /// Notes `symbol`, just found from `from`, as captured by each lambda between the two.

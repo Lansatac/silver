@@ -1,0 +1,12 @@
+module generics_support.stack
+
+type Stack<T>(items: [T])
+
+def empty<T>(): Stack<T> => Stack([])
+
+def push<T>(stack: Stack<T>, item: T): Stack<T> => Stack(stack.items ~ [item])
+
+def top<T>(stack: Stack<T>): T? {
+    val count = stack.items.length()
+    if count == 0 => None else stack.items[count - 1]
+}

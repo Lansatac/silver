@@ -1143,7 +1143,7 @@ def main(): Unit => ()`);
     {
         auto symbol = occurrence(a.sources["main"], name, 1) in a.names["main"].declarations;
         return (*symbol).match!(
-            (const Id!TypeDecl decl) => a.analysis.fieldsOf(decl),
+            (const Id!TypeDecl decl) => a.analysis.fieldsOf(a.analysis.typeOf(decl)),
             (_) => assert(0, name ~ " isn't a type"),
         );
     }
@@ -1847,7 +1847,7 @@ unittest
     print([1][f])`).shouldReport(DiagnosticCode.TypeMismatch, At("f", 2));
     analyzedMain(`print([1][0.."a"])`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
     analyzedMain(`print("abc"[0])`).shouldReport(DiagnosticCode.InvalidOperand, At(`"abc"`, 1));
-    analyzedMain(`print(length("abc"))`).shouldReport(DiagnosticCode.InvalidOperand, At(`"abc"`, 1));
+    analyzedMain(`print(length("abc"))`).shouldReport(DiagnosticCode.TypeMismatch, At(`"abc"`, 1));
 }
 
 @("an array's elements can't be assigned, even on a mutable val")
@@ -2529,7 +2529,7 @@ unittest
 unittest
 {
     analyzedMain("    val r = [1].length()").shouldHaveNoDiagnostics();
-    analyzedMain("    val qq = 1\n    val r = qq.length()").shouldReport(DiagnosticCode.InvalidOperand, At("qq", 2));
+    analyzedMain("    val qq = 1\n    val r = qq.length()").shouldReport(DiagnosticCode.TypeMismatch, At("qq", 2));
 }
 
 private enum sums = "type Peg = Literal(text: String) | Sequence(parts: [Peg]) | Empty\n"

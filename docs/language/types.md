@@ -65,5 +65,4 @@ Ordering with `<`, `<=`, `>` and `>=` is defined only for numbers and strings.
 ## Current implementation
 
 - `Any` is a placeholder type visible in prelude signatures such as `print(value: Any)`, standing in for a design based on generics. It can't be an element of an array, tuple or option, a field, or a member of a sum.
-- Type arguments such as `Box<Int>` are parsed and currently ignored, even on a type that has no parameters.
 - Printing a function value works when interpreted, showing its name, and is a compile error when compiled.

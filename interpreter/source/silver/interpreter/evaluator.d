@@ -1,5 +1,7 @@
 module silver.interpreter.evaluator;
 
+import std.algorithm.searching : until;
+import std.conv : to;
 import std.format : format;
 import std.meta : AliasSeq;
 import std.sumtype : has, match;
@@ -584,7 +586,8 @@ final class Evaluator
             (bool b) => b.to!string,
             (double d) => d != d ? "nan" : d.to!string,
             (string s) => s,
-            (Closure c) => _program.functions[c.target].name,
+            // An instance is shown as its function is named, without its type arguments.
+            (Closure c) => _program.functions[c.target].name.until('<').to!string,
             (_) => assert(0, "lowering formats anything else itself"),
         );
     }

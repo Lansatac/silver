@@ -8,7 +8,8 @@ import silver.ast.span;
 import silver.ast.id;
 
 /// The node kinds that get IDs. One NodeIds is shared by every module in a Program.
-alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt, TypeDecl, Field, ConstDecl, Pattern, AliasDecl);
+alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt, TypeDecl, Field, ConstDecl, Pattern, AliasDecl,
+    TypeParam);
 
 /// The types every module can name, which no declaration can take the name of.
 enum Builtin
@@ -124,6 +125,15 @@ string printTypeExpr(const TypeExpr t)
     );
 }
 
+/// `<Int, String>`, or nothing when `args` is empty.
+string printTypeArgs(const(TypeExpr)[] args)
+{
+    import std.algorithm : map;
+    import std.array : join;
+
+    return args.length == 0 ? "" : "<" ~ args.map!printTypeExpr.join(", ") ~ ">";
+}
+
 /// `(Int) -> Int?` returns an option and `Int??` doesn't parse, so an optional
 /// function or option needs its inner type parenthesized.
 private string printOptionInner(const TypeExpr inner)
@@ -201,6 +211,8 @@ struct InterpolatedString
 struct Identifier
 {
     string name;
+    /// `empty<Int>`'s, or empty when none are written.
+    TypeExpr[] typeArgs;
 }
 
 enum BinaryOp
@@ -285,6 +297,8 @@ struct MemberAccess
 {
     Expr* object;
     string member;
+    /// `std.x.empty<Int>`'s, or empty when none are written.
+    TypeExpr[] typeArgs;
 }
 
 /// `Some(x)`.
@@ -430,12 +444,12 @@ string printExpr(const Expr e)
         // %(%s%) writes a one-element array's string quoted and escaped.
         (const StringLiteral s) => format("%(%s%)", [s.value]),
         (const InterpolatedString s) => format("(interpolate%s)", s.parts.map!(p => " " ~ printExpr(p)).join),
-        (const Identifier i) => i.name,
+        (const Identifier i) => i.name ~ printTypeArgs(i.typeArgs),
         (const BinaryExpr b) => format("(%s %s %s)", b.op, printExpr(*b.left), printExpr(*b.right)),
         (const UnaryExpr u) => format("(%s %s)", u.op, printExpr(*u.operand)),
         (const CallExpr c) => format("(call %s%s)", printExpr(*c.callee),
             c.args.length.iota.map!(i => (c.isMutable(i) ? " mutable " : " ") ~ printExpr(c.args[i])).join),
-        (const MemberAccess m) => format("(. %s %s)", printExpr(*m.object), m.member),
+        (const MemberAccess m) => format("(. %s %s%s)", printExpr(*m.object), m.member, printTypeArgs(m.typeArgs)),
         (const WhileExpr w) => format("(while %s %s)", w.binding is null
             ? printExpr(*w.condition)
             : format("(val %s %s)", w.binding.name, printExpr(w.binding.value)), printExpr(*w.body)),
@@ -612,6 +626,14 @@ struct Param
     bool annotated = true;
 }
 
+/// `T` in `def first<T>(...)` or `type Box<T>(...)`.
+struct TypeParam
+{
+    Id!TypeParam id;
+    string name;
+    Span span;
+}
+
 /// `def name(params): Type => expr` or `def name(params): Type { ... }`.
 /// A block body is a BlockExpr, so either way the body is one expression.
 /// `native def` and `intrinsic def` have no body.
@@ -628,6 +650,7 @@ struct FunctionDecl
     /// The C symbol a native binds, which is its name unless `native("...")` gives another.
     string symbol;
     bool isPrivate;
+    TypeParam[] typeParams;
 }
 
 enum FunctionKind
@@ -664,6 +687,10 @@ struct TypeDecl
     bool implicitMarker;
     /// On a sum, also set on each member it declares.
     bool isPrivate;
+    TypeParam[] typeParams;
+    /// For a member a generic sum declares inline: `typeParams` are the sum's own nodes, the ones
+    /// its fields mention, in the sum's order.
+    bool inheritsParams;
 }
 
 /// `alias Name = Type`, a second name for a type. Sema expands it, so the backends never see one.
@@ -814,13 +841,22 @@ private string printFunctionDecl(const FunctionDecl f)
     final switch (f.kind)
     {
         case FunctionKind.ordinary:
-            return format("(def %s %s %s)", f.name, printSignature(f), printExpr(*f.body));
+            return format("(def %s%s %s %s)", f.name, printTypeParams(f.typeParams), printSignature(f), printExpr(*f.body));
         case FunctionKind.native:
             auto symbol = f.symbol == f.name ? "" : "(\"" ~ f.symbol ~ "\")";
             return format("(native%s def %s %s)", symbol, f.name, printSignature(f));
         case FunctionKind.intrinsic:
-            return format("(intrinsic def %s %s)", f.name, printSignature(f));
+            return format("(intrinsic def %s%s %s)", f.name, printTypeParams(f.typeParams), printSignature(f));
     }
+}
+
+/// `<T, U>`, or nothing when `params` is empty.
+private string printTypeParams(const(TypeParam)[] params)
+{
+    import std.algorithm : map;
+    import std.array : join;
+
+    return params.length == 0 ? "" : "<" ~ params.map!(p => p.name).join(", ") ~ ">";
 }
 
 private string printTypeDecl(const TypeDecl t)
@@ -828,15 +864,16 @@ private string printTypeDecl(const TypeDecl t)
     import std.algorithm : map;
     import std.array : join;
 
+    auto name = t.name ~ printTypeParams(t.typeParams);
     if (t.members.length > 0)
     {
-        return "(type " ~ t.name ~ " = " ~ t.members.map!(m => printTypeExpr(m.type)).join(" | ") ~ ")";
+        return "(type " ~ name ~ " = " ~ t.members.map!(m => printTypeExpr(m.type)).join(" | ") ~ ")";
     }
     if (t.fields.length == 0)
     {
-        return t.emptyParens ? "(type " ~ t.name ~ " ())" : "(type " ~ t.name ~ ")";
+        return t.emptyParens ? "(type " ~ name ~ " ())" : "(type " ~ name ~ ")";
     }
-    return "(type " ~ t.name ~ " (" ~ t.fields.map!(f => f.name ~ ": " ~ printTypeExpr(f.type)).join(", ") ~ "))";
+    return "(type " ~ name ~ " (" ~ t.fields.map!(f => f.name ~ ": " ~ printTypeExpr(f.type)).join(", ") ~ "))";
 }
 
 private string printConstDecl(const ConstDecl c)

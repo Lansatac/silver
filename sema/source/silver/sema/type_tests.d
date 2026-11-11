@@ -31,6 +31,7 @@ private string shape(TypeTable table, Type type)
         (const NominalData _) => "Nominal",
         (const TupleData t) => "Tuple/" ~ t.elements.length.to!string,
         (const ErrorType _) => "Error",
+        (const TypeParamData _) => "Parameter",
     );
 }
 

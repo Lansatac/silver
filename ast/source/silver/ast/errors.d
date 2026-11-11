@@ -69,6 +69,12 @@ enum DiagnosticCode : string
     UninhabitedType = "T0027",
     /// A type in a native's signature that has no C equivalent.
     InvalidNativeType = "T0028",
+    /// Type arguments that don't fit what they're given to: too many or too few, or any at all.
+    WrongTypeArgumentCount = "T0029",
+    InvalidTypeArgument = "T0030",
+    CannotInferTypeArgument = "T0031",
+    /// Something generic code can't do with a value whose type mentions a type parameter.
+    OpaqueTypeParameter = "T0032",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",
@@ -86,6 +92,8 @@ enum DiagnosticCode : string
     InternalError = "I0001",
     /// A construct that lowering to Core, or a backend running Core, doesn't handle yet.
     NotImplemented = "I0002",
+    /// Generic instances whose type arguments keep growing, as polymorphic recursion makes.
+    InstanceNestingTooDeep = "I0003",
 }
 
 // Two members sharing a code would make the code ambiguous, and `to!string` would

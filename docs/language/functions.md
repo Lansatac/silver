@@ -130,7 +130,7 @@ Functions can be overloaded on all of their parameters, and `f(x)` and `x.f()` s
 
 - A nested function can call itself and those declared before it, but not one declared after it.
 - Overloading isn't available, so every call is resolved by name alone.
-- In a method call, the receiver must be exactly the first parameter's type, with no adaptation or promotion, and its type doesn't choose between functions.
+- In a method call, the receiver must be exactly the first parameter's type, with no adaptation or promotion, and its type doesn't choose between functions. For a generic function, that's the type once the type arguments are found, with the receiver as the first argument for inference.
 - A `mutable` first parameter is rejected for a method call. A later `mutable` argument is fine.
 - A native function can't be used as a function value in compiled programs.
 - `tail` isn't available.

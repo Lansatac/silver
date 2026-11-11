@@ -62,13 +62,15 @@ Silver:
 
     AssignTarget         < Postfix
 
-    FunctionDeclaration  < :DEF Nl? Identifier Nl? :'(' Nl? Params Nl? :')' TypeAnnotation Nl? (:'=>' Nl? Expression / Block)
+    FunctionDeclaration  < :DEF Nl? Identifier (Nl? TypeParameters)? Nl? :'(' Nl? Params Nl? :')' TypeAnnotation Nl? (:'=>' Nl? Expression / Block)
 
-    NativeFunctionDeclaration < :NATIVE Nl? NativeSymbol? :DEF Nl? Identifier Nl? :'(' Nl? Params Nl? :')' TypeAnnotation
+    NativeFunctionDeclaration < :NATIVE Nl? NativeSymbol? :DEF Nl? Identifier (Nl? TypeParameters)? Nl? :'(' Nl? Params Nl? :')' TypeAnnotation
     NativeSymbol         < :'(' Nl? StringLiteral Nl? :')'
-    IntrinsicFunctionDeclaration < :INTRINSIC Nl? :DEF Nl? Identifier Nl? :'(' Nl? Params Nl? :')' TypeAnnotation
+    IntrinsicFunctionDeclaration < :INTRINSIC Nl? :DEF Nl? Identifier (Nl? TypeParameters)? Nl? :'(' Nl? Params Nl? :')' TypeAnnotation
     NativeLibrary        < :NATIVE Nl? :LIBRARY Nl? StringLiteral
     IntrinsicAlias       < :INTRINSIC Nl? :ALIAS Nl? TypeName
+    TypeParameters       < :'<' Nl? TypeParameter (Nl? :',' Nl? TypeParameter)* Nl? :'>'
+    TypeParameter        < TypeName
     Params               < (Param (Nl? ',' Nl? Param)*)?
     Param                < (MUTABLE Nl?)? Identifier TypeAnnotation
 
@@ -79,8 +81,8 @@ Silver:
     BreakStatement       < BREAK
     ContinueStatement    < CONTINUE
 
-    TypeDeclaration      < :TYPE Nl? TypeName (Fields / Nl? :'=' !'=' Nl? SumMembers)?
-    AliasDeclaration     < :ALIAS Nl? TypeName Nl? :'=' !'=' Nl? Type
+    TypeDeclaration      < :TYPE Nl? TypeName (Nl? TypeParameters)? (Fields / Nl? :'=' !'=' Nl? SumMembers)?
+    AliasDeclaration     < :ALIAS Nl? TypeName (Nl? TypeParameters)? Nl? :'=' !'=' Nl? Type
     SumMembers           < SumMember (LeadingNl? :BitOrOperator Nl? SumMember)*
     SumMember            < InlineMember / Type
     InlineMember         < TypeName Fields
@@ -147,7 +149,7 @@ Silver:
     UnaryOperator        < "-" / "!" / "~"
 
     Postfix              < Eval PostfixOp*
-    PostfixOp            < CallArgs / IndexArgs / Nl? (SafeMemberAccess / MemberAccess / PropagateNone / WithUpdate)
+    PostfixOp            < CallArgs / IndexArgs / Nl? (SafeMemberAccess / MemberAccess / PropagateNone / WithUpdate / TypeArguments)
     MemberAccess         < :'.' Nl? identifier
     SafeMemberAccess     < :"?." Nl? identifier
     PropagateNone        <- "?" !("?" / "." !".")

@@ -1,8 +1,14 @@
 module silver.sema.type;
 
+import std.algorithm : any, map, maxElement;
+import std.array : join;
+static import std.array;
 import std.sumtype;
 
-import silver.ast : Id, TypeDecl;
+import silver.ast : Id, TypeDecl, TypeParam;
+
+/// What each type parameter stands for, in a use of a generic declaration.
+alias Substitution = Type[Id!TypeParam];
 
 struct Type { private uint index; }
 
@@ -43,6 +49,7 @@ final class TypeTable
     private TypeData[int] _types;
     private Type[TypeData] _interned;
     private string[Id!TypeDecl] _nominalNames;
+    private string[Id!TypeParam] _parameterNames;
 
 
     private Type registerTypeData(TypeData data)
@@ -99,11 +106,111 @@ final class TypeTable
         );
     }
 
-    /// The type declared by `decl`. `name` is only for `describe`, so it isn't part of the type's identity.
-    Type nominal(const(Id!TypeDecl) decl, string name)
+    /// The type declared by `decl`, with `args` for its type parameters. `name` is only for `describe`,
+    /// so it isn't part of the type's identity.
+    Type nominal(const(Id!TypeDecl) decl, string name, const(Type)[] args = null)
     {
         _nominalNames[decl] = name;
-        return registerTypeData(TypeData(NominalData(decl)));
+        return registerTypeData(TypeData(NominalData(decl, args.idup)));
+    }
+
+    /// The type a type parameter stands for inside the declaration it belongs to, about which
+    /// nothing is known.
+    Type parameter(const(Id!TypeParam) param, string name)
+    {
+        _parameterNames[param] = name;
+        return registerTypeData(TypeData(TypeParamData(param)));
+    }
+
+    bool isParameter(Type t) const
+    {
+        return _types[t.index].match!((const TypeParamData _) => true, _ => false);
+    }
+
+    /// Whether `t` is or holds a type parameter, so that generic code knows nothing about its values.
+    bool mentionsParameter(Type t) const
+    {
+        return _types[t.index].match!(
+            (const TypeParamData _) => true,
+            (const OptionData o) => mentionsParameter(o.inner),
+            (const ArrayData a) => mentionsParameter(a.element),
+            (const FunctionData f) => f.params.any!(p => mentionsParameter(p)) || mentionsParameter(f.ret),
+            (const TupleData tuple) => tuple.elements.any!(e => mentionsParameter(e)),
+            (const NominalData nominal) => nominal.args.any!(a => mentionsParameter(a)),
+            _ => false,
+        );
+    }
+
+    /// Whether `t` is or holds the type parameter `param`.
+    bool mentionsParameter(Type t, Id!TypeParam param) const
+    {
+        return _types[t.index].match!(
+            (const TypeParamData p) => p.param == param,
+            (const OptionData o) => mentionsParameter(o.inner, param),
+            (const ArrayData a) => mentionsParameter(a.element, param),
+            (const FunctionData f) => f.params.any!(p => mentionsParameter(p, param)) || mentionsParameter(f.ret, param),
+            (const TupleData tuple) => tuple.elements.any!(e => mentionsParameter(e, param)),
+            (const NominalData nominal) => nominal.args.any!(a => mentionsParameter(a, param)),
+            _ => false,
+        );
+    }
+
+    /// Whether `t` is or holds `error`, which stands for a type that's already been reported.
+    bool mentionsError(Type t) const
+    {
+        if (t == error) return true;
+        return _types[t.index].match!(
+            (const OptionData o) => mentionsError(o.inner),
+            (const ArrayData a) => mentionsError(a.element),
+            (const FunctionData f) => f.params.any!(p => mentionsError(p)) || mentionsError(f.ret),
+            (const TupleData tuple) => tuple.elements.any!(e => mentionsError(e)),
+            (const NominalData nominal) => nominal.args.any!(a => mentionsError(a)),
+            _ => false,
+        );
+    }
+
+    /// How deeply other types nest inside `t`: 0 for one with nothing inside it.
+    size_t depth(Type t) const
+    {
+        size_t deepest(const(Type)[] inner) => inner.length == 0 ? 0 : 1 + inner.map!(i => depth(i)).maxElement;
+        return _types[t.index].match!(
+            (const OptionData o) => deepest([o.inner]),
+            (const ArrayData a) => deepest([a.element]),
+            (const FunctionData f) => deepest(f.params ~ f.ret),
+            (const TupleData tuple) => deepest(tuple.elements),
+            (const NominalData nominal) => deepest(nominal.args),
+            _ => size_t(0),
+        );
+    }
+
+    /// `t` with each type parameter in `substitution` replaced by what it stands for.
+    Type substitute(Type t, const Substitution substitution)
+    {
+        if (substitution.length == 0) return t;
+        return _types[t.index].match!(
+            (const TypeParamData p) {
+                auto replaced = p.param in substitution;
+                return replaced is null ? t : *replaced;
+            },
+            (const OptionData o) => option(substitute(o.inner, substitution)),
+            (const ArrayData a) => array(substitute(a.element, substitution)),
+            (const FunctionData f) => function_(std.array.array(f.params.map!(p => substitute(p, substitution))),
+                substitute(f.ret, substitution), f.mutables),
+            (const TupleData tuple) => this.tuple(std.array.array(tuple.elements.map!(e => substitute(e, substitution)))),
+            (const NominalData nominal) => nominal.args.length == 0 ? t
+                : registerTypeData(TypeData(NominalData(nominal.decl,
+                    std.array.array(nominal.args.map!(a => substitute(a, substitution))).idup))),
+            _ => t,
+        );
+    }
+
+    /// The type arguments of the declared type `t`, empty for one that isn't generic.
+    immutable(Type)[] nominalArgs(Type t) const
+    {
+        return _types[t.index].match!(
+            (const NominalData nominal) => nominal.args,
+            (_) => assert(0, "not a declared type"),
+        );
     }
     
     const(TypeData) opIndex(Type t) const
@@ -171,7 +278,9 @@ final class TypeTable
             (const FunctionData f) => "(" ~ f.params.length.iota.map!(i => (f.isMutable(i) ? "mutable " : "") ~ describe(f.params[i])).join(", ")
                 ~ ") -> " ~ describe(f.ret),
             (const TupleData t) => "(" ~ t.elements.map!(e => describe(e)).join(", ") ~ ")",
-            (const NominalData nd) => _nominalNames[nd.decl],
+            (const NominalData nd) => _nominalNames[nd.decl]
+                ~ (nd.args.length == 0 ? "" : "<" ~ nd.args.map!(a => describe(a)).join(", ") ~ ">"),
+            (const TypeParamData p) => _parameterNames[p.param],
             (const ErrorType e) => "Error",
         );
     }
@@ -266,6 +375,14 @@ struct TupleData
 struct NominalData
 {
     Id!TypeDecl decl;
+    /// For a generic type, what its parameters stand for, in order.
+    immutable(Type)[] args;
+}
+
+/// A type parameter, inside the declaration it belongs to.
+struct TypeParamData
+{
+    Id!TypeParam param;
 }
 
 struct NoneType
@@ -286,4 +403,4 @@ struct ErrorType
 }
 
 alias TypeData = SumType!(Primitive, OptionData, NoneType, ArrayData, EmptyArrayType, FunctionData, NominalData, TupleData,
-    ErrorType);
+    ErrorType, TypeParamData);

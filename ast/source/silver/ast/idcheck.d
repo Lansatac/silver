@@ -59,6 +59,7 @@ private final class IdCheck
     void visit(const FunctionDecl f, Span span)
     {
         see(f.id, f.nameSpan);
+        foreach (p; f.typeParams) see(p.id, p.span);
         foreach (p; f.params)
         {
             see(p.id, p.nameSpan);
@@ -71,6 +72,10 @@ private final class IdCheck
     void visit(const TypeDecl t, Span span)
     {
         see(t.id, t.nameSpan);
+        if (!t.inheritsParams)
+        {
+            foreach (p; t.typeParams) see(p.id, p.span);
+        }
         foreach (f; t.fields)
         {
             see(f.id, f.nameSpan);
@@ -198,7 +203,13 @@ private final class IdCheck
                     visit(arg);
                 }
             },
-            (const MemberAccess m) => visit(m.object),
+            (const MemberAccess m) {
+                visit(m.object);
+                foreach (arg; m.typeArgs) visit(arg);
+            },
+            (const Identifier i) {
+                foreach (arg; i.typeArgs) visit(arg);
+            },
             (const WhileExpr w) {
                 if (w.binding !is null) visit(*w.binding, w.binding.nameSpan);
                 visit(w.condition);

@@ -388,3 +388,37 @@ unittest
     if (!compileAndRun(source, run)) return;
     run.output.should.equal("11\n8\n");
 }
+
+@("codegen names each instance of a generic function apart, with its type arguments quoted")
+unittest
+{
+    auto source = "type Box<T>(value: T)\ndef identity<T>(x: T): T => x\n"
+        ~ "def main(): Unit {\n    printl(identity(1))\n    printl(identity(\"s\"))\n    printl(identity(Box([1.5])))\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("define i64 @\"main.identity<Int>.");
+    ir.should.contain("define { ptr, i64 } @\"main.identity<String>.");
+    ir.should.contain("define ptr @\"main.identity<Box<[Float]>>.");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("1\ns\nBox([1.5])\n");
+}
+
+@("codegen lays out each instance of a generic type from its own field and member types")
+unittest
+{
+    auto source = "type Pair<A, B>(left: A, right: B)\ntype Result<T, E> = Ok(value: T) | Error(error: E)\ntype Tag<T>\n"
+        ~ "def main(): Unit {\n    val p = Pair(1, 2.5)\n    val q = Pair((), true)\n    val r: Result<Int, String> = Ok(1)\n"
+        ~ "    val t = Tag<Int>\n    printl(p)\n    printl(q)\n    printl(r)\n    printl(t)\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("%p.addr = alloca ptr");
+    ir.should.contain("getelementptr { i64, double }");
+    ir.should.contain("getelementptr { i1 }");
+    ir.should.contain("%r.addr = alloca { i32, ptr }");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("Pair(1, 2.5)\nPair((), true)\nOk(1)\nTag\n");
+}
