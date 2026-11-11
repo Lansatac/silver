@@ -2,6 +2,8 @@
 
 **Status: proposed, not decided.** Nothing here is implemented. It assumes the generics direction under discussion: `<>` type parameters, bodies checked once with each `T` opaque, and monomorphization.
 
+The [ranges proposal](ranges.md) builds on this one and suggests changes to it: an answer to open question 1, interface names as types, and overloading as a prerequisite.
+
 ## Summary
 
 An interface describes a shape: a set of function signatures. A type satisfies an interface by having those functions, with no declaration linking the two.
