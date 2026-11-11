@@ -9,61 +9,14 @@ import std.string;
 
 
 import silver.ast;
-import silver.sema.constant;
+import silver.sema.constant_eval;
+import silver.sema.coverage;
+import silver.sema.declare;
 import silver.sema.type;
 import silver.sema.resolve;
+import silver.sema.typing;
 
 // Type checking for Silver programs.
-
-package struct Typing
-{
-    TypeTable types;
-    Type[Id!Expr] exprTypes;
-    Type[SymbolId] symbolTypes;
-    FieldInfo[][Id!TypeDecl] fields;
-    size_t[Id!Expr] fieldIndexes;
-    size_t[][][Id!Expr] updatePaths;
-    ConstValue[Id!ConstDecl] constants;
-    Type[Id!Expr] promotions;
-    /// For each use of a generic function, by the expression naming it, what its type parameters stand
-    /// for, in terms of the type parameters of the function the use is in.
-    Type[][Id!Expr] typeArguments;
-    const(Expr)[][Id!Expr] concatOperands;
-    const(CallExpr)*[Id!Expr] methodCalls;
-    Id!FunctionDecl[Id!Expr] methodCallees;
-    /// For each overloaded name, the function chosen, by the name's expression.
-    SymbolId[Id!Expr] chosenSymbols;
-    /// For each call of an overloaded name, the function chosen, by the call.
-    Id!FunctionDecl[Id!Expr] chosenCallees;
-    /// The functions that share their name with another of their module.
-    bool[Id!FunctionDecl] overloaded;
-    Type[Id!TypeDecl] nominalTypes;
-    Type[][Id!TypeDecl] members;
-    Type[Id!Expr] constructedMembers;
-    Type[Id!Pattern] patternSubjects;
-    size_t[Id!Pattern] patternMembers;
-    Id!TypeDecl[Id!Pattern] patternConstructors;
-}
-
-/// A pattern as coverage sees it: a head (null for one that matches anything) and what's under it.
-private struct CoveragePattern
-{
-    string head;
-    CoveragePattern[] args;
-}
-
-/// One of the shapes a type's values come in, and the types of what's inside it.
-private struct PatternHead
-{
-    string key;
-    string label;
-    const(Type)[] args;
-
-    string render(const(string)[] parts) const
-    {
-        return label ~ (parts.length > 0 ? "(" ~ parts.join(", ") ~ ")" : "");
-    }
-}
 
 /// Where the checker is inside a function body. Passed by value, so a nested body (a lambda)
 /// gets its own copy and the enclosing one is untouched when it returns.
@@ -86,55 +39,30 @@ private struct InferredReturn
     Span[] nones;
 }
 
-struct FieldInfo { string name; Type type; }
 
 private final class TypeChecker
 {
     this(const Resolution resolutions, Collector collector)
     {
         _types = new TypeTable();
+        _typing.types = _types;
         _collector = collector;
         _resolutions = resolutions;
+        _declarer = new Declarer(_types, &_typing, resolutions, collector);
     }
 
     private TypeTable _types;
     private Collector _collector;
     private const Resolution _resolutions;
-    private Type[Id!Expr] _exprTypes;
-    private Type[SymbolId] _symbolTypes;
-    private Type[Id!TypeDecl] _nominalTypes;
-    private Type[Id!AliasDecl] _aliasTypes;
-    private FieldInfo[][Id!TypeDecl] _fields;
-    private size_t[Id!Expr] _fieldIndexes;
-    private size_t[][][Id!Expr] _updatePaths;
-    /// Where a value becomes an option, by the option type it's wrapped into.
-    private Type[Id!Expr] _promotions;
+    /// What checking produces, built up in place.
+    private Typing _typing;
+    private Declarer _declarer;
     /// Every integer literal. A literal's type can change after it's first seen, as it adapts
     /// to where it's used, so ranges are checked once all the bodies have been.
     private const(Expr)[] _intLiterals;
     private bool[Id!Expr] _negatedLiterals;
-    private ConstValue[Id!ConstDecl] _constants;
     /// Constants whose initializer already has an error, which evaluating would only repeat.
     private bool[Id!ConstDecl] _unevaluable;
-    /// True while a constant's dependencies are being evaluated, and false once they're done.
-    private bool[Id!ConstDecl] _evaluating;
-    private bool[Id!ConstDecl] _cycleReported;
-    private Type[][Id!Expr] _typeArguments;
-    private const(CallExpr)*[Id!Expr] _methodCalls;
-    private Id!FunctionDecl[Id!Expr] _methodCallees;
-    private SymbolId[Id!Expr] _chosenSymbols;
-    private Id!FunctionDecl[Id!Expr] _chosenCallees;
-    private bool[Id!FunctionDecl] _overloaded;
-    private const(Expr)[][Id!Expr] _concatOperands;
-    /// What each sum's values can be, in declaration order.
-    private Type[][Id!TypeDecl] _members;
-    /// The sum that declared each member it owns, which is what its constructor produces.
-    private Type[Id!TypeDecl] _owners;
-    /// For a construction that produces its owner, the member it builds on the way.
-    private Type[Id!Expr] _constructedMembers;
-    private Type[Id!Pattern] _patternSubjects;
-    private size_t[Id!Pattern] _patternMembers;
-    private Id!TypeDecl[Id!Pattern] _patternConstructors;
 
     Typing checkProgram(const Program program)
     {
@@ -147,7 +75,7 @@ private final class TypeChecker
             {
                 decl.kind.match!(
                     (const TypeDecl t) {
-                        _nominalTypes[t.id] = _types.nominal(t.id, t.name, t.typeParams.map!(p => parameterType(p)).array);
+                        _typing.nominalTypes[t.id] = _types.nominal(t.id, t.name, t.typeParams.map!(p => _declarer.parameterType(p)).array);
                     },
                     (_) {},
                 );
@@ -160,7 +88,7 @@ private final class TypeChecker
             foreach (decl; mod.declarations)
             {
                 decl.kind.match!(
-                    (const AliasDecl a) { aliasType(a.id); },
+                    (const AliasDecl a) { _declarer.aliasType(a.id); },
                     (_) {},
                 );
             }
@@ -172,10 +100,10 @@ private final class TypeChecker
             {
                 decl.kind.match!(
                     (const FunctionDecl f) {
-                        declareSignature(f);
+                        _declarer.declareSignature(f);
                     },
                     (const TypeDecl decl) {
-                        declareConstructor(decl);
+                        _declarer.declareConstructor(decl);
                     },
                     (const ConstDecl c) {
                         declareConstant(c);
@@ -209,7 +137,7 @@ private final class TypeChecker
             }
         }
 
-        checkInhabited(programModules);
+        _declarer.checkInhabited(programModules);
 
         foreach (literal; _intLiterals)
         {
@@ -217,27 +145,17 @@ private final class TypeChecker
         }
 
         // Last, because an integer literal's type isn't final until everything's been checked.
-        foreach (mod; programModules)
-        {
-            foreach (decl; mod.declarations)
-            {
-                decl.kind.match!(
-                    (const ConstDecl c) => evaluateConstant(c.id),
-                    (_) {},
-                );
-            }
-        }
+        _typing.constants = evaluateConstants(programModules, _types, _typing.exprTypes, _resolutions, _unevaluable,
+            _negatedLiterals, _collector);
 
-        return Typing(_types, _exprTypes, _symbolTypes, _fields, _fieldIndexes, _updatePaths, _constants, _promotions,
-            _typeArguments, _concatOperands, _methodCalls, _methodCallees, _chosenSymbols, _chosenCallees, _overloaded, _nominalTypes, _members, _constructedMembers,
-            _patternSubjects, _patternMembers, _patternConstructors);
+        return _typing;
     }
 
     private void declareConstant(const ConstDecl constant)
     {
-        auto type = constant.type is null ? _types.error : resolveType(*constant.type);
+        auto type = constant.type is null ? _types.error : _declarer.resolveType(*constant.type);
         // Name resolution reports any other type, so uses shouldn't report it again.
-        _symbolTypes[SymbolId(constant.id)] = isConstantType(type) ? type : _types.error;
+        _typing.symbolTypes[SymbolId(constant.id)] = isConstantType(type) ? type : _types.error;
     }
 
     private bool isConstantType(Type type)
@@ -250,7 +168,7 @@ private final class TypeChecker
 
     private void checkConstant(const ConstDecl constant)
     {
-        auto type = _symbolTypes[SymbolId(constant.id)];
+        auto type = _typing.symbolTypes[SymbolId(constant.id)];
         auto reported = _collector.diagnostics.length;
         if (type != _types.error && requireConstantExpr(constant.value))
         {
@@ -303,190 +221,6 @@ private final class TypeChecker
         return false;
     }
 
-    /// Evaluates a constant's initializer once, after the constants it names, so that any of
-    /// them being unusable is settled first. That goes for a short-circuited operand as well,
-    /// which is never evaluated but is still a reference, so `false && a` can't define `a`.
-    private void evaluateConstant(Id!ConstDecl id)
-    {
-        if (id in _evaluating || id in _unevaluable) return;
-
-        auto value = _resolutions.declarations.constants[id].value;
-        _evaluating[id] = true;
-        evaluateNamedConstants(value);
-        _evaluating[id] = false;
-        if (auto result = constantValue(value))
-        {
-            _constants[id] = *result;
-        }
-    }
-
-    private void evaluateNamedConstants(const Expr expr)
-    {
-        expr.kind.match!(
-            (const UnaryExpr unary) => evaluateNamedConstants(*unary.operand),
-            (const BinaryExpr binary) {
-                evaluateNamedConstants(*binary.left);
-                evaluateNamedConstants(*binary.right);
-            },
-            (const InterpolatedString interpolated) {
-                foreach (part; interpolated.parts)
-                {
-                    evaluateNamedConstants(part);
-                }
-            },
-            (const Identifier _) => evaluateNamedConstant(expr),
-            (const MemberAccess _) => evaluateNamedConstant(expr),
-            (_) {},
-        );
-    }
-
-    private void evaluateNamedConstant(const Expr name)
-    {
-        auto id = constantNamedBy(name);
-        if (!id.isValid) return;
-
-        if (!_evaluating.get(id, false))
-        {
-            evaluateConstant(id);
-        }
-        else if (id !in _cycleReported)
-        {
-            _cycleReported[id] = true;
-            _collector.reportError(DiagnosticCode.ConstantCycle, name.span,
-                "`%s` is defined in terms of itself".format(_resolutions.declarations.constants[id].name));
-        }
-    }
-
-    /// The constant `name` refers to, or an invalid ID if it isn't one.
-    private Id!ConstDecl constantNamedBy(const Expr name)
-    {
-        if (auto symbol = name.id in _resolutions.resolutions)
-        {
-            return (*symbol).match!(
-                (const Id!ConstDecl id) => id,
-                _ => Id!ConstDecl.init,
-            );
-        }
-        return Id!ConstDecl.init;
-    }
-
-    /// The value of a constant expression, or null if it has none, which is already reported.
-    private const(ConstValue)* constantValue(const Expr expr)
-    {
-        return expr.kind.match!(
-            (const BoolLiteral literal) => boxedConstant(ConstValue(bool(literal.value))),
-            (const FloatLiteral literal) => boxedConstant(ConstValue(double(literal.value))),
-            (const StringLiteral literal) {
-                string text = literal.value;
-                return boxedConstant(ConstValue(text));
-            },
-            (const InterpolatedString interpolated) => interpolatedConstantValue(interpolated),
-            (const UnitLiteral _) => boxedConstant(ConstValue(ConstUnit())),
-            (const IntLiteral literal) => integerLiteralValue(expr, literal),
-            (const Identifier _) => namedConstantValue(expr),
-            (const MemberAccess _) => namedConstantValue(expr),
-            (const UnaryExpr unary) => unaryConstantValue(expr, unary),
-            (const BinaryExpr binary) => binaryConstantValue(expr, binary),
-            (_) => assert(0, "requireConstantExpr rejected everything else"),
-        );
-    }
-
-    private const(ConstValue)* interpolatedConstantValue(const InterpolatedString interpolated)
-    {
-        string text;
-        foreach (part; interpolated.parts)
-        {
-            auto value = constantValue(part);
-            if (value is null) return null;
-            text ~= formatValue(*value);
-        }
-        return boxedConstant(ConstValue(text));
-    }
-
-    private static const(ConstValue)* boxedConstant(ConstValue value)
-    {
-        auto box = new ConstValue;
-        *box = value;
-        return box;
-    }
-
-    private const(ConstValue)* namedConstantValue(const Expr name)
-    {
-        return constantNamedBy(name) in _constants;
-    }
-
-    /// Takes in the sign of a negated literal, so that `-128` is a value even where `128` isn't.
-    private const(ConstValue)* integerLiteralValue(const Expr expr, const IntLiteral literal)
-    {
-        auto type = _exprTypes[expr.id];
-        auto negated = (expr.id in _negatedLiterals) !is null;
-        if (literal.tooLarge) return null;
-        if (!_types.isInteger(type))
-        {
-            double value = cast(double) literal.value;
-            return boxedConstant(ConstValue(negated ? -value : value));
-        }
-
-        auto info = _types.integerOf(type);
-        // checkLiteralRange has reported one that doesn't fit.
-        auto limit = negated ? info.minMagnitude : info.maxValue;
-        if ((negated && !info.signed) || literal.value > limit) return null;
-        if (!info.signed) return boxedConstant(ConstValue(ConstUInt(literal.value)));
-        return boxedConstant(ConstValue(ConstInt(cast(long)(negated ? 0 - literal.value : literal.value))));
-    }
-
-    private const(ConstValue)* unaryConstantValue(const Expr expr, const UnaryExpr unary)
-    {
-        auto operand = constantValue(*unary.operand);
-        if (operand is null || unary.operand.id in _negatedLiterals) return operand;
-
-        try
-        {
-            return boxedConstant(unaryValue(unary.op, *operand, integerInfoOf(*unary.operand)));
-        }
-        catch (ConstantFailure failure)
-        {
-            return reportConstantFailure(expr, failure);
-        }
-    }
-
-    private const(ConstValue)* binaryConstantValue(const Expr expr, const BinaryExpr binary)
-    {
-        auto left = constantValue(*binary.left);
-        if (left is null) return null;
-
-        if (binary.op == BinaryOp.And || binary.op == BinaryOp.Or)
-        {
-            auto decided = (*left).get!(const bool) == (binary.op == BinaryOp.Or);
-            return decided ? left : constantValue(*binary.right);
-        }
-
-        auto right = constantValue(*binary.right);
-        if (right is null) return null;
-
-        try
-        {
-            return boxedConstant(binaryValue(binary.op, *left, *right, integerInfoOf(*binary.left)));
-        }
-        catch (ConstantFailure failure)
-        {
-            return reportConstantFailure(expr, failure);
-        }
-    }
-
-    /// What's known about `expr`'s type as an integer, which is nothing for any other type.
-    private IntegerInfo integerInfoOf(const Expr expr)
-    {
-        auto type = _exprTypes[expr.id];
-        return _types.isInteger(type) ? _types.integerOf(type) : IntegerInfo.init;
-    }
-
-    private const(ConstValue)* reportConstantFailure(const Expr expr, ConstantFailure failure)
-    {
-        _collector.reportError(DiagnosticCode.ConstantEvaluationFailed, expr.span, failure.msg);
-        return null;
-    }
-
     private void checkLiteralRange(const Expr expr)
     {
         auto literal = expr.kind.match!(
@@ -499,7 +233,7 @@ private final class TypeChecker
                 "This integer literal doesn't fit in 64 bits");
             return;
         }
-        auto type = _exprTypes[expr.id];
+        auto type = _typing.exprTypes[expr.id];
         if (!_types.isInteger(type)) return;
 
         auto info = _types.integerOf(type);
@@ -516,476 +250,9 @@ private final class TypeChecker
         }
     }
 
-    private Type resolveType(const TypeExpr type)
-    {
-        return type.kind.match!(
-            (const NamedType _) => resolveNamedType(type),
-            (const OptionType option) => optionOf(resolveType(*option.inner), type.span),
-            (const ArrayType array) => arrayOf(resolveType(*array.element), type.span),
-            (const FunctionType func) => _types.function_(
-                func.params.map!(p => resolveType(p)).array, resolveType(*func.returnType), func.mutableParams),
-            (const UnitType _) => _types.unit,
-            (const TupleType tuple) => tupleOf(tuple.elements.map!(e => resolveType(e)).array, tuple.elements),
-        );
-    }
-
-    /// The tuple of `elements`, or `error` if one of them is, reported at its type expression in
-    /// `written` when it's `Any`. Nothing that synthesizes a tuple can give it an `Any`.
-    private Type tupleOf(Type[] elements, const(TypeExpr)[] written = null)
-    {
-        foreach (i, element; elements)
-        {
-            if (element == _types.any && written.length > 0)
-            {
-                _collector.reportError(DiagnosticCode.InvalidTupleElement, written[i].span, "A tuple can't hold `Any`");
-                elements[i] = _types.error;
-            }
-        }
-        if (elements.canFind(_types.error)) return _types.error;
-        return _types.tuple(elements);
-    }
-
-    /// The option holding `inner`, or `error` (reported at `span`) if there can't be one.
-    private Type optionOf(Type inner, Span span)
-    {
-        if (inner == _types.error) return inner;
-        if (inner == _types.none) return reportUntypedNone(span);
-        if (inner == _types.any)
-        {
-            _collector.reportError(DiagnosticCode.InvalidOptionPayload, span, "An option can't hold `Any`");
-            return _types.error;
-        }
-        return _types.option(inner);
-    }
-
-    /// The array of `element`, or `error` (reported at `span`) if there can't be one.
-    private Type arrayOf(Type element, Span span)
-    {
-        if (element == _types.error) return element;
-        if (element == _types.any)
-        {
-            _collector.reportError(DiagnosticCode.InvalidArrayElement, span, "An array can't hold `Any`");
-            return _types.error;
-        }
-        return _types.array(element);
-    }
-
-    private Type reportUntypedNone(Span span)
-    {
-        _collector.reportError(DiagnosticCode.UntypedNone, span,
-            "This `None` has no type to take here; annotate one, as in `val x: Int? = None`");
-        return _types.error;
-    }
-
-    private Type reportUntypedEmptyArray(Span span)
-    {
-        _collector.reportError(DiagnosticCode.UntypedEmptyArray, span,
-            "This `[]` has no type to take here; annotate one, as in `val x: [Int] = []`");
-        return _types.error;
-    }
-
-    /// Reports a value of `type` that nothing gives a type to, if it's one: a bare `None` or `[]`.
-    private Type requireTyped(Type type, Span span)
-    {
-        if (type == _types.none) return reportUntypedNone(span);
-        if (type == _types.emptyArray) return reportUntypedEmptyArray(span);
-        return type;
-    }
-
-    private Type resolveNamedType(const TypeExpr typeExpr)
-    {
-        auto symbol = typeExpr.id in _resolutions.typeResolutions;
-        if (symbol is null) return _types.error;
-        auto named = typeExpr.kind.match!((const NamedType n) => n, (_) => assert(0, "only a named type resolves to a symbol"));
-
-        Type withoutArguments(Type type)
-        {
-            if (named.args.length == 0) return type;
-            foreach (arg; named.args) resolveType(arg);
-            _collector.reportError(DiagnosticCode.WrongTypeArgumentCount, typeExpr.span,
-                "`%s` isn't generic, so it takes no type arguments".format(named.path.join(".")));
-            return _types.error;
-        }
-
-        return (*symbol).match!(
-            (const Builtin builtIn) => withoutArguments(builtinType(builtIn)),
-            (const Id!TypeDecl decl) => instanceType(decl, named, typeExpr.span),
-            (const Id!AliasDecl decl) => withoutArguments(aliasType(decl)),
-            (const Id!TypeParam param) => withoutArguments(parameterType(*_resolutions.declarations.typeParams[param])),
-        );
-    }
-
-    /// `decl` with the type arguments `named` gives it, which have to be all of them.
-    private Type instanceType(Id!TypeDecl decl, const NamedType named, Span span)
-    {
-        auto params = typeParamsOf(decl);
-        auto name = named.path.join(".");
-        auto args = resolveTypeArguments(named.args);
-        if (params.length == 0 && args.length == 0) return _nominalTypes[decl];
-        if (args.length != params.length)
-        {
-            _collector.reportError(DiagnosticCode.WrongTypeArgumentCount, span, params.length == 0
-                ? "`%s` isn't generic, so it takes no type arguments".format(name)
-                : args.length == 0
-                    ? "`%s` is generic, so it needs its type arguments, as in `%s`".format(name, example(name, params.length, ""))
-                    : "`%s` takes %s type arguments, got %s".format(name, params.length, args.length));
-            return _types.error;
-        }
-        if (args.canFind(_types.error)) return _types.error;
-        return _types.nominal(decl, _resolutions.declarations.types[decl].name, args);
-    }
-
-    /// The types `written` names, each reported if it can't be a type argument.
-    private Type[] resolveTypeArguments(const(TypeExpr)[] written)
-    {
-        Type[] args;
-        foreach (arg; written)
-        {
-            auto type = resolveType(arg);
-            if (type == _types.any)
-            {
-                _collector.reportError(DiagnosticCode.InvalidTypeArgument, arg.span,
-                    "`Any` can't be a type argument, since no value has it as its type");
-                type = _types.error;
-            }
-            args ~= type;
-        }
-        return args;
-    }
-
-    /// `name<Int, Int>` followed by `call`, to show where type arguments go.
-    private static string example(string name, size_t count, string call)
-    {
-        return "%s<%-(%s, %)>%s".format(name, "Int".repeat(count), call);
-    }
-
-    private Type parameterType(const TypeParam param)
-    {
-        return _types.parameter(param.id, param.name);
-    }
-
-    private const(TypeParam)[] typeParamsOf(Id!TypeDecl decl)
-    {
-        return _resolutions.declarations.types[decl].typeParams;
-    }
-
-    /// What the type parameters of the declared type `type` stand for in it.
-    private Substitution substitutionOf(Type type)
-    {
-        return _types[type].match!(
-            (const NominalData nominal) {
-                Substitution substitution;
-                foreach (i, param; typeParamsOf(nominal.decl))
-                {
-                    if (i < nominal.args.length) substitution[param.id] = nominal.args[i];
-                }
-                return substitution;
-            },
-            _ => Substitution.init,
-        );
-    }
-
-    /// The fields of `type` with its type arguments filled in, or none if it isn't a declared type.
-    private FieldInfo[] fieldsOf(Type type)
-    {
-        return _types[type].match!(
-            (const NominalData nominal) {
-                auto declared = _fields.get(nominal.decl, null);
-                if (nominal.args.length == 0) return declared;
-                auto substitution = substitutionOf(type);
-                return declared.map!(f => FieldInfo(f.name, _types.substitute(f.type, substitution))).array;
-            },
-            _ => FieldInfo[].init,
-        );
-    }
-
-    private Type aliasType(Id!AliasDecl id)
-    {
-        if (auto known = id in _aliasTypes) return *known;
-        // A recursive alias, which name resolution reported, stops here.
-        _aliasTypes[id] = _types.error;
-        auto type = resolveType(_resolutions.declarations.aliases[id].target);
-        _aliasTypes[id] = type;
-        return type;
-    }
-
-    private Type builtinType(Builtin builtin)
-    {
-        final switch (builtin)
-        {
-            case Builtin.Never: return _types.never;
-            case Builtin.Unit: return _types.unit;
-            case Builtin.Bool: return _types.bool_;
-            case Builtin.Int: return _types.int_;
-            case Builtin.Float: return _types.float_;
-            case Builtin.String: return _types.string_;
-            case Builtin.Any: return _types.any;
-            case Builtin.Int8: return _types.int8;
-            case Builtin.Int16: return _types.int16;
-            case Builtin.Int32: return _types.int32;
-            case Builtin.Int64: return _types.int_;
-            case Builtin.UInt: return _types.uint_;
-            case Builtin.UInt8: return _types.uint8;
-            case Builtin.UInt16: return _types.uint16;
-            case Builtin.UInt32: return _types.uint32;
-            case Builtin.UInt64: return _types.uint_;
-        }
-    }
-
-    private void declareSignature(const FunctionDecl func)
-    {
-        auto params = func.params.map!(p => resolveType(p.type)).array;
-        foreach (i, param; func.params)
-        {
-            _symbolTypes[SymbolId(param.id)] = params[i];
-        }
-        auto returnType = resolveType(func.returnType);
-        if (func.kind != FunctionKind.ordinary)
-        {
-            foreach (param; func.params.filter!(p => p.mutable))
-            {
-                _collector.reportError(DiagnosticCode.MutableNativeParameter, param.nameSpan, "%s function can't take a `mutable` parameter"
-                    .format(func.kind == FunctionKind.native ? "A native" : "An intrinsic"));
-            }
-        }
-        if (func.kind == FunctionKind.native)
-        {
-            foreach (i, param; func.params)
-            {
-                requireNativeType(params[i], param.type.span, false);
-            }
-            requireNativeType(returnType, func.returnType.span, true);
-        }
-        _symbolTypes[SymbolId(func.id)] = _types.function_(params, returnType, func.params.map!(p => p.mutable).array);
-    }
-
-    /// Reports a type in a native's signature that has no C equivalent.
-    private void requireNativeType(Type type, Span span, bool isReturn)
-    {
-        if (type == _types.error || _types.isInteger(type) || type == _types.float_ || type == _types.bool_) return;
-        if (isReturn && (type == _types.unit || type == _types.never)) return;
-        _collector.reportError(DiagnosticCode.InvalidNativeType, span,
-            "`%s` can't cross into C; a native function takes integers, `Float` and `Bool`%s".format(_types.describe(type),
-                isReturn ? ", and can also return `Unit` or `Never`" : ""));
-    }
-
-    private void declareSum(const TypeDecl decl)
-    {
-        auto sum = _nominalTypes[decl.id];
-        _fields[decl.id] = null;
-        // Only its members can be built. Using the name as a value is reported where it's used.
-        _symbolTypes[SymbolId(decl.id)] = _types.error;
-
-        Type[] members;
-        foreach (member; decl.members)
-        {
-            auto type = resolveType(member.type);
-            if (type == _types.error) continue;
-            string problem;
-            if (type == _types.any || type == _types.never) problem = "A sum can't have `%s` as a member".format(_types.describe(type));
-            else if (type == sum) problem = "A sum can't be a member of itself";
-            else if (members.canFind(type)) problem = "`%s` is already a member of this sum".format(_types.describe(type));
-            else if (_types.isParameter(type))
-            {
-                problem = "A type parameter can't be a member by itself yet; wrap it, as in `Just(value: %s)`"
-                    .format(_types.describe(type));
-            }
-            else if (members.any!(m => couldCoincide(m, type)))
-            {
-                problem = "`%s` and `%s` would be the same member in some instances of `%s`"
-                    .format(_types.describe(members.find!(m => couldCoincide(m, type)).front), _types.describe(type),
-                        _types.describe(sum));
-            }
-            if (problem !is null)
-            {
-                _collector.reportError(DiagnosticCode.InvalidSumMember, member.type.span, problem);
-                continue;
-            }
-            members ~= type;
-            if (!member.owned) continue;
-            _resolutions.typeResolutions[member.type.id].match!(
-                (const Id!TypeDecl owned) { _owners[owned] = sum; },
-                (_) {},
-            );
-        }
-        _members[decl.id] = members;
-    }
-
-    /// Whether some type arguments make `a` and `b` one type. Only a type parameter can stand for
-    /// another type, and each one is free to.
-    private bool couldCoincide(Type a, Type b)
-    {
-        if (!_types.mentionsParameter(a) && !_types.mentionsParameter(b)) return false;
-        Substitution bound;
-
-        Type resolved(Type t)
-        {
-            while (_types.isParameter(t))
-            {
-                auto param = _types[t].match!((const TypeParamData p) => p.param, (_) => Id!TypeParam.init);
-                auto next = param in bound;
-                if (next is null) break;
-                t = *next;
-            }
-            return t;
-        }
-
-        bool unify(Type x, Type y)
-        {
-            x = resolved(x);
-            y = resolved(y);
-            if (x == y) return true;
-            foreach (pair; [[x, y], [y, x]])
-            {
-                if (!_types.isParameter(pair[0])) continue;
-                auto param = _types[pair[0]].match!((const TypeParamData p) => p.param, (_) => Id!TypeParam.init);
-                if (_types.mentionsParameter(_types.substitute(pair[1], bound), param)) return false;
-                bound[param] = pair[1];
-                return true;
-            }
-            bool all(const(Type)[] xs, const(Type)[] ys)
-            {
-                if (xs.length != ys.length) return false;
-                foreach (i; 0 .. xs.length)
-                {
-                    if (!unify(xs[i], ys[i])) return false;
-                }
-                return true;
-            }
-            auto yData = _types[y];
-            return _types[x].match!(
-                (const OptionData o) => yData.match!((const OptionData p) => unify(o.inner, p.inner), _ => false),
-                (const ArrayData a) => yData.match!((const ArrayData p) => unify(a.element, p.element), _ => false),
-                (const TupleData t) => yData.match!((const TupleData p) => all(t.elements, p.elements), _ => false),
-                (const FunctionData f) => yData.match!(
-                    (const FunctionData p) => f.mutables == p.mutables && all(f.params ~ f.ret, p.params ~ p.ret),
-                    _ => false),
-                (const NominalData n) => yData.match!(
-                    (const NominalData p) => n.decl == p.decl && all(n.args, p.args),
-                    _ => false),
-                _ => false,
-            );
-        }
-
-        return unify(a, b);
-    }
-
-    private void declareConstructor(const TypeDecl decl)
-    {
-        if (decl.members.length > 0) return declareSum(decl);
-
-        auto fields = decl.fields.map!(f => FieldInfo(f.name, resolveType(f.type))).array;
-        _fields[decl.id] = fields;
-
-        auto declared = _nominalTypes[decl.id];
-        _symbolTypes[SymbolId(decl.id)] = fields.length == 0
-            ? declared
-            : _types.function_(fields.map!(f => f.type).array, declared);
-    }
-
-
-    /// Reports the types no value can ever have, such as `type A(a: A)`: the ones that can be built
-    /// are found from those needing nothing else, and whatever's left can't finish building itself.
-    /// A generic type is buildable when certain of its parameters are, so what's found for each is
-    /// the sets of its parameters, by index, any one of which is enough. At the declaration every
-    /// parameter counts as buildable, so a type with at least one such set can be built.
-    private void checkInhabited(M)(M modules)
-    {
-        const(TypeDecl)[] decls;
-        foreach (mod; modules)
-        {
-            foreach (decl; mod.declarations)
-            {
-                decl.kind.match!((const TypeDecl t) { decls ~= t; }, (_) {});
-            }
-        }
-
-        // Each set is a bit mask of parameter indexes; no sets at all means it can't be built.
-        ulong[][Id!TypeDecl] needs;
-        static ulong[] minimal(ulong[] sets)
-        {
-            ulong[] kept;
-            foreach (set; sets.sort.uniq)
-            {
-                if (!kept.any!(k => (k & set) == k)) kept ~= set;
-            }
-            return kept;
-        }
-        static ulong[] both(const(ulong)[] a, const(ulong)[] b)
-        {
-            ulong[] sets;
-            foreach (x; a)
-            {
-                foreach (y; b) sets ~= x | y;
-            }
-            return minimal(sets);
-        }
-        ulong[] canBuild(Type type, const TypeDecl within)
-        {
-            return _types[type].match!(
-                (const TypeParamData p) {
-                    auto index = within.typeParams.countUntil!(q => q.id == p.param);
-                    return index < 0 ? [0UL] : [1UL << index];
-                },
-                (const TupleData tuple) => tuple.elements.fold!((sets, e) => both(sets, canBuild(e, within)))([0UL]),
-                (const NominalData nominal) {
-                    ulong[] sets;
-                    foreach (set; needs.get(nominal.decl, null))
-                    {
-                        ulong[] met = [0UL];
-                        foreach (i, arg; nominal.args)
-                        {
-                            if (set & (1UL << i)) met = both(met, canBuild(arg, within));
-                        }
-                        sets ~= met;
-                    }
-                    return minimal(sets);
-                },
-                _ => [0UL],
-            );
-        }
-        ulong[] canBuildDecl(const TypeDecl decl)
-        {
-            if (decl.members.length == 0) return _fields[decl.id].fold!((sets, f) => both(sets, canBuild(f.type, decl)))([0UL]);
-            auto members = _members[decl.id];
-            if (members.length == 0) return [0UL];
-            return minimal(members.map!(m => canBuild(m, decl)).join);
-        }
-
-        for (auto changed = true; changed;)
-        {
-            changed = false;
-            foreach (decl; decls)
-            {
-                auto found = canBuildDecl(decl);
-                if (found == needs.get(decl.id, null)) continue;
-                needs[decl.id] = found;
-                changed = true;
-            }
-        }
-
-        bool buildable(Id!TypeDecl decl) => needs.get(decl, null).length > 0;
-        foreach (decl; decls.filter!(d => !buildable(d.id)))
-        {
-            if (auto owner = decl.id in _owners)
-            {
-                if (!buildable(_types[*owner].match!((const NominalData n) => n.decl, (_) => Id!TypeDecl.init))) continue;
-            }
-            auto reason = "none of its members can be";
-            if (decl.members.length == 0)
-            {
-                auto field = _fields[decl.id].find!(f => canBuild(f.type, decl).length == 0).front;
-                reason = "its field `%s: %s` can't be".format(field.name, _types.describe(field.type));
-            }
-            _collector.reportError(DiagnosticCode.UninhabitedType, decl.nameSpan,
-                "No value of `%s` can ever be built, because %s; an option or array field would end the recursion"
-                    .format(decl.name, reason));
-        }
-    }
-
     private void checkFunction(const FunctionDecl func)
     {
-        auto returnType = _types[_symbolTypes[SymbolId(func.id)]].match!(
+        auto returnType = _types[_typing.symbolTypes[SymbolId(func.id)]].match!(
             (const FunctionData fd)=>fd.ret,
             (_)=>_types.error
             );
@@ -1013,7 +280,7 @@ private final class TypeChecker
             auto type = _types.error;
             if (param.annotated)
             {
-                type = resolveType(param.type);
+                type = _declarer.resolveType(param.type);
             }
             else if (expected !is null)
             {
@@ -1024,12 +291,12 @@ private final class TypeChecker
                 _collector.reportError(DiagnosticCode.UntypedLambdaParameter, param.nameSpan,
                     "Nothing here says what type `%s` is; write `%s: Type`".format(param.name, param.name));
             }
-            _symbolTypes[SymbolId(param.id)] = type;
+            _typing.symbolTypes[SymbolId(param.id)] = type;
             params ~= type;
             mutables ~= param.mutable;
         }
 
-        Type ret = lambda.returnType !is null ? resolveType(*lambda.returnType)
+        Type ret = lambda.returnType !is null ? _declarer.resolveType(*lambda.returnType)
             : expected !is null ? expected.ret : Type.init;
         if (ret == Type.init)
         {
@@ -1037,13 +304,13 @@ private final class TypeChecker
         }
         else
         {
-            if (lambda.self.isValid) _symbolTypes[SymbolId(lambda.self)] = _types.function_(params, ret, mutables);
+            if (lambda.self.isValid) _typing.symbolTypes[SymbolId(lambda.self)] = _types.function_(params, ret, mutables);
             checkBody(*lambda.body, ret);
         }
 
         auto failed = wrongCount || ret == _types.error || params.canFind(_types.error);
         auto type = failed ? _types.error : _types.function_(params, ret, mutables);
-        _exprTypes[expr.id] = type;
+        _typing.exprTypes[expr.id] = type;
         return type;
     }
 
@@ -1064,7 +331,7 @@ private final class TypeChecker
         {
             joined = join(joined, _types.none, span, "Return values");
         }
-        joined = requireTyped(joined, body.span);
+        joined = _declarer.requireTyped(joined, body.span);
         if (joined == _types.error) return joined;
 
         foreach (i, type; inferred.types)
@@ -1113,7 +380,7 @@ private final class TypeChecker
             (const MatchExpr match_) => checkDiscardedMatch(match_, expr.span, ctx),
             (_) => synthesize(expr, ctx),
         );
-        _exprTypes[expr.id] = type;
+        _typing.exprTypes[expr.id] = type;
         return type;
     }
 
@@ -1162,13 +429,13 @@ private final class TypeChecker
         {
             // A discard keeps no value, so a `None` or `[]` needs no type to be dropped.
             auto type = synthesize(value, ctx);
-            _symbolTypes[SymbolId(binding.id)] = binding.name == discardName ? type : requireTyped(type, value.span);
+            _typing.symbolTypes[SymbolId(binding.id)] = binding.name == discardName ? type : _declarer.requireTyped(type, value.span);
         }
         else
         {
-            auto type = resolveType(*binding.type);
+            auto type = _declarer.resolveType(*binding.type);
             check(value, type, ctx);
-            _symbolTypes[SymbolId(binding.id)] = type;
+            _typing.symbolTypes[SymbolId(binding.id)] = type;
         }
     }
 
@@ -1187,11 +454,11 @@ private final class TypeChecker
             foreach (i, element; literal.elements)
             {
                 checkPattern(parts[i], element, ctx);
-                types ~= _promotions.get(element.id, _exprTypes.get(element.id, _types.error));
+                types ~= _typing.promotions.get(element.id, _typing.exprTypes.get(element.id, _types.error));
             }
             // Never built, so only recorded for completeness; a dropped `None` leaves it untyped.
-            _exprTypes[value.id] = types.canFind(_types.none) || types.canFind(_types.emptyArray)
-                ? _types.error : tupleOf(types);
+            _typing.exprTypes[value.id] = types.canFind(_types.none) || types.canFind(_types.emptyArray)
+                ? _types.error : _declarer.tupleOf(types);
             return;
         }
 
@@ -1201,7 +468,7 @@ private final class TypeChecker
                 auto expected = annotatedType(pattern);
                 if (expected == Type.init)
                 {
-                    bindPattern(pattern, requireTyped(synthesize(value, ctx), value.span));
+                    bindPattern(pattern, _declarer.requireTyped(synthesize(value, ctx), value.span));
                 }
                 else
                 {
@@ -1220,14 +487,14 @@ private final class TypeChecker
         return pattern.kind.match!(
             (const VarDecl binding) {
                 if (binding.type is null) return Type.init;
-                auto type = resolveType(*binding.type);
-                _symbolTypes[SymbolId(binding.id)] = type;
+                auto type = _declarer.resolveType(*binding.type);
+                _typing.symbolTypes[SymbolId(binding.id)] = type;
                 return type;
             },
             (const TuplePattern tuple) {
                 // Every element, so each annotation is resolved once whatever comes after it.
                 auto types = tuple.elements.map!(e => annotatedType(e)).array;
-                return types.canFind(Type.init) ? Type.init : tupleOf(types);
+                return types.canFind(Type.init) ? Type.init : _declarer.tupleOf(types);
             },
             (_) => assert(0, "the grammar only allows names and tuples in a `val`"),
         );
@@ -1242,10 +509,10 @@ private final class TypeChecker
             (const VarDecl binding) {
                 if (binding.type is null)
                 {
-                    _symbolTypes[SymbolId(binding.id)] = type;
+                    _typing.symbolTypes[SymbolId(binding.id)] = type;
                     return;
                 }
-                auto annotated = _symbolTypes[SymbolId(binding.id)];
+                auto annotated = _typing.symbolTypes[SymbolId(binding.id)];
                 if (type != annotated && !unknown && annotated != _types.error)
                 {
                     _collector.reportError(DiagnosticCode.TypeMismatch, binding.type.span,
@@ -1378,30 +645,6 @@ private final class TypeChecker
         );
     }
 
-    /// What the sum `type` can be, with its type arguments filled in.
-    private const(Type)[] membersOf(Type type)
-    {
-        return _types[type].match!(
-            (const NominalData nominal) {
-                auto declared = _members.get(nominal.decl, null);
-                if (nominal.args.length == 0) return declared;
-                auto substitution = substitutionOf(type);
-                return declared.map!(m => _types.substitute(m, substitution)).array;
-            },
-            _ => (Type[]).init,
-        );
-    }
-
-    private bool isSum(Type type)
-    {
-        return membersOf(type).length > 0;
-    }
-
-    private bool isOwnedMember(Type type)
-    {
-        return _types[type].match!((const NominalData nominal) => (nominal.decl in _owners) !is null, _ => false);
-    }
-
     /// The type of `expr`, where nothing asks for a particular one. A constructor of a member its
     /// sum owns produces the sum.
     private Type synthesize(const Expr expr, BodyContext ctx)
@@ -1409,11 +652,11 @@ private final class TypeChecker
         auto type = synthesizeExact(expr, ctx);
         // A use of a generic one has already decided what it builds.
         if (type == _types.error || genericUse(expr).found) return type;
-        auto sum = constructedDecl(expr) in _owners;
+        auto sum = _declarer.ownerOf(constructedDecl(expr));
         if (sum is null) return type;
 
-        _constructedMembers[expr.id] = type;
-        _exprTypes[expr.id] = *sum;
+        _typing.constructedMembers[expr.id] = type;
+        _typing.exprTypes[expr.id] = *sum;
         return *sum;
     }
 
@@ -1421,7 +664,7 @@ private final class TypeChecker
     private Type synthesizeExact(const Expr expr, BodyContext ctx, Type expected = Type.init)
     {
         // "what type is this?"
-        _constructedMembers.remove(expr.id);
+        _typing.constructedMembers.remove(expr.id);
 
         auto type = expr.kind.match!(
             (const BoolLiteral _) => _types.bool_,
@@ -1437,7 +680,7 @@ private final class TypeChecker
                 ? synthesizeConcat(expr, binary, ctx)
                 : synthesizeBinary(binary, expr.span, ctx),
             (const CallExpr call) => expr.id in _resolutions.conversions
-                ? synthesizeConversion(call, builtinType(_resolutions.conversions[expr.id]), expr.span, ctx)
+                ? synthesizeConversion(call, _declarer.builtinType(_resolutions.conversions[expr.id]), expr.span, ctx)
                 : isMethodCall(expr.id, *call.callee)
                     ? synthesizeMethodCall(expr, call, ctx, expected)
                     : synthesizeCall(expr, call, ctx, expected),
@@ -1449,7 +692,7 @@ private final class TypeChecker
             (const BlockExpr block) => synthesizeBlock(block, expr.span, ctx),
             (const UnitLiteral _) => _types.unit,
             (const Identifier _) => synthesizeIdentifier(expr, expected),
-            (const SomeExpr some) => optionOf(synthesize(*some.value, ctx), some.value.span),
+            (const SomeExpr some) => _declarer.optionOf(synthesize(*some.value, ctx), some.value.span),
             (const NoneLiteral _) => _types.none,
             (const PropagateExpr propagate) => synthesizePropagate(propagate, expr.span, ctx),
             (const SafeMemberAccess access) => synthesizeSafeMember(expr, access, ctx),
@@ -1457,11 +700,11 @@ private final class TypeChecker
             (const MapLiteral literal) => synthesizeMapLiteral(literal, expr.span, ctx),
             (const IndexExpr index) => synthesizeIndex(index, ctx),
             (const RangeExpr range) => synthesizeBareRange(range, expr.span, ctx),
-            (const TupleLiteral literal) => tupleOf(literal.elements.map!(e => requireTyped(synthesize(e, ctx), e.span)).array),
+            (const TupleLiteral literal) => _declarer.tupleOf(literal.elements.map!(e => _declarer.requireTyped(synthesize(e, ctx), e.span)).array),
             (const MatchExpr match_) => synthesizeMatch(match_, expr.span, ctx),
             (const Lambda lambda) => typeLambda(expr, lambda, null),
         );
-        _exprTypes[expr.id] = type;
+        _typing.exprTypes[expr.id] = type;
         return type;
     }
 
@@ -1475,14 +718,14 @@ private final class TypeChecker
         {
             joined = join(joined, type, literal.elements[i + 1].span, "Array elements");
         }
-        joined = requireTyped(joined, literal.elements[0].span);
+        joined = _declarer.requireTyped(joined, literal.elements[0].span);
         if (joined == _types.error) return joined;
 
         foreach (i, element; literal.elements)
         {
             coerce(element, types[i], joined);
         }
-        return arrayOf(joined, literal.elements[0].span);
+        return _declarer.arrayOf(joined, literal.elements[0].span);
     }
 
     private Type synthesizeMapLiteral(const MapLiteral literal, Span span, BodyContext ctx)
@@ -1499,7 +742,7 @@ private final class TypeChecker
     /// `xs[i]`, or `xs[a..b]`, whose range is part of the slice rather than a value.
     private Type synthesizeIndex(const IndexExpr index, BodyContext ctx)
     {
-        auto objectType = requireTyped(synthesize(*index.object, ctx), index.object.span);
+        auto objectType = _declarer.requireTyped(synthesize(*index.object, ctx), index.object.span);
         auto range = asRange(index.index);
         if (range is null)
         {
@@ -1509,7 +752,7 @@ private final class TypeChecker
         {
             checkConsumedInteger(*range.start, ctx);
             checkConsumedInteger(*range.end, ctx);
-            _exprTypes[index.index.id] = objectType;
+            _typing.exprTypes[index.index.id] = objectType;
         }
         if (objectType == _types.error) return objectType;
         if (!_types.isArray(objectType))
@@ -1586,7 +829,7 @@ private final class TypeChecker
     {
         if (binary.op == BinaryOp.Concat)
         {
-            _concatOperands[expr.id] = concatChain(*binary.left) ~ concatChain(*binary.right);
+            _typing.concatOperands[expr.id] = concatChain(*binary.left) ~ concatChain(*binary.right);
         }
     }
 
@@ -1620,7 +863,7 @@ private final class TypeChecker
         if (leftType == _types.error || rightType == _types.error) return _types.error;
         if (leftType == _types.emptyArray && rightType == _types.emptyArray)
         {
-            return reportUntypedEmptyArray(binary.left.span);
+            return _declarer.reportUntypedEmptyArray(binary.left.span);
         }
 
         foreach (side, type; [leftType, rightType])
@@ -1652,7 +895,7 @@ private final class TypeChecker
     /// `x?`, which returns `None` from the enclosing function, so that has to return an option.
     private Type synthesizePropagate(const PropagateExpr propagate, Span span, BodyContext ctx)
     {
-        auto operandType = requireTyped(synthesize(*propagate.operand, ctx), propagate.operand.span);
+        auto operandType = _declarer.requireTyped(synthesize(*propagate.operand, ctx), propagate.operand.span);
         if (operandType == _types.error) return operandType;
         if (!_types.isOption(operandType))
         {
@@ -1677,7 +920,7 @@ private final class TypeChecker
     /// `a?.b?.c` one flat option: each `?.` works on the option the one before it produced.
     private Type synthesizeSafeMember(const Expr expr, const SafeMemberAccess access, BodyContext ctx)
     {
-        auto objectType = requireTyped(synthesize(*access.object, ctx), access.object.span);
+        auto objectType = _declarer.requireTyped(synthesize(*access.object, ctx), access.object.span);
         if (objectType == _types.error) return objectType;
         if (!_types.isOption(objectType))
         {
@@ -1687,12 +930,12 @@ private final class TypeChecker
             return _types.error;
         }
 
-        auto fields = fieldsOf(_types.optionInner(objectType));
+        auto fields = _declarer.fieldsOf(_types.optionInner(objectType));
         foreach (i, field; fields)
         {
             if (field.name == access.member)
             {
-                _fieldIndexes[expr.id] = i;
+                _typing.fieldIndexes[expr.id] = i;
                 return _types.isOption(field.type) ? field.type : _types.option(field.type);
             }
         }
@@ -1706,7 +949,7 @@ private final class TypeChecker
     {
         foreach (part; interpolated.parts)
         {
-            auto type = requireTyped(synthesize(part, ctx), part.span);
+            auto type = _declarer.requireTyped(synthesize(part, ctx), part.span);
             if (_types.mentionsParameter(type)) reportOpaque(part.span, type, "it can't go in a string hole", "show: (%s) -> String");
         }
         return _types.string_;
@@ -1746,7 +989,7 @@ private final class TypeChecker
     private Type synthesizeConversion(const CallExpr call, Type target, Span span, BodyContext ctx)
     {
         rejectMutableArguments(call);
-        _exprTypes[call.callee.id] = target;
+        _typing.exprTypes[call.callee.id] = target;
         if (call.args.length != 1)
         {
             foreach (arg; call.args)
@@ -1762,7 +1005,7 @@ private final class TypeChecker
         auto arg = call.args[0];
         if (target == _types.string_)
         {
-            auto type = requireTyped(synthesize(arg, ctx), arg.span);
+            auto type = _declarer.requireTyped(synthesize(arg, ctx), arg.span);
             if (_types.mentionsParameter(type)) reportOpaque(arg.span, type, "it can't be converted to a `String`", "show: (%s) -> String");
             return target;
         }
@@ -1803,8 +1046,8 @@ private final class TypeChecker
         {
             if (decl in visited) return true;
             visited[decl] = true;
-            return _fields[decl].all!(f => isComparable(f.type, visited))
-                && _members.get(decl, null).all!(m => isComparable(m, visited));
+            return _typing.fields[decl].all!(f => isComparable(f.type, visited))
+                && _typing.members.get(decl, null).all!(m => isComparable(m, visited));
         }
 
         return _types[type].match!(
@@ -1882,7 +1125,7 @@ private final class TypeChecker
         {
             synthesize(*binary.right, ctx);
             if (optionType == _types.error) return optionType;
-            if (optionType == _types.none) return reportUntypedNone(binary.left.span);
+            if (optionType == _types.none) return _declarer.reportUntypedNone(binary.left.span);
             _collector.reportError(DiagnosticCode.InvalidOperand, binary.left.span,
                 "`??` needs an option on its left, got `%s`".format(_types.describe(optionType)));
             return _types.error;
@@ -1941,7 +1184,7 @@ private final class TypeChecker
     /// the array a `[]` takes on.
     private bool promotes(const Expr expr, Type type, Type target)
     {
-        if (isSum(target)) return isAssignable(type, target) || (isIntLiteral(expr) && membersOf(target).any!(m => isNumeric(m)));
+        if (_declarer.isSum(target)) return isAssignable(type, target) || (isIntLiteral(expr) && _declarer.membersOf(target).any!(m => isNumeric(m)));
         if (type == _types.emptyArray && _types.isArray(target)) return true;
         if (!_types.isOption(target) || _types.isOption(type) && !isAssignable(type, target)) return false;
         return isAssignable(type, target) || (isIntLiteral(expr) && isNumeric(innermost(target)));
@@ -2068,10 +1311,10 @@ private final class TypeChecker
                 return _types.bool_;
             case BinaryOp.Equal:
             case BinaryOp.NotEqual:
-                if (leftType == _types.none && rightType == _types.none) return reportUntypedNone(binary.left.span);
+                if (leftType == _types.none && rightType == _types.none) return _declarer.reportUntypedNone(binary.left.span);
                 if (leftType == _types.emptyArray && rightType == _types.emptyArray)
                 {
-                    return reportUntypedEmptyArray(binary.left.span);
+                    return _declarer.reportUntypedEmptyArray(binary.left.span);
                 }
                 if (leftType != rightType && promotes(*binary.right, rightType, leftType))
                 {
@@ -2116,12 +1359,12 @@ private final class TypeChecker
                 call, typed, false, ctx);
             if (!chosen.isValid)
             {
-                _exprTypes[call.callee.id] = _types.error;
+                _typing.exprTypes[call.callee.id] = _types.error;
                 typeUnchosen(call, typed, ctx);
                 return _types.error;
             }
-            _chosenSymbols[call.callee.id] = SymbolId(chosen);
-            _chosenCallees[expr.id] = chosen;
+            _typing.chosenSymbols[call.callee.id] = SymbolId(chosen);
+            _typing.chosenCallees[expr.id] = chosen;
         }
         auto generic = genericUse(expr);
         if (generic.found) return applyGeneric(expr, generic, call, expected, ctx, typed);
@@ -2130,7 +1373,7 @@ private final class TypeChecker
         {
             rejectTypeArguments(typeArgsOf(*call.callee), spelling(*call.callee), call.callee.span);
             auto calleeType = symbolType(SymbolId(*function_));
-            _exprTypes[call.callee.id] = calleeType;
+            _typing.exprTypes[call.callee.id] = calleeType;
             return applyCallee(calleeType, call, expr.span, ctx, typed);
         }
         return applyCallee(synthesize(*call.callee, ctx), call, expr.span, ctx);
@@ -2145,13 +1388,13 @@ private final class TypeChecker
 
     private const(SymbolId)* resolutionOf(Id!Expr name)
     {
-        if (auto chosen = name in _chosenSymbols) return chosen;
+        if (auto chosen = name in _typing.chosenSymbols) return chosen;
         return name in _resolutions.resolutions;
     }
 
     private const(Id!FunctionDecl)* calleeOf(Id!Expr call)
     {
-        if (auto chosen = call in _chosenCallees) return chosen;
+        if (auto chosen = call in _typing.chosenCallees) return chosen;
         return call in _resolutions.callees;
     }
 
@@ -2317,7 +1560,7 @@ private final class TypeChecker
             (const NominalData n) => data.match!(
                 (const NominalData m) => m.decl == n.decl
                     ? n.args.length.iota.all!(i => couldBe(n.args[i], m.args[i], params))
-                    : _members.get(n.decl, null).any!(member => declOf(member) == m.decl),
+                    : _typing.members.get(n.decl, null).any!(member => declOf(member) == m.decl),
                 _ => false,
             ),
             _ => false,
@@ -2348,7 +1591,7 @@ private final class TypeChecker
         if (_types.mentionsError(param)) return Fit.exact;
         if (param == _types.any) return Fit.converted;
         auto bare = _types[param].match!((const TypeParamData p) => params.canFind!(q => q.id == p.param), _ => false);
-        auto members = membersOf(param);
+        auto members = _declarer.membersOf(param);
         bool sumHas(bool delegate(Type) test) => members.any!(m => test(m));
         // Inside an option, a fit is at best a conversion, since the value is promoted.
         Fit inOption(Fit delegate(Type) inner)
@@ -2361,7 +1604,7 @@ private final class TypeChecker
         {
             if (bare || param == _types.int_) return Fit.exact;
             auto inner = _types.isOption(param) ? innermost(param) : param;
-            auto numeric = isNumeric(inner) || params.canFind!(p => inner == parameterType(p))
+            auto numeric = isNumeric(inner) || params.canFind!(p => inner == _declarer.parameterType(p))
                 || sumHas(m => isNumeric(m));
             return numeric ? Fit.converted : Fit.none;
         }
@@ -2505,12 +1748,12 @@ private final class TypeChecker
         auto collector = _collector;
         _collector = new Collector;
         scope (exit) _collector = collector;
-        return resolveType(type);
+        return _declarer.resolveType(type);
     }
 
     private FunctionData signatureOf(Id!FunctionDecl f)
     {
-        return signatureOf(_symbolTypes[SymbolId(f)]);
+        return signatureOf(_typing.symbolTypes[SymbolId(f)]);
     }
 
     private FunctionData signatureOf(Type functionType)
@@ -2599,7 +1842,7 @@ private final class TypeChecker
                     _types.describe(expected), all.join(", ")));
             return _types.error;
         }
-        _chosenSymbols[name.id] = SymbolId(fits[0]);
+        _typing.chosenSymbols[name.id] = SymbolId(fits[0]);
         return namedValue(name, SymbolId(fits[0]), expected);
     }
 
@@ -2607,7 +1850,7 @@ private final class TypeChecker
     private bool valueFits(Id!FunctionDecl f, const(TypeExpr)[] written, Type expected)
     {
         auto params = _resolutions.declarations.functions[f].typeParams;
-        auto type = _symbolTypes[SymbolId(f)];
+        auto type = _typing.symbolTypes[SymbolId(f)];
         if (written.length > 0 && written.length != params.length) return false;
         Substitution bound;
         if (written.length > 0)
@@ -2628,7 +1871,7 @@ private final class TypeChecker
         auto first = (name.id in _resolutions.overloads).groups.joiner.front;
         _collector.reportError(DiagnosticCode.AmbiguousOverload, name.span,
             "`%s` is overloaded, so as a value it needs a function type to choose by, as in `val f: %s = %s`"
-                .format(spelled, _types.describe(_symbolTypes[SymbolId(first)]), spelled));
+                .format(spelled, _types.describe(_typing.symbolTypes[SymbolId(first)]), spelled));
     }
 
     /// Reports two functions of one name in `mod` that take the same parameters, and notes which
@@ -2645,8 +1888,8 @@ private final class TypeChecker
                     auto earlier = seen.get(f.name, null);
                     seen[f.name] ~= f.id;
                     if (earlier.length == 0) return;
-                    _overloaded[f.id] = true;
-                    foreach (e; earlier) _overloaded[e] = true;
+                    _typing.overloaded[f.id] = true;
+                    foreach (e; earlier) _typing.overloaded[e] = true;
                     foreach (e; earlier)
                     {
                         if (reportDuplicateOverload(e, f)) break;
@@ -2777,24 +2020,24 @@ private final class TypeChecker
                 auto decl = _resolutions.declarations.functions[f];
                 if (decl.typeParams.length == 0) return false;
                 g.params = decl.typeParams;
-                g.type = _symbolTypes[SymbolId(f)];
+                g.type = _typing.symbolTypes[SymbolId(f)];
                 return true;
             },
             (const Id!TypeDecl t) {
                 auto decl = _resolutions.declarations.types[t];
                 if (decl.members.length > 0) return false;
-                if (auto owner = t in _owners)
+                if (auto owner = _declarer.ownerOf(t))
                 {
                     if (_types.mentionsParameter(*owner))
                     {
                         g.owner = *owner;
-                        g.ownerParams = typeParamsOf(declOf(*owner));
+                        g.ownerParams = _declarer.typeParamsOf(declOf(*owner));
                     }
                 }
                 if (decl.typeParams.length == 0 && g.owner == Type.init) return false;
                 g.params = decl.typeParams;
-                g.type = _symbolTypes[SymbolId(t)];
-                g.member = _nominalTypes[t];
+                g.type = _typing.symbolTypes[SymbolId(t)];
+                g.member = _typing.nominalTypes[t];
                 return true;
             },
             _ => false,
@@ -2834,7 +2077,7 @@ private final class TypeChecker
     private void rejectTypeArguments(const(TypeExpr)[] written, string name, Span span)
     {
         if (written.length == 0) return;
-        resolveTypeArguments(written);
+        _declarer.resolveTypeArguments(written);
         _collector.reportError(DiagnosticCode.WrongTypeArgumentCount, span,
             "`%s` isn't generic, so it takes no type arguments".format(name));
     }
@@ -2851,7 +2094,7 @@ private final class TypeChecker
             if (_types.isOption(type)) return wanted(_types.optionInner(type));
             auto decl = declOf(type);
             if (decl == member) return true;
-            return decl.isValid && decl != owner && membersOf(type).any!(m => declOf(m) == member);
+            return decl.isValid && decl != owner && _declarer.membersOf(type).any!(m => declOf(m) == member);
         }
         return wanted(expected);
     }
@@ -2916,7 +2159,7 @@ private final class TypeChecker
         auto decl = declOf(result);
         if (decl.isValid && declOf(expected).isValid && declOf(expected) != decl)
         {
-            auto member = membersOf(expected).find!(m => declOf(m) == decl);
+            auto member = _declarer.membersOf(expected).find!(m => declOf(m) == decl);
             if (!member.empty) expected = member.front;
         }
         bindParams(result, expected, params, bound);
@@ -2930,7 +2173,7 @@ private final class TypeChecker
     /// Binds what `g.written` gives, reporting it unless it gives every one of `g.params`.
     private void bindWritten(const Generic g, ref Substitution bound)
     {
-        auto args = resolveTypeArguments(g.written);
+        auto args = _declarer.resolveTypeArguments(g.written);
         if (args.length == g.params.length)
         {
             foreach (i, param; g.params) bound[param.id] = args[i];
@@ -2994,7 +2237,7 @@ private final class TypeChecker
         foreach (i, type; pretyped) typed[i] = type;
         void typeTheRest()
         {
-            resolveTypeArguments(g.written);
+            _declarer.resolveTypeArguments(g.written);
             foreach (i, arg; args)
             {
                 if (typed[i] == Type.init) synthesize(arg, ctx);
@@ -3111,9 +2354,9 @@ private final class TypeChecker
         reportOverlaps(places, placeSpans,
             "This overlaps a `mutable` argument before it, and one call can't change a place through two");
 
-        _exprTypes[g.name] = _types.substitute(shape, bound);
-        _typeArguments[g.name] = params.map!(p => bound[p.id]).array;
-        if (sum) _constructedMembers[expr.id] = _types.substitute(g.member, bound);
+        _typing.exprTypes[g.name] = _types.substitute(shape, bound);
+        _typing.typeArguments[g.name] = params.map!(p => bound[p.id]).array;
+        if (sum) _typing.constructedMembers[expr.id] = _types.substitute(g.member, bound);
         return _types.substitute(signature.ret, bound);
     }
 
@@ -3149,8 +2392,8 @@ private final class TypeChecker
             if (!culprit.empty)
             {
                 auto i = culprit.front;
-                if (typed[i] == _types.none) reportUntypedNone(args[i].span);
-                else if (typed[i] == _types.emptyArray) reportUntypedEmptyArray(args[i].span);
+                if (typed[i] == _types.none) _declarer.reportUntypedNone(args[i].span);
+                else if (typed[i] == _types.emptyArray) _declarer.reportUntypedEmptyArray(args[i].span);
                 else if (_types.mentionsError(typed[i]) || typed[i] == _types.never) continue;
                 else
                 {
@@ -3166,8 +2409,8 @@ private final class TypeChecker
             {
                 auto arg = args[untyped.front];
                 arg.kind.match!(
-                    (const NoneLiteral _) { reportUntypedNone(arg.span); },
-                    (const ArrayLiteral _) { reportUntypedEmptyArray(arg.span); },
+                    (const NoneLiteral _) { _declarer.reportUntypedNone(arg.span); },
+                    (const ArrayLiteral _) { _declarer.reportUntypedEmptyArray(arg.span); },
                     (_) {
                         if (arg.id in _resolutions.overloads) reportOverloadedValue(arg);
                         else reportUninferredValue(arg, genericNamed(arg), true);
@@ -3180,12 +2423,12 @@ private final class TypeChecker
                 auto owner = _resolutions.declarations.types[declOf(g.owner)].name;
                 _collector.reportError(DiagnosticCode.CannotInferTypeArgument, expr.span,
                     "This builds a `%s`, but nothing here says what `%s` is; annotate the type it's used as, as in `val x: %s = ...`"
-                        .format(_types.describe(g.owner), param.name, example(owner, g.ownerParams.length, "")));
+                        .format(_types.describe(g.owner), param.name, _declarer.example(owner, g.ownerParams.length, "")));
                 continue;
             }
             _collector.reportError(DiagnosticCode.CannotInferTypeArgument, expr.span,
                 "Nothing in this call says what `%s` is; write the type arguments, as in `%s`"
-                    .format(param.name, example(g.spelled, g.params.length, args.length == 0 ? "()" : "(...)")));
+                    .format(param.name, _declarer.example(g.spelled, g.params.length, args.length == 0 ? "()" : "(...)")));
         }
     }
 
@@ -3198,12 +2441,12 @@ private final class TypeChecker
             auto owner = _resolutions.declarations.types[declOf(g.owner)].name;
             _collector.reportError(DiagnosticCode.CannotInferTypeArgument, expr.span,
                 "This `%s` has no type to take here; annotate one, as in `val x: %s = %s`"
-                    .format(g.spelled, example(owner, g.ownerParams.length, ""), g.spelled));
+                    .format(g.spelled, _declarer.example(owner, g.ownerParams.length, ""), g.spelled));
             return;
         }
         _collector.reportError(DiagnosticCode.CannotInferTypeArgument, expr.span,
             "`%s` is generic, so as a value it needs its type arguments, as in `%s`, or a type to take them from"
-                .format(g.spelled, example(g.spelled, g.params.length, "")));
+                .format(g.spelled, _declarer.example(g.spelled, g.params.length, "")));
     }
 
     /// A generic function, constructor or marker used as a value, which has one type: from its
@@ -3222,8 +2465,8 @@ private final class TypeChecker
             if (expected == Type.init || !_types.mentionsError(expected)) reportUninferredValue(expr, g, sum);
             foreach (param; params) bound.require(param.id, _types.error);
         }
-        _typeArguments[g.name] = params.map!(p => bound[p.id]).array;
-        if (sum) _constructedMembers[expr.id] = _types.substitute(g.member, bound);
+        _typing.typeArguments[g.name] = params.map!(p => bound[p.id]).array;
+        if (sum) _typing.constructedMembers[expr.id] = _types.substitute(g.member, bound);
         return _types.substitute(shape, bound);
     }
 
@@ -3322,7 +2565,7 @@ private final class TypeChecker
         {
             rejectTypeArguments(access.typeArgs, access.member, call.callee.span);
             auto calleeType = fieldOf(*call.callee, access, objectType);
-            _exprTypes[call.callee.id] = calleeType;
+            _typing.exprTypes[call.callee.id] = calleeType;
             return applyCallee(calleeType, call, expr.span, ctx);
         }
 
@@ -3332,8 +2575,8 @@ private final class TypeChecker
         auto arguments = (cast(Expr*) access.object)[0 .. 1] ~ cast(Expr[]) call.args;
         auto mutables = call.mutableArgs.length > 0 ? false ~ call.mutableArgs.dup : null;
         auto rewritten = new const CallExpr(cast(Expr*) call.callee, arguments, mutables);
-        _methodCalls[expr.id] = rewritten;
-        auto receiver = requireTyped(objectType, access.object.span);
+        _typing.methodCalls[expr.id] = rewritten;
+        auto receiver = _declarer.requireTyped(objectType, access.object.span);
         auto typed = new Type[arguments.length];
         typed[0] = receiver;
 
@@ -3348,13 +2591,13 @@ private final class TypeChecker
         }
         if (!function_.isValid)
         {
-            _exprTypes[call.callee.id] = _types.error;
+            _typing.exprTypes[call.callee.id] = _types.error;
             typeUnchosen(*rewritten, typed, ctx);
             return _types.error;
         }
-        auto functionType = _symbolTypes[SymbolId(function_)];
-        _exprTypes[call.callee.id] = functionType;
-        _methodCallees[expr.id] = function_;
+        auto functionType = _typing.symbolTypes[SymbolId(function_)];
+        _typing.exprTypes[call.callee.id] = functionType;
+        _typing.methodCallees[expr.id] = function_;
 
         auto decl = _resolutions.declarations.functions[function_];
         if (!receiverFits(access, functionType, receiver, call.callee.span))
@@ -3403,7 +2646,7 @@ private final class TypeChecker
 
     private bool hasField(Type type, string name)
     {
-        return fieldsOf(type).canFind!(f => f.name == name);
+        return _declarer.fieldsOf(type).canFind!(f => f.name == name);
     }
 
     /// A `mutable` argument is written back when the call returns, so it must be a place of exactly
@@ -3436,7 +2679,7 @@ private final class TypeChecker
     /// is checked as an assignment to that field would be.
     private Type synthesizeWith(const Expr expr, const WithExpr with_, BodyContext ctx)
     {
-        auto objectType = requireTyped(synthesize(*with_.object, ctx), with_.object.span);
+        auto objectType = _declarer.requireTyped(synthesize(*with_.object, ctx), with_.object.span);
 
         size_t[][] indexes;
         string[][] paths;
@@ -3452,7 +2695,7 @@ private final class TypeChecker
             spans ~= update.span;
         }
         reportOverlaps(paths, spans, "This overlaps an update before it, and one `with` can't change a place twice");
-        _updatePaths[expr.id] = indexes;
+        _typing.updatePaths[expr.id] = indexes;
         return objectType;
     }
 
@@ -3464,7 +2707,7 @@ private final class TypeChecker
         foreach (name; update.path)
         {
             if (type == _types.error) return type;
-            auto fields = fieldsOf(type);
+            auto fields = _declarer.fieldsOf(type);
             auto index = fields.countUntil!(f => f.name == name);
             if (index < 0)
             {
@@ -3495,12 +2738,12 @@ private final class TypeChecker
     {
         if (objectType == _types.error) return _types.error;
 
-        auto fields = fieldsOf(objectType);
+        auto fields = _declarer.fieldsOf(objectType);
         foreach (i, field; fields)
         {
             if (field.name == member.member)
             {
-                _fieldIndexes[expr.id] = i;
+                _typing.fieldIndexes[expr.id] = i;
                 return field.type;
             }
         }
@@ -3529,7 +2772,7 @@ private final class TypeChecker
 
     private Type symbolType(SymbolId symbol)
     {
-        if (auto type = symbol in _symbolTypes) return *type;
+        if (auto type = symbol in _typing.symbolTypes) return *type;
         // A module used as a value; name resolution has already reported it.
         if (symbol.match!((const Id!Module _) => true, _ => false)) return _types.error;
         // This should never happen: every symbol that can be resolved should have a type.
@@ -3557,7 +2800,7 @@ private final class TypeChecker
     {
         auto iterable = &for_.binding.value;
         auto range = asRange(iterable);
-        _symbolTypes[SymbolId(for_.binding.id)] = range is null
+        _typing.symbolTypes[SymbolId(for_.binding.id)] = range is null
             ? synthesizeForArray(*iterable, ctx)
             : synthesizeForRange(*iterable, *range, ctx);
         checkLoopBody(*for_.body, ctx);
@@ -3567,7 +2810,7 @@ private final class TypeChecker
     /// The element type of what a `for` loops over, which isn't a range.
     private Type synthesizeForArray(const Expr iterable, BodyContext ctx)
     {
-        auto type = requireTyped(synthesize(iterable, ctx), iterable.span);
+        auto type = _declarer.requireTyped(synthesize(iterable, ctx), iterable.span);
         if (_types.isArray(type)) return _types.arrayElement(type);
         if (type == _types.error || type == _types.never) return type;
         _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span,
@@ -3597,7 +2840,7 @@ private final class TypeChecker
                 "`for` needs a range of integers, got `%s`".format(_types.describe(type)));
             type = _types.error;
         }
-        _exprTypes[expr.id] = type;
+        _typing.exprTypes[expr.id] = type;
         return type;
     }
 
@@ -3626,7 +2869,7 @@ private final class TypeChecker
     private void checkOptionBinding(const VarDecl binding, string keyword, BodyContext ctx)
     {
         auto initializer = binding.value;
-        auto optionType = requireTyped(synthesize(initializer, ctx), initializer.span);
+        auto optionType = _declarer.requireTyped(synthesize(initializer, ctx), initializer.span);
         auto payload = _types.error;
         if (_types.isOption(optionType))
         {
@@ -3637,7 +2880,7 @@ private final class TypeChecker
             _collector.reportError(DiagnosticCode.InvalidOperand, initializer.span,
                 "`%s` needs an option, got `%s`".format(keyword, _types.describe(optionType)));
         }
-        _symbolTypes[SymbolId(binding.id)] = payload;
+        _typing.symbolTypes[SymbolId(binding.id)] = payload;
     }
 
     private Type synthesizeIf(const IfExpr if_, Span span, BodyContext ctx)
@@ -3669,8 +2912,8 @@ private final class TypeChecker
         if (b == _types.never) return a;
         if (isAssignable(a, b)) return b;
         if (isAssignable(b, a)) return a;
-        if (a == _types.none) return optionOf(b, span);
-        if (b == _types.none) return optionOf(a, span);
+        if (a == _types.none) return _declarer.optionOf(b, span);
+        if (b == _types.none) return _declarer.optionOf(a, span);
 
         _collector.reportError(DiagnosticCode.TypeMismatch, span,
             "%s have different types `%s` and `%s`".format(what, _types.describe(a), _types.describe(b)));
@@ -3707,7 +2950,7 @@ private final class TypeChecker
             (const ReturnStmt _) => true,
             (const BreakStmt _) => true,
             (const ContinueStmt _) => true,
-            (const ExprStmt e) => _exprTypes.get(e.expr.id, _types.error) == _types.never,
+            (const ExprStmt e) => _typing.exprTypes.get(e.expr.id, _types.error) == _types.never,
             _ => false,
         );
     }
@@ -3729,7 +2972,7 @@ private final class TypeChecker
         );
         auto generic = genericNamed(name);
         if (generic.found && !isIntrinsic) return instantiateValue(name, generic, expected);
-        if (generic.found) resolveTypeArguments(generic.written);
+        if (generic.found) _declarer.resolveTypeArguments(generic.written);
         else rejectTypeArguments(typeArgsOf(name), spelling(name), name.span);
         return symbolValue(symbol, name.span);
     }
@@ -3739,7 +2982,7 @@ private final class TypeChecker
     {
         if (expected == member) return true;
         if (_types.isOption(expected)) return wantsMember(member, owner, _types.optionInner(expected));
-        return expected != owner && membersOf(expected).canFind(member);
+        return expected != owner && _declarer.membersOf(expected).canFind(member);
     }
 
     /// The one member of `sum` that the option, array or tuple written out as `expr` can be, or
@@ -3747,11 +2990,11 @@ private final class TypeChecker
     private Type memberForSyntax(const Expr expr, Type sum)
     {
         auto candidates = expr.kind.match!(
-            (const SomeExpr _) => membersOf(sum).filter!(m => _types.isOption(m)).array,
-            (const NoneLiteral _) => membersOf(sum).filter!(m => _types.isOption(m)).array,
-            (const ArrayLiteral _) => membersOf(sum).filter!(m => _types.isArray(m)).array,
-            (const BinaryExpr _) => isArraySyntax(expr) ? membersOf(sum).filter!(m => _types.isArray(m)).array : null,
-            (const TupleLiteral literal) => membersOf(sum)
+            (const SomeExpr _) => _declarer.membersOf(sum).filter!(m => _types.isOption(m)).array,
+            (const NoneLiteral _) => _declarer.membersOf(sum).filter!(m => _types.isOption(m)).array,
+            (const ArrayLiteral _) => _declarer.membersOf(sum).filter!(m => _types.isArray(m)).array,
+            (const BinaryExpr _) => isArraySyntax(expr) ? _declarer.membersOf(sum).filter!(m => _types.isArray(m)).array : null,
+            (const TupleLiteral literal) => _declarer.membersOf(sum)
                 .filter!(m => _types.isTuple(m) && _types.tupleElements(m).length == literal.elements.length).array,
             _ => (const(Type)[]).init,
         );
@@ -3779,18 +3022,18 @@ private final class TypeChecker
             return coerce(expr, synthesizeExact(expr, ctx, expected), expected);
         }
         auto constructed = constructedDecl(expr);
-        if (auto owner = constructed in _owners)
+        if (auto owner = _declarer.ownerOf(constructed))
         {
-            auto member = _nominalTypes[constructed];
+            auto member = _typing.nominalTypes[constructed];
             if (wantsMember(member, *owner, expected)) return coerce(expr, synthesizeExact(expr, ctx), expected);
         }
-        if (isSum(expected))
+        if (_declarer.isSum(expected))
         {
             auto member = memberForSyntax(expr, expected);
             if (member != Type.init)
             {
                 check(expr, member, ctx);
-                _promotions[expr.id] = expected;
+                _typing.promotions[expr.id] = expected;
                 return expected;
             }
         }
@@ -3804,10 +3047,10 @@ private final class TypeChecker
         if (isOption && (isArraySyntax(expr) || isTupleLiteral(expr) || isLambda(expr)))
         {
             check(expr, _types.optionInner(expected), ctx);
-            _promotions[expr.id] = expected;
+            _typing.promotions[expr.id] = expected;
             return expected;
         }
-        if (isNumeric(expected) || isOption || isArray || isTuple || isSum(expected) || isOwnedMember(expected)
+        if (isNumeric(expected) || isOption || isArray || isTuple || _declarer.isSum(expected) || _declarer.isOwnedMember(expected)
             || _types.isFunction(expected))
         {
             auto passedDown = expr.kind.match!(
@@ -3852,7 +3095,7 @@ private final class TypeChecker
                     (const MatchExpr match_) => checkMatch(match_, expected, expr.span, ctx),
                     (_) => assert(0, "only ifs, blocks, matches, Some, arrays and tuples are passed down"),
                 );
-                _exprTypes[expr.id] = type;
+                _typing.exprTypes[expr.id] = type;
                 return type;
             }
         }
@@ -3868,7 +3111,7 @@ private final class TypeChecker
         {
             return adaptLiteral(expr, expected);
         }
-        if (isSum(expected))
+        if (_declarer.isSum(expected))
         {
             auto hasValue = type != _types.error && type != _types.never;
             if (hasValue && type != expected)
@@ -3876,7 +3119,7 @@ private final class TypeChecker
                 if (isIntLiteral(expr)) return injectLiteral(expr, expected);
                 if (isAssignable(type, expected))
                 {
-                    _promotions[expr.id] = expected;
+                    _typing.promotions[expr.id] = expected;
                     return expected;
                 }
             }
@@ -3890,13 +3133,13 @@ private final class TypeChecker
             auto hasValue = type != _types.error && type != _types.never;
             if (hasValue && type != expected && isAssignable(type, expected))
             {
-                _promotions[expr.id] = expected;
+                _typing.promotions[expr.id] = expected;
                 return expected;
             }
         }
         else if (expected == _types.any)
         {
-            type = requireTyped(type, expr.span);
+            type = _declarer.requireTyped(type, expr.span);
             if (_types.mentionsParameter(type))
             {
                 return reportOpaque(expr.span, type, "it can't be printed or go where any value is taken", "show: (%s) -> String");
@@ -3904,7 +3147,7 @@ private final class TypeChecker
         }
         else if (type == _types.emptyArray && _types.isArray(expected))
         {
-            _promotions[expr.id] = expected;
+            _typing.promotions[expr.id] = expected;
             return expected;
         }
         requireAssignable(type, expected, expr.span);
@@ -3914,7 +3157,7 @@ private final class TypeChecker
     /// An integer literal in a sum takes the type of its only integer member, or else of a Float one.
     private Type injectLiteral(const Expr expr, Type sum)
     {
-        auto integers = membersOf(sum).filter!(m => _types.isInteger(m)).array;
+        auto integers = _declarer.membersOf(sum).filter!(m => _types.isInteger(m)).array;
         if (integers.length > 1)
         {
             _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
@@ -3922,14 +3165,14 @@ private final class TypeChecker
                     .format(_types.describe(sum), _types.describe(integers[0])));
             return _types.error;
         }
-        auto numbers = integers.length == 1 ? integers : membersOf(sum).filter!(m => m == _types.float_).array;
+        auto numbers = integers.length == 1 ? integers : _declarer.membersOf(sum).filter!(m => m == _types.float_).array;
         if (numbers.length == 1)
         {
             adaptLiteral(expr, numbers[0]);
-            _promotions[expr.id] = sum;
+            _typing.promotions[expr.id] = sum;
             return sum;
         }
-        auto hint = membersOf(sum).any!(m => _types.isOption(m) && isNumeric(innermost(m))) ? "; write `Some(...)`" : "";
+        auto hint = _declarer.membersOf(sum).any!(m => _types.isOption(m) && isNumeric(innermost(m))) ? "; write `Some(...)`" : "";
         _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
             "An integer isn't a member of `%s`%s".format(_types.describe(sum), hint));
         return _types.error;
@@ -3939,13 +3182,13 @@ private final class TypeChecker
     /// their types once this returns, so the arms can be checked.
     private void checkMatchHead(const MatchExpr match_, Span span, BodyContext ctx)
     {
-        auto subject = requireTyped(synthesize(*match_.subject, ctx), match_.subject.span);
+        auto subject = _declarer.requireTyped(synthesize(*match_.subject, ctx), match_.subject.span);
         auto reported = _collector.diagnostics.length;
         auto patterns = match_.arms.map!(arm => checkArmPattern(arm.pattern, subject, ctx)).array;
         if (match_.origin != MatchOrigin.Match || subject == _types.error || subject == _types.never) return;
         // A pattern that's already wrong would only be reported again as a gap in the coverage.
         if (_collector.diagnostics.length > reported) return;
-        checkCoverage(match_, patterns, subject, span);
+        checkCoverage(match_, patterns, subject, span, _types, _declarer, _collector);
     }
 
     private Type synthesizeMatch(const MatchExpr match_, Span span, BodyContext ctx)
@@ -3998,18 +3241,18 @@ private final class TypeChecker
     /// Checks `pattern` against a value of `subject`, giving each binding its type.
     private CoveragePattern checkArmPattern(const Pattern pattern, Type subject, BodyContext ctx)
     {
-        _patternSubjects[pattern.id] = subject;
+        _typing.patternSubjects[pattern.id] = subject;
         if (_types.isParameter(subject))
         {
             auto bound = pattern.kind.match!(
                 (const VarDecl binding) {
-                    auto type = binding.type is null ? subject : resolveType(*binding.type);
-                    _symbolTypes[SymbolId(binding.id)] = type;
+                    auto type = binding.type is null ? subject : _declarer.resolveType(*binding.type);
+                    _typing.symbolTypes[SymbolId(binding.id)] = type;
                     return type == subject || type == _types.error;
                 },
                 (_) {
                     checkArmPattern(pattern, _types.error, ctx);
-                    _patternSubjects[pattern.id] = subject;
+                    _typing.patternSubjects[pattern.id] = subject;
                     return false;
                 },
             );
@@ -4050,20 +3293,20 @@ private final class TypeChecker
     /// Wildcards for what's inside a `member` that a pattern didn't take apart.
     private CoveragePattern[] wildcardsFor(Type member)
     {
-        auto fields = fieldsOf(member);
+        auto fields = _declarer.fieldsOf(member);
         return new CoveragePattern[fields.length];
     }
 
     /// Records that `pattern` tests for `member` of the sum `subject`, reporting it if there's no such member.
     private bool recordMember(const Pattern pattern, Type member, Type subject, out string key)
     {
-        auto index = membersOf(subject).countUntil(member);
+        auto index = _declarer.membersOf(subject).countUntil(member);
         if (index < 0)
         {
             reportPattern(pattern.span, "`%s` can't be a `%s`".format(_types.describe(subject), _types.describe(member)));
             return false;
         }
-        _patternMembers[pattern.id] = index;
+        _typing.patternMembers[pattern.id] = index;
         key = "member%s".format(index);
         return true;
     }
@@ -4072,11 +3315,11 @@ private final class TypeChecker
     {
         if (binding.type is null)
         {
-            _symbolTypes[SymbolId(binding.id)] = subject;
+            _typing.symbolTypes[SymbolId(binding.id)] = subject;
             return CoveragePattern.init;
         }
-        auto type = resolveType(*binding.type);
-        _symbolTypes[SymbolId(binding.id)] = type;
+        auto type = _declarer.resolveType(*binding.type);
+        _typing.symbolTypes[SymbolId(binding.id)] = type;
         if (type == _types.error || isUnknown(subject) || type == subject) return CoveragePattern.init;
 
         string key;
@@ -4138,16 +3381,16 @@ private final class TypeChecker
         }
 
         // A generic type takes the arguments of the instance the subject is or holds.
-        auto type = _nominalTypes[decl];
-        if (typeParamsOf(decl).length > 0)
+        auto type = _typing.nominalTypes[decl];
+        if (_declarer.typeParamsOf(decl).length > 0)
         {
-            auto instance = (declOf(subject) == decl ? [subject] : membersOf(subject).filter!(m => declOf(m) == decl).array);
+            auto instance = (declOf(subject) == decl ? [subject] : _declarer.membersOf(subject).filter!(m => declOf(m) == decl).array);
             Substitution unknown;
-            foreach (param; typeParamsOf(decl)) unknown[param.id] = _types.error;
+            foreach (param; _declarer.typeParamsOf(decl)) unknown[param.id] = _types.error;
             type = instance.length > 0 ? instance[0] : _types.substitute(type, unknown);
         }
-        auto fields = fieldsOf(type);
-        _patternConstructors[pattern.id] = decl;
+        auto fields = _declarer.fieldsOf(type);
+        _typing.patternConstructors[pattern.id] = decl;
         if (constructor.arguments.length != fields.length)
         {
             checkArgumentsAsUnknown();
@@ -4166,136 +3409,6 @@ private final class TypeChecker
         string key;
         if (!recordMember(pattern, type, subject, key)) return CoveragePattern.init;
         return CoveragePattern(key, args);
-    }
-
-    /// Every shape `type`'s values come in, or nothing if there are too many to list, as for an integer.
-    private PatternHead[] headsOf(Type type)
-    {
-        if (type == _types.bool_) return [PatternHead("false", "false"), PatternHead("true", "true")];
-        return _types[type].match!(
-            (const OptionData option) => [PatternHead("none", "None"), PatternHead("some", "Some", [option.inner])],
-            (const TupleData tuple) => [PatternHead("tuple", "", tuple.elements)],
-            (const NominalData nominal) {
-                auto members = membersOf(type);
-                if (members.length == 0)
-                {
-                    return [PatternHead("product", _types.describe(type), fieldsOf(type).map!(f => f.type).array)];
-                }
-                PatternHead[] heads;
-                foreach (i, member; members)
-                {
-                    auto fields = fieldsOf(member);
-                    heads ~= PatternHead("member%s".format(i), _types.describe(member), fields.map!(f => f.type).array);
-                }
-                return heads;
-            },
-            _ => PatternHead[].init,
-        );
-    }
-
-    private static CoveragePattern[][] specialize(CoveragePattern[][] rows, string key, size_t arity)
-    {
-        CoveragePattern[][] result;
-        foreach (row; rows)
-        {
-            if (row[0].head is null) result ~= new CoveragePattern[arity] ~ row[1 .. $].dup;
-            else if (row[0].head == key) result ~= row[0].args.dup ~ row[1 .. $].dup;
-        }
-        return result;
-    }
-
-    private static CoveragePattern[][] defaults(CoveragePattern[][] rows)
-    {
-        return rows.filter!(row => row[0].head is null).map!(row => row[1 .. $].dup).array;
-    }
-
-    private static bool usesAll(const PatternHead[] heads, CoveragePattern[][] rows)
-    {
-        return heads.length > 0 && heads.all!(h => rows.any!(row => row[0].head == h.key));
-    }
-
-    /// Whether `row` matches a value no row of `rows` does. Each is a list of patterns for values of `types`.
-    private bool isUseful(CoveragePattern[][] rows, CoveragePattern[] row, const(Type)[] types)
-    {
-        if (types.length == 0) return rows.length == 0;
-
-        auto heads = headsOf(types[0]);
-        auto rest = types[1 .. $];
-        if (row[0].head !is null)
-        {
-            auto found = heads.find!(h => h.key == row[0].head);
-            const(Type)[] inner = found.empty ? null : found.front.args;
-            return isUseful(specialize(rows, row[0].head, row[0].args.length), row[0].args ~ row[1 .. $], inner ~ rest);
-        }
-        if (usesAll(heads, rows))
-        {
-            foreach (head; heads)
-            {
-                auto wildcards = new CoveragePattern[head.args.length];
-                if (isUseful(specialize(rows, head.key, head.args.length), wildcards ~ row[1 .. $], head.args ~ rest)) return true;
-            }
-            return false;
-        }
-        return isUseful(defaults(rows), row[1 .. $], rest);
-    }
-
-    /// Finds values of `types` that no row matches, written as patterns in `witness`.
-    private bool findUncovered(CoveragePattern[][] rows, const(Type)[] types, out string[] witness)
-    {
-        if (types.length == 0) return rows.length == 0;
-
-        auto heads = headsOf(types[0]);
-        auto rest = types[1 .. $];
-        if (usesAll(heads, rows))
-        {
-            foreach (head; heads)
-            {
-                string[] parts;
-                if (!findUncovered(specialize(rows, head.key, head.args.length), head.args ~ rest, parts)) continue;
-                witness = head.render(parts[0 .. head.args.length]) ~ parts[head.args.length .. $];
-                return true;
-            }
-            return false;
-        }
-
-        string[] after;
-        if (!findUncovered(defaults(rows), rest, after)) return false;
-        auto unused = heads.find!(h => !rows.any!(row => row[0].head == h.key));
-        auto first = unused.empty || rows.all!(row => row[0].head is null)
-            ? "_" : unused.front.render("_".repeat(unused.front.args.length).array);
-        witness = first ~ after;
-        return true;
-    }
-
-    private void checkCoverage(const MatchExpr match_, CoveragePattern[] patterns, Type subject, Span span)
-    {
-        const(Type)[] types = [subject];
-        CoveragePattern[][] rows;
-        foreach (i, pattern; patterns)
-        {
-            if (!isUseful(rows, [pattern], types))
-            {
-                _collector.reportError(DiagnosticCode.UnreachableArm, match_.arms[i].pattern.span,
-                    "This arm can never run, because the arms before it cover everything it matches");
-            }
-            rows ~= [pattern];
-        }
-
-        string[] missing;
-        auto heads = headsOf(subject);
-        foreach (head; heads)
-        {
-            string[] parts;
-            if (findUncovered(specialize(rows, head.key, head.args.length), head.args, parts)) missing ~= head.render(parts);
-        }
-        if (heads.length == 0)
-        {
-            string[] witness;
-            if (findUncovered(rows, types, witness)) missing = witness;
-        }
-        if (missing.length == 0) return;
-        _collector.reportError(DiagnosticCode.NonExhaustiveMatch, span,
-            "This `match` doesn't cover %-(`%s`%|, %); add %s, or a `_` arm".format(missing, missing.length > 1 ? "them" : "it"));
     }
 
     private Type checkIf(const IfExpr if_, Type expected, BodyContext ctx)
@@ -4347,7 +3460,7 @@ private final class TypeChecker
             (const UnaryExpr unary) { adaptLiteral(*unary.operand, type); },
             (_) {},
         );
-        _exprTypes[expr.id] = type;
+        _typing.exprTypes[expr.id] = type;
         return type;
     }
 
@@ -4360,8 +3473,8 @@ private final class TypeChecker
         if (to == _types.any) return true;                             // print's placeholder
         return _types[to].match!(
             // T -> T?, but not through a sum, since promotion is one step.
-            (const OptionData o) => isSum(o.inner) ? from == o.inner : isAssignable(from, o.inner),
-            (const NominalData _) => membersOf(to).canFind(from),
+            (const OptionData o) => _declarer.isSum(o.inner) ? from == o.inner : isAssignable(from, o.inner),
+            (const NominalData _) => _declarer.membersOf(to).canFind(from),
             // Both have the layout of an array with no elements, so no conversion hides here.
             (const ArrayData a) => from == _types.emptyArray
                 || (_types.isArray(from) && _types.arrayElement(from) == _types.never),

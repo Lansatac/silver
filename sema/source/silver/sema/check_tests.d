@@ -9,7 +9,7 @@ import std.format : format;
 import std.sumtype : get, has, match;
 
 import silver.ast;
-import silver.sema.check : FieldInfo;
+import silver.sema.typing : FieldInfo;
 import silver.sema.constant : ConstInt, ConstUInt, ConstUnit;
 import silver.sema.resolution_tests;
 import silver.sema.target : Target;

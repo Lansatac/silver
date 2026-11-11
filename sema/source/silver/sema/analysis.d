@@ -1,7 +1,8 @@
 module silver.sema.analysis;
 
 import silver.ast;
-import silver.sema.check;
+import silver.sema.check : checkTypes;
+import silver.sema.typing;
 import silver.sema.constant : ConstValue;
 import silver.sema.resolve;
 import silver.sema.target : Intrinsic, intrinsicNamed, Target;

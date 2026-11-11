@@ -1,7 +1,7 @@
 module silver.sema.entry;
 
 import silver.ast;
-import silver.sema.check : Typing;
+import silver.sema.typing : Typing;
 import silver.sema.resolve : Resolution, SymbolId;
 import silver.sema.type : FunctionData;
 
