@@ -17,7 +17,7 @@ The integer types are `Int8`, `Int16`, `Int32`, `Int64`, `UInt8`, `UInt16`, `UIn
 
 There are no type suffixes. Write `1.0` or `Float(1)`.
 
-An integer literal takes the type expected of it, or the type of the number beside it, and is checked at compile time to fit. With neither, it is an `Int`. A sign is an operator applied to a literal, but a negated literal still adapts, so `-128` is a valid `Int8`.
+An integer literal takes the type expected of it, or the type of the number beside it, and is checked at compile time to fit. With neither, it is an `Int`. An arm of an `if` or `match` that's a literal takes the type of the other arms in the same way, so with `small: UInt8`, `if c => 1 else small` is a `UInt8`. A sign is an operator applied to a literal, but a negated literal still adapts, so `-128` is a valid `Int8`.
 
 ```silver
 val byte: UInt8 = 255
@@ -66,4 +66,4 @@ A conversion panics when the value doesn't fit, or is NaN. A `Float` is truncate
 
 ## Current implementation
 
-The implementation matches this description.
+- A literal arm of an `if` or `match` doesn't take the type of the other arms yet, so `if c => 1 else small` is an error unless a `UInt8` is expected of it.
