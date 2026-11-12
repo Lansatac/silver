@@ -160,6 +160,14 @@ class SourceMap
         return (file in texts) !is null;
     }
 
+    /// The source `span` covers, or "" for a span outside the text of its file.
+    string text(Span span) const
+    {
+        auto text = span.file in texts;
+        if (text is null || span.start > span.end || span.end > text.length) return "";
+        return (*text)[span.start .. span.end];
+    }
+
     /// The line and column of `span.start`. The column counts bytes since the last
     /// newline. A span in an unknown file, or past the end of its text, is clamped
     /// to the text it has, which for an unknown file is Location(1, 1).

@@ -1,0 +1,26 @@
+// Asserts that hold do nothing, and a message is only evaluated when one fails.
+
+type Point(x: Int, y: Int)
+
+def noisy(text: String): String {
+    printl("evaluated {text}")
+    text
+}
+
+def main(): Unit {
+    val n = 3
+    assert(n == 3)
+    assert(n != 4)
+    assert(n < 4)
+    assert(n <= 3)
+    assert(n > 2)
+    assert(n >= 3)
+    assert(Point(1, 2) == Point(1, 2))
+    assert(["a"] != ["b"])
+    assert(n > 0 && n < 10)
+    assert(true, noisy("message"))
+    (n == 3).assert()
+    val small: UInt8 = 200
+    assert(small == 200)
+    printl("done")
+}

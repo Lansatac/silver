@@ -1,0 +1,4 @@
+def main(): Unit {
+    val count = -1
+    assert((count) >= 0)
+}

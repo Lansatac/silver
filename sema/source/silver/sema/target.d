@@ -18,7 +18,8 @@ struct Target
     }
 }
 
-/// The operations an `intrinsic def` can name, each a member named as the function is.
+/// The operations an `intrinsic def` can name, each a member named as the function is, with a
+/// trailing `_` where the name is a D keyword.
 enum Intrinsic
 {
     print,
@@ -26,6 +27,7 @@ enum Intrinsic
     read,
     length,
     panic,
+    assert_,
     get,
     set,
     update,
@@ -41,12 +43,13 @@ bool isIntrinsicType(string name)
 const(Intrinsic)* intrinsicNamed(string name)
 {
     import std.conv : to;
+    import std.string : chomp;
     import std.traits : EnumMembers;
 
     static immutable all = [EnumMembers!Intrinsic];
     foreach (ref intrinsic; all)
     {
-        if (intrinsic.to!string == name) return &intrinsic;
+        if (intrinsic.to!string.chomp("_") == name) return &intrinsic;
     }
     return null;
 }
@@ -70,6 +73,7 @@ unittest
 {
     assert(*intrinsicNamed("length") == Intrinsic.length);
     assert(*intrinsicNamed("printl") == Intrinsic.printl);
+    assert(*intrinsicNamed("assert") == Intrinsic.assert_);
     assert(intrinsicNamed("sqrt") is null);
 }
 

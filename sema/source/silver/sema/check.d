@@ -915,10 +915,25 @@ private final class TypeChecker
             return _types.error;
         }
 
+        if (isAssert(symbol))
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, span,
+                "`assert` shows the condition it's given, so it can only be called");
+            return _types.error;
+        }
         if (!takesAnyIntrinsically(symbol)) return symbolType(symbol);
         _collector.reportError(DiagnosticCode.NotSupportedYet, span,
             "`%s` is built into the compiler, so it can only be called for now".format(symbolName(symbol)));
         return _types.error;
+    }
+
+    private bool isAssert(SymbolId symbol)
+    {
+        return symbol.match!(
+            (const Id!FunctionDecl f) => _resolutions.declarations.functions[f].kind == FunctionKind.intrinsic
+                && _resolutions.declarations.functions[f].name == "assert",
+            _ => false,
+        );
     }
 
     /// Whether `symbol` is an intrinsic with an `Any` parameter, which has no function type to be a value of.
@@ -2048,7 +2063,9 @@ private final class TypeChecker
     {
         auto first = _resolutions.declarations.functions[earlier];
         string problem;
-        if (first.kind == FunctionKind.intrinsic && later.kind == FunctionKind.intrinsic)
+        // Lowering expands `assert` from what's written, telling its forms apart by their arguments.
+        auto assertForms = later.name == "assert" && first.params.length != later.params.length;
+        if (first.kind == FunctionKind.intrinsic && later.kind == FunctionKind.intrinsic && !assertForms)
         {
             problem = "`%s` is already an intrinsic, and an intrinsic's name says which one it is";
         }

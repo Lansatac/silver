@@ -1,0 +1,4 @@
+def main(): Unit {
+    val x = 2.5
+    assert(x <= 1.0)
+}

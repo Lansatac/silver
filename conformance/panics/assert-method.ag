@@ -1,0 +1,4 @@
+def main(): Unit {
+    val options: [Int?] = [Some(1), None]
+    (options[1] == Some(2)).assert()
+}

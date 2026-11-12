@@ -1,0 +1,8 @@
+def loud(x: Int): Int {
+    printl("evaluated {x}")
+    x
+}
+
+def main(): Unit {
+    assert(loud(1) + 1 == loud(3))
+}

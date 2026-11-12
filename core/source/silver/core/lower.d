@@ -25,14 +25,14 @@ Program lowerProgram(const ref ast.Program program, const Analysis analysis)
 {
     auto mains = ast.mainFunctions(program);
     assert(mains.length == 1, "sema reports a program without exactly one `main`");
-    return lowerFrom(mains[0].id, analysis);
+    return lowerFrom(mains[0].id, analysis, program.sources);
 }
 
 /// `root` and every function it calls, directly or not, as a Program whose entry point is
 /// `root`.
-Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis)
+Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis, const ast.SourceMap sources)
 {
-    auto lowering = new Lowering(analysis);
+    auto lowering = new Lowering(analysis, sources);
     auto entry = lowering.slotFor(root);
     lowering.lowerPending();
     auto program = Program(rebindable(analysis.types), lowering.functions, entry, lowering.libraries);
@@ -184,9 +184,13 @@ private final class Lowering
     /// An intrinsic used as a value, by the instance it is.
     private size_t[InstanceKey] _intrinsicWrappers;
 
-    this(const Analysis analysis)
+    /// The source, for the condition `assert` shows.
+    private const ast.SourceMap _sources;
+
+    this(const Analysis analysis, const ast.SourceMap sources)
     {
         _analysis = Instance(rebindable(analysis), null);
+        _sources = sources;
     }
 
     /// Where `func` with the type arguments `args` is in `functions`, giving it a slot and
@@ -663,15 +667,27 @@ private final class Lowering
                     _analysis.concatOperands(e.id).map!(o => lowerExpr(o)).array)));
             case ast.BinaryOp.Coalesce:
                 return lowerCoalesce(binary, type, span);
-            case ast.BinaryOp.Equal, ast.BinaryOp.NotEqual:
-                auto left = lowerExpr(*binary.left);
-                auto right = lowerExpr(*binary.right);
-                if (isPrimitive(left.type)) goto default;
-                auto equal = equality(left, right);
-                return binary.op == ast.BinaryOp.Equal ? equal : not(equal);
             default:
-                return Expr(type, span, ExprKind(Prim(primOp(binary.op), [lowerExpr(*binary.left), lowerExpr(*binary.right)])));
+                return binaryOf(binary.op, lowerExpr(*binary.left), lowerExpr(*binary.right), type, span);
         }
+    }
+
+    /// `left op right` for an operator with no operands of its own to lower.
+    private Expr binaryOf(ast.BinaryOp op, Expr left, Expr right, Type type, Span span)
+    {
+        auto isEquality = op == ast.BinaryOp.Equal || op == ast.BinaryOp.NotEqual;
+        if (isEquality && !isPrimitive(left.type))
+        {
+            auto equal = equality(left, right);
+            return op == ast.BinaryOp.Equal ? equal : not(equal);
+        }
+        return Expr(type, span, ExprKind(Prim(primOp(op), [left, right])));
+    }
+
+    private static bool isComparison(ast.BinaryOp op)
+    {
+        with (ast.BinaryOp) return op == Equal || op == NotEqual || op == Less || op == LessEqual || op == Greater
+            || op == GreaterEqual;
     }
 
     private PrimOp primOp(ast.BinaryOp op)
@@ -1453,7 +1469,55 @@ private final class Lowering
 
     private Expr lowerIntrinsic(Id!(ast.FunctionDecl) callee, const ast.Expr[] written, FunctionData signature, Span span)
     {
-        return intrinsicCall(_analysis.intrinsicOf(callee), written.map!(a => lowerExpr(a)).array, signature, span);
+        auto intrinsic = _analysis.intrinsicOf(callee);
+        if (intrinsic == Intrinsic.assert_) return lowerAssert(written, span);
+        return intrinsicCall(intrinsic, written.map!(a => lowerExpr(a)).array, signature, span);
+    }
+
+    /// `assert(condition)` or `assert(condition, message)`: a panic when the condition is false,
+    /// showing it as written and the values of both sides of a comparison at its top. The panic
+    /// says where it is. Each side is evaluated once, and the message only on failure.
+    private Expr lowerAssert(const ast.Expr[] written, Span span)
+    {
+        auto condition = written[0];
+        const(ast.Expr)* left, right;
+        ast.BinaryOp op;
+        condition.kind.match!(
+            (const ast.BinaryExpr binary) {
+                if (!isComparison(binary.op)) return;
+                left = binary.left;
+                right = binary.right;
+                op = binary.op;
+            },
+            (_) {},
+        );
+
+        Stmt[] held;
+        Expr test;
+        Expr[] values;
+        if (left !is null)
+        {
+            auto leftValue = lowerExpr(*left);
+            auto rightValue = lowerExpr(*right);
+            auto heldLeft = temp("left", leftValue.type), heldRight = temp("right", rightValue.type);
+            held = [let(heldLeft, leftValue), let(heldRight, rightValue)];
+            test = binaryOf(op, use(heldLeft, span), use(heldRight, span), types.bool_, condition.span);
+            values = [stringLiteral("\n    left: ", span), formatted(use(heldLeft, span)),
+                stringLiteral("\n    right: ", span), formatted(use(heldRight, span))];
+        }
+        else
+        {
+            test = lowerExpr(condition);
+        }
+
+        auto source = _sources.text(condition.span);
+        Expr[] parts = [stringLiteral("Assertion failed: ", span)];
+        if (written.length > 1) parts ~= [lowerExpr(written[1]), stringLiteral("\n    condition: " ~ source, span)];
+        else parts ~= stringLiteral(source, span);
+        parts ~= values;
+        auto message = Expr(types.string_, span, ExprKind(Prim(PrimOp.Concat, parts)));
+        auto failure = Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.panic, [message], [false])));
+        return Expr(types.unit, span, ExprKind(Block(held ~ eval(when(not(test), failure)), null)));
     }
 
     /// What `intrinsic` does with `args`, which are values. One filling an `Any` that isn't a
@@ -1470,6 +1534,8 @@ private final class Lowering
                 return Expr(types.unit, span, ExprKind(Cell(CellOp.Set, args)));
             case Intrinsic.update:
                 return updateCell(args[0], args[1], span);
+            case Intrinsic.assert_:
+                assert(0, "`assert` is expanded from what's written, and sema rejects it as a value");
             case Intrinsic.print, Intrinsic.printl, Intrinsic.read, Intrinsic.panic:
                 break;
         }
@@ -2024,7 +2090,7 @@ version (unittest)
                 },
                 (ref _) {},
             );
-            if (found.length > 0) return Lowered(lowerFrom(found[0], analysis), analysis);
+            if (found.length > 0) return Lowered(lowerFrom(found[0], analysis, program.sources), analysis);
         }
         assert(0, "no function " ~ name);
     }

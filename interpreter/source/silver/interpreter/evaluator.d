@@ -581,8 +581,8 @@ final class Evaluator
                 return Value(Record(1, [Value(line)]));
             case Intrinsic.panic:
                 throw new CodedException(DiagnosticCode.ExplicitPanic, args[0].as!string);
-            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update:
-                assert(0, "lowering makes `length` a Length, and the others operations on a Cell");
+            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_:
+                assert(0, "lowering makes `length` a Length, `assert` a test, and the others operations on a Cell");
         }
     }
 

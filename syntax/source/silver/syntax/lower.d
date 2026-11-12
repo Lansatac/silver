@@ -524,12 +524,14 @@ private final class Lowering
         case "Silver.BitAndExpression":
         case "Silver.ShiftExpression":
             // `X (Op X)*`, folded left so `1 - 2 - 3` is `(1 - 2) - 3`.
+            // Spans come from the CST, since an operand's own leaves out its parentheses.
             auto lhs = convertExpression(cst[0]);
+            auto start = spanOf(cst[0], file).start;
             foreach (pair; cst.children.drop(1).chunks(2))
             {
                 auto op = toBinaryOp(pair[0].matches[0]);
                 auto rhs = convertExpression(pair[1]);
-                auto span = Span(file, lhs.span.start, rhs.span.end);
+                auto span = Span(file, start, spanOf(pair[1], file).end);
                 lhs = Expr(ids.next!Expr, span, ExprKind(BinaryExpr(op, boxed(lhs), boxed(rhs))));
             }
             return lhs;
@@ -1315,6 +1317,28 @@ unittest
     assert(text(ifExpr.condition.span) == "c");
     assert(text(ifExpr.trueBody.span) == "{ 1 }");
     assert(text((*body).span) == "if c /* why */ { 1 } // one\n else { 2 }");
+}
+
+@("a binary expression's span includes parentheses around its operands")
+unittest
+{
+    import std.sumtype : match;
+    import silver.syntax.parse : parse;
+
+    auto source = "def f(): Int => (a) * (b + c) - d";
+    auto m = parse(source, "test", new NodeIds);
+    auto body = m.declarations[0].kind.match!(
+        (const FunctionDecl f) => f.body,
+        _ => null,
+    );
+    auto left = (*body).kind.match!(
+        (const BinaryExpr b) => b.left,
+        _ => null,
+    );
+    string text(Span s) => source[s.start .. s.end];
+
+    assert(text((*body).span) == "(a) * (b + c) - d");
+    assert(text(left.span) == "(a) * (b + c)");
 }
 
 @("a module names at most one native library, and a native's symbol and library are plain strings")

@@ -82,7 +82,7 @@ Anything passed to a native function is valid until that call returns. A library
 intrinsic def panic(message: String): Never
 ```
 
-`intrinsic def` declares a function the compiler implements itself. It exists so that built-in operations are ordinary names that can be imported, shadowed and qualified. It is available only inside the standard library.
+`intrinsic def` declares a function the compiler implements itself. It exists so that built-in operations are ordinary names that can be imported, shadowed and qualified. It is available only inside the standard library. An intrinsic's name says which operation it is, so two intrinsics of one name are an error, except the two forms of `assert`.
 
 `intrinsic alias Name` declares an alias the compiler defines for the platform being compiled for, which is how `std.c` names the C types whose width varies, such as `CLong`.
 

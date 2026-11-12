@@ -741,8 +741,8 @@ private final class Generator
                 return emitRead();
             case Intrinsic.panic:
                 return emitExplicitPanic(call.args[0], e.span);
-            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update:
-                assert(0, "lowering makes `length` a Length, and the others operations on a Cell");
+            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_:
+                assert(0, "lowering makes `length` a Length, `assert` a test, and the others operations on a Cell");
         }
     }
 

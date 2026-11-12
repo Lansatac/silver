@@ -32,6 +32,20 @@ Each word has one meaning wherever it appears. A later panic in a test just ends
 
 Both take apart a comparison at the top of the expression and report the source text, location, and left and right values. Each operand is evaluated once and formatted as `print` would. A library can't do this, since it would receive only a `false`.
 
+```silver
+val scores = [3, 4]
+assert(scores[0] == scores[1], "scores differ")
+```
+
+```
+panic: main.ag(2,1): Assertion failed: scores differ
+    condition: scores[0] == scores[1]
+    left: 3
+    right: 4
+```
+
+Without a message, the condition takes its place on the first line. A comparison is `==`, `!=`, `<`, `<=`, `>` or `>=`; any other condition, such as `a && b`, is shown without values. The message is evaluated only when the condition is false. `assert` can't be used as a function value, since it has to see the condition it's given.
+
 Postfix `?` in a test stops the test and reports that the value was `None`.
 
 ```silver
@@ -69,4 +83,5 @@ Matchers, fixtures, property testing, snapshots and reporters belong in librarie
 
 ## Current implementation
 
-None of this is available yet, including `assert` and `silver test`.
+- `assert` is available on both backends.
+- `test`, `expect`, `panics`, companion files and `silver test` aren't available yet.

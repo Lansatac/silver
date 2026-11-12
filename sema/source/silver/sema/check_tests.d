@@ -2597,6 +2597,17 @@ unittest
         .shouldHaveNoDiagnostics();
 }
 
+@("assert takes a Bool and optionally a String message, and can only be called")
+unittest
+{
+    analyzed("def main(): Unit {\n    assert(1 < 2)\n    assert(true, \"m\")\n    (1 == 1).assert()\n}")
+        .shouldHaveNoDiagnostics();
+    analyzed("def main(): Unit {\n    assert(7)\n}").shouldReport(DiagnosticCode.TypeMismatch, At("7", 1));
+    analyzed("def main(): Unit {\n    assert(true, 7)\n}").shouldReport(DiagnosticCode.TypeMismatch, At("7", 1));
+    analyzed("def main(): Unit {\n    val f: (Bool) -> Unit = assert\n}")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("assert", 1));
+}
+
 @("std.c's long is as wide as the target says, and its other types are the same everywhere")
 unittest
 {

@@ -1,0 +1,3 @@
+Assertion failed: loud(1) + 1 == loud(3)
+    left: 2
+    right: 3

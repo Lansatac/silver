@@ -1,0 +1,4 @@
+Assertion failed: scores differ by 1
+    condition: scores[0] == scores[1]
+    left: 3
+    right: 4

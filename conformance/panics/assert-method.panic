@@ -1,0 +1,3 @@
+Assertion failed: options[1] == Some(2)
+    left: None
+    right: Some(2)

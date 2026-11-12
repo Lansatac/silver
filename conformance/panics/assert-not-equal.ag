@@ -1,0 +1,6 @@
+type Point(x: Int, y: Int)
+
+def main(): Unit {
+    val p = Point(1, 2)
+    assert(p != Point(1, 2))
+}

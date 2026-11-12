@@ -11,3 +11,6 @@ intrinsic def length<T>(values: [T]): Int
 def at<T>(values: [T], index: Int): T => values[index]
 // Stops the program with `message`, for what can't happen.
 intrinsic def panic(message: String): Never
+// Panics when `condition` is false, showing it and, for a comparison, both sides' values.
+intrinsic def assert(condition: Bool): Unit
+intrinsic def assert(condition: Bool, message: String): Unit

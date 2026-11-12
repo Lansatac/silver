@@ -1,0 +1,3 @@
+Assertion failed: name < "apple"
+    left: pear
+    right: apple
