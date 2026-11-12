@@ -29,22 +29,21 @@ A value whose type is `T` can be bound, passed, returned, stored and captured. A
 Nothing else is known about `T`, so:
 
 - `T` is assignable only to itself. A literal can't be a `T`.
-- A type that mentions a type parameter isn't comparable or ordered. `==` on a `T`, a `[T]` or a `Box<T>` is an error.
-- A value whose type mentions a type parameter can't be printed, converted with `String(x)`, or put in a string hole.
+- A type that mentions a type parameter isn't ordered. `<` on a `T` is an error.
 - A pattern on a `T` can only bind it.
 
-A function that needs one of these takes it as a parameter for now:
+Comparing with `==` and printing do work on a `T`, because every type has both. Each instance uses its type's own:
 
 ```silver
-def contains<T>(values: [T], wanted: T, same: (T, T) -> Bool): Bool {
+def contains<T>(values: [T], wanted: T): Bool {
     for value in values {
-        if same(value, wanted) { return true }
+        if value == wanted { return true }
     }
     false
 }
 ```
 
-Outside generic code these rules don't apply: a `Box<Int>` is compared and printed structurally like any declared type, as `Box(1)`.
+A function that needs an order takes it as a parameter for now, as `larger` does below.
 
 ## Generic types
 
@@ -119,8 +118,7 @@ A generic function that calls itself with an ever larger type, such as `def grow
 
 ## Open questions
 
-- Bounds: saying what a type parameter can do, as in `T: Eq`, so generic code can compare, order and print. This is the interfaces design, which isn't settled. See [the proposal](../proposals/interfaces.md).
-- A type parameter as a sum member by itself, as in `type Maybe<T> = T | Nothing`.
+- Bounds: saying what a type parameter can do, as in `T: Ord` or `T: Json`, so generic code can order values and use functions written for them. This is the interfaces design, which isn't settled. See [the proposal](../proposals/interfaces.md).- A type parameter as a sum member by itself, as in `type Maybe<T> = T | Nothing`.
 - Generic aliases, as in `alias Pair<T> = (T, T)`.
 - Type parameters on a nested `def`.
 - Leaving some type arguments to inference, as in `convert<_, Int>(x)`.
@@ -130,6 +128,7 @@ A generic function that calls itself with an ever larger type, such as `def grow
 
 ## Current implementation
 
+- A value whose type mentions a type parameter can't yet be compared with `==`, printed, converted with `String(x)` or put in a string hole. Each is an error, and a function that needs one takes it as a parameter.
 - Type arguments can nest 64 deep. Past that the program doesn't compile, and the error shows the instances, or the type, that led there.
 - An alias of an instance, as in `alias IntBox = Box<Int>`, is a type like any other, but its name can't build a value: write `Box<Int>(1)`.
 - Inference treats two more kinds of argument as having no type of their own, as `None` does: a marker that a generic sum owns, such as `Nil`, and a generic function or constructor named without its type arguments. Each binds nothing, and is checked once the type arguments are known.

@@ -24,7 +24,7 @@ val x = p.x
 
 A declaration with an empty field list, `type T()`, is an error: write `type T`.
 
-A constructor can be used as a function value, and its return type is the product itself even when a sum owns it. Products are compared and printed structurally: `Point(1, 2)`. A type is comparable when all of its fields are.
+A constructor can be used as a function value, and its return type is the product itself even when a sum owns it. Products are compared and printed structurally: `Point(1, 2)`.
 
 ### Copying with changes
 
@@ -71,7 +71,7 @@ type Percent(value: Int) invariant isPercent(value)
 def percent(value: Int): Percent? => if isPercent(value) => Percent(value) else None
 ```
 
-In a generic type the invariant is checked once, where it's written, like a generic function's body. So it can't compare, order or print a value whose type mentions a type parameter.
+In a generic type the invariant is checked once, where it's written, like a generic function's body. So it can't order a value whose type mentions a type parameter.
 
 A member that a sum declares inline can have an invariant, written in parentheses, since `|` would otherwise read as the operator:
 
@@ -124,7 +124,7 @@ Promotion into a sum is one step and is never chained through an option. A liter
 
 ### Using sum values
 
-A sum value has no field access or field assignment. A `mutable val` holding one can be rebound. Sums compare and print structurally, and a sum is comparable when all of its members are.
+A sum value has no field access or field assignment. A `mutable val` holding one can be rebound. Sums compare and print structurally.
 
 ## match
 

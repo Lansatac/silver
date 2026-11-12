@@ -77,7 +77,7 @@ val f = increment
 val two = applyTo(f, 1)
 ```
 
-A constructor can also be used as a function value. Function values aren't comparable.
+A constructor can also be used as a function value. Two function values are equal when they come from the same place in the source and captured equal values; see [Types](types.md#function-values).
 
 ## Mutable parameters
 
@@ -147,8 +147,45 @@ An overloaded function used as a value is the one whose type is exactly the expe
 val show: (String) -> String = describe
 ```
 
+## Operator functions
+
+Syntax that isn't a call means a call to a function whose name starts with `op`. Writing that function for a type gives the type the syntax.
+
+| Syntax | Means |
+| --- | --- |
+| `x[i]` | `opIndex(x, i)` |
+| `x[i] = v` | `x = opIndexAssign(x, i, v)` |
+| `x[a..b]` | `opSlice(x, a, b)` |
+| `a == b`, `a != b` | `opEquals(a, b)` |
+| `a < b`, `<=`, `>`, `>=` | `opCompare(a, b)` |
+| printing, `String(x)`, a string hole | `opString(x)` |
+
+```silver
+type Window<T>(items: [T], from: Int, to: Int)
+
+def length<T>(w: Window<T>): Int => w.to - w.from
+def opIndex<T>(w: Window<T>, index: Int): T => w.items[w.from + index]
+def opIndexAssign<T>(w: Window<T>, index: Int, value: T): Window<T> {
+    mutable val items = w.items
+    items[w.from + index] = value
+    w with (items = items)
+}
+def opSlice<T>(w: Window<T>, from: Int, to: Int): Window<T> =>
+    Window(w.items, w.from + from, w.from + to)
+```
+
+- The result of `x[i]` and of `x[a..b]` is whatever the function returns.
+- `opIndexAssign` returns the changed value, which is assigned back. So an assignment through several steps is built from the inside out: `grid[y][x] = v` means `grid = opIndexAssign(grid, y, opIndexAssign(grid[y], x, v))`.
+- `x[i] += 1` reads with `opIndex` and writes with `opIndexAssign`, and evaluates `x` and `i` once.
+- A slice with a bound left out uses `length`: `x[a..]` is `opSlice(x, a, length(x))`, and `x[..b]` is `opSlice(x, 0, b)`.
+
+`opIndex`, `opIndexAssign` and `opSlice` are ordinary functions, chosen as any call is, so a module can write them for a type it didn't declare. `opEquals`, `opCompare` and `opString` belong to the type: every type has an `opEquals` and an `opString` already, and only the type's own module can write one to replace it, or write an `opCompare`.
+
+A function that's useful to call by name keeps a plain name, even where syntax uses it: `length` and `next`, which `for` calls.
+
 ## Open questions
 
+- What `opCompare` returns, whether a type gets one without writing it, and how `opEquals` and `opCompare` are kept in agreement.
 - Whether `x.f()` can drop its parentheses.
 - Whether a method call can have a `mutable` receiver.
 - Method calls through `?.`, as in `a?.f()`.
@@ -157,6 +194,8 @@ val show: (String) -> String = describe
 ## Current implementation
 
 - A nested function can call itself and those declared before it, but not one declared after it.
+- Function values aren't comparable yet.
+- Operator functions aren't available. Indexing, element assignment and slicing work only on arrays, `==` and printing are always the structural ones, and `<` works only on numbers and strings.
 - Only module-level functions can be overloaded. Two nested `def`s of one name in a block are an error.
 - When more than one candidate is left, an argument with a type of its own is typed before any is chosen, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.
 - A method call's receiver needs a type of its own, so `None.f()` and `[].f()` are errors. An integer literal receiver adapts, as in `(200).f()` with `f(x: UInt8)`.

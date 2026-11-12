@@ -29,6 +29,19 @@ RUN curl -fsS https://dlang.org/install.sh | bash -s install "dmd-${DMD_VERSION}
     && echo "${DMD_DIR}/linux/lib64" > /etc/ld.so.conf.d/dlang.conf && ldconfig \
     && chmod -R a+rX /opt/dlang
 
+# Beads (`bd`), the issue tracker. Pinned like dmd; bump the version to upgrade.
+ARG BEADS_VERSION=1.3.4
+RUN ARCH=$(dpkg --print-architecture) \
+    && TARBALL=beads_${BEADS_VERSION}_linux_${ARCH}.tar.gz \
+    && BASE=https://github.com/gastownhall/beads/releases/download/v${BEADS_VERSION} \
+    && TMP=$(mktemp -d) && cd "$TMP" \
+    && curl -fsSLO "${BASE}/${TARBALL}" \
+    && curl -fsSL "${BASE}/checksums.txt" | grep " ${TARBALL}\$" | sha256sum -c - \
+    && tar -xzf "${TARBALL}" \
+    && install -m 0755 "$(find . -type f -name bd | head -n1)" /usr/local/bin/bd \
+    && ln -s bd /usr/local/bin/beads \
+    && cd / && rm -rf "$TMP"
+
 # 24.04 ships an `ubuntu` user with UID 1000; replace it with `dev`.
 ARG USERNAME=dev
 ARG USER_UID=1000

@@ -40,7 +40,36 @@ A conversion is implicit only if it works for every value, keeps the value's mea
 
 ## Equality and ordering
 
-`==` and `!=` work on any two values of one *comparable* type. Primitives are comparable. Options, arrays, tuples and declared types are compared structurally, and are comparable when everything they contain is. Function values are not comparable.
+`==` and `!=` work on any two values of one type. Options, arrays, tuples and declared types are compared structurally. Two `Ref`s are equal when they're the same cell (see [Shared references](refs.md)), and function values are compared as described below.
+
+A type's equality belongs to the type. Its own module can replace the structural one by writing an `opEquals`, and the printed form by writing an `opString` (see [operator functions](functions.md#operator-functions)). A function in another module can't change what `==` means for it, and generic code comparing a value uses the same equality as everyone else. A comparison with another meaning, such as "equal ignoring case", is an ordinary function, passed where it's needed.
+
+### Function values
+
+Function values are comparable. Two are equal when they come from the same place in the source and hold equal values:
+
+- A `def`, a constructor or a native function used as a value is equal to itself. A generic one is equal to itself with the same type arguments.
+- A value made by a lambda or a nested `def` is equal to another made by that same lambda, when everything the two captured is equal.
+
+```silver
+def increment(x: Int): Int => x + 1
+def adder(n: Int): (Int) -> Int => x => x + n
+
+val f = adder(1)
+f == f                              // true
+adder(1) == adder(1)                // true: the same lambda, equal captures
+adder(1) == adder(2)                // false
+increment == increment              // true
+increment == (x => increment(x))    // false
+```
+
+Two lambdas with the same text are different functions, and a lambda that calls a function isn't that function. So a lambda written in a comparison can't be equal to the other side, and it's an error there: as an operand of `==` or `!=`, or as part of a value an operand builds with a constructor, a tuple, an array or `Some`.
+
+```silver
+button == Button("OK", () => save())     // error: this lambda is equal to nothing else
+```
+
+### Ordering
 
 Ordering with `<`, `<=`, `>` and `>=` is defined only for numbers and strings.
 
@@ -62,7 +91,9 @@ Ordering with `<`, `<=`, `>` and `>=` is defined only for numbers and strings.
 
 - Whether integers widen implicitly where a type is expected, as `Int8` to `Int` or `UInt8` to `Int16`. These would pass the rule for implicit conversions. `Int` and `UInt` wouldn't convert in either direction, and neither would `Int` to `Float`, which is inexact for large values.
 
+
 ## Current implementation
 
+- Function values and `Ref`s aren't comparable yet. Comparing two, or two values of a type that contains one, is an error.
 - `Any` is a placeholder type visible in prelude signatures such as `print(value: Any)`, standing in for a design based on generics. It can't be an element of an array, tuple or option, a field, or a member of a sum.
 - Printing a function value works when interpreted, showing its name, and is a compile error when compiled.

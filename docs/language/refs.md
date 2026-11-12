@@ -58,7 +58,16 @@ While `change` runs, the cell is empty. Reading, setting or updating the same `R
 
 ## Equality and printing
 
-- A `Ref` isn't comparable, and neither is a type that contains one, as with function values.
+- Two `Ref`s are equal when they're the same cell. Their contents aren't compared, so `Ref(1) == Ref(1)` is false, the answer doesn't change when a cell is written, and a cell that leads back to itself compares without trouble. To compare contents, write `get(a) == get(b)`.
+
+  ```silver
+  val a = Ref(1)
+  val b = a
+  a == b          // true
+  a == Ref(1)     // false
+  ```
+
+- A type that contains a `Ref` compares it the same way, as does a lambda that captured one.
 - A `Ref` prints as its contents would in a product: `Ref(2)`, `Ref([a, b])`. A cell that leads back to itself can't be printed: the program panics with a stack overflow.
 
 ## Constants
@@ -69,9 +78,8 @@ A constant can't be a `Ref`, or have a type that contains one. A `Ref` at module
 
 - Passing a cell's contents as a `mutable` argument, as in `advance(mutable ref)`.
 - Assignment forms such as `ref += 1`.
-- Whether two `Ref`s can be asked if they're the same cell.
 - A reference that doesn't keep its cell alive, for structures that point back at their owner.
 
 ## Current implementation
 
-All of this is implemented on both backends. Using a `Ref` from inside its own `update` panics with "Ref is being updated" (`R0010`).
+All of this is implemented on both backends, except `==`: a `Ref` isn't comparable yet, and neither is a type that contains one. Using a `Ref` from inside its own `update` panics with "Ref is being updated" (`R0010`).
