@@ -86,6 +86,14 @@ Ordering with `<`, `<=`, `>` and `>=` is defined only for numbers and strings.
 | `(1, "a")` | `(1, a)` |
 | a product or member `Point(1, 2)` | `Point(1, 2)` |
 | a marker | its name |
+| a function value | its name: `increment`, `Point` |
+
+A function value prints as the function it comes from, without anything it captured, so `adder(1)` and `adder(2)` print alike:
+
+- A `def`, a constructor or a native function prints its name. An overloaded one prints the same name for each overload.
+- A generic instance adds its type arguments, written as they would be in source: `identity<Int>`, `wrap<[String]>`.
+- A nested `def` prints its name, and a lambda prints `lambda`.
+- A function from another module prints without the module's name, as its types' values do.
 
 ## Open questions
 
