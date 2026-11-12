@@ -21,7 +21,7 @@ These documents describe the language as designed. Where the implementation does
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, invariants, `match` | Implemented |
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
-| [Modules](language/modules.md) | Files, imports, visibility | Partial: no `public import` or renamed imports |
+| [Modules](language/modules.md) | Files, imports, visibility | Partial: no `forward import` or renamed imports |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the standard library's natives |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, the test runner | Partial: no companion files, `panics`, `--filter` or `--format json` |
 

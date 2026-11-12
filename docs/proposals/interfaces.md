@@ -148,7 +148,7 @@ The search is the overloading rule in [functions.md](../language/functions.md): 
 
 ### Conformance is as visible as its function
 
-There is no separate form to import or export. An extension reaches exactly the modules that can see its function, so `import`, selective imports and `public import` control it.
+There is no separate form to import or export. An extension reaches exactly the modules that can see its function, so `import`, selective imports and `forward import` control it.
 
 ### Operators and printing (decided, November 2026)
 

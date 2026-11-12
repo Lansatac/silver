@@ -1627,7 +1627,7 @@ private final class TypeChecker
         if (imported.length == 1) return bestTrial(imported[0], name.span, spelled, reportable);
         if (imported.length > 1)
         {
-            if (reportable) reportImportedOverloads(name.span, spelled, imported.map!(g => g[0].func).array, candidates.qualifiable);
+            if (reportable) reportImportedOverloads(name.span, spelled, imported.map!(g => g[0].func).array);
             return Id!FunctionDecl.init;
         }
         if (reportable) reportNoOverload(name.span, spelled, groups);
@@ -1991,21 +1991,12 @@ private final class TypeChecker
     }
 
     /// Reports a call that functions of more than one imported module fit, one from each of `fits`.
-    private void reportImportedOverloads(Span span, string spelled, const(Id!FunctionDecl)[] fits,
-        const(string)[] qualifiable)
+    private void reportImportedOverloads(Span span, string spelled, const(Id!FunctionDecl)[] fits)
     {
         auto modules = fits.map!(f => _resolutions.declarations.functionModules[f]).array;
         _collector.reportError(DiagnosticCode.AmbiguousName, span,
-            "This call fits a `%s` in more than one imported module (%s); %s"
-                .format(spelled, modules.join(", "), qualifyHint(spelled, modules, qualifiable, "(...)")));
-    }
-
-    /// How to say which of `modules` a name means: qualify it, if one of them allows that.
-    private static string qualifyHint(string spelled, const string[] modules, const(string)[] qualifiable, string suffix)
-    {
-        auto found = modules.find!(m => qualifiable.canFind(m));
-        if (found.empty) return "list it in only one of the imports";
-        return "qualify it, as in `%s.%s%s`".format(found.front, spelled, suffix);
+            "This call fits a `%s` in more than one imported module (%s); qualify it, as in `%s.%s(...)`"
+                .format(spelled, modules.join(", "), modules[0], spelled));
     }
 
     /// Gives each argument of a call that couldn't be chosen a type, without reporting it again.
@@ -2041,9 +2032,8 @@ private final class TypeChecker
             {
                 auto modules = imported.map!(g => _resolutions.declarations.functionModules[g[0]]).array;
                 _collector.reportError(DiagnosticCode.AmbiguousName, name.span,
-                    "A `%s` in more than one imported module (%s) is a `%s`; %s"
-                        .format(spelled, modules.join(", "), _types.describe(expected),
-                            qualifyHint(spelled, modules, candidates.qualifiable, "")));
+                    "A `%s` in more than one imported module (%s) is a `%s`; qualify it, as in `%s.%s`"
+                        .format(spelled, modules.join(", "), _types.describe(expected), modules[0], spelled));
                 return _types.error;
             }
             if (imported.length == 1) fits = imported[0];

@@ -17,7 +17,7 @@ Case is significant and enforced. A name starting with an uppercase letter is a 
 
 The reserved words are `alias`, `break`, `continue`, `def`, `else`, `false`, `for`, `if`, `import`, `in`, `intrinsic`, `invariant`, `match`, `module`, `mutable`, `native`, `private`, `return`, `tail`, `true`, `type`, `val`, `while`, `with` and `_`.
 
-`test` is reserved only in one position: at the top level, followed by a string. `static` is the same, followed by `import`. Both remain usable as names everywhere else.
+`test` is reserved only in one position: at the top level, followed by a string. It remains usable as a name everywhere else.
 
 ## Punctuation
 

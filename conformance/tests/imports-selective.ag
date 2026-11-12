@@ -18,7 +18,8 @@ def main(): Unit {
     printl(describe("one"))
     printl(sides.twice())
 
-    // Unrelated to the imported module's path, since a selective import gives no qualified access.
-    val imports_support = 5
-    printl(imports_support)
+    // Every name is reachable qualified, listed or not.
+    printl(imports_support.labels.area())
+    printl(imports_support.shapes.unused())
+    printl(imports_support.shapes.describe(imports_support.shapes.sides))
 }

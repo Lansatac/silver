@@ -11,7 +11,6 @@ Silver:
 
     Declaration          <  (
                             / ImportStatement
-                            / StaticImport
                             / NativeLibrary
                             / IntrinsicAlias
                             / IntrinsicType
@@ -48,7 +47,6 @@ Silver:
     ModuleDeclaration    < :MODULE Nl? QualifiedName
     ImportStatement      < :IMPORT Nl? QualifiedName (Nl? :':' Nl? ImportedName (Nl? :',' Nl? ImportedName)*)?
     ImportedName         <- Identifier / TypeName
-    StaticImport         < :STATIC Nl? :IMPORT Nl? QualifiedName
 
     # The annotation is required, but sema can say so better than a parse error could
     ConstantDeclaration  < :VAL Nl? Identifier TypeAnnotation? Nl? '=' Nl? Expression
@@ -265,7 +263,6 @@ Silver:
     ALIAS               <- Kword("alias")
     INVARIANT           <- Kword("invariant")
     TEST                <- Kword("test")
-    STATIC              <- Kword("static")
     UNDERSCORE          <- Kword("_")
 
     Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / INTRINSIC / PRIVATE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / WITH / INVARIANT / UNDERSCORE
