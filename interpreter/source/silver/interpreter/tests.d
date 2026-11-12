@@ -71,9 +71,9 @@ unittest
     error.diagnostic.message.should.contain("cbrt");
 }
 
-@("an instance of a generic function prints as its function is named, without type arguments")
+@("an instance of a generic function prints with its type arguments")
 unittest
 {
     run("type Box<T>(value: T)\ndef identity<T>(x: T): T => x\ndef main(): Unit {\n    printl(identity<Int>)\n"
-        ~ "    printl(Box<String>)\n}").should.equal("identity\nBox\n");
+        ~ "    printl(Box<String>)\n}").should.equal("identity<Int>\nBox<String>\n");
 }

@@ -1,6 +1,5 @@
 module silver.interpreter.evaluator;
 
-import std.algorithm.searching : until;
 import std.conv : to;
 import std.format : format;
 import std.meta : AliasSeq;
@@ -670,9 +669,7 @@ final class Evaluator
             (bool b) => b.to!string,
             (double d) => d != d ? "nan" : d.to!string,
             (string s) => s,
-            // An instance or overload is shown as its function is named, without its type arguments
-            // or parameter types.
-            (Closure c) => _program.functions[c.target].name.until!(ch => ch == '<' || ch == '(').to!string,
+            (Closure c) => _program.functions[c.target].printedName,
             (_) => assert(0, "lowering formats anything else itself"),
         );
     }

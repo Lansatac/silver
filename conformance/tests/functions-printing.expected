@@ -1,0 +1,25 @@
+increment
+Point
+sqrt
+area
+identity<Int>
+identity<[String]>
+identity<(Int, String)>
+identity<(Int) -> Bool>
+identity<Int?>
+identity<Box<Float>>
+identity<Square>
+length<Int>
+Box<Int>
+show
+show
+lambda
+lambda
+nested
+increment
+calls increment and lambda
+[increment, lambda, nested]
+(increment, 1)
+Handler(bump, increment)
+Some(increment)
+Box(increment)

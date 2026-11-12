@@ -135,4 +135,3 @@ A generic function that calls itself with an ever larger type, such as `def grow
 - Inference treats two more kinds of argument as having no type of their own, as `None` does: a marker that a generic sum owns, such as `Nil`, and a generic function or constructor named without its type arguments. Each binds nothing, and is checked once the type arguments are known.
 - In step 1, an argument whose parameter type is already known when its turn comes is checked against it rather than given a type of its own, so with `f<T>(a: T, b: [T])`, `f(small, [1, 2])` adapts the literals to `small`'s type.
 - In step 3, a lambda whose parameter types aren't known at its turn is tried again after the arguments that follow it.
-- Interpreted, a function value that's an instance prints as its function's name, without type arguments.

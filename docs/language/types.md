@@ -104,4 +104,3 @@ A function value prints as the function it comes from, without anything it captu
 
 - Function values and `Ref`s aren't comparable yet. Comparing two, or two values of a type that contains one, is an error.
 - `Any` is a placeholder type visible in prelude signatures such as `print(value: Any)`, standing in for a design based on generics. It can't be an element of an array, tuple or option, a field, or a member of a sum.
-- Printing a function value works when interpreted, showing its name, and is a compile error when compiled.

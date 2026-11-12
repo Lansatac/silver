@@ -1,0 +1,5 @@
+module functions_printing_support.shapes
+
+type Square(side: Int)
+
+def area(s: Square): Int => s.side * s.side

@@ -65,6 +65,8 @@ struct Function
     Type returnType;
     Expr body;
     FunctionOrigin origin;
+    /// How a function value of it prints: `identity<Int>`, `Point`, `lambda`.
+    string printedName;
 }
 
 enum FunctionOrigin
@@ -197,8 +199,8 @@ enum PrimOp
     /// `xs ~= ys`'s value: like `Concat` of two, but it may extend `xs`'s buffer in place and
     /// leave room to grow.
     Append,
-    /// An integer, `Float` or `Bool` as a String, the way `print` shows it. A function value too,
-    /// as its name, where the backend can.
+    /// An integer, `Float`, `Bool` or function value as a String, the way `print` shows it: a
+    /// function value as its function's `printedName`.
     Format,
 }
 

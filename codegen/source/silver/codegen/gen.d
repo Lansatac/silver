@@ -215,8 +215,12 @@ private final class FunctionState
 
 /// The LLVM type of every String and array: where element zero is, and how many elements.
 private enum sliceLayout = "{ ptr, i64 }";
-/// The LLVM type of every function value: the code, then the environment it takes after its params.
+/// The LLVM type of every function value: its function's descriptor, then the environment the
+/// code takes after its params.
 private enum closureLayout = "{ ptr, ptr }";
+/// A constant for each function used as a value: the code a closure calls, then the String a
+/// function value prints as.
+private enum descriptorLayout = "{ ptr, " ~ sliceLayout ~ " }";
 
 private final class Generator
 {
@@ -235,6 +239,8 @@ private final class Generator
     /// function's index, once one has been asked for.
     private string[size_t] _thunks;
     private string[] _thunkDefinitions;
+    /// The descriptor of each function used as a value, by the function's index.
+    private string[size_t] _descriptors;
 
     this(const ref Program program, const SourceMap sources)
     {
@@ -658,7 +664,8 @@ private final class Generator
     {
         auto signature = functionData(call.callee.type);
         auto closure = emitExpr(*call.callee);
-        auto code = _function.extract(closureLayout, closure.value, 0);
+        auto descriptor = _function.extract(closureLayout, closure.value, 0);
+        auto code = _function.load("ptr", descriptor.value);
         auto env = _function.extract(closureLayout, closure.value, 1);
         string[] params;
         bool[] mutables;
@@ -668,7 +675,7 @@ private final class Generator
             mutables ~= signature.isMutable(i);
         }
         auto arguments = emitArguments(call.args, params, mutables);
-        auto called = closure.then(code).then(env).then(arguments.code)
+        auto called = closure.then(descriptor).then(code).then(env).then(arguments.code)
             .then(_function.call(llvmType(signature.ret, e.span), code.value, arguments.operands ~ ("ptr " ~ env.value)));
         return endIfNever(called, e.type);
     }
@@ -678,15 +685,12 @@ private final class Generator
     private Fragment emit(const Expr e, const MakeClosure closure)
     {
         auto func = _program.functions[closure.target];
-        if (func.origin != FunctionOrigin.lambda)
-        {
-            return Fragment.constant("{ ptr %s, ptr null }".format(thunk(closure.target, e.span)));
-        }
+        auto descriptor = descriptorOf(closure.target, e.span);
+        if (func.origin != FunctionOrigin.lambda) return Fragment.constant("{ ptr %s, ptr null }".format(descriptor));
         auto layout = environmentLayout(func);
         string[] operands;
         auto values = emitAll(closure.captures, operands);
-        auto code = mangled(closure.target);
-        if (layout == "{  }") return values.withValue("{ ptr %s, ptr null }".format(code));
+        if (layout == "{  }") return values.withValue("{ ptr %s, ptr null }".format(descriptor));
 
         auto env = alloc(layout);
         auto result = values.then(env);
@@ -697,7 +701,21 @@ private final class Generator
             auto pointer = fieldPointer(layout, env.value, at++);
             result = result.then(pointer).then(Fragment.store(llvmType(capture.type, e.span), operands[i], pointer.value));
         }
-        return result.then(_function.insert(closureLayout, "{ ptr %s, ptr undef }".format(code), "ptr", env.value, 1));
+        return result.then(_function.insert(closureLayout, "{ ptr %s, ptr undef }".format(descriptor), "ptr", env.value, 1));
+    }
+
+    /// The descriptor of function `target`, which a closure of it points to. A lambda's code takes
+    /// its environment itself; any other function's goes through a thunk.
+    private string descriptorOf(size_t target, Span span)
+    {
+        if (auto existing = target in _descriptors) return *existing;
+        auto func = _program.functions[target];
+        auto code = func.origin == FunctionOrigin.lambda ? mangled(target) : thunk(target, span);
+        auto name = "@\".fn.%s\"".format(target);
+        _descriptors[target] = name;
+        auto printed = stringConstant(func.printedName);
+        _globals ~= "%s = private constant %s { ptr %s, %s %s }".format(name, descriptorLayout, code, sliceLayout, printed);
+        return name;
     }
 
     /// The thunk for calling function `target` through a closure.
@@ -994,7 +1012,7 @@ private final class Generator
         return left.code.then(right.code).then(order).then(result);
     }
 
-    /// A primitive as a String, as `print` shows it.
+    /// A primitive or function value as a String, as `print` shows it.
     private Fragment emitFormat(Type type, string value, Span span)
     {
         auto types = _program.types;
@@ -1006,8 +1024,10 @@ private final class Generator
         }
         if (type == types.float_) return callRuntimeForString("silver_format_float", [value]);
         if (type == types.bool_) return callRuntimeForString("silver_format_bool", [value]);
-        throw new DiagnosticException(Diagnostic(DiagnosticCode.InternalError, span,
-            "A function value can't be printed in compiled code yet"));
+        assert(types.isFunction(type), "lowering formats anything but a primitive or a function itself");
+        auto descriptor = _function.extract(closureLayout, value, 0);
+        auto printed = fieldPointer(descriptorLayout, descriptor.value, 1);
+        return descriptor.then(printed).then(_function.load(sliceLayout, printed.value));
     }
 
     /// `lhs op rhs` through LLVM's overflow intrinsic, panicking if the result doesn't fit.

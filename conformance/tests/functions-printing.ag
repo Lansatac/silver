@@ -1,0 +1,58 @@
+// A function value prints as the function it comes from, never what it captured.
+
+import std.math
+import functions_printing_support.shapes
+
+type Point(x: Int, y: Int)
+type Box<T>(item: T)
+type Handler(name: String, run: (Int) -> Int)
+
+def increment(x: Int): Int => x + 1
+def identity<T>(x: T): T => x
+def adder(n: Int): (Int) -> Int => x => x + n
+
+def show(x: Int): String => "int"
+def show(x: String): String => "string"
+
+def main(): Unit {
+    printl(increment)
+    printl(Point)
+    printl(sqrt)
+    printl(area)
+
+    // A generic instance, with its type arguments as written.
+    val same: (Int) -> Int = identity
+    printl(same)
+    printl(identity<[String]>)
+    printl(identity<(Int, String)>)
+    printl(identity<(Int) -> Bool>)
+    printl(identity<Int?>)
+    printl(identity<Box<Float>>)
+    printl(identity<Square>)
+    val count: ([Int]) -> Int = length
+    printl(count)
+    val boxed: (Int) -> Box<Int> = Box
+    printl(boxed)
+
+    // Every overload prints the same name.
+    val showInt: (Int) -> String = show
+    val showString: (String) -> String = show
+    printl(showInt)
+    printl(showString)
+
+    // Lambdas and nested defs, with or without captures.
+    printl(adder(1))
+    printl((x: Int) => x * 2)
+    def nested(x: Int): Int => x + 3
+    printl(nested)
+
+    // Wherever a value is formatted.
+    printl(String(increment))
+    printl("calls {increment} and {adder(5)}")
+    printl([increment, adder(2), nested])
+    printl((increment, 1))
+    printl(Handler("bump", increment))
+    val maybe: ((Int) -> Int)? = increment
+    printl(maybe)
+    printl(Box(increment))
+}

@@ -270,12 +270,18 @@ private final class Lowering
     {
         import std.range : iota;
 
-        string name = _analysis.declarationOf(key.decl).name;
-        if (key.args.length > 0) name = "%s<%-(%s, %)>".format(name, key.args.map!(a => types.describe(a)));
+        auto name = printedName(key);
         if (!_analysis.isOverloaded(key.decl)) return name;
         auto declared = _analysis.signatureOf(key.decl);
         auto params = declared.params.length.iota.map!(i => (declared.isMutable(i) ? "mutable " : "") ~ types.describe(declared.params[i]));
         return "%s(%-(%s, %))".format(name, params);
+    }
+
+    /// How a function value of the instance `key` prints: `first<Int>`, or just its name.
+    private string printedName(InstanceKey key)
+    {
+        string name = _analysis.declarationOf(key.decl).name;
+        return key.args.length == 0 ? name : "%s<%-(%s, %)>".format(name, key.args.map!(a => types.describe(a)));
     }
 
     private size_t reserveSlot()
@@ -318,7 +324,8 @@ private final class Lowering
             params ~= local;
         }
         auto body = coerce(lowerExpr(*func.body), signature.ret);
-        return Function(instanceName(key), _moduleName, params, null, signature.ret, body, FunctionOrigin.declared);
+        return Function(instanceName(key), _moduleName, params, null, signature.ret, body, FunctionOrigin.declared,
+            printedName(key));
     }
 
     /// Stops at a type nested too deeply, which a generic type whose fields hold ever larger
@@ -566,7 +573,7 @@ private final class Lowering
         foreach (i, ref param; decl.params) params ~= new Local(paramName(param.name, i), signature.params[i]);
         auto body = intrinsicCall(_analysis.intrinsicOf(func), params.map!(p => use(p, _span)).array, signature, _span);
         functions[slot] = Function(instanceName(key), _analysis.moduleOf(func), params, null, signature.ret, body,
-            FunctionOrigin.derived);
+            FunctionOrigin.derived, printedName(key));
         return slot;
     }
 
@@ -618,7 +625,7 @@ private final class Lowering
         auto body = Expr(signature.ret, _span, ExprKind(ForeignCall(decl.symbol, args)));
         noteLibrary(func);
         functions[slot] = Function(decl.name, _analysis.moduleOf(func), params, null, signature.ret, body,
-            FunctionOrigin.derived);
+            FunctionOrigin.derived, decl.name);
         return slot;
     }
 
@@ -649,8 +656,8 @@ private final class Lowering
         foreach (field; _analysis.fieldsOf(record)) params ~= new Local(field.name, field.type);
         Expr body = construct(record, params.map!(p => use(p, _span)).array, _span);
         if (signature.ret != record) body = inject(_analysis.memberIndexFor(signature.ret, record), body, signature.ret);
-        functions[slot] = Function(typeName(record) ~ typeArgumentsOf(record), _moduleName, params, null, signature.ret,
-            body, FunctionOrigin.derived);
+        auto name = typeName(record) ~ typeArgumentsOf(record);
+        functions[slot] = Function(name, _moduleName, params, null, signature.ret, body, FunctionOrigin.derived, name);
         return slot;
     }
 
@@ -1566,7 +1573,8 @@ private final class Lowering
 
         auto body = coerce(lowerExpr(*lambda.body), signature.ret);
         auto name = lambda.name is null ? "lambda" : lambda.name;
-        functions[slot] = Function(name, _moduleName, params, captures, signature.ret, body, FunctionOrigin.lambda);
+        functions[slot] = Function(name, _moduleName, params, captures, signature.ret, body, FunctionOrigin.lambda,
+            name);
         return Expr(type, span, ExprKind(MakeClosure(slot, captureValues)));
     }
 
