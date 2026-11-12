@@ -266,12 +266,56 @@ unittest
     a.shouldCall(At("shared", 3), At("shared", 2, "b"));
 }
 
-@("a call that functions of two imported modules fit is ambiguous, even when one fits better")
+@("an imported function that fits exactly and isn't generic beats other modules' that convert")
 unittest
 {
-    auto a = analyzed("import a\nimport b\ndef main(): Unit {\n    only(1)\n}", libraries);
-    a.shouldReport(DiagnosticCode.AmbiguousName, At("only", 1));
-    analyzed("import a\nimport b\ndef main(): Unit {\n    a.only(1)\n}", libraries).shouldHaveNoDiagnostics();
+    auto a = analyzed("import a\nimport b\ndef main(): Unit {\n    only(1)\n    val n = 2\n    n.only()\n}", libraries);
+    a.shouldHaveNoDiagnostics();
+    a.shouldCall(At("only", 1), At("only", 1, "a"));
+    a.shouldCall(At("only", 2), At("only", 1, "a"));
+    auto b = analyzed("import a\nimport b\ndef main(): Unit {\n    b.only(1)\n}", libraries);
+    b.shouldHaveNoDiagnostics();
+    b.shouldCall(At("only", 1), At("only", 1, "b"));
+}
+
+@("an imported function that fits exactly and isn't generic beats other modules' generic ones")
+unittest
+{
+    auto files = [
+        "foo.ag": "module foo\ntype Foo(x: Int)\ndef toJson(f: Foo): String => \"foo\"",
+        "json.ag": "module json\ndef toJson<T>(x: T?): String => \"any\"\ndef toJson<T>(xs: [T]): String => \"array\"",
+    ];
+    auto a = analyzed("import foo\nimport json\ndef main(): Unit {\n    val f = Foo(1)\n"
+        ~ "    val s = toJson(f)\n    val t = f.toJson()\n    val u = toJson([f])\n}", files);
+    a.shouldHaveNoDiagnostics();
+    a.shouldCall(At("toJson", 1), At("toJson", 1, "foo"));
+    a.shouldCall(At("toJson", 2), At("toJson", 1, "foo"));
+    a.shouldCall(At("toJson", 3), At("toJson", 2, "json"));
+}
+
+@("a call that functions of two imported modules fit equally well is ambiguous")
+unittest
+{
+    auto files = [
+        "a.ag": "module a\ndef f(x: Int): Unit => ()\ndef g(x: Int?): Unit => ()\ndef h<T>(x: T): Unit => ()",
+        "b.ag": "module b\ndef f(x: Int): Unit => ()\ndef g(x: Int?): Unit => ()\ndef h(x: Int?): Unit => ()",
+    ];
+    foreach (call; ["f", "g", "h"])
+    {
+        analyzed("import a\nimport b\ndef main(): Unit {\n    " ~ call ~ "(1)\n}", files)
+            .shouldReport(DiagnosticCode.AmbiguousName, At(call, 1));
+    }
+}
+
+@("a for chooses among imported modules by fit as a call does")
+unittest
+{
+    auto files = [
+        "down.ag": "module down\ntype Down(n: Int)\ndef next(d: Down): (Int, Down)? => None",
+        "gen.ag": "module gen\ndef next<T>(x: T?): (Int, T?)? => None",
+    ];
+    analyzed("import down\nimport gen\ndef main(): Unit {\n    for x in Down(3) { print(x) }\n}", files)
+        .shouldHaveNoDiagnostics();
 }
 
 @("this module's functions come first, and imported ones are tried when none of them fits")

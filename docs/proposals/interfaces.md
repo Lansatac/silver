@@ -135,7 +135,7 @@ encode(p)        // and Point2D is a Json, through the same function
 
 The search itself (decided, November 2026):
 
-- **Imported modules are ranked by how well they fit, for a plain call as well** (decided, November 2026; this changes the rule in [functions.md](../language/functions.md#overloading) and isn't implemented). A function that fits every argument with no conversion and isn't generic beats functions in other imported modules that need a conversion or are generic. Without this, a type's own `toJson(f: Foo)` and an interface module's `toJson<T: Json>(x: T?)` would be ambiguous in every module importing both, since a `Foo` promotes to a `Foo?`. The price is that a library adding an exact, non-generic function for a type takes calls that went to another import's promoted or generic one. A new function that fits by a conversion or is generic still can't.
+- **Imported modules are ranked by how well they fit, for a plain call as well** (decided and implemented, November 2026; see [functions.md](../language/functions.md#overloading)). A function that fits every argument with no conversion and isn't generic beats functions in other imported modules that need a conversion or are generic. Without this, a type's own `toJson(f: Foo)` and an interface module's `toJson<T: Json>(x: T?)` would be ambiguous in every module importing both, since a `Foo` promotes to a `Foo?`. The price is that a library adding an exact, non-generic function for a type takes calls that went to another import's promoted or generic one. A new function that fits by a conversion or is generic still can't.
 - **Two imported modules that fit equally well are an error**, as they are for a plain call. A call is fixed by qualifying the name. A bound has nothing to qualify, so the fix is a function in the current module that forwards to one of them, until there's an adapter form (open question 8).
 - **A function whose bound fails doesn't fit**, for a plain call as well, and the choice goes on among the rest. So a function written for one shape, such as `toArray<R: Indexed<T>, T, U>(m: Map<R, T, U>)`, steps aside for a general one when its bound doesn't hold. A "no function fits" error says which bound failed.
 - **A bound that needs itself fails.** With only `toJson<T: Json>(x: T?)` in scope, whether `Foo` is a `Json` asks the same question again, so it isn't. A search that keeps reaching larger types stops at a depth limit, with an error of its own.
@@ -268,7 +268,7 @@ Since ordering, equality and hashing belong to the type, `Set<T: Ord>` and a map
 - **Sema.** Record the search result per bound at each call, and at each written type with a bounded parameter. Witness identity is structural: declaration ID, type arguments, nested witnesses. The search keeps the goals in progress, so one met again fails, and has a depth limit. A bound that fails makes its function not fit, so the search runs inside the overload choice.
 - **Lowering.** Instances are already made on demand. An instance's key gains its witnesses, which appear in its name only where two instances would otherwise share one. A call to a bound's function becomes a direct call to the witness.
 - **Backends.** Unchanged. Core is concrete, so neither sees a bound or a witness.
-- **Prerequisites.** Generics and overloading, both implemented. Overloading changes first: imported modules are ranked by fit; see "Conformance".
+- **Prerequisites.** Generics and overloading, both implemented, including the ranking of imported modules by fit (see "Conformance").
 
 ## Open questions
 

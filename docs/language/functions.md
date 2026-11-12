@@ -139,7 +139,17 @@ A call chooses among the functions of its name like this:
 3. An argument fits its parameter exactly, or by a conversion: promotion to an option, becoming a member of a sum, or a literal taking a type other than its default. A candidate that fits every argument beats another if it fits each argument at least as well and one of them better. When two fit every argument equally well, a function that isn't generic beats a generic one, and a generic function beats another that takes everything it takes, as `f<T>(x: [T])` beats `f<T>(x: T)`.
 4. If no candidate fits, or more than one fits better than all the others, the call is an error.
 
-The current module's functions come first. Imported functions are only tried when none of the current module's fits, and then only one imported module's functions may fit: if functions from two modules fit, the call is ambiguous even if one fits better, and qualifying it resolves that. So a new overload in a library can at worst cause an ambiguity error, and can never silently change a call. It also means a module can declare its own `printl(p: Point)` and still call the prelude's `printl` with anything else.
+The current module's functions come first. Imported functions are only tried when none of the current module's fits, and then the choice is made within one imported module. A module with a function that fits every argument exactly and isn't generic beats the other modules, whose functions would need a conversion or are generic. Otherwise only one imported module's functions may fit: if functions from two modules fit equally well, the call is ambiguous, and qualifying it resolves that.
+
+```silver
+import shapes    // def encode(s: Square): String
+import encoding  // def encode<T>(x: T?): String
+
+encode(Square(2))  // shapes.encode, which fits exactly
+encode(Circle(1))  // encoding.encode, the only one that fits
+```
+
+So a new overload in a library can silently change a call only by fitting it exactly, without being generic, where another import's function needed a conversion or was generic. Anything else it adds can at worst cause an ambiguity error. It also means a module can declare its own `printl(p: Point)` and still call the prelude's `printl` with anything else.
 
 An overloaded function used as a value is the one whose type is exactly the expected type, so it needs one:
 

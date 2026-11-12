@@ -17,7 +17,7 @@ def computeQualified(): Float => some.library.helper(1.0)
 `import a.b` gives both unqualified access (`name`) and qualified access (`a.b.name`).
 
 - A module's own declarations beat imports.
-- A name provided by two imports is an error only where it is used, and qualifying it resolves that. For functions, that's a call that functions of both fit: see [overloading](functions.md#overloading).
+- A name provided by two imports is an error only where it is used, and qualifying it resolves that. For functions, that's a call that functions of both fit equally well: see [overloading](functions.md#overloading).
 - Imports are private, so they aren't transitive.
 - Module paths exist only at compile time and aren't values.
 - Each module runs once per program.

@@ -1,6 +1,7 @@
 // Functions of one name, chosen by the types of their arguments.
 
 import overloading_support.shapes
+import overloading_support.encoding
 
 type Point(x: Int, y: Int)
 
@@ -78,6 +79,12 @@ def main(): Unit {
     printl(area(Circle(1)))
     printl(area(4))
     printl(label(Square(1)))
+
+    // An imported function that fits exactly and isn't generic beats another module's
+    printl(encode(Square(2)))
+    printl(Square(3).encode())
+    printl(encode(Circle(1)))
+    printl(encode([Square(1)]))
 
     // Method calls choose the same way, and the receiver is promoted
     val i = 7

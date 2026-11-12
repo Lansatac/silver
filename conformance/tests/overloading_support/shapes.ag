@@ -8,3 +8,5 @@ def area(c: Circle): Int => 3 * c.radius * c.radius
 
 def label(s: Square): String => "square"
 private def label(c: Circle): String => "circle"
+
+def encode(s: Square): String => "square {s.side}"

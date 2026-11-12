@@ -1578,7 +1578,7 @@ private final class TypeChecker
 
         auto own = groups[0].filter!(t => t.fitsAll).array;
         if (own.length > 0) return bestTrial(own, name.span, spelled, reportable);
-        auto imported = groups[1 .. $].map!(g => g.filter!(t => t.fitsAll).array).filter!(g => g.length > 0).array;
+        auto imported = rankedImports(groups[1 .. $].map!(g => g.filter!(t => t.fitsAll).array).array);
         if (imported.length == 1) return bestTrial(imported[0], name.span, spelled, reportable);
         if (imported.length > 1)
         {
@@ -1587,6 +1587,21 @@ private final class TypeChecker
         }
         if (reportable) reportNoOverload(name.span, spelled, groups);
         return Id!FunctionDecl.init;
+    }
+
+    /// The fitting trials of the imported modules that have any, a list per module, narrowed to
+    /// the modules with a function that fits every argument exactly and isn't generic when some
+    /// have one.
+    private const(Trial[])[] rankedImports(const(Trial[])[] fitting)
+    {
+        auto imported = fitting.filter!(g => g.length > 0).array;
+        auto exact = imported.filter!(g => g.any!(t => fitsExactly(t))).array;
+        return exact.length > 0 ? exact : imported;
+    }
+
+    private bool fitsExactly(const Trial trial)
+    {
+        return trial.fits.all!(f => f == Fit.exact) && !isGenericFunction(trial.func);
     }
 
     /// `f` as a candidate for a call with `count` arguments and `written` type arguments, failed
@@ -3023,26 +3038,28 @@ private final class TypeChecker
         if (lookup is null) return LoopUse.init;
         auto call = CallExpr(null, cast(Expr[]) args);
         Candidates fitting;
+        Trial[][] trials;
         foreach (group; lookup.groups)
         {
-            Id!FunctionDecl[] fits;
+            Trial[] fits;
             foreach (f; group)
             {
                 auto trial = arityTrial(f, args.length, 0);
                 if (trial.fitsAll) fitTrial(trial, call, typed, null, false);
-                if (trial.fitsAll) fits ~= f;
+                if (trial.fitsAll) fits ~= trial;
             }
-            fitting.groups ~= fits;
+            trials ~= fits;
+            fitting.groups ~= fits.map!(t => t.func).array;
         }
         if (fitting.count == 0) return LoopUse.init;
 
         LoopUse failed;
         failed.failed = true;
         auto span = args[0].span;
-        auto imported = fitting.groups[1 .. $].filter!(g => g.length > 0).array;
+        auto imported = rankedImports(trials[1 .. $]);
         if (fitting.groups[0].length == 0 && imported.length > 1)
         {
-            auto modules = imported.map!(g => _resolutions.declarations.functionModules[g[0]]).array;
+            auto modules = imported.map!(g => _resolutions.declarations.functionModules[g[0].func]).array;
             _collector.reportError(DiagnosticCode.AmbiguousName, span,
                 ("`for` could use `%s` from more than one imported module (%s); declare one in this module that "
                     ~ "calls the one you mean, as in `def %s(...) => %s.%s(...)`")

@@ -1,0 +1,4 @@
+module overloading_support.encoding
+
+def encode<T>(x: T?): String => if val _ = x => "a value" else "nothing"
+def encode<T>(xs: [T]): String => "{length(xs)} values"

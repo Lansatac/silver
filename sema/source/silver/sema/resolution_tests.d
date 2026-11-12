@@ -702,7 +702,7 @@ unittest
 @("name resolution treats the prelude like any other import when names clash")
 unittest
 {
-    auto files = ["lib.ag": "module lib\ndef printl(value: Int): Unit => ()"];
+    auto files = ["lib.ag": "module lib\ndef printl(value: Int?): Unit => ()"];
     auto bare = analyzed("import lib\ndef main(): Unit => printl(1)", files);
     bare.shouldReport(DiagnosticCode.AmbiguousName, At("printl", 1));
 
