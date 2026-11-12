@@ -658,6 +658,8 @@ struct FunctionDecl
     /// For the function holding a type's invariant, that type; otherwise invalid. Its name can't be
     /// written, and its parameters name the fields, which hide anything of the same name.
     Id!TypeDecl invariantOf;
+    /// For a `test`, its name, which the function's own name can't be written as; otherwise null.
+    string testName;
 }
 
 enum FunctionKind
@@ -785,7 +787,7 @@ string printDecl(const Decl d)
 
     return d.kind.match!(
         (const ImportStmt i) => printImport(i),
-        (const FunctionDecl f) => marked(f.isPrivate, printFunctionDecl(f)),
+        (const FunctionDecl f) => marked(f.isPrivate && f.testName is null, printFunctionDecl(f)),
         (const TypeDecl t) => marked(t.isPrivate, printTypeDecl(t)),
         (const ConstDecl c) => marked(c.isPrivate, printConstDecl(c)),
         (const AliasDecl a) => marked(a.isPrivate, a.intrinsic
@@ -854,6 +856,7 @@ private string printFunctionDecl(const FunctionDecl f)
     final switch (f.kind)
     {
         case FunctionKind.ordinary:
+            if (f.testName !is null) return format("(test \"%s\" %s)", f.testName, printExpr(*f.body));
             return format("(def %s%s %s %s)", f.name, printTypeParams(f.typeParams), printSignature(f), printExpr(*f.body));
         case FunctionKind.native:
             auto symbol = f.symbol == f.name ? "" : "(\"" ~ f.symbol ~ "\")";

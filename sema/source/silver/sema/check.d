@@ -28,6 +28,8 @@ private struct BodyContext
     bool inLoop;
     /// Collects what the body returns when `returnType` is still to be inferred, or null.
     InferredReturn* inferred;
+    /// Whether this is a test's own body, where `?` stops the test instead of returning.
+    bool testBody;
 }
 
 /// What a lambda with no known return type was found to return.
@@ -66,6 +68,8 @@ private final class TypeChecker
     /// Constructions of a type with an invariant from literals alone, which are checked once the
     /// literals' types are final.
     private const(Expr)[] _literalConstructions;
+    /// Whether the body being checked is a test's, or a lambda or nested `def` in one.
+    private bool _inTest;
 
     Typing checkProgram(const Program program)
     {
@@ -259,10 +263,10 @@ private final class TypeChecker
             (const FunctionData fd)=>fd.ret,
             (_)=>_types.error
             );
-        if (func.body !is null)
-        {
-            checkBody(*func.body, returnType);
-        }
+        if (func.body is null) return;
+        _inTest = func.testName !is null;
+        scope (exit) _inTest = false;
+        checkBody(*func.body, returnType, _inTest);
     }
 
     /// The function type of `lambda`, checking its body. `expected` supplies what it leaves out.
@@ -350,9 +354,10 @@ private final class TypeChecker
     }
 
     /// Checks a function or lambda body in a fresh context, against its return type.
-    private void checkBody(const Expr body, Type returnType)
+    private void checkBody(const Expr body, Type returnType, bool testBody = false)
     {
         auto ctx = BodyContext(returnType);
+        ctx.testBody = testBody;
         if (returnType == _types.unit)
         {
             checkDiscarded(body, ctx);
@@ -804,9 +809,9 @@ private final class TypeChecker
                 : synthesizeBinary(binary, expr.span, ctx),
             (const CallExpr call) => expr.id in _resolutions.conversions
                 ? synthesizeConversion(call, _declarer.builtinType(_resolutions.conversions[expr.id]), expr.span, ctx)
-                : isMethodCall(expr.id, *call.callee)
+                : placeExpect(expr, isMethodCall(expr.id, *call.callee)
                     ? synthesizeMethodCall(expr, call, ctx, expected)
-                    : synthesizeCall(expr, call, ctx, expected),
+                    : synthesizeCall(expr, call, ctx, expected)),
             (const MemberAccess member) => synthesizeMemberAccess(expr, member, ctx, expected),
             (const WithExpr with_) => synthesizeWith(expr, with_, ctx),
             (const WhileExpr while_) => synthesizeWhile(while_, expr.span, ctx),
@@ -918,10 +923,10 @@ private final class TypeChecker
             return _types.error;
         }
 
-        if (isAssert(symbol))
+        if (showsCondition(symbol))
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, span,
-                "`assert` shows the condition it's given, so it can only be called");
+                "`%s` shows the condition it's given, so it can only be called".format(symbolName(symbol)));
             return _types.error;
         }
         if (!takesAnyIntrinsically(symbol)) return symbolType(symbol);
@@ -930,13 +935,29 @@ private final class TypeChecker
         return _types.error;
     }
 
-    private bool isAssert(SymbolId symbol)
+    /// Whether `symbol` is `assert` or `expect`, which take apart the condition as written.
+    private bool showsCondition(SymbolId symbol)
     {
-        return symbol.match!(
-            (const Id!FunctionDecl f) => _resolutions.declarations.functions[f].kind == FunctionKind.intrinsic
-                && _resolutions.declarations.functions[f].name == "assert",
-            _ => false,
-        );
+        return symbol.match!((const Id!FunctionDecl f) => isIntrinsic(f, "assert") || isIntrinsic(f, "expect"), _ => false);
+    }
+
+    private bool isIntrinsic(Id!FunctionDecl f, string name)
+    {
+        auto decl = _resolutions.declarations.functions[f];
+        return decl.kind == FunctionKind.intrinsic && decl.name == name;
+    }
+
+    /// `call`, of type `type`, reported if it calls `expect` outside a test.
+    private Type placeExpect(const Expr call, Type type)
+    {
+        auto callee = calleeOf(call.id);
+        if (callee is null) callee = call.id in _typing.methodCallees;
+        if (!_inTest && callee !is null && isIntrinsic(*callee, "expect"))
+        {
+            _collector.reportError(DiagnosticCode.ExpectOutsideTest, call.span,
+                "`expect` records a failure for a test to report, so it can only be used in one; `assert` stops the program instead");
+        }
+        return type;
     }
 
     /// Whether `symbol` is an intrinsic with an `Any` parameter, which has no function type to be a value of.
@@ -1036,7 +1057,8 @@ private final class TypeChecker
         return _types.error;
     }
 
-    /// `x?`, which returns `None` from the enclosing function, so that has to return an option.
+    /// `x?`, which returns `None` from the enclosing function, so that has to return an option, or
+    /// in a test's own body stops the test.
     private Type synthesizePropagate(const PropagateExpr propagate, Span span, BodyContext ctx)
     {
         auto operandType = _declarer.requireTyped(synthesize(*propagate.operand, ctx), propagate.operand.span);
@@ -1051,7 +1073,7 @@ private final class TypeChecker
         {
             ctx.inferred.nones ~= span;
         }
-        else if (!_types.isOption(ctx.returnType))
+        else if (!ctx.testBody && !_types.isOption(ctx.returnType))
         {
             _collector.reportError(DiagnosticCode.InvalidPropagation, span,
                 "`?` returns `None` when there's no value, but this function returns `%s`"
@@ -2089,9 +2111,15 @@ private final class TypeChecker
     {
         auto first = _resolutions.declarations.functions[earlier];
         string problem;
-        // Lowering expands `assert` from what's written, telling its forms apart by their arguments.
-        auto assertForms = later.name == "assert" && first.params.length != later.params.length;
-        if (first.kind == FunctionKind.intrinsic && later.kind == FunctionKind.intrinsic && !assertForms)
+        // Lowering expands `assert` and `expect` from what's written, telling their forms apart by their arguments.
+        auto shownForms = (later.name == "assert" || later.name == "expect") && first.params.length != later.params.length;
+        if (later.testName !is null)
+        {
+            _collector.reportError(DiagnosticCode.DuplicateDeclaration, later.nameSpan,
+                "There's already a test named \"%s\" in this module".format(later.testName));
+            return true;
+        }
+        if (first.kind == FunctionKind.intrinsic && later.kind == FunctionKind.intrinsic && !shownForms)
         {
             problem = "`%s` is already an intrinsic, and an intrinsic's name says which one it is";
         }

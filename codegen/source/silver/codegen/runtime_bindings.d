@@ -29,4 +29,10 @@ static immutable RuntimeFunction[string] runtime = [
     "silver_string_compare": RuntimeFunction("i32", ["ptr", "i64", "ptr", "i64"]),
     "silver_panic":       RuntimeFunction("void", ["ptr"], "noreturn"),
     "silver_panic_message": RuntimeFunction("void", ["ptr", "i64"], "noreturn"),
+
+    "silver_test_start":   RuntimeFunction("void", ["ptr"]),
+    "silver_test_begin":   RuntimeFunction("i1", ["i64"]),
+    "silver_test_end":     RuntimeFunction("void", []),
+    "silver_test_failed":  RuntimeFunction("void", ["ptr", "i64"]),
+    "silver_test_stopped": RuntimeFunction("void", ["ptr", "i64"], "noreturn"),
 ];

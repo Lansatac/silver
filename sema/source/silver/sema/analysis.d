@@ -351,13 +351,14 @@ final class Analysis
     }
 }
 
-/// Analyzes every module in `program`, reporting problems to `collector`.
-Analysis analyze(const ref Program program, Collector collector, Target target = Target.host)
+/// Analyzes every module in `program`, reporting problems to `collector`. With `testing`, the
+/// program is run for its tests, so it needn't have a `main`.
+Analysis analyze(const ref Program program, Collector collector, Target target = Target.host, bool testing = false)
 {
     import silver.sema.entry : checkEntryPoint, checkEntryPointReturn;
     import silver.sema.resolve : resolveNames;
 
-    auto entryPoint = checkEntryPoint(program, collector);
+    auto entryPoint = checkEntryPoint(program, collector, testing);
     auto resolution = resolveNames(program, collector, target);
     auto typing = checkTypes(program, resolution, collector);
     checkEntryPointReturn(entryPoint, resolution, typing, collector);

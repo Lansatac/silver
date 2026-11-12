@@ -28,6 +28,7 @@ enum Intrinsic
     length,
     panic,
     assert_,
+    expect,
     get,
     set,
     update,

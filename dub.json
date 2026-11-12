@@ -10,6 +10,7 @@
 		"./core/",
 		"./interpreter/",
 		"./codegen/",
+		"./testing/",
 		"./conformance/"
 	],
 	"license": "proprietary",
@@ -21,7 +22,8 @@
 		"silver:interpreter": "*",
 		"silver:sema": "*",
 		"silver:loader": "*",
-		"silver:codegen": "*"
+		"silver:codegen": "*",
+		"silver:testing": "*"
 	},
 	"targetType": "executable",
 	"lflags-windows": ["/STACK:67108864"]

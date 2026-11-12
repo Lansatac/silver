@@ -83,6 +83,8 @@ enum DiagnosticCode : string
     DuplicateOverload = "T0035",
     /// A value built from literals alone that breaks its type's invariant.
     InvariantViolated = "T0036",
+    /// `expect` outside a test.
+    ExpectOutsideTest = "T0037",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

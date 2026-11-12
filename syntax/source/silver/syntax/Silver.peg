@@ -21,6 +21,7 @@ Silver:
                             / TypeDeclaration
                             / AliasDeclaration
                             / ConstantDeclaration
+                            / TestDeclaration
                             )
 
     # ExpressionStatement is last: anything that isn't another kind of statement is an expression
@@ -66,6 +67,7 @@ Silver:
     AssignElement        < AssignTuple / UNDERSCORE / Postfix
 
     FunctionDeclaration  < :DEF Nl? Identifier (Nl? TypeParameters)? Nl? :'(' Nl? Params Nl? :')' TypeAnnotation Nl? (:'=>' Nl? Expression / Block)
+    TestDeclaration      < :TEST Nl? StringLiteral Nl? (:'=>' Nl? Expression / Block)
 
     NativeFunctionDeclaration < :NATIVE Nl? NativeSymbol? :DEF Nl? Identifier (Nl? TypeParameters)? Nl? :'(' Nl? Params Nl? :')' TypeAnnotation
     NativeSymbol         < :'(' Nl? StringLiteral Nl? :')'
@@ -259,6 +261,7 @@ Silver:
     MATCH               <- Kword("match")
     ALIAS               <- Kword("alias")
     INVARIANT           <- Kword("invariant")
+    TEST                <- Kword("test")
     UNDERSCORE          <- Kword("_")
 
     Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / INTRINSIC / PRIVATE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / WITH / INVARIANT / UNDERSCORE

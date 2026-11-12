@@ -249,15 +249,53 @@ private final class Generator
         {
             functions ~= emitFunction(i, func);
         }
-        // After the functions, so every runtime call and string literal has been seen.
+        auto entry = emitEntry();
+        // After the functions and the entry, so every runtime call and string literal has been seen.
         return emitDeclares() ~ _globals.map!(s => s ~ "\n").join ~ "\n" ~ functions.join("\n") ~ "\n"
-            ~ _thunkDefinitions.join("\n") ~ "\n" ~ emitEntry();
+            ~ _thunkDefinitions.join("\n") ~ "\n" ~ entry;
     }
 
     /// `silver_main`, which the runtime calls once druntime has started.
     private string emitEntry()
     {
+        if (_program.entryPoint == size_t.max) return emitTestEntry();
         return "define void @silver_main() {\n.entry:\n  call void %s()\n  ret void\n}\n".format(mangled(_program.entryPoint));
+    }
+
+    /// `silver_main` for running the tests: each runs through a guard, which a panic in it or `?`
+    /// on `None` jumps back to, using LLVM's own setjmp and longjmp. Those only save and restore the
+    /// frame, stack and resume address, and unwind nothing, which suits frames with no unwind
+    /// information. The guard is the setjmp's own function, so it's live while the test runs.
+    private string emitTestEntry()
+    {
+        foreach (declaration; ["declare ptr @llvm.frameaddress.p0(i32 immarg)", "declare ptr @llvm.stacksave.p0()",
+            "declare i32 @llvm.eh.sjlj.setjmp(ptr)", "declare void @llvm.eh.sjlj.longjmp(ptr)"])
+        {
+            useIntrinsic(declaration);
+        }
+        foreach (name; ["silver_test_start", "silver_test_begin", "silver_test_end"]) _usedRuntime[name] = true;
+
+        auto text = "@silver.test.jump = internal global [5 x ptr] zeroinitializer\n\n"
+            ~ "define private void @silver.test.escape() noinline {\n.entry:\n"
+            ~ "  call void @llvm.eh.sjlj.longjmp(ptr @silver.test.jump)\n  unreachable\n}\n\n"
+            ~ "define private void @silver.test.guard(ptr %test) noinline {\n.entry:\n"
+            ~ "  %frame = call ptr @llvm.frameaddress.p0(i32 0)\n"
+            ~ "  store ptr %frame, ptr @silver.test.jump\n"
+            ~ "  %stack = call ptr @llvm.stacksave.p0()\n"
+            ~ "  %slot = getelementptr [5 x ptr], ptr @silver.test.jump, i64 0, i64 2\n"
+            ~ "  store ptr %stack, ptr %slot\n"
+            ~ "  %jumped = call i32 @llvm.eh.sjlj.setjmp(ptr @silver.test.jump)\n"
+            ~ "  %fresh = icmp eq i32 %jumped, 0\n"
+            ~ "  br i1 %fresh, label %run, label %done\nrun:\n  call void %test()\n  br label %done\ndone:\n  ret void\n}\n\n"
+            ~ "define void @silver_main() {\n.entry:\n  call void @silver_test_start(ptr @silver.test.escape)\n";
+        foreach (i, test; _program.tests)
+        {
+            text ~= ("  %%begin.%1$s = call i1 @silver_test_begin(i64 %1$s)\n"
+                ~ "  br i1 %%begin.%1$s, label %%run.%1$s, label %%next.%1$s\nrun.%1$s:\n"
+                ~ "  call void @silver.test.guard(ptr %2$s)\n  call void @silver_test_end()\n"
+                ~ "  br label %%next.%1$s\nnext.%1$s:\n").format(i, mangled(test.function_));
+        }
+        return text ~ "  ret void\n}\n";
     }
 
     private string emitDeclares()
@@ -432,6 +470,7 @@ private final class Generator
             },
             (const Length length) => planSlots(slots, *length.array),
             (const Cell cell) => all(cell.args),
+            (const TestFailure failure) => planSlots(slots, *failure.message),
         );
     }
 
@@ -741,8 +780,8 @@ private final class Generator
                 return emitRead();
             case Intrinsic.panic:
                 return emitExplicitPanic(call.args[0], e.span);
-            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_:
-                assert(0, "lowering makes `length` a Length, `assert` a test, and the others operations on a Cell");
+            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect:
+                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, and the others operations on a Cell");
         }
     }
 
@@ -814,6 +853,20 @@ private final class Generator
     {
         _function.usesOutSlots = true;
         return callRuntime(name, operands ~ [FunctionState.outData, FunctionState.outLength]).then(loadOutSlice());
+    }
+
+    /// A failure of the running test, which the runtime records. One that ends the test returns to
+    /// its guard.
+    private Fragment emit(const Expr e, const TestFailure failure)
+    {
+        auto text = emitExpr(*failure.message);
+        auto parts = sliceParts(text.value);
+        auto recorded = text.then(parts.code);
+        if (!failure.ends) return recorded.then(callRuntime("silver_test_failed", [parts.data, parts.length])).withValue(null);
+        return recorded.then(callRuntime("silver_test_stopped", [parts.data, parts.length]))
+            .then(Fragment.unreachable())
+            .then(Fragment.label(_function.newLabel("after.stop")))
+            .withValue(null);
     }
 
     /// `panic(message)`: the message, with the location first, as other panics have.
@@ -1708,7 +1761,7 @@ private final class Generator
         import std.string : replace;
 
         auto func = _program.functions[index];
-        auto plain = !func.name.canFind('<') && !func.name.canFind('(');
+        auto plain = !func.name.canFind!(c => c == '<' || c == '(' || c == '"' || c == '\\');
         if (func.origin == FunctionOrigin.declared && plain) return "@\"%s.%s\"".format(func.moduleName, func.name);
         return "@\"%s.%s.%s\"".format(func.moduleName, func.name.replace("\"", "'").replace("\\", "/"), index);
     }

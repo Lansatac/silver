@@ -43,6 +43,7 @@ Program load(string source, string file, string[] importPaths, SourceContext con
         }
     }
     program.modules[start.name] = start;
+    program.entryModule = start.name;
 
     // Modules whose imports haven't been followed yet.
     Module*[] unscanned = [start];

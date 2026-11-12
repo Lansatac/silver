@@ -83,5 +83,4 @@ The condition of an `if` or `while`, the iterable of a `for` and the subject of 
 
 ## Current implementation
 
-- `test` declarations aren't available.
 - `tail` isn't reserved yet.

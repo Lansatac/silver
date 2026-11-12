@@ -1,0 +1,4 @@
+// `main` is checked, but tests run without it.
+def main(): Unit => printl("main isn't run")
+
+test "one" => expect(1 + 1 == 2)

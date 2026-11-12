@@ -23,6 +23,9 @@ final class Evaluator
     private Program _program;
     private bool _useStdOut;
     private string _output;
+    /// Whether tests are running, so `read` finds no input; and the failures of the current one.
+    private bool _testing;
+    private string[] _failures;
 
     /// With `useStdOut`, output goes straight to standard output; otherwise it's kept for `output`.
     this(Program program, bool useStdOut = false)
@@ -41,6 +44,48 @@ final class Evaluator
     void run()
     {
         runOnLargeStack(&runProgram);
+    }
+
+    /// Runs each of the program's tests on its own, so a panic ends only that one.
+    TestRun[] runTests()
+    {
+        TestRun[] runs;
+        _testing = true;
+        runOnLargeStack(() {
+            foreach (test; _program.tests) runs ~= runTest(test);
+        });
+        return runs;
+    }
+
+    private TestRun runTest(const TestCase test)
+    {
+        _output = null;
+        _failures = null;
+        TestRun run;
+        try
+        {
+            invoke(test.function_, [], null, null);
+        }
+        catch (CodedException error)
+        {
+            run.panic = new Diagnostic(error.code, _program.functions[test.function_].body.span, error.msg);
+        }
+        catch (RuntimeError error)
+        {
+            run.panic = new Diagnostic(error.diagnostic.code, error.diagnostic.span, error.diagnostic.message);
+        }
+        catch (TestStop stop)
+        {
+            _failures ~= stop.msg;
+        }
+        // Anything else is a fault in the interpreter, which can still be reported against the test.
+        catch (Throwable fault)
+        {
+            run.crash = fault.msg;
+        }
+        run.failures = _failures;
+        run.output = _output;
+        return run;
     }
 
     private void runProgram()
@@ -119,6 +164,7 @@ final class Evaluator
                 (const Slice slice) => evaluate(slice, frame),
                 (const Length length) => Value(cast(long) evaluate(*length.array, frame).as!ArrayValue.elements.length),
                 (const Cell cell) => evaluate(cell, frame),
+                (const TestFailure failure) => fail(evaluate(*failure.message, frame).as!string, failure.ends),
             );
         }
         catch (CodedException error)
@@ -141,6 +187,13 @@ final class Evaluator
     private Value jump(Signal)(size_t label)
     {
         throw new Signal(label);
+    }
+
+    private Value fail(string message, bool ends)
+    {
+        if (ends) throw new TestStop(message);
+        _failures ~= message;
+        return Value(Unit());
     }
 
     private Value leave(Value value)
@@ -576,13 +629,14 @@ final class Evaluator
                 write(formatted(args[0], call.args[0].type), true);
                 return Value(Unit());
             case Intrinsic.read:
+                if (_testing) return Value(Record(0, null));
                 auto line = readln();
                 if (line.length == 0) return Value(Record(0, null));
                 return Value(Record(1, [Value(line)]));
             case Intrinsic.panic:
                 throw new CodedException(DiagnosticCode.ExplicitPanic, args[0].as!string);
-            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_:
-                assert(0, "lowering makes `length` a Length, `assert` a test, and the others operations on a Cell");
+            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect:
+                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, and the others operations on a Cell");
         }
     }
 
@@ -677,6 +731,20 @@ final class Evaluator
     }
 }
 
+/// What happened when a test ran.
+struct TestRun
+{
+    /// Each recorded failure, in order, each starting with where it happened. A test that stopped
+    /// has its reason last.
+    string[] failures;
+    /// The panic that ended the test, if one did.
+    const(Diagnostic)* panic;
+    /// Why the interpreter itself failed while running the test, if it did.
+    string crash;
+    /// What the test printed.
+    string output;
+}
+
 /// The locals of one call. Core's locals are objects, so a nested block needs no scope of its own.
 private final class Frame
 {
@@ -719,6 +787,16 @@ private class ReturnSignal : Throwable
     {
         super("return outside of a function");
         this.value = value;
+        info = noTrace;
+    }
+}
+
+/// Thrown when a test stops, as `?` on `None` stops it, and caught by the test runner.
+private class TestStop : Throwable
+{
+    this(string message)
+    {
+        super(message);
         info = noTrace;
     }
 }

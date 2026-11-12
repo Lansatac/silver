@@ -6,7 +6,8 @@
 		"silver:interpreter": "*",
 		"silver:loader": "*",
 		"silver:sema": "*",
-		"silver:codegen": "*"
+		"silver:codegen": "*",
+		"silver:testing": "*"
 	},
 	"configurations": [
 		{ "name": "library" },

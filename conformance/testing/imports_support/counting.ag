@@ -1,0 +1,5 @@
+module imports_support.counting
+
+def next(n: Int): Int => n + 1
+
+test "an imported module's test isn't run" => expect(false)

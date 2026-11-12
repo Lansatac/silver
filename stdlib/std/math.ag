@@ -74,14 +74,24 @@ def powInt(base: Int, exponent: Int): Int {
 }
 
 def factorial(n: Int): Int {
-    if n < 0 {
-        panic("factorial of a negative number")
-    }
+    assert(n >= 0, "factorial of a negative number")
     match n {
         0 => 1
         _ => n * factorial(n - 1)
     }
 }
+
+test "factorial" {
+    expect(factorial(0) == 1, "0 is 1")
+    expect(factorial(1) == 1)
+    expect(factorial(2) == 2)
+    expect(factorial(3) == 6)
+    expect(factorial(4) == 24)
+}
+
+// test "negative factorial panics" {
+//     expect(panics{factorial - 1})
+// }
 
 // Unlike `x < 0`, this is true of -0.0.
 private def isNegative(x: Float): Bool => x < 0 || (x == 0 && 1 / x < 0)

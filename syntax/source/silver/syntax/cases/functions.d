@@ -96,3 +96,16 @@ immutable Case[] natives = [
     rejectsDeclaration("native library SDL2"),
     rejectsDeclaration(`private native library "SDL2"`),
 ];
+
+immutable Case[] tests = [
+    declaresAs(`test "adds one" { expect(f(1) == 2) }`, `(test "adds one" (block => (call expect (Equal (call f 1) 2))))`),
+    declaresAs(`test "adds one" => expect(f(1) == 2)`, `(test "adds one" (call expect (Equal (call f 1) 2)))`),
+    declaresAs("test\n\"a\"\n{\n}", `(test "a" (block))`),
+    declaresAs("test \"a\" =>\n    f()", `(test "a" (call f))`),
+    declaresAs("test \"a\" {}\ndef f(): Int => 1", [`(test "a" (block))`, "(def f (): Int 1)"]),
+    rejectsDeclaration(`test a {}`),
+    rejectsDeclaration(`private test "a" {}`),
+    rejects(`test "a" {}`), // only at module level
+    parsesAs("val test = 1", "(val test 1)"),
+    parsesAs("test(1)", "(call test 1)"),
+];

@@ -5,15 +5,15 @@ import silver.sema.typing : Typing;
 import silver.sema.resolve : Resolution, SymbolId;
 import silver.sema.type : FunctionData;
 
-/// Reports a program that doesn't have exactly one top-level `main` across all its modules.
-/// Returns that `main`, or an invalid ID if there isn't exactly one.
-Id!FunctionDecl checkEntryPoint(const ref Program program, Collector collector)
+/// Reports a program that doesn't have exactly one top-level `main` across all its modules, though
+/// with `testing` it needn't have one. Returns that `main`, or an invalid ID if there isn't exactly one.
+Id!FunctionDecl checkEntryPoint(const ref Program program, Collector collector, bool testing = false)
 {
     import std.algorithm : map;
     import std.array : join;
 
     auto mains = mainFunctions(program);
-    if (mains.length == 0)
+    if (mains.length == 0 && !testing)
     {
         collector.reportError(DiagnosticCode.MissingMain, Span.init,
             "No module defines `def main(): Unit`");

@@ -176,6 +176,8 @@ private final class Lowering
             return [Decl(spanOf(cst, file), DeclKind(alias_))];
         case "Silver.ConstantDeclaration":
             return [Decl(spanOf(cst, file), DeclKind(convertConstantDeclaration(cst)))];
+        case "Silver.TestDeclaration":
+            return [Decl(spanOf(cst, file), DeclKind(convertTest(cst)))];
         case "Silver.IntrinsicType":
             auto intrinsicType = convertProduct(cst[0], cst.children[$ - 1]);
             if (cst.children.length > 2) intrinsicType.typeParams = convertTypeParameters(cst[1]);
@@ -951,6 +953,18 @@ private final class Lowering
         return new NativeLibrary(plainString(cst[0], "A library name"), span);
     }
 
+    /// `test "name" body`: a private function returning Unit, named so nothing can call it.
+    private FunctionDecl convertTest(ParseTree cst)
+    {
+        auto name = plainString(cst[0], "A test's name");
+        auto nameSpan = spanOf(cst[0], file);
+        auto unit = TypeExpr(ids.next!TypeExpr, nameSpan, TypeExprKind(UnitType()));
+        auto f = FunctionDecl(ids.next!FunctionDecl, "test " ~ name, nameSpan, null, boxed(convertExpression(cst[1])),
+            unit, FunctionKind.ordinary, null, true);
+        f.testName = name;
+        return f;
+    }
+
     /// The text of a string literal that has to be known as written, with no holes.
     private string plainString(ParseTree cst, string what)
     {
@@ -1386,7 +1400,7 @@ unittest
     assert(text(left.span) == "(a) * (b + c)");
 }
 
-@("a module names at most one native library, and a native's symbol and library are plain strings")
+@("a module names at most one native library, and a native's symbol and library and a test's name are plain strings")
 unittest
 {
     import std.exception : collectException;
@@ -1404,6 +1418,8 @@ unittest
     rejected("native library \"\"");
     rejected("native(\"\") def f(): Int");
     rejected("native(\"f{x}\") def f(): Int");
+    rejected("test \"\" {}");
+    rejected("test \"a{1}\" {}");
     assert(collectException!ParseException(parse("native library \"a\"\nnative(\"b\") def f(): Int", "test", new NodeIds)) is null);
 }
 

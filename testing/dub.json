@@ -1,0 +1,25 @@
+{
+	"name": "testing",
+	"description": "silver test: finding a program's tests, running them on either backend, and reporting.",
+	"targetType": "library",
+	"dependencies": {
+		"silver:ast": "*",
+		"silver:loader": "*",
+		"silver:sema": "*",
+		"silver:core": "*",
+		"silver:interpreter": "*",
+		"silver:codegen": "*"
+	},
+	"configurations": [
+		{ "name": "library" },
+		{
+			"name": "unittest",
+			"dependencies": {
+				"silly": "~>1.2.0-dev.2",
+				"fluent-asserts": "~>2.1"
+			},
+			"libs-windows": ["psapi"],
+			"lflags-windows": ["/STACK:67108864"]
+		}
+	]
+}

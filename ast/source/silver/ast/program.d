@@ -17,6 +17,8 @@ struct Program
     SourceMap sources;
     /// Where every node in the program got its ID, for passes that create nodes later.
     NodeIds ids;
+    /// The module loading started from, whose tests `silver test` runs.
+    string entryModule;
 }
 
 auto sortedModules(const ref Program program)

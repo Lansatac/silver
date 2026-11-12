@@ -10,6 +10,7 @@ import std.stdio : readln, stdout;
 import silver.runtime.buffer : newString;
 import silver.runtime.format : floatText;
 import silver.runtime.panic : panic;
+import silver.runtime.testing : testing, testOutput;
 
 extern (C) nothrow:
 
@@ -31,6 +32,13 @@ void silver_printl_unit() { output("()", true); }
 /// buffer (see `silver.runtime.buffer`), since every String on the heap must be in one.
 bool silver_read(const(char)** data, size_t* length)
 {
+    // A test has no input.
+    if (testing)
+    {
+        *data = null;
+        *length = 0;
+        return false;
+    }
     try
     {
         auto line = readln();
@@ -48,6 +56,11 @@ private void output(lazy const(char)[] text, bool newline)
 {
     try
     {
+        if (testing)
+        {
+            testOutput(newline ? text ~ "\n" : text);
+            return;
+        }
         stdout.write(text);
         if (newline) stdout.write('\n');
     }

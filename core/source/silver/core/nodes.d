@@ -24,6 +24,17 @@ struct Program
     const(Type)[][Type] sumMembers;
     /// What each `Ref` type the program uses holds.
     Type[Type] cellContents;
+    /// When the program is run for its tests, those tests in the order written, and `entryPoint`
+    /// is unused.
+    TestCase[] tests;
+}
+
+/// A `test`, which is a function in `Program.functions` taking nothing and returning Unit.
+struct TestCase
+{
+    string name;
+    size_t function_;
+    Span span;
 }
 
 /// A variable. It has an identity of its own because lowering invents temporaries that no
@@ -77,7 +88,7 @@ struct Expr
 
 alias ExprKind = SumType!(UnitLit, BoolLit, IntLit, FloatLit, StringLit, LocalRef, Call, CallClosure, MakeClosure,
     ForeignCall, IntrinsicCall, Prim, Convert, If, Block, Loop, Break, Continue, Return, Construct, Field, Update,
-    Inject, IsMember, Payload, ArrayLit, Index, Slice, Length, Cell);
+    Inject, IsMember, Payload, ArrayLit, Index, Slice, Length, Cell, TestFailure);
 
 /// `()`.
 struct UnitLit
@@ -332,6 +343,15 @@ struct Cell
 {
     CellOp op;
     Expr[] args;
+}
+
+/// A failure of the running test, with `message`, a String that already says where it happened.
+/// With `ends`, it stops the test, and is `Never`; otherwise the test carries on, and it's Unit.
+/// Only a test reaches one.
+struct TestFailure
+{
+    Expr* message;
+    bool ends;
 }
 
 struct Block

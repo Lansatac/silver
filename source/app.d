@@ -70,6 +70,8 @@ enum Backend
     interpreter,
     /// Compile to a temporary executable and run that.
     llvm,
+    /// `silver test` only: run the tests both ways, and fail a test the two disagree on.
+    both,
 }
 
 /// The LLVM IR for the program in `programFile`, or null after printing why there isn't any.
@@ -160,6 +162,19 @@ int compileAndRun(string programFile, string[] importPaths)
     return wait(spawnProcess([exePath]));
 }
 
+/// Runs the tests in the file or directory at `path`, reports them, and returns 0 if they all passed.
+int test(string path, string[] importPaths, Backend backend)
+{
+    import std.algorithm : map;
+    import silver.testing : report, runFile, succeeded, TestBackend, testFiles;
+
+    auto testBackend = backend == Backend.both ? TestBackend.both
+        : backend == Backend.llvm ? TestBackend.llvm : TestBackend.interpreter;
+    auto runs = testFiles(path).map!(file => runFile(file, importPaths, testBackend, tempDir)).array;
+    write(report(runs));
+    return succeeded(runs) ? 0 : 1;
+}
+
 /// A path in the temp directory, unique to this process, named after `programFile`.
 string temporaryPath(string programFile, string extension)
 {
@@ -194,21 +209,32 @@ int main(string[] args)
 	auto arguments = getopt(
     args,
     "importPath|I", "Add a path to search for imported modules", &importPaths,
-    "backend|b", "run: how to run the program: interpreter (default) or llvm", &backend,
+    "backend|b", "run, test: how to run the program: interpreter (default), llvm, or for tests, both", &backend,
     "output|o", "build: where to write the executable (or the IR, with --emit-llvm)", &outputPath,
     "emit-llvm", "build: write LLVM IR instead of an executable", &emitLlvm,
     "emit-core", "print the Core the program lowers to instead of running it", &emitCore,
     );
     immutable building = args.length == 3 && args[1] == "build";
-	if (arguments.helpWanted || !(args.length == 2 || building))
+    immutable testing = args.length == 3 && args[1] == "test";
+	if (arguments.helpWanted || !(args.length == 2 || building || testing))
 	{
 		defaultGetoptPrinter("The Silver interpreter and compiler.\n"
             ~ "Usage: silver [OPTION]... <file>         run <file>\n"
-            ~ "       silver build [OPTION]... <file>   compile <file> to an executable with LLVM", arguments.options);
+            ~ "       silver build [OPTION]... <file>   compile <file> to an executable with LLVM\n"
+            ~ "       silver test [OPTION]... <path>    run the tests in <path>, a file or a directory", arguments.options);
 		return 0;
 	}
 
 	auto programFile = args[$ - 1];
+    if (testing)
+    {
+        if (!programFile.exists)
+        {
+            stderr.writefln("'%s' doesn't exist!", programFile);
+            return 1;
+        }
+        return test(programFile, importPaths, backend);
+    }
 	if(!programFile.exists || !programFile.isFile)
 	{
 		stderr.writefln("'%s' is not a file!", programFile);
@@ -224,5 +250,8 @@ int main(string[] args)
     {
         case Backend.interpreter: return interpret(programFile, allImportPaths, emitCore);
         case Backend.llvm: return compileAndRun(programFile, allImportPaths);
+        case Backend.both:
+            stderr.writeln("Only `silver test` runs a program both ways");
+            return 1;
     }
 }

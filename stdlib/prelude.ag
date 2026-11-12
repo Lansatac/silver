@@ -14,3 +14,6 @@ intrinsic def panic(message: String): Never
 // Panics when `condition` is false, showing it and, for a comparison, both sides' values.
 intrinsic def assert(condition: Bool): Unit
 intrinsic def assert(condition: Bool, message: String): Unit
+// In a test, records a failure when `condition` is false, shown as `assert` shows it, and carries on.
+intrinsic def expect(condition: Bool): Unit
+intrinsic def expect(condition: Bool, message: String): Unit

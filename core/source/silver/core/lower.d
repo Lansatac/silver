@@ -41,6 +41,28 @@ Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis, const ast
     return program;
 }
 
+/// The tests written in `program`'s entry module, and every function they call, as a Program to
+/// run for its tests. `analysis` must have no errors.
+Program lowerTests(const ref ast.Program program, const Analysis analysis)
+{
+    auto lowering = new Lowering(analysis, program.sources);
+    TestCase[] tests;
+    foreach (decl; program.modules[program.entryModule].declarations)
+    {
+        decl.kind.match!(
+            (const ast.FunctionDecl f) {
+                if (f.testName !is null) tests ~= TestCase(f.testName, lowering.slotFor(f.id), f.nameSpan);
+            },
+            (_) {},
+        );
+    }
+    lowering.lowerPending();
+    auto lowered = Program(rebindable(analysis.types), lowering.functions, size_t.max, lowering.libraries);
+    lowered.tests = tests;
+    lowering.describeTypes(lowered);
+    return lowered;
+}
+
 /// How deeply an instance's type arguments can nest, which only polymorphic recursion reaches.
 enum instanceNestingLimit = 64;
 
@@ -154,6 +176,8 @@ private final class Lowering
     private Self[SymbolId] _selves;
     /// What `return` and `?` return from in the function being lowered.
     private Type _returnType;
+    /// Whether this is a test's own body, where `?` stops the test.
+    private bool _testBody;
     /// The label of the innermost loop whose body is being lowered, which `break` and `continue` leave.
     private size_t _loop = size_t.max;
     private size_t _nextLabel;
@@ -273,6 +297,7 @@ private final class Lowering
         _selves = null;
         auto signature = _analysis.signatureOf(func.id);
         _returnType = signature.ret;
+        _testBody = func.testName !is null;
         _moduleName = _analysis.moduleOf(func.id);
         Local[] params;
         foreach (i, ref param; func.params)
@@ -759,12 +784,15 @@ private final class Lowering
         return Expr(type, span, ExprKind(Block([let(option, left)], boxed(choice))));
     }
 
-    /// `x?`: the payload, or `None` returned from the function.
+    /// `x?`: the payload, or `None` returned from the function. In a test's own body, `None` stops the test.
     private Expr lowerPropagate(const ast.PropagateExpr propagate, Type type, Span span)
     {
         auto operand = lowerExpr(*propagate.operand);
         auto option = temp("option", operand.type);
-        auto leave = Expr(types.never, span, ExprKind(Return(boxed(noneOf(_returnType, span)))));
+        auto stop = "%s: `%s` was None, so the test stopped"
+            .format(located(span), _sources.text(propagate.operand.span));
+        auto leave = _testBody ? testFailure(stringLiteral(stop, span), true, span)
+            : Expr(types.never, span, ExprKind(Return(boxed(noneOf(_returnType, span)))));
         auto choice = Expr(type, span, ExprKind(If(boxed(isMember(use(option, span), 1)),
             boxed(payload(use(option, span), 1)), boxed(leave))));
         return Expr(type, span, ExprKind(Block([let(option, operand)], boxed(choice))));
@@ -1381,18 +1409,21 @@ private final class Lowering
         auto outerLocals = _locals;
         auto outerSelves = _selves;
         auto outerReturn = _returnType;
+        auto outerTestBody = _testBody;
         auto outerLoop = _loop;
         scope (exit)
         {
             _locals = outerLocals;
             _selves = outerSelves;
             _returnType = outerReturn;
+            _testBody = outerTestBody;
             _loop = outerLoop;
         }
         _locals = null;
         _selves = null;
         _returnType = signature.ret;
         _loop = size_t.max;
+        _testBody = false;
 
         Local[] captures;
         foreach (symbol; captured)
@@ -1509,14 +1540,15 @@ private final class Lowering
     private Expr lowerIntrinsic(Id!(ast.FunctionDecl) callee, const ast.Expr[] written, FunctionData signature, Span span)
     {
         auto intrinsic = _analysis.intrinsicOf(callee);
-        if (intrinsic == Intrinsic.assert_) return lowerAssert(written, span);
+        if (intrinsic == Intrinsic.assert_ || intrinsic == Intrinsic.expect) return lowerShown(intrinsic, written, span);
         return intrinsicCall(intrinsic, written.map!(a => lowerExpr(a)).array, signature, span);
     }
 
     /// `assert(condition)` or `assert(condition, message)`: a panic when the condition is false,
     /// showing it as written and the values of both sides of a comparison at its top. The panic
-    /// says where it is. Each side is evaluated once, and the message only on failure.
-    private Expr lowerAssert(const ast.Expr[] written, Span span)
+    /// says where it is. Each side is evaluated once, and the message only on failure. `expect`
+    /// is the same, except that it records a failure of the test, and the message has its place.
+    private Expr lowerShown(Intrinsic intrinsic, const ast.Expr[] written, Span span)
     {
         auto condition = written[0];
         const(ast.Expr)* left, right;
@@ -1550,13 +1582,27 @@ private final class Lowering
         }
 
         auto source = _sources.text(condition.span);
-        Expr[] parts = [stringLiteral("Assertion failed: ", span)];
+        auto expect = intrinsic == Intrinsic.expect;
+        Expr[] parts = [stringLiteral(expect ? located(span) ~ ": Expectation failed: " : "Assertion failed: ", span)];
         if (written.length > 1) parts ~= [lowerExpr(written[1]), stringLiteral("\n    condition: " ~ source, span)];
         else parts ~= stringLiteral(source, span);
         parts ~= values;
         auto message = Expr(types.string_, span, ExprKind(Prim(PrimOp.Concat, parts)));
-        auto failure = Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.panic, [message], [false])));
+        auto failure = expect ? testFailure(message, false, span)
+            : Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.panic, [message], [false])));
         return Expr(types.unit, span, ExprKind(Block(held ~ eval(when(not(test), failure)), null)));
+    }
+
+    private Expr testFailure(Expr message, bool ends, Span span)
+    {
+        return Expr(ends ? types.never : types.unit, span, ExprKind(TestFailure(boxed(message), ends)));
+    }
+
+    /// `file(line,column)`, as a panic's message starts.
+    private string located(Span span)
+    {
+        auto location = _sources.locate(span);
+        return "%s(%s,%s)".format(span.file, location.line, location.column);
     }
 
     /// What `intrinsic` does with `args`, which are values. One filling an `Any` that isn't a
@@ -1573,8 +1619,8 @@ private final class Lowering
                 return Expr(types.unit, span, ExprKind(Cell(CellOp.Set, args)));
             case Intrinsic.update:
                 return updateCell(args[0], args[1], span);
-            case Intrinsic.assert_:
-                assert(0, "`assert` is expanded from what's written, and sema rejects it as a value");
+            case Intrinsic.assert_, Intrinsic.expect:
+                assert(0, "`assert` and `expect` are expanded from what's written, and sema rejects them as values");
             case Intrinsic.print, Intrinsic.printl, Intrinsic.read, Intrinsic.panic:
                 break;
         }

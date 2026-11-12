@@ -7,7 +7,7 @@ version (unittest)
     import std.conv : to;
     import std.file : dirEntries, exists, mkdirRecurse, readText, rmdirRecurse, SpanMode, tempDir, write;
     import std.parallelism : taskPool;
-    import std.path : baseName, buildNormalizedPath, buildPath, dirName, stripExtension;
+    import std.path : baseName, buildNormalizedPath, buildPath, dirName, dirSeparator, stripExtension;
     import std.process : environment, pipeProcess, Redirect, thisProcessID, wait;
     import std.range : chunks;
     import std.stdio : File, stdin, writeln;
@@ -18,6 +18,7 @@ version (unittest)
     import silver.interpreter.evaluator : Evaluator;
     import silver.loader : load, standardLibraryPath;
     import silver.sema : analyze, Analysis, Target;
+    import silver.testing : report, runFile, TestBackend;
 
     string conformanceDirectory()
     {
@@ -67,6 +68,20 @@ version (unittest)
     Case[] panicCases()
     {
         return casesIn("panics");
+    }
+
+    /// Programs run for their tests, whose `.expected` is what `silver test` reports, with each
+    /// location relative to testing/.
+    Case[] testingCases()
+    {
+        return casesIn("testing");
+    }
+
+    /// Runs the tests of `c` on `backend`, and returns why the report isn't the expected one, or null.
+    string runTesting(Case c, TestBackend backend, string workDirectory)
+    {
+        auto text = report([runFile(c.sourcePath, [], backend, workDirectory)]);
+        return compareOutput(c, text.replace(dirName(c.sourcePath) ~ dirSeparator, "").normalizeNewlines);
     }
 
     string normalizeNewlines(string text)
@@ -520,5 +535,30 @@ unittest
     {
         rmdirRecurse(workDirectory);
     }
+    assert(problems is null, problems);
+}
+
+@("Interpreted tests report what the expected report says")
+unittest
+{
+    auto all = testingCases;
+    auto failed = failuresByName(all, inParallel(all, (Case c) => runTesting(c, TestBackend.interpreter, tempDir)));
+    auto problems = pendingProblems("Interpreted testing", all, failed, interpretedPending);
+    assert(problems is null, problems);
+}
+
+@("Compiled tests report what the expected report says")
+unittest
+{
+    Toolchain toolchain;
+    if (auto missing = findToolchain(toolchain))
+    {
+        writeln("    note: ", missing, " Compiled testing conformance was skipped.");
+        return;
+    }
+
+    auto all = testingCases;
+    auto failed = failuresByName(all, inParallel(all, (Case c) => runTesting(c, TestBackend.llvm, tempDir)));
+    auto problems = pendingProblems("Compiled testing", all, failed, compiledPending);
     assert(problems is null, problems);
 }

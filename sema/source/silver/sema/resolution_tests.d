@@ -26,7 +26,7 @@ struct Analyzed
 
 /// Analyzes `entry` as main.ag. `files` (by file name, e.g. "a/b.ag") are written to a
 /// temporary import path, searched before the stdlib.
-Analyzed analyzed(string entry, string[string] files = null, Target target = Target.host)
+Analyzed analyzed(string entry, string[string] files = null, Target target = Target.host, bool testing = false)
 {
     import std.file : mkdirRecurse, readText, rmdirRecurse, tempDir, write;
     import std.path : buildPath, dirName;
@@ -47,7 +47,7 @@ Analyzed analyzed(string entry, string[string] files = null, Target target = Tar
     assert(!context.collector.hasErrors, "The test program failed to load");
 
     Analyzed a;
-    a.analysis = analyze(program, context.collector, target);
+    a.analysis = analyze(program, context.collector, target, testing);
     a.collector = context.collector;
     foreach (name, m; program.modules)
     {

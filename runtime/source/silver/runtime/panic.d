@@ -4,11 +4,15 @@ module silver.runtime.panic;
 
 import core.stdc.stdio : fflush, fprintf, stderr, stdout;
 import core.stdc.stdlib : exit;
+import core.stdc.string : strlen;
 
-/// Prints `message` to stderr and exits with status 1. The message should already say
-/// where in the Silver source the failure happened.
+import silver.runtime.testing : panicInTest;
+
+/// Prints `message` to stderr and exits with status 1, or in a test, ends the test. The message
+/// should already say where in the Silver source the failure happened.
 extern (C) noreturn silver_panic(const(char)* message) nothrow @nogc
 {
+    panicInTest(message, strlen(message));
     fflush(stdout);
     fprintf(stderr, "panic: %s\n", message);
     exit(1);
@@ -17,6 +21,7 @@ extern (C) noreturn silver_panic(const(char)* message) nothrow @nogc
 /// The `panic` intrinsic. `message` isn't NUL-terminated, and generated code has put the location in it.
 extern (C) noreturn silver_panic_message(const(char)* message, size_t length) nothrow @nogc
 {
+    panicInTest(message, length);
     fflush(stdout);
     fprintf(stderr, "panic: %.*s\n", cast(int) length, message);
     exit(1);

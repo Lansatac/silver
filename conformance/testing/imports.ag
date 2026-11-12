@@ -1,0 +1,4 @@
+// Only the tests of the file named are run, not those of what it imports.
+import imports_support.counting
+
+test "uses an imported function" => expect(next(1) == 2)

@@ -105,6 +105,10 @@ private struct Printer
                 output ~= "return ";
                 expr(*return_.value);
             },
+            (const TestFailure failure) {
+                output ~= failure.ends ? "stop test" : "fail test";
+                arguments([*failure.message]);
+            },
             (const Construct construct) {
                 output ~= types.describe(e.type);
                 arguments(construct.fields);

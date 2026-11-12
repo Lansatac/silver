@@ -1,0 +1,57 @@
+def double(x: Int): Int => x * 2
+
+def lookup(key: String): Int? => if key == "a" => 1 else None
+
+test "passes quietly" {
+    printl("not shown")
+    expect(double(2) == 4)
+}
+
+test "short form" => expect(double(0) == 0)
+
+test "every failure is recorded and the test carries on" {
+    expect(double(1) == 3)
+    expect(double(2) == 5, "doubling {2}")
+    expect(double(1) > 2 && true)
+    printl("still running")
+}
+
+test "a panic ends only this test" {
+    printl("before")
+    expect(false)
+    val xs = [1, 2]
+    printl(xs[double(2)])
+    printl("never")
+}
+
+test "after a panic, tests still run" => expect(lookup("a") == Some(1))
+
+test "? on None stops the test" {
+    val found = lookup("a")?
+    print(found)
+    val missing = lookup("b")?
+    printl(missing)
+}
+
+test "a lambda or nested def can expect" {
+    val positive = (n: Int) => expect(n > 0, "{n} is positive")
+    positive(1)
+    positive(-1)
+    def even(n: Int): Unit => expect(n % 2 == 0)
+    even(3)
+}
+
+test "there's no input" => expect(read() == None)
+
+test "assert still panics" {
+    assert(double(3) == 7)
+    expect(true)
+}
+
+def deeper(n: Int): Int => deeper(n + 1) + 1
+
+test "a stack overflow ends only this test" => expect(deeper(0) > 0)
+
+def depth(n: Int): Int => if n == 0 => 0 else depth(n - 1) + 1
+
+test "the next test has the whole stack" => expect(depth(10000) == 10000)
