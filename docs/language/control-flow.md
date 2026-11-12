@@ -130,4 +130,4 @@ How deep a program can recurse isn't specified, and differs between the interpre
 
 ## Current implementation
 
-- `for` loops by index over a type with a `length` and an `at`, not an `opIndex`. Operator functions aren't available yet; see [Functions](functions.md#operator-functions).
+The implementation matches this description.

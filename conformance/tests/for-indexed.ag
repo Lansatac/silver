@@ -1,4 +1,4 @@
-// `for` over a value with `length` and `at` loops by index, ahead of `next`.
+// `for` over a value with `length` and `opIndex` loops by index, ahead of `next`.
 
 type Squares(count: Int)
 
@@ -6,7 +6,7 @@ def length(s: Squares): Int {
     printl("length")
     s.count
 }
-def at(s: Squares, index: Int): Int {
+def opIndex(s: Squares, index: Int): Int {
     printl("at {index}")
     index * index
 }
@@ -15,7 +15,7 @@ def next(s: Squares): (Int, Squares)? => panic("stepped")
 
 type Window<T>(items: [T], from: Int, to: Int)
 def length<T>(w: Window<T>): Int => w.to - w.from
-def at<T>(w: Window<T>, index: Int): T => w.items.at(w.from + index)
+def opIndex<T>(w: Window<T>, index: Int): T => w.items[w.from + index]
 
 // Only `length`: stepped.
 type Down(n: Int)

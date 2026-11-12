@@ -68,6 +68,8 @@ private final class TypeChecker
     /// Constructions of a type with an invariant from literals alone, which are checked once the
     /// literals' types are final.
     private const(Expr)[] _literalConstructions;
+    /// How many elements `placePath` has named, so each is a place of its own.
+    private size_t _elementPlaces;
     /// Whether the body being checked is a test's, or a lambda or nested `def` in one.
     private bool _inTest;
 
@@ -408,9 +410,7 @@ private final class TypeChecker
                     checkTupleAssign(assign.target, assign.value, ctx);
                     return;
                 }
-                auto lhsType = synthesize(assign.target, ctx);
-                if (lhsType != _types.error) checkAssignable(assign.target);
-                check(assign.value, lhsType, ctx);
+                checkAssign(assign, ctx);
             },
             // Only a block's last expression is its value, so anything else here was dropped by
             // mistake, as with `val y = x` and `-1` from a `- 1` that started a line.
@@ -572,24 +572,19 @@ private final class TypeChecker
             "`%s` needs to be in the body of a loop".format(keyword));
     }
 
-    /// Reports `target` unless it's a mutable binding, a chain of fields rooted at one, or, when
-    /// assigned to, an element of one. `use` is what's being done to it, for the message:
-    /// "assigned to", or "passed as `mutable`". Within a field path `whole` is false, since an
-    /// element can't be the root of one.
-    private bool checkAssignable(const Expr target, string use = "assigned to", bool whole = true)
+    /// Reports `target` unless it's a mutable binding or a chain of fields rooted at one, or, when
+    /// assigned to, of fields and elements. `use` is what's being done to it, for the message:
+    /// "assigned to", or "passed as `mutable`".
+    private bool checkAssignable(const Expr target, string use = "assigned to")
     {
         return target.kind.match!(
             (const Identifier _) => checkBindingMutable(target, use),
-            (const MemberAccess access) => checkAssignable(*access.object, use, false),
+            (const MemberAccess access) => checkAssignable(*access.object, use),
             (const IndexExpr index) {
-                auto named = index.object.kind.match!((const Identifier _) => true, _ => false);
-                if (whole && use == "assigned to" && named && asRange(index.index) is null)
-                {
-                    return checkBindingMutable(*index.object, use);
-                }
+                if (use == "assigned to" && asRange(index.index) is null) return checkAssignable(*index.object, use);
                 _collector.reportError(DiagnosticCode.InvalidAssignmentTarget, target.span, use == "assigned to"
-                    ? "Only an element of an array held by a `mutable val` or a `mutable` parameter can be assigned to, as `xs[i] = v`"
-                    : "An array element can't be %s; pass the whole array, or copy the element into a `mutable val`".format(use));
+                    ? "A slice can't be assigned to; assign its elements, as `xs[i] = v`"
+                    : "An element can't be %s; pass the whole value, or copy the element into a `mutable val`".format(use));
                 return false;
             },
             (_) => reportInvalidAssignment(target, use),
@@ -623,19 +618,170 @@ private final class TypeChecker
 
     private bool reportInvalidAssignment(const Expr target, string use)
     {
-        _collector.reportError(DiagnosticCode.InvalidAssignmentTarget, target.span,
-            "Only a `mutable val`, a `mutable` parameter or one of their fields can be %s".format(use));
+        _collector.reportError(DiagnosticCode.InvalidAssignmentTarget, target.span, use == "assigned to"
+            ? "Only a `mutable val`, a `mutable` parameter, or a field or element of one, can be assigned to"
+            : "Only a `mutable val`, a `mutable` parameter or one of their fields can be %s".format(use));
         return false;
     }
 
+    /// `target = value`, where the target is a place. An element of anything but an array is
+    /// written with `opIndexAssign`, and so is each such element the place is inside, from the
+    /// inside out, so `grid[y][x] = v` is `grid = opIndexAssign(grid, y, opIndexAssign(grid[y], x, v))`.
+    private void checkAssign(const AssignStmt assign, BodyContext ctx)
+    {
+        auto target = assign.target;
+        auto type = targetType(target, ctx);
+        auto assignable = type != _types.error && checkAssignable(target);
+        auto written = true;
+        if (type == Type.init) written = writeIndexed(target, &assign.value, Type.init, false, ctx);
+        else check(assign.value, type, ctx);
+        if (assignable && written) writeAround(target, ctx);
+        if (assign.compound && written) checkCompoundIndices(target, assign.value);
+    }
+
+    /// The type a value assigned to `target` has to have, with what's read on the way synthesized,
+    /// or `Type.init` when `target` is an element of something other than an array, whose
+    /// `opIndexAssign` is chosen once the value is known.
+    private Type targetType(const Expr target, BodyContext ctx)
+    {
+        auto index = target.kind.match!((ref const IndexExpr i) => &i, _ => null);
+        if (index is null || asRange(index.index) !is null) return synthesize(target, ctx);
+        auto objectType = _declarer.requireTyped(synthesize(*index.object, ctx), index.object.span);
+        _typing.exprTypes[index.object.id] = objectType;
+        Type type;
+        if (objectType == _types.error || objectType == _types.never)
+        {
+            checkArgument(*index.index, _types.error, ctx);
+            type = _types.error;
+        }
+        else if (_types.isArray(objectType))
+        {
+            checkIndex(*index.index, ctx);
+            type = _types.arrayElement(objectType);
+        }
+        else
+        {
+            return Type.init;
+        }
+        _typing.exprTypes[target.id] = type;
+        return type;
+    }
+
+    /// Writes an element of something other than an array, the `target` of `x[i] = v`, which means
+    /// `x = opIndexAssign(x, i, v)`. `v` is `value`, or else a value of type `type` with no
+    /// expression, which has to be exactly the type `opIndexAssign` takes; so does an index that
+    /// was already synthesized, when `indexRead`, since it was read with that type. Whether it
+    /// could be written.
+    private bool writeIndexed(const Expr target, const(Expr)* value, Type type, bool indexRead, BodyContext ctx)
+    {
+        auto index = target.kind.match!((ref const IndexExpr i) => &i, (_) => null);
+        auto objectType = _typing.exprTypes.get(index.object.id, _types.error);
+        auto given = placeholder(target.span);
+        auto indexType = indexRead ? argumentType(*index.index) : Type.init;
+        const(Expr)[] args = [given, indexRead ? given : *index.index, value is null ? given : *value];
+        Type[] typed = [objectType, indexType, value is null ? type : Type.init];
+        auto write = syntaxFunction(target, target.span, "opIndexAssign", "`x[i] = v`", args, typed, ctx);
+        if (!write.found)
+        {
+            _typing.exprTypes[target.id] = _types.error;
+            return false;
+        }
+        auto params = write.signature.params;
+        string problem;
+        if (params[0] != objectType || write.signature.ret != objectType)
+        {
+            problem = "`x[i] = v` assigns what `opIndexAssign` returns back to `x`, so it has to take and return `%s`, but `%s` doesn't"
+                .format(_types.describe(objectType), describeUse("opIndexAssign", write));
+        }
+        else if (indexRead && params[1] != indexType)
+        {
+            problem = "`%s` reads with an index of type `%s`, and writes back with `%s`, which takes `%s`"
+                .format(_types.describe(objectType), _types.describe(indexType),
+                    describeUse("opIndexAssign", write), _types.describe(params[1]));
+        }
+        else if (value is null && params[2] != type)
+        {
+            problem = "`%s` writes back a `%s`, but `%s` takes `%s`".format(_types.describe(objectType),
+                _types.describe(type), describeUse("opIndexAssign", write), _types.describe(params[2]));
+        }
+        if (problem !is null)
+        {
+            _collector.reportError(DiagnosticCode.TypeMismatch, target.span, problem);
+            _typing.exprTypes[target.id] = _types.error;
+            return false;
+        }
+        _typing.indexing.require(target.id).write = write.use;
+        _typing.exprTypes[target.id] = params[2];
+        return true;
+    }
+
+    /// After a write to `place`, the writes back into each element of something other than an array
+    /// that holds it, each of which was read on the way.
+    private void writeAround(const Expr place, BodyContext ctx)
+    {
+        place.kind.match!(
+            (const MemberAccess access) => writeBack(*access.object, ctx),
+            (const IndexExpr index) => writeBack(*index.object, ctx),
+            (_) {},
+        );
+    }
+
+    private void writeBack(const Expr place, BodyContext ctx)
+    {
+        auto index = place.kind.match!((ref const IndexExpr i) => &i, _ => null);
+        if (index !is null && !_types.isArray(_typing.exprTypes.get(index.object.id, _types.error)))
+        {
+            auto type = _typing.exprTypes.get(place.id, _types.error);
+            if (type == _types.error || !writeIndexed(place, null, type, true, ctx)) return;
+        }
+        writeAround(place, ctx);
+    }
+
+    /// `x[i] += v` reads `x[i]` and writes it with `i` evaluated once, so the read has to take each
+    /// index as the type the write does. `value` is the operation, which reads the target again.
+    private void checkCompoundIndices(const Expr target, const Expr value)
+    {
+        auto read = value.kind.match!((const BinaryExpr b) => b.left, _ => null);
+        if (read is null) return;
+        void compare(const Expr written, const Expr reread)
+        {
+            auto field = written.kind.match!((const MemberAccess m) => m.object, _ => null);
+            if (field !is null)
+            {
+                compare(*field, *reread.kind.match!((const MemberAccess m) => m.object, _ => null));
+                return;
+            }
+            auto pair = written.kind.match!((ref const IndexExpr i) => &i, _ => null);
+            if (pair is null) return;
+            auto other = reread.kind.match!((ref const IndexExpr i) => &i, _ => null);
+            compare(*pair.object, *other.object);
+            auto from = argumentType(*other.index);
+            auto to = argumentType(*pair.index);
+            if (from == to || _types.mentionsError(from) || _types.mentionsError(to) || asRange(pair.index) !is null) return;
+            _collector.reportError(DiagnosticCode.TypeMismatch, pair.index.span,
+                "This index is evaluated once, for the read and the write, but the read takes it as `%s` and the write as `%s`"
+                    .format(_types.describe(from), _types.describe(to)));
+        }
+        compare(target, *read);
+    }
+
+    /// The type an argument is passed as, after any promotion.
+    private Type argumentType(const Expr arg)
+    {
+        if (auto promoted = arg.id in _typing.promotions) return *promoted;
+        return _typing.exprTypes.get(arg.id, _types.error);
+    }
+
     /// The place `target` names as its binding and then field names, for telling whether two
-    /// writes overlap. Only called on a target `checkAssignable` accepted.
+    /// writes overlap. Each element is a place of its own, since indices aren't known. Only called
+    /// on a target `checkAssignable` accepted.
     private string[] placePath(const Expr target)
     {
         return target.kind.match!(
             (const Identifier _) => [_resolutions.resolutions[target.id].to!string],
             (const MemberAccess access) => placePath(*access.object) ~ access.member,
-            (_) => assert(0, "only names and fields are places"),
+            (const IndexExpr index) => placePath(*index.object) ~ "[%s]".format(_elementPlaces++),
+            (_) => assert(0, "only names, fields and elements are places"),
         );
     }
 
@@ -664,15 +810,11 @@ private final class TypeChecker
         const(string[])[] paths;
         Span[] spans;
         bool assignable = true;
-        size_t elements;
+        const(Expr)[] places;
 
         bool isDiscard(const Expr e) => e.kind.match!((const Identifier name) => name.name == discardName, _ => false);
         const(Expr)[] partsOf(const Expr e) => e.kind.match!((const TupleLiteral t) => t.elements, _ => null);
 
-        string[] pathOf(const Expr place) => place.kind.match!(
-            (const IndexExpr index) => placePath(*index.object) ~ "[%s]".format(elements++),
-            _ => placePath(place),
-        );
         void prepare(const Expr t)
         {
             if (auto parts = partsOf(t))
@@ -681,14 +823,15 @@ private final class TypeChecker
                 return;
             }
             if (isDiscard(t)) return;
-            auto type = synthesize(t, ctx);
+            auto type = targetType(t, ctx);
             placeTypes[t.id] = type;
             if (type == _types.error || !checkAssignable(t))
             {
                 assignable = false;
                 return;
             }
-            paths ~= pathOf(t);
+            places ~= t;
+            paths ~= placePath(t);
             spans ~= t.span;
         }
         prepare(target);
@@ -705,6 +848,11 @@ private final class TypeChecker
             if (parts is null)
             {
                 auto expected = placeTypes[t.id];
+                if (expected == Type.init)
+                {
+                    writeIndexed(t, null, type, false, ctx);
+                    return;
+                }
                 if (expected != _types.error && type != expected)
                 {
                     _collector.reportError(DiagnosticCode.TypeMismatch, t.span,
@@ -751,9 +899,15 @@ private final class TypeChecker
                 synthesize(v, ctx);
                 return;
             }
-            check(v, placeTypes[t.id], ctx);
+            if (placeTypes[t.id] == Type.init) writeIndexed(t, &v, Type.init, false, ctx);
+            else check(v, placeTypes[t.id], ctx);
         }
         assign(target, value);
+        if (!assignable) return;
+        foreach (place; places)
+        {
+            if (_typing.exprTypes.get(place.id, _types.error) != _types.error) writeAround(place, ctx);
+        }
     }
 
     /// The declaration `expr` builds a value of, or an invalid ID if it doesn't: a constructor call,
@@ -826,7 +980,7 @@ private final class TypeChecker
             (const SafeMemberAccess access) => synthesizeSafeMember(expr, access, ctx),
             (const ArrayLiteral literal) => synthesizeArrayLiteral(literal, ctx),
             (const MapLiteral literal) => synthesizeMapLiteral(literal, expr.span, ctx),
-            (const IndexExpr index) => synthesizeIndex(index, ctx),
+            (const IndexExpr index) => synthesizeIndex(expr, index, ctx),
             (const RangeExpr range) => synthesizeBareRange(range, expr.span, ctx),
             (const TupleLiteral literal) => _declarer.tupleOf(literal.elements.map!(e => _declarer.requireTyped(synthesize(e, ctx), e.span)).array),
             (const MatchExpr match_) => synthesizeMatch(match_, expr.span, ctx),
@@ -867,38 +1021,99 @@ private final class TypeChecker
         return _types.error;
     }
 
-    /// `xs[i]`, or `xs[a..b]`, whose range is part of the slice rather than a value.
-    private Type synthesizeIndex(const IndexExpr index, BodyContext ctx)
+    /// `x[i]`, or `x[a..b]`, whose range is part of the slice rather than a value. An array's are
+    /// built in; anything else's call `opIndex` or `opSlice`.
+    private Type synthesizeIndex(const Expr expr, const IndexExpr index, BodyContext ctx)
     {
         auto objectType = _declarer.requireTyped(synthesize(*index.object, ctx), index.object.span);
         auto range = asRange(index.index);
-        if (range is null)
+        if (range !is null) _typing.exprTypes[index.index.id] = objectType;
+        if (objectType == _types.error || objectType == _types.never)
         {
-            checkConsumedInteger(*index.index, ctx);
-        }
-        else
-        {
-            if (range.start !is null) checkConsumedInteger(*range.start, ctx);
-            if (range.end !is null) checkConsumedInteger(*range.end, ctx);
-            _typing.exprTypes[index.index.id] = objectType;
-        }
-        if (objectType == _types.error) return objectType;
-        if (!_types.isArray(objectType))
-        {
-            _collector.reportError(DiagnosticCode.InvalidOperand, index.object.span,
-                "Only an array can be indexed, got `%s`".format(_types.describe(objectType)));
+            if (range is null) checkArgument(*index.index, _types.error, ctx);
+            if (range !is null && range.start !is null) checkArgument(*range.start, _types.error, ctx);
+            if (range !is null && range.end !is null) checkArgument(*range.end, _types.error, ctx);
             return _types.error;
         }
-        return range is null ? _types.arrayElement(objectType) : objectType;
+        if (_types.isArray(objectType))
+        {
+            if (range is null)
+            {
+                checkIndex(*index.index, ctx);
+                return _types.arrayElement(objectType);
+            }
+            if (range.start !is null) checkIndex(*range.start, ctx);
+            if (range.end !is null) checkIndex(*range.end, ctx);
+            return objectType;
+        }
+        if (range !is null) return sliceIndexed(expr, index, *range, objectType, ctx);
+        auto read = syntaxFunction(expr, expr.span, "opIndex", "`x[i]`", [*index.object, *index.index], [objectType, Type.init], ctx);
+        if (!read.found) return _types.error;
+        _typing.indexing.require(expr.id).read = read.use;
+        return read.signature.ret;
     }
 
-    /// An operand that's range-checked and doesn't affect the result's type, so any integer will do.
-    private void checkConsumedInteger(const Expr expr, BodyContext ctx)
+    /// `x[a..b]` on something other than an array, which is `opSlice(x, a, b)`. A left-out `a` is
+    /// 0, and a left-out `b` is `length(x)`, with `x` evaluated once.
+    private Type sliceIndexed(const Expr expr, const IndexExpr index, const RangeExpr range, Type objectType,
+        BodyContext ctx)
     {
+        auto left = placeholder(expr.span);
+        Type end;
+        if (range.end is null)
+        {
+            auto length = syntaxFunction(expr, expr.span, "length", "`x[a..]`", [*index.object], [objectType], ctx);
+            if (!length.found)
+            {
+                if (range.start !is null) checkArgument(*range.start, _types.error, ctx);
+                return _types.error;
+            }
+            _typing.indexing.require(expr.id).length = length.use;
+            end = length.signature.ret;
+        }
+        auto args = [*index.object, range.start is null ? left : *range.start, range.end is null ? left : *range.end];
+        Type[] typed = [objectType, range.start is null ? _types.int_ : Type.init, end];
+        auto slice = syntaxFunction(expr, expr.span, "opSlice", "`x[a..b]`", args, typed, ctx);
+        if (!slice.found) return _types.error;
+        auto params = slice.signature.params;
+        if (range.start is null && params[1] != _types.int_)
+        {
+            _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
+                "`x[..b]` passes `opSlice` an `Int` 0 to start at, but `%s` takes `%s`"
+                    .format(describeUse("opSlice", slice), _types.describe(params[1])));
+            return _types.error;
+        }
+        if (range.end is null && params[2] != end)
+        {
+            _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
+                "`x[a..]` passes `opSlice` the `%s` that `length` returns to end at, but `%s` takes `%s`"
+                    .format(_types.describe(end), describeUse("opSlice", slice), _types.describe(params[2])));
+            return _types.error;
+        }
+        _typing.indexing.require(expr.id).read = slice.use;
+        return slice.signature.ret;
+    }
+
+    /// An array's index or slice bound, which is an `Int`.
+    private void checkIndex(const Expr expr, BodyContext ctx)
+    {
+        if (isIntLiteral(expr))
+        {
+            check(expr, _types.int_, ctx);
+            return;
+        }
         auto type = synthesize(expr, ctx);
-        if (type == _types.error || type == _types.never || _types.isInteger(type)) return;
-        _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
-            "Expected an integer, got `%s`".format(_types.describe(type)));
+        if (type == _types.int_ || type == _types.error || type == _types.never) return;
+        _collector.reportError(DiagnosticCode.TypeMismatch, expr.span, _types.isInteger(type)
+            ? "An array index is an `Int`, not `%s`; convert it with `Int(...)`".format(_types.describe(type))
+            : "An array index is an `Int`, not `%s`".format(_types.describe(type)));
+    }
+
+    /// An argument that syntax passes with no expression of its own, such as the 0 a left-out
+    /// slice start means. It's given a type, so it's never synthesized.
+    private static Expr placeholder(Span span)
+    {
+        return Expr(Id!Expr.init, span, ExprKind(Identifier(discardName)));
     }
 
     private Type synthesizeBareRange(const RangeExpr range, Span span, BodyContext ctx)
@@ -3024,7 +3239,7 @@ private final class TypeChecker
     }
 
     /// The element type of what a `for` loops over, which isn't `a..b`: an array, or a value that
-    /// `length` and `at`, or `next`, loop over.
+    /// `length` and `opIndex`, or `next`, loop over.
     private Type synthesizeForValue(const Expr for_, const Expr iterable, BodyContext ctx)
     {
         auto type = _declarer.requireTyped(synthesize(iterable, ctx), iterable.span);
@@ -3033,40 +3248,37 @@ private final class TypeChecker
         auto element = loopElement(for_, iterable, type, ctx);
         if (element != Type.init) return element;
         _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span,
-            "`for` needs an array, a range, or a value that `length` and `at`, or `next`, take; got `%s`"
+            "`for` needs an array, a range, or a value that `length` and `opIndex`, or `next`, take; got `%s`"
                 .format(_types.describe(type)));
         return _types.error;
     }
 
-    /// A function a `for` calls, as `loopFunction` finds it.
-    private struct LoopUse
+    /// A function that syntax calls, as `syntaxFunction` finds it.
+    private struct SyntaxUse
     {
-        LoopFunction use;
+        FunctionUse use;
         /// With the type arguments filled in.
         FunctionData signature;
         /// Whether finding it was reported as an error.
         bool failed;
 
-        bool found() const => use.func.isValid;
+        bool found() const => use.found;
     }
 
     /// What `for` yields from a `type` that isn't an array, with the functions calls at the loop
-    /// would choose. When a `length(r): Int` and an `at(r, i: Int): T` both take a `type`, it loops by
-    /// index, and otherwise steps with a `next(r): (T, type)?`. Each has to take exactly `type`, and
-    /// `T` is the element type. `Type.init` when neither way is there.
+    /// would choose. When a `length(r): Int` and an `opIndex(r, i: Int): T` both take a `type`, it
+    /// loops by index, and otherwise steps with a `next(r): (T, type)?`. Each has to take exactly
+    /// `type`, and `T` is the element type. `Type.init` when neither way is there.
     private Type loopElement(const Expr for_, const Expr iterable, Type type, BodyContext ctx)
     {
-        auto lookups = for_.id in _resolutions.loopLookups;
-        if (lookups is null) return Type.init;
-        // Never synthesized, since its type is given.
-        auto index = Expr(Id!Expr.init, iterable.span, ExprKind(Identifier("index")));
-
-        auto length = loopFunction(*lookups, "length", [iterable], [type], ctx);
-        auto at = loopFunction(*lookups, "at", [iterable, index], [type, _types.int_], ctx);
+        auto index = placeholder(iterable.span);
+        auto length = syntaxFunction(for_, iterable.span, "length", "`for`", [iterable], [type], ctx, false);
+        auto at = syntaxFunction(for_, iterable.span, "opIndex", "`for`", [iterable, index], [type, _types.int_], ctx, false);
         if (length.failed || at.failed) return _types.error;
         if (length.found && at.found)
         {
-            if (!takesExactly("length", length, [type], iterable.span) || !takesExactly("at", at, [type, _types.int_], iterable.span))
+            if (!takesExactly("length", length, [type], iterable.span)
+                || !takesExactly("opIndex", at, [type, _types.int_], iterable.span))
             {
                 return _types.error;
             }
@@ -3081,7 +3293,7 @@ private final class TypeChecker
             return at.signature.ret;
         }
 
-        auto next = loopFunction(*lookups, "next", [iterable], [type], ctx);
+        auto next = syntaxFunction(for_, iterable.span, "next", "`for`", [iterable], [type], ctx, false);
         if (next.failed) return _types.error;
         if (!next.found) return Type.init;
         if (!takesExactly("next", next, [type], iterable.span)) return _types.error;
@@ -3095,72 +3307,139 @@ private final class TypeChecker
                     .format(_types.describe(type), _types.describe(type), describeUse("next", next), _types.describe(result)));
             return _types.error;
         }
-        _typing.loops[for_.id] = LoopFunctions(LoopFunction.init, LoopFunction.init, next.use);
+        _typing.loops[for_.id] = LoopFunctions(FunctionUse.init, FunctionUse.init, next.use);
         return parts[0];
     }
 
-    /// The function `name` that a call at a `for` with arguments of the types `typed` would choose,
-    /// with its type arguments bound by them. Not found when none takes them; failed when choosing
-    /// reported an error.
-    private LoopUse loopFunction(const Candidates[string] lookups, string name, const(Expr)[] args, Type[] typed,
-        BodyContext ctx)
+    /// The function `name` that `syntax` at `at` calls with `args`, chosen as a call is from the
+    /// functions resolution found there, with its type arguments bound by the arguments. An
+    /// argument with a type in `typed` has it already: it's been synthesized, or it's a placeholder
+    /// for a value with no expression, which the caller checks. The rest are checked against their
+    /// parameters. Not found when no function takes them, which is reported when `required`;
+    /// failed when finding one reported an error.
+    private SyntaxUse syntaxFunction(const Expr at, Span span, string name, string syntax, const(Expr)[] args,
+        Type[] typed, BodyContext ctx, bool required = true)
     {
-        auto lookup = name in lookups;
-        if (lookup is null) return LoopUse.init;
+        SyntaxUse failed;
+        failed.failed = true;
+        void typeTheRest()
+        {
+            foreach (i, arg; args)
+            {
+                if (typed[i] == Type.init) checkArgument(arg, _types.error, ctx);
+            }
+        }
+
+        auto lookups = at.id in _resolutions.operatorLookups;
+        auto lookup = lookups is null ? null : name in *lookups;
+        // What's indexed or looped over is what a reader looks for the function by.
+        bool takesFirst(Id!FunctionDecl f)
+        {
+            auto params = signatureOf(f).params;
+            auto typeParams = _resolutions.declarations.functions[f].typeParams;
+            return params.length == args.length && typedFit(typed[0], params[0], typeParams, false) != Fit.none;
+        }
+        if (lookup is null || !lookup.groups.joiner.any!takesFirst)
+        {
+            if (!required) return SyntaxUse.init;
+            typeTheRest();
+            _collector.reportError(DiagnosticCode.InvalidOperand, args[0].id.isValid ? args[0].span : span,
+                "%s calls `%s`, and no `%s` here takes a `%s`".format(syntax, name, name, _types.describe(typed[0])));
+            return failed;
+        }
+        // Each argument with a type of its own is synthesized once, so it's fitted by its type.
+        foreach (i, arg; args)
+        {
+            if (typed[i] == Type.init && !isShaped(arg)) typed[i] = synthesize(arg, ctx);
+        }
         auto call = CallExpr(null, cast(Expr[]) args);
         Candidates fitting;
         Trial[][] trials;
+        Trial[][] tried;
         foreach (group; lookup.groups)
         {
             Trial[] fits;
+            Trial[] all;
             foreach (f; group)
             {
                 auto trial = arityTrial(f, args.length, 0);
                 if (trial.fitsAll) fitTrial(trial, call, typed, null, false);
+                all ~= trial;
                 if (trial.fitsAll) fits ~= trial;
             }
             trials ~= fits;
+            tried ~= all;
             fitting.groups ~= fits.map!(t => t.func).array;
         }
-        if (fitting.count == 0) return LoopUse.init;
+        auto reportable = !typed.any!(t => t != Type.init && _types.mentionsError(t));
+        if (fitting.count == 0)
+        {
+            if (!required) return SyntaxUse.init;
+            typeTheRest();
+            if (reportable) reportNoOverload(span, name, tried);
+            return failed;
+        }
 
-        LoopUse failed;
-        failed.failed = true;
-        auto span = args[0].span;
         auto imported = rankedImports(trials[1 .. $]);
         if (fitting.groups[0].length == 0 && imported.length > 1)
         {
+            typeTheRest();
             auto modules = imported.map!(g => _resolutions.declarations.functionModules[g[0].func]).array;
             _collector.reportError(DiagnosticCode.AmbiguousName, span,
-                ("`for` could use `%s` from more than one imported module (%s); declare one in this module that "
+                ("%s could use `%s` from more than one imported module (%s); declare one in this module that "
                     ~ "calls the one you mean, as in `def %s(...) => %s.%s(...)`")
-                    .format(name, modules.join(", "), name, modules[0], name));
+                    .format(syntax, name, modules.join(", "), name, modules[0], name));
             return failed;
         }
-        auto function_ = chooseFunction(args[0], name, null, fitting, call, typed, false, ctx);
-        if (!function_.isValid) return failed;
+        auto named = Expr(Id!Expr.init, span, ExprKind(Identifier(name)));
+        auto function_ = chooseFunction(named, name, null, fitting, call, typed, false, ctx);
+        if (!function_.isValid)
+        {
+            typeTheRest();
+            return failed;
+        }
 
         auto params = _resolutions.declarations.functions[function_].typeParams;
         auto signature = signatureOf(function_);
         Substitution bound;
-        foreach (i, type; typed) bindParams(signature.params[i], type, params, bound);
+        foreach (i, type; typed)
+        {
+            if (type != Type.init) bindParams(signature.params[i], type, params, bound);
+        }
+        auto checked = new bool[args.length];
+        foreach (i, arg; args)
+        {
+            if (typed[i] != Type.init) continue;
+            if (isBound(signature.params[i], params, bound))
+            {
+                check(arg, _types.substitute(signature.params[i], bound), ctx);
+                checked[i] = true;
+                continue;
+            }
+            typed[i] = synthesize(arg, ctx);
+            bindParams(signature.params[i], typed[i], params, bound);
+        }
         auto unbound = params.filter!(p => p.id !in bound);
         if (!unbound.empty)
         {
             _collector.reportError(DiagnosticCode.CannotInferTypeArgument, span,
-                "`for` uses `%s: %s` here, but nothing in `%s` says what its `%s` is".format(name,
-                    _types.describe(symbolType(SymbolId(function_))), _types.describe(typed[0]), unbound.front.name));
+                "%s uses `%s: %s` here, but nothing it passes says what its `%s` is".format(syntax, name,
+                    _types.describe(symbolType(SymbolId(function_))), unbound.front.name));
             return failed;
         }
-        LoopUse found;
-        found.use = LoopFunction(function_, params.map!(p => bound[p.id]).array);
+        SyntaxUse found;
+        found.use = FunctionUse(function_, params.map!(p => bound[p.id]).array);
         found.signature = signatureOf(_types.substitute(symbolType(SymbolId(function_)), bound));
+        foreach (i, arg; args)
+        {
+            if (!checked[i] && arg.id.isValid) coerce(arg, typed[i], found.signature.params[i]);
+        }
         return found;
     }
 
     /// Whether `use` takes exactly `params`, reporting it when not, since a `for` doesn't convert
     /// what it passes.
-    private bool takesExactly(string name, const LoopUse use, const(Type)[] params, Span span)
+    private bool takesExactly(string name, const SyntaxUse use, const(Type)[] params, Span span)
     {
         if (use.signature.params == params) return true;
         auto describe(const(Type)[] types) => types.length == 1
@@ -3172,12 +3451,11 @@ private final class TypeChecker
         return false;
     }
 
-    /// A function a `for` uses, as an error message names it, with its signature.
-    private string describeUse(string name, const LoopUse use)
+    /// A function that syntax uses, as an error message names it, with its signature.
+    private string describeUse(string name, const SyntaxUse use)
     {
         return "%s: %s".format(name, _types.describe(symbolType(SymbolId(use.use.func))));
     }
-
 
     /// The type of a `for` range's bounds, which is also its own type and that of each value.
     /// Only integers count, and a literal takes the type of the number beside it.

@@ -1829,7 +1829,7 @@ unittest
         .shouldReport(DiagnosticCode.InvalidArrayElement, At("[Any]", 1));
 }
 
-@("indexing takes any integer and only applies to arrays, and a slice keeps the array's type")
+@("an array index is an Int, and a slice keeps the array's type")
 unittest
 {
     auto a = analyzedMain(`val xs = ["a"]
@@ -1845,9 +1845,10 @@ unittest
     a.shouldDeclareType(At("start", 1), "[String]");
 
     analyzedMain(`val i: UInt8 = 0
-    val j: Int16 = 1
-    print([1][i])
-    print([1][i..j])`).shouldHaveNoDiagnostics();
+    print([1][i])`).shouldReport(DiagnosticCode.TypeMismatch, At("i", 2));
+    analyzedMain(`val j: Int16 = 1
+    print([1][0..j])`).shouldReport(DiagnosticCode.TypeMismatch, At("j", 2));
+    analyzedMain(`print([1][0..2] ~ [1][..1] ~ [1][0..])`).shouldHaveNoDiagnostics();
     analyzedMain(`val f = 1.0
     print([1][f])`).shouldReport(DiagnosticCode.TypeMismatch, At("f", 2));
     analyzedMain(`print([1][0.."a"])`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
@@ -1862,9 +1863,12 @@ unittest
 unittest
 {
     analyzedMain(`mutable val xs = [1]
-    val i: UInt8 = 0
+    val i = 0
     xs[i] = 2
     xs[0] += 2`).shouldHaveNoDiagnostics();
+    analyzedMain(`mutable val xs = [1]
+    val i: UInt8 = 0
+    xs[i] = 2`).shouldReport(DiagnosticCode.TypeMismatch, At("i", 2));
     analyzedMain(`mutable val xs: [Int?] = [None]
     xs[0] = 1
     mutable val ys = [[1]]
@@ -1938,17 +1942,21 @@ unittest
     analyzed(message ~ "    (xs[0], xs[0]) = (1, 2)\n    (p.x, p.y) = (1, 2)\n}").shouldHaveNoDiagnostics();
 }
 
-@("only a whole element of a named array can be assigned, not a nested one, a slice or a field of one")
+@("an element can be assigned through a path of elements and fields, but a slice can't be assigned")
 unittest
 {
     analyzedMain(`mutable val g = [[1]]
-    g[0][0] = 2`).shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("g[0][0]", 1));
+    g[0][0] = 2
+    g[0][0] += 1`).shouldHaveNoDiagnostics();
+    analyzed("type P(h: [Int])\ntype Q(p: P)\ndef main(): Unit {\n    mutable val ps = [P([1])]\n    ps[0].h = [2]\n"
+        ~ "    ps[0].h ~= [2]\n    ps[0].h[0] = 3\n    mutable val q = Q(P([1]))\n    q.p.h[0] = 2\n}").shouldHaveNoDiagnostics();
+    analyzedMain(`val g = [[1]]
+    g[0][0] = 2`).shouldReport(DiagnosticCode.AssignToImmutable, At("g", 2));
+    analyzedMain(`mutable val g = [[1]]
+    g[0][0] = "a"`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
     analyzedMain(`mutable val xs = [1, 2]
     xs[0..1] = [3]`).shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("xs[0..1]", 1));
-    analyzed("type P(h: [Int])\ndef main(): Unit {\n    mutable val ps = [P([1])]\n    ps[0].h = [2]\n}")
-        .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("ps[0]", 1));
-    analyzed("type P(h: [Int])\ndef main(): Unit {\n    mutable val ps = [P([1])]\n    ps[0].h ~= [2]\n}")
-        .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("ps[0]", 1));
+    analyzedMain(`[[1]][0][0] = 2`).shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("[[1]]", 1));
 }
 
 @("~ joins two of the same array or String, and never takes a bare element")
@@ -2106,14 +2114,14 @@ unittest
     analyzed(source ~ "def next<T>(a: T): (Int, T)? => None" ~ loop).shouldHaveNoDiagnostics();
 }
 
-@("for loops by index when a length and an at take the value, in place of next")
+@("for loops by index when a length and an opIndex take the value, in place of next")
 unittest
 {
     auto a = analyzed("type A(x: Int)\n"
-        ~ "def length(a: A): Int => 1\ndef at(a: A, index: Int): String => \"\"\n"
+        ~ "def length(a: A): Int => 1\ndef opIndex(a: A, index: Int): String => \"\"\n"
         ~ "def next(a: A): (Bool, A)? => None\n"
-        ~ "type B(x: Int)\ndef at(b: B, index: Int): String => \"\"\ndef next(b: B): (Bool, B)? => None\n"
-        ~ "type W<T>(items: [T])\ndef length<T>(w: W<T>): Int => 0\ndef at<T>(w: W<T>, index: Int): T => w.items.at(index)\n"
+        ~ "type B(x: Int)\ndef opIndex(b: B, index: Int): String => \"\"\ndef next(b: B): (Bool, B)? => None\n"
+        ~ "type W<T>(items: [T])\ndef length<T>(w: W<T>): Int => 0\ndef opIndex<T>(w: W<T>, index: Int): T => w.items[index]\n"
         ~ "def main(): Unit {\n    for one in A(1) { print(one) }\n    for two in B(1) { print(two) }\n"
         ~ "    for three in W([1.5]) { print(three) }\n    print([1].at(0))\n}");
     a.shouldHaveNoDiagnostics();
@@ -2122,19 +2130,19 @@ unittest
     a.shouldHaveType("three", 2, "Float");
 }
 
-@("the length and at a for uses take exactly the value and an Int, and length returns an Int")
+@("the length and opIndex a for uses take exactly the value and an Int, and length returns an Int")
 unittest
 {
     enum source = "type A(x: Int)\n";
     enum loop = "\ndef main(): Unit {\n    for x in A(1) { }\n}";
-    enum at = "def at(a: A, index: Int): Int => 1\n";
+    enum at = "def opIndex(a: A, index: Int): Int => 1\n";
     enum length = "def length(a: A): Int => 1\n";
     analyzed(source ~ at ~ "def length(a: A): UInt8 => 1" ~ loop).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
     analyzed(source ~ at ~ "def length(a: A?): Int => 1" ~ loop).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    analyzed(source ~ length ~ "def at(a: A, index: Int?): Int => 1" ~ loop)
+    analyzed(source ~ length ~ "def opIndex(a: A, index: Int?): Int => 1" ~ loop)
         .shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    // An `at` that an Int doesn't fit isn't one.
-    analyzed(source ~ length ~ "def at(a: A, index: UInt8): Int => 1" ~ loop)
+    // An `opIndex` that an Int doesn't fit isn't one.
+    analyzed(source ~ length ~ "def opIndex(a: A, index: UInt8): Int => 1" ~ loop)
         .shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
 }
 

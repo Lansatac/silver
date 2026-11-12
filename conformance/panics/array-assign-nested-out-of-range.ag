@@ -1,0 +1,7 @@
+def main(): Unit {
+    mutable val rows = [[1, 2], [3]]
+    rows[1][0] = 30
+    printl(rows)
+    rows[1][1] = { printl("value first"); 4 }
+    printl(rows)
+}

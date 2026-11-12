@@ -16,10 +16,10 @@ def main(): Unit {
     printl(xs[length(xs) - 1..])
     printl(xs[..length(xs) - 1])
 
-    // Bounds of any integer type, as in any slice.
+    // A bound of another integer type is converted first.
     val i: UInt8 = 2
-    printl(xs[i..])
-    printl(xs[..i])
+    printl(xs[Int(i)..])
+    printl(xs[..Int(i)])
 
     // The array is evaluated once, even though the end is its length.
     printl(made()[2..])

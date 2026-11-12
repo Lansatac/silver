@@ -39,7 +39,7 @@ def main(): Unit {
     printl(before)
 
     val small: UInt8 = 2
-    xs[small] = 30
+    xs[Int(small)] = 30
     xs[1] += 10
     xs[2] *= 2
     printl(xs)

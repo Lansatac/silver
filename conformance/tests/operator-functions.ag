@@ -1,0 +1,101 @@
+// `x[i]`, `x[i] = v` and `x[a..b]` call `opIndex`, `opIndexAssign` and `opSlice` on anything but an array.
+
+type Window<T>(items: [T], from: Int, to: Int)
+
+def length<T>(w: Window<T>): Int => w.to - w.from
+def opIndex<T>(w: Window<T>, index: Int): T => w.items[w.from + index]
+def opIndexAssign<T>(w: Window<T>, index: Int, value: T): Window<T> {
+    mutable val items = w.items
+    items[w.from + index] = value
+    w with (items = items)
+}
+def opSlice<T>(w: Window<T>, from: Int, to: Int): Window<T> => Window(w.items, w.from + from, w.from + to)
+
+// A missing entry is ordinary, so reading one gives an option.
+type Counts(names: [String], counts: [Int])
+
+def opIndex(c: Counts, name: String): Int? {
+    for i in 0..length(c.names) {
+        if c.names[i] == name { return c.counts[i] }
+    }
+    None
+}
+def opIndexAssign(c: Counts, name: String, count: Int): Counts {
+    for i in 0..length(c.names) {
+        if c.names[i] == name {
+            mutable val counts = c.counts
+            counts[i] = count
+            return c with (counts = counts)
+        }
+    }
+    Counts(c.names ~ [name], c.counts ~ [count])
+}
+
+// Each call says when it runs, to show what's evaluated once.
+type Grid(rows: [[Int]])
+
+def opIndex(g: Grid, row: Int): [Int] {
+    printl("read row {row}")
+    g.rows[row]
+}
+def opIndexAssign(g: Grid, row: Int, value: [Int]): Grid {
+    printl("write row {row}")
+    mutable val rows = g.rows
+    rows[row] = value
+    Grid(rows)
+}
+
+type Game(board: Window<Int>, turn: Int)
+
+def at(name: String, value: Int): Int {
+    printl("index {name}")
+    value
+}
+
+def main(): Unit {
+    mutable val w = Window([1, 2, 3, 4, 5], 1, 4)
+    printl(w[0])
+    w[1] = 30
+    w[2] += 10
+    printl(w.items)
+    printl(w[1..3][0])
+    printl(length(w[1..]))
+    printl(w[..2][1])
+    (w[0], w[1]) = (w[1], w[0])
+    printl(w.items)
+
+    mutable val c = Counts([], [])
+    c["a"] = 1
+    c["b"] = 2
+    c["a"] = 3
+    printl(c["a"])
+    printl(c["z"])
+
+    // `g[y][x] = v` is `g = opIndexAssign(g, y, opIndexAssign(g[y], x, v))`.
+    mutable val g = Grid([[1, 2], [3, 4]])
+    g[at("y", 1)][at("x", 0)] = 30
+    printl(g.rows)
+    g[at("y", 0)][at("x", 1)] += 5
+    printl(g.rows)
+
+    // Fields and elements can be mixed along the path.
+    mutable val game = Game(Window([0, 0, 0], 0, 3), 1)
+    game.board[1] = 7
+    printl(game.board.items)
+    mutable val games = [game]
+    games[0].board[2] = 9
+    games[0].turn += 1
+    printl(games[0].board.items)
+    printl(games[0].turn)
+    mutable val nested = [[1, 2], [3]]
+    nested[0][1] = 20
+    nested[1] ~= [4]
+    printl(nested)
+
+    // An array's versions, for where a function is wanted.
+    val xs = [5, 6, 7]
+    printl(opIndex(xs, 1))
+    printl(xs.opSlice(1, 3))
+    printl(xs.opIndexAssign(0, 50))
+    printl(xs)
+}

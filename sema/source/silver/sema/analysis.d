@@ -170,6 +170,12 @@ final class Analysis
         return for_ in _typing.loops;
     }
 
+    /// The functions `index` calls, or null if it indexes an array.
+    const(IndexFunctions)* indexingOf(Id!Expr index) const
+    {
+        return index in _typing.indexing;
+    }
+
     const(Id!TypeDecl)* constructionOf(Id!Expr call) const
     {
         return call in _resolution.constructions;

@@ -57,7 +57,7 @@ def next(c: Countdown): (Int, Countdown)? =>
 
 ## `for` (decided and implemented, November 2026)
 
-`for` is structural for now: it uses the functions a call at the loop would choose, with no interface. The rules are in [control flow](../language/control-flow.md#for). In short, a value is looped over by index when a `length(r): Int` and an `opIndex(r, i: Int): T` take it (implemented with `at` in that role, before operator functions were named), and otherwise stepped with `next(r): (T, R)?`, expanded in lowering to:
+`for` is structural for now: it uses the functions a call at the loop would choose, with no interface. The rules are in [control flow](../language/control-flow.md#for). In short, a value is looped over by index when a `length(r): Int` and an `opIndex(r, i: Int): T` take it, and otherwise stepped with `next(r): (T, R)?`, expanded in lowering to:
 
 ```silver
 mutable val rest = e

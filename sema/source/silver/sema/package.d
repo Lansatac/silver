@@ -3,7 +3,7 @@
 module silver.sema;
 
 public import silver.sema.analysis;
-public import silver.sema.typing : FieldInfo, LoopFunction, LoopFunctions;
+public import silver.sema.typing : FieldInfo, FunctionUse, IndexFunctions, LoopFunctions;
 public import silver.sema.constant : ConstInt, ConstUInt, ConstUnit, ConstValue;
 public import silver.sema.resolve : SymbolId;
 public import silver.sema.target;

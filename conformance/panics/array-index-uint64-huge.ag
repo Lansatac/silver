@@ -1,5 +1,0 @@
-def main(): Unit {
-    val xs = [1, 2]
-    val i: UInt64 = 0xFFFFFFFFFFFFFFFF
-    printl(xs[i])
-}

@@ -88,9 +88,10 @@ package struct Resolution
     /// Names that could be more than one function, by the name's expression. The type checker
     /// chooses, so these have no entry in `resolutions`.
     Candidates[Id!Expr] overloads;
-    /// For each `for`, by name, the functions that calls of `length`, `at` and `next` there would
-    /// choose from, since `for` loops over anything but an array or `a..b` with them.
-    Candidates[string][Id!Expr] loopLookups;
+    /// For each `for` and each `x[i]`, by name, the functions that calls of `length`, `opIndex`,
+    /// `opIndexAssign`, `opSlice` and `next` there would choose from, since that syntax means calls
+    /// of them on anything but an array or `a..b`.
+    Candidates[string][Id!Expr] operatorLookups;
     Declarations declarations;
     /// The `native library` of each module that names one.
     string[string] nativeLibraries;
@@ -301,7 +302,7 @@ private final class NameResolver
     private Builtin[Id!Expr] _conversions;
     private Candidates[Id!Expr] _methodLookups;
     private Candidates[Id!Expr] _overloads;
-    private Candidates[string][Id!Expr] _loopLookups;
+    private Candidates[string][Id!Expr] _operatorLookups;
     private Declarations _declarations;
     private Collector _collector;
     /// Each module's own top-level declarations, by module name.
@@ -345,7 +346,7 @@ private final class NameResolver
             resolveModule(mod.name, mod);
         }
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
-            _loopLookups, _declarations, _nativeLibraries);
+            _operatorLookups, _declarations, _nativeLibraries);
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
@@ -1120,11 +1121,7 @@ private final class NameResolver
                 resolveExpr(*whileExpr.body, bodyScope);
             },
             (const ForExpr forExpr) {
-                foreach (name; ["length", "at", "next"])
-                {
-                    auto candidates = moduleFunctions(name, scopeTable);
-                    if (candidates.count > 0) _loopLookups.require(expr.id)[name] = candidates;
-                }
+                recordOperators(expr, ["length", "opIndex", "next"], scopeTable);
                 auto bodyScope = declareHeadBinding(*forExpr.binding, forExpr.binding, scopeTable);
                 resolveExpr(*forExpr.body, bodyScope);
             },
@@ -1157,6 +1154,7 @@ private final class NameResolver
                 }
             },
             (const IndexExpr index) {
+                recordOperators(expr, ["opIndex", "opIndexAssign", "opSlice", "length"], scopeTable);
                 resolveExpr(*index.object, scopeTable);
                 resolveExpr(*index.index, scopeTable);
             },
@@ -1265,6 +1263,16 @@ private final class NameResolver
     {
         auto candidates = moduleFunctions(name, scopeTable);
         if (candidates.count > 0) _methodLookups[call] = candidates;
+    }
+
+    /// The functions syntax at `expr` could call by each of `names`, as `operatorLookups` keeps them.
+    private void recordOperators(const Expr expr, const string[] names, const Scope scopeTable)
+    {
+        foreach (name; names)
+        {
+            auto candidates = moduleFunctions(name, scopeTable);
+            if (candidates.count > 0) _operatorLookups.require(expr.id)[name] = candidates;
+        }
     }
 
     /// The module-level functions a plain `name` finds, grouped as for a plain name.

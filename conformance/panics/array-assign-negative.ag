@@ -1,4 +1,4 @@
-def set(mutable xs: [Int], i: Int8): Unit {
+def set(mutable xs: [Int], i: Int): Unit {
     xs[i] = 0
 }
 

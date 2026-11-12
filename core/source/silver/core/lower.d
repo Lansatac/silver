@@ -10,7 +10,7 @@ import std.typecons : Rebindable, rebindable;
 import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
 import silver.core.nodes;
-import silver.sema : Analysis, LoopFunction, LoopFunctions, ConstInt, ConstUInt, ConstUnit, ConstValue, FunctionData, Intrinsic, NominalData, Primitive,
+import silver.sema : Analysis, FunctionUse, IndexFunctions, LoopFunctions, ConstInt, ConstUInt, ConstUnit, ConstValue, FunctionData, Intrinsic, NominalData, Primitive,
     Substitution, SymbolId, Type, TypeTable;
 
 /// A parameter's local name. Discarded ones get a name no Silver identifier can have, so several
@@ -136,13 +136,24 @@ private struct Instance
         auto loop = analysis.loopOf(for_);
         if (loop is null) return null;
         auto instance = new LoopFunctions;
-        *instance = LoopFunctions(concrete(loop.length), concrete(loop.at), concrete(loop.next));
+        *instance = LoopFunctions(concrete(loop.length), concrete(loop.index), concrete(loop.next));
         return instance;
     }
 
-    private LoopFunction concrete(const LoopFunction f) const
+    /// The functions `index` calls, with their type arguments for this instance, or null if it
+    /// indexes an array.
+    const(IndexFunctions)* indexingOf(Id!(ast.Expr) index) const
     {
-        return LoopFunction(f.func, f.typeArgs.map!(t => concrete(t)).array);
+        auto functions = analysis.indexingOf(index);
+        if (functions is null) return null;
+        auto instance = new IndexFunctions;
+        *instance = IndexFunctions(concrete(functions.read), concrete(functions.write), concrete(functions.length));
+        return instance;
+    }
+
+    private FunctionUse concrete(const FunctionUse f) const
+    {
+        return FunctionUse(f.func, f.typeArgs.map!(t => concrete(t)).array);
     }
 
     /// What the type parameters of the generic `name` uses stand for in this instance.
@@ -492,7 +503,7 @@ private final class Lowering
             (const ast.PropagateExpr propagate) => lowerPropagate(propagate, type, span),
             (const ast.SafeMemberAccess access) => lowerSafeMember(e, access, type),
             (const ast.ArrayLiteral literal) => make(ExprKind(ArrayLit(literal.elements.map!(el => lowerExpr(el)).array))),
-            (const ast.IndexExpr index) => lowerIndex(index, type, span),
+            (const ast.IndexExpr index) => lowerIndex(e, index, type, span),
             (const ast.TupleLiteral literal) => make(ExprKind(Construct(literal.elements.map!(el => lowerExpr(el)).array))),
             (const ast.WithExpr with_) => lowerWith(e, with_, type),
             (const ast.MatchExpr match_) => lowerMatch(match_, type, span),
@@ -864,9 +875,11 @@ private final class Lowering
         return field(object, _analysis.fieldIndexOf(e.id), type);
     }
 
-    private Expr lowerIndex(const ast.IndexExpr index, Type type, Span span)
+    /// `x[i]` or `x[a..b]`: built in for an array, and otherwise a call of `opIndex` or `opSlice`.
+    private Expr lowerIndex(const ast.Expr e, const ast.IndexExpr index, Type type, Span span)
     {
         auto array = lowerExpr(*index.object);
+        if (auto functions = _analysis.indexingOf(e.id)) return lowerIndexCall(*functions, index, array, type, span);
         if (auto range = ast.asRange(index.index))
         {
             auto start = range.start is null ? intLiteral(types.int_, 0, span) : lowerExpr(*range.start);
@@ -881,6 +894,20 @@ private final class Lowering
             return Expr(type, span, ExprKind(Block([let(held, array)], boxed(slice))));
         }
         return Expr(type, span, ExprKind(Index(boxed(array), boxed(lowerExpr(*index.index)))));
+    }
+
+    /// `opIndex(x, i)`, or `opSlice(x, a, b)`, where a left-out `a` is 0 and a left-out `b` is
+    /// `length(x)`, with `x` evaluated once.
+    private Expr lowerIndexCall(const IndexFunctions functions, const ast.IndexExpr index, Expr object, Type type, Span span)
+    {
+        auto range = ast.asRange(index.index);
+        if (range is null) return callUse(functions.read, [object, lowerExpr(*index.index)], span);
+        auto start = range.start is null ? intLiteral(types.int_, 0, span) : lowerExpr(*range.start);
+        if (range.end !is null) return callUse(functions.read, [object, start, lowerExpr(*range.end)], span);
+        auto held = temp("sliced", object.type);
+        auto end = callUse(functions.length, [use(held, span)], span);
+        auto slice = callUse(functions.read, [use(held, span), start, end], span);
+        return Expr(type, span, ExprKind(Block([let(held, object)], boxed(slice))));
     }
 
     /// `object with (a.b = v, ...)`: a copy of the object, with the updates applied in order.
@@ -1063,24 +1090,35 @@ private final class Lowering
         {
             return lowerTupleAssign(assign.target, assign.value, span);
         }
+        if (!hasElement(assign.target)) return [Stmt(span, StmtKind(lowerAssignPlace(assign)))];
         auto element = assign.target.kind.match!((ref const ast.IndexExpr index) => &index, _ => null);
-        if (element !is null) return lowerAssignElement(assign, *element, span);
-        return [Stmt(span, StmtKind(lowerAssignPlace(assign)))];
+        auto local = element !is null && element.object.kind.match!((const ast.Identifier _) => true, _ => false);
+        if (local && _analysis.indexingOf(assign.target.id) is null) return lowerAssignElement(assign, *element, span);
+
+        // Each index on the way is evaluated once, from the root out, then the value, and only then
+        // is the place read and written.
+        Stmt[] statements;
+        Id!(ast.Expr)[] held;
+        scope (exit) foreach (id; held) _lowered.remove(id);
+        holdIndices(assign.target, statements, held);
+        if (assign.compound) holdReads(assign.target, readOf(assign.value), statements, held);
+        auto value = lowerExpr(assign.value);
+        auto written = temp("value", value.type);
+        statements ~= let(written, value);
+        return statements ~ writePlace(assign.target, use(written, span), span);
     }
 
-    /// `xs[i] = v`. In `xs[i] += v`, the value's read of `xs[i]` uses the index already evaluated.
+    /// `xs[i] = v` for an array in a local. In `xs[i] += v`, the value's read of `xs[i]` uses the
+    /// index already evaluated.
     private Stmt[] lowerAssignElement(const ast.AssignStmt assign, const ast.IndexExpr target, Span span)
     {
         auto local = localOf(*target.object);
         auto index = lowerExpr(*target.index);
         if (!assign.compound) return [Stmt(span, StmtKind(AssignElement(local, index, lowerExpr(assign.value))))];
 
-        auto read = assign.value.kind.match!(
-            (const ast.BinaryExpr binary) => binary.left.kind.match!(
-                (ref const ast.IndexExpr index) => index.index.id,
-                _ => assert(0, "a compound assignment reads its target"),
-            ),
-            _ => assert(0, "a compound assignment is a binary operation"),
+        auto read = readOf(assign.value).kind.match!(
+            (ref const ast.IndexExpr index) => index.index.id,
+            _ => assert(0, "a compound assignment reads its target"),
         );
         auto held = temp("index", index.type);
         _lowered[read] = use(held, index.span);
@@ -1089,18 +1127,118 @@ private final class Lowering
         return [let(held, index), Stmt(span, StmtKind(AssignElement(local, use(held, index.span), value)))];
     }
 
+    /// The read of its target that a compound assignment's value starts with.
+    private static const(ast.Expr) readOf(const ast.Expr value)
+    {
+        return value.kind.match!(
+            (const ast.BinaryExpr binary) => *binary.left,
+            (_) => assert(0, "a compound assignment is a binary operation"),
+        );
+    }
+
     private Assign lowerAssignPlace(const ast.AssignStmt assign)
     {
         return assignPlace(assign.target, lowerExpr(assign.value));
     }
 
-    /// `(a, xs[i], _) = value`. Each element target's index is evaluated, left to right, then every
+    /// Whether `place` has an element on its path, as `xs[i]`, `xs[i].x` and `p.xs[i]` do.
+    private static bool hasElement(const ast.Expr place)
+    {
+        return place.kind.match!(
+            (const ast.IndexExpr _) => true,
+            (const ast.MemberAccess access) => hasElement(*access.object),
+            _ => false,
+        );
+    }
+
+    /// Evaluates each index on the way to `place`, from the root out, into a local that every
+    /// later lowering of it uses, adding its ID to `held`.
+    private void holdIndices(const ast.Expr place, ref Stmt[] statements, ref Id!(ast.Expr)[] held)
+    {
+        place.kind.match!(
+            (const ast.MemberAccess access) => holdIndices(*access.object, statements, held),
+            (const ast.IndexExpr index) {
+                holdIndices(*index.object, statements, held);
+                auto lowered = lowerExpr(*index.index);
+                auto local = temp("index", lowered.type);
+                statements ~= let(local, lowered);
+                _lowered[index.index.id] = use(local, index.index.span);
+                held ~= index.index.id;
+            },
+            (_) {},
+        );
+    }
+
+    /// For a compound assignment, makes `read`, its read of `place`, use the indices held for
+    /// `place`, and evaluates once, from the root out, each value on the way that's both read and
+    /// written back into, so `g[y][x] += 1` reads `g[y]` once.
+    private void holdReads(const ast.Expr place, const ast.Expr read, ref Stmt[] statements, ref Id!(ast.Expr)[] held)
+    {
+        const(ast.Expr)* object;
+        const(ast.Expr)* reread;
+        place.kind.match!(
+            (const ast.MemberAccess access) {
+                object = access.object;
+                reread = read.kind.match!((const ast.MemberAccess m) => m.object, (_) => assert(0, "the read is the place"));
+            },
+            (const ast.IndexExpr index) {
+                auto other = read.kind.match!((ref const ast.IndexExpr i) => &i, (_) => assert(0, "the read is the place"));
+                _lowered[other.index.id] = _lowered[index.index.id];
+                held ~= other.index.id;
+                object = index.object;
+                reread = other.object;
+            },
+            (_) {},
+        );
+        if (object is null) return;
+        holdReads(*object, *reread, statements, held);
+        if (object.kind.match!((const ast.Identifier _) => true, _ => false)) return;
+        auto value = lowerExpr(*object);
+        auto local = temp("held", value.type);
+        statements ~= let(local, value);
+        _lowered[object.id] = _lowered[reread.id] = use(local, object.span);
+        held ~= [object.id, reread.id];
+    }
+
+    /// Writes `value`, which can be used as often as needed, to `place`, whose indices are held.
+    /// Each step is written back into what holds it, from the inside out: a field by rebuilding
+    /// its owner, an array's element in place, and anything else's with `opIndexAssign`.
+    private Stmt[] writePlace(const ast.Expr place, Expr value, Span span)
+    {
+        return place.kind.match!(
+            (const ast.Identifier _) => [Stmt(span, StmtKind(Assign(localOf(place), value)))],
+            (const ast.MemberAccess access) {
+                auto step = Step(_analysis.fieldIndexOf(place.id), _analysis.typeOf(place.id));
+                return writePlace(*access.object, rebuild(lowerExpr(*access.object), [step], value), span);
+            },
+            (const ast.IndexExpr index) {
+                auto at = lowerExpr(*index.index);
+                if (auto functions = _analysis.indexingOf(place.id))
+                {
+                    auto updated = callUse(functions.write, [lowerExpr(*index.object), at, value], span);
+                    return writePlace(*index.object, updated, span);
+                }
+                if (index.object.kind.match!((const ast.Identifier _) => true, _ => false))
+                {
+                    return [Stmt(span, StmtKind(AssignElement(localOf(*index.object), at, value)))];
+                }
+                auto array = lowerExpr(*index.object);
+                auto elements = temp("elements", array.type, true);
+                return [let(elements, array), Stmt(span, StmtKind(AssignElement(elements, at, value)))]
+                    ~ writePlace(*index.object, use(elements, span), span);
+            },
+            (_) => notLowered!(Stmt[])("assigning to that kind of place"),
+        );
+    }
+
+    /// `(a, xs[i], _) = value`. Each target's indices are evaluated, left to right, then every
     /// part of the value, and only then are the targets written, left to right, so `(a, b) = (b, a)`
     /// swaps. A tuple literal is taken apart element by element, so no tuple is built.
     private Stmt[] lowerTupleAssign(const ast.Expr target, const ast.Expr value, Span span)
     {
         Stmt[] statements;
-        Local[typeof(target.id)] indices;
+        Id!(ast.Expr)[] held;
+        scope (exit) foreach (id; held) _lowered.remove(id);
         const(ast.Expr)[] places;
         Expr[] parts;
 
@@ -1109,20 +1247,14 @@ private final class Lowering
         static bool isDiscard(const ast.Expr e) =>
             e.kind.match!((const ast.Identifier name) => name.name == discardName, _ => false);
 
-        void holdIndices(const ast.Expr t)
+        void holdAll(const ast.Expr t)
         {
-            t.kind.match!(
-                (const ast.TupleLiteral tuple) {
-                    foreach (ref element; tuple.elements) holdIndices(element);
-                },
-                (const ast.IndexExpr index) {
-                    auto lowered = lowerExpr(*index.index);
-                    auto held = temp("index", lowered.type);
-                    statements ~= let(held, lowered);
-                    indices[t.id] = held;
-                },
-                (_) {},
-            );
+            if (auto elements = partsOf(t))
+            {
+                foreach (ref element; elements) holdAll(element);
+                return;
+            }
+            holdIndices(t, statements, held);
         }
 
         // `whole` is pure, so each place can take its part with a read of it.
@@ -1156,25 +1288,16 @@ private final class Lowering
                 statements ~= eval(lowered);
                 return;
             }
-            auto held = temp(elements is null ? "value" : "tuple", lowered.type);
-            statements ~= let(held, lowered);
-            distribute(t, use(held, lowered.span));
+            auto local = temp(elements is null ? "value" : "tuple", lowered.type);
+            statements ~= let(local, lowered);
+            distribute(t, use(local, lowered.span));
         }
 
-        holdIndices(target);
+        holdAll(target);
         evaluate(target, value);
         foreach (i, place; places)
         {
-            if (auto index = place.id in indices)
-            {
-                auto object = place.kind.match!((const ast.IndexExpr e) => e.object, _ => null);
-                auto write = AssignElement(localOf(*object), use(*index, place.span), parts[i]);
-                statements ~= Stmt(span, StmtKind(write));
-            }
-            else
-            {
-                statements ~= Stmt(span, StmtKind(assignPlace(place, parts[i])));
-            }
+            statements ~= hasElement(place) ? writePlace(place, parts[i], span) : [Stmt(span, StmtKind(assignPlace(place, parts[i])))];
         }
         return statements;
     }
@@ -1273,8 +1396,8 @@ private final class Lowering
         }
         else
         {
-            length = callLoopFunction(functions.length, [use(held, span)], span);
-            value = callLoopFunction(functions.at, [use(held, span), use(next, span)], span);
+            length = callUse(functions.length, [use(held, span)], span);
+            value = callUse(functions.index, [use(held, span), use(next, span)], span);
         }
         auto binds = functions is null && for_.binding.name == discardName ? null : bindOrDrop(*for_.binding, value);
         auto label = newLabel();
@@ -1293,11 +1416,11 @@ private final class Lowering
 
     /// `for x in r` with `next` is `while val step = next(rest)` over a mutable `rest` that starts
     /// as `r`. `rest` moves on before the body, so `continue` can't skip it.
-    private Expr lowerForStepped(const ast.ForExpr for_, const LoopFunction stepper, Span span)
+    private Expr lowerForStepped(const ast.ForExpr for_, const FunctionUse stepper, Span span)
     {
         auto source = lowerExpr(for_.binding.value);
         auto rest = temp("rest", source.type, true);
-        auto next = callLoopFunction(stepper, [use(rest, span)], span);
+        auto next = callUse(stepper, [use(rest, span)], span);
         auto step = temp("step", next.type);
         auto stepped = payload(use(step, span), 1);
         auto pair = temp("pair", stepped.type);
@@ -1506,8 +1629,8 @@ private final class Lowering
         }
     }
 
-    /// A call of a function a `for` uses, given its arguments as values.
-    private Expr callLoopFunction(const LoopFunction f, Expr[] args, Span span)
+    /// A call of a function that syntax uses, given its arguments as values.
+    private Expr callUse(const FunctionUse f, Expr[] args, Span span)
     {
         return callDirect(f.func, f.typeArgs.idup, args, span);
     }
@@ -2392,17 +2515,51 @@ def f(a: String, b: String): String {
 unittest
 {
     auto result = loweredFunction(`
-def f(mutable xs: [Int], i: UInt8): Unit {
+def f(mutable xs: [Int], i: Int): Unit {
     xs[i] = 1
     xs[i + 1] += 2
 }
 `, "f");
     print(result.program).should.equal(
-`def f(mutable xs: [Int], i: UInt8): Unit {
+`def f(mutable xs: [Int], i: Int): Unit {
     xs[i] = 1
-    let index: UInt8 = Add(i, 1)
+    let index: Int = Add(i, 1)
     xs[index] = Add(xs[index], 2)
 }`);
+}
+
+@("an element inside another is written back into it, with indices and what's both read and written evaluated once")
+unittest
+{
+    auto result = loweredFunction(`
+type G(rows: [[Int]])
+def opIndex(g: G, row: Int): [Int] => g.rows[row]
+def opIndexAssign(g: G, row: Int, value: [Int]): G => g
+def f(mutable xs: [[Int]], mutable g: G, i: Int): Unit {
+    xs[i][0] = 1
+    g[i][0] += 2
+}
+`, "f");
+    print(result.program).should.equal(
+`def f(mutable xs: [[Int]], mutable g: G, i: Int): Unit {
+    let index: Int = i
+    let index.1: Int = 0
+    let value: Int = 1
+    let mutable elements: [Int] = xs[index]
+    elements[index.1] = value
+    xs[index] = elements
+    let index.2: Int = i
+    let index.3: Int = 0
+    let held: [Int] = opIndex(g, index.2)
+    let value.1: Int = Add(held[index.3], 2)
+    let mutable elements.1: [Int] = held
+    elements.1[index.3] = value.1
+    g = opIndexAssign(g, index.2, elements.1)
+}
+
+def opIndex(g: G, row: Int): [Int] g.0[row]
+
+def opIndexAssign(g: G, row: Int, value: [Int]): G g`);
 }
 
 @("a call names its target, which is lowered once even when it recurses")

@@ -25,6 +25,8 @@ package struct Typing
     Id!FunctionDecl[Id!Expr] methodCallees;
     /// For a `for` over something other than an array or `a..b`, the functions it calls, by the `for`.
     LoopFunctions[Id!Expr] loops;
+    /// For each indexing of something other than an array, the functions it calls, by the indexing.
+    IndexFunctions[Id!Expr] indexing;
     /// For each overloaded name, the function chosen, by the name's expression.
     SymbolId[Id!Expr] chosenSymbols;
     /// For each call of an overloaded name, the function chosen, by the call.
@@ -43,21 +45,33 @@ package struct Typing
 
 struct FieldInfo { string name; Type type; }
 
-/// One function a `for` calls, and what its type parameters stand for, in terms of the type
-/// parameters of the function the `for` is in.
-struct LoopFunction
+/// A function that syntax calls, such as `for` or `x[i]`, and what its type parameters stand for,
+/// in terms of the type parameters of the function the syntax is in.
+struct FunctionUse
 {
     Id!FunctionDecl func;
     Type[] typeArgs;
+
+    bool found() const => func.isValid;
 }
 
-/// How a `for` loops over a value: by index with `length` and `at` when `at` is set, and otherwise
-/// by stepping it with `next`.
+/// How a `for` loops over a value: by index with `length` and `opIndex` when `index` is set, and
+/// otherwise by stepping it with `next`.
 struct LoopFunctions
 {
-    LoopFunction length;
-    LoopFunction at;
-    LoopFunction next;
+    FunctionUse length;
+    FunctionUse index;
+    FunctionUse next;
 
-    bool indexed() const => at.func.isValid;
+    bool indexed() const => index.found;
+}
+
+/// The functions `x[i]` calls when `x` isn't an array. Any of them can be missing: `read` is
+/// `opIndex`, or `opSlice` for `x[a..b]`; `write` is `opIndexAssign`, for an assignment to it or
+/// through it; `length` gives a slice its left-out end.
+struct IndexFunctions
+{
+    FunctionUse read;
+    FunctionUse write;
+    FunctionUse length;
 }

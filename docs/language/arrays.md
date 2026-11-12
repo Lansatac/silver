@@ -17,19 +17,19 @@ A literal may have a trailing comma, and can span lines.
 
 ## Indexing and slicing
 
-`xs[i]` takes an index of any integer type and yields an element. It panics on an out-of-range index, including a negative one.
+`xs[i]` takes an `Int` index and yields an element. It panics on an out-of-range index, including a negative one. An index of another integer type is converted first, as `xs[Int(b)]`.
 
 Indexing is a call: `x[i]` means `opIndex(x, i)`, `x[i] = v` means `x = opIndexAssign(x, i, v)`, and `x[a..b]` means `opSlice(x, a, b)`. So a value of any type with those functions can be indexed, assigned and sliced, and the results are whatever they return. See [operator functions](functions.md#operator-functions). An array's `opIndex` returns the element and panics out of range, while a type where a missing entry is ordinary can return an option.
 
-`xs[a..b]` is the half-open slice from `a` to `b`, whose bounds are of one integer type. It panics when `a > b`, `a < 0`, or `b > length(xs)`.
+`xs[a..b]` is the half-open slice from `a` to `b`, whose bounds are `Int`s. It panics when `a > b`, `a < 0`, or `b > length(xs)`.
 
 Either bound can be left out: `xs[a..]` runs to the end, as `xs[a..length(xs)]` would with `xs` evaluated once, and `xs[..b]` starts at 0. `xs[..]` isn't allowed, since it would just be `xs`.
 
-`length(xs)` is the number of elements, as an `Int`, and `at(xs, i)` is `xs[i]` with an `Int` index, for where a function is wanted. Both are prelude functions, so they can be called as methods (`xs.at(i)`).
+`length(xs)` is the number of elements, as an `Int`, and `at(xs, i)` is `xs[i]`, for where a function is wanted. Both are prelude functions, so they can be called as methods (`xs.at(i)`). So are `opIndex`, `opIndexAssign` and `opSlice` for arrays.
 
 ## Assigning elements
 
-`xs[i] = v` replaces one element of an array held by a `mutable val` or a mutable parameter. A `val` can't assign its elements. The index follows the same rules as reading one, so it can be any integer type and an out-of-range index panics. `v` is checked against the element type, so literals adapt and options promote.
+`xs[i] = v` replaces one element of an array held by a `mutable val` or a mutable parameter. A `val` can't assign its elements. The index follows the same rules as reading one, so it's an `Int` and an out-of-range index panics. `v` is checked against the element type, so literals adapt and options promote.
 
 ```silver
 mutable val xs = [1, 2, 3]
@@ -42,6 +42,8 @@ printl(before)    // [1, 2, 3]
 An array remains a value: the assignment changes what `xs` holds, and nothing else that held the old array can see it.
 
 The index is evaluated first, then `v`, and then the element is replaced in whatever `xs` holds at that point. Compound assignment works on an element and evaluates the index once, so `xs[next()] += 1` calls `next` once.
+
+An element can be assigned through a path of elements and fields rooted at a `mutable val` or a mutable parameter, as `grid[y][x] = v`, `ps[i].name = n` and `game.board[i] = v`. Each step is written back into the one that holds it, as in [operator functions](functions.md#operator-functions).
 
 Two elements can be swapped with a [tuple of targets](tuples.md#assigning-parts): `(xs[i], xs[j]) = (xs[j], xs[i])`.
 
@@ -84,14 +86,12 @@ Maps share the bracket syntax, with `:` between key and value:
 ## Open questions
 
 - A form of indexing that returns `T?`, as a second prelude function beside `at`.
-- How an array's `opIndex` takes an index of any integer type, when a function's parameter has one type.
-- Whether `mutable` arguments work on an element. Assigning through a path, such as `grid[y][x] = v`, is settled by `opIndexAssign` returning the changed value; `game.board[i] = v` is the same with a field in the path.
+- Whether `mutable` arguments work on an element.
 - Pre-sizing an array before appending, and making one of `n` copies of a value. Leaning towards the range form (a repeating range collected into an array) once ranges exist, rather than an array function now.
 - The semantics of maps.
 
 ## Current implementation
 
 - Map literals parse, but are rejected.
-- Only an array can be indexed, assigned by element or sliced. Operator functions aren't available yet, and only a plain variable's elements can be assigned.
 - `xs[i] = v` copies the whole array every time, even when nothing else holds it.
 - `length` is built into the compiler, so it can only be called, as `length(xs)` or `xs.length()`, and not used as a function value.

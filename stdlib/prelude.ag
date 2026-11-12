@@ -9,6 +9,15 @@ intrinsic def read(): String?
 intrinsic def length<T>(values: [T]): Int
 // The element at `index`, as `values[index]` reads it.
 def at<T>(values: [T], index: Int): T => values[index]
+// What `values[index]`, `values[index] = value` and `values[from..to]` mean, for where a function
+// is wanted. The syntax is built in for arrays, so it never calls these.
+def opIndex<T>(values: [T], index: Int): T => values[index]
+def opIndexAssign<T>(values: [T], index: Int, value: T): [T] {
+    mutable val changed = values
+    changed[index] = value
+    changed
+}
+def opSlice<T>(values: [T], from: Int, to: Int): [T] => values[from..to]
 // Stops the program with `message`, for what can't happen.
 intrinsic def panic(message: String): Never
 // Panics when `condition` is false, showing it and, for a comparison, both sides' values.
