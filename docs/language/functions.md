@@ -25,7 +25,7 @@ Functions at the top level of a module can be used before they are declared. A f
 
 ## Tail calls
 
-`tail f(args)` exits the innermost function or lambda with the result of the call, as `return f(args)` would, except that the call reuses the current call's stack space. Recursion through `tail` therefore runs at any depth.
+`tail f(args)` exits the innermost function or lambda with the result of the call, as `return f(args)` would, except that the call reuses the current call's stack space. The call can be to any function or function value, not only the one it appears in, so self-recursion, mutual recursion and calls through function values all run at any depth through `tail`.
 
 ```silver
 def sum(n: Int, acc: Int): Int {
@@ -199,7 +199,6 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 - Whether `x.f()` can drop its parentheses.
 - Whether a method call can have a `mutable` receiver.
 - Method calls through `?.`, as in `a?.f()`.
-- Whether `tail` can call any function, or only the function it appears in.
 
 ## Current implementation
 
