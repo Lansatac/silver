@@ -154,6 +154,8 @@ A match must be exhaustive, and the error names what's missing, including throug
 
 Bindings are immutable and in scope only in their arm.
 
+A pattern compares by structure: a member pattern looks at the value's fields, and never calls the type's `opEquals`. So for a type whose `opEquals` treats `Fraction(1, 2)` and `Fraction(2, 4)` as equal, `f == Fraction(1, 2)` can be true where the pattern `Fraction(1, 2)` doesn't match `f`. To branch on the type's own equality, compare with `==`.
+
 `if val` is the one-arm form. It takes a constructor pattern, including `Some(p)` and `None`, and doesn't need to be exhaustive:
 
 ```silver
@@ -163,6 +165,7 @@ val r = if val Circle(radius) = shape => radius else 0.0
 ## Open questions
 
 - Guards on match arms
+- Named constants as patterns, as in `match p { origin => ... }`, and whether one compares with `==`, since it's a whole value rather than a structure
 - Named patterns, alongside named arguments
 - A one-member sum over an existing type, such as `type Id = Int`, is a nominal wrapper with implicit injection. It may be rejected if it proves a footgun.
 - A built-in checked construction that returns `T?` where the invariant doesn't hold.
