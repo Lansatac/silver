@@ -118,6 +118,8 @@ package TypeSymbol expandAlias(TypeSymbol symbol, const(AliasDecl*[Id!AliasDecl]
 package struct Candidates
 {
     Id!FunctionDecl[][] groups;
+    /// The imported modules the name could be qualified with where it's used.
+    const(string)[] qualifiable;
 
     size_t count() const => groups.map!(g => g.length).sum;
 }
@@ -130,13 +132,29 @@ package Resolution resolveNames(const ref Program program, Collector collector, 
 
 private immutable Scope universal = new Scope(builtinTypes);
 
+/// What one module's imports of another give it: qualified access as `a.b.name`, and unqualified
+/// access to every name or only to those a selective import lists. Imports of one module combine.
+package struct ModuleAccess
+{
+    string name;
+    bool qualified;
+    bool everyName;
+    const(string)[] names;
+
+    bool provides(string member) const
+    {
+        return everyName || names.canFind(member);
+    }
+}
+
 /// The names declared in one module, function, or block. Lookups fall back to the parent.
 package final class Scope
 {
     private SymbolId[string] _scopeTable;
     private const Scope _parent;
-    /// The modules visible from here: the enclosing module's imports, plus the prelude.
-    private const(string)[] _visibleModules;
+    /// The enclosing module's imports, plus the prelude.
+    private const(ModuleAccess)[] _imports;
+    private const(string)[] _qualifiedModules;
     private TypeSymbol[string] _typeTable;
     /// Every function of each name, in declaration order, for a module's scope.
     private Id!FunctionDecl[][string] _functions;
@@ -152,17 +170,19 @@ package final class Scope
     }
 
     /// A module's top-level scope.
-    this(const(string)[] visibleModules)
+    this(const(ModuleAccess)[] imports)
     {
         _parent = universal;
-        _visibleModules = visibleModules;
+        _imports = imports;
+        _qualifiedModules = imports.filter!(i => i.qualified).map!(i => i.name).array;
     }
 
     /// A function, lambda, or block scope inside `parent`, seeing the same modules.
     this(const Scope parent)
     {
         _parent = parent;
-        _visibleModules = parent._visibleModules;
+        _imports = parent._imports;
+        _qualifiedModules = parent._qualifiedModules;
     }
 
     const(Scope) parent() const
@@ -170,9 +190,16 @@ package final class Scope
         return _parent;
     }
 
-    const(string)[] visibleModules() const
+    /// The imported modules whose members can be named as `a.b.name`.
+    const(string)[] qualifiedModules() const
     {
-        return _visibleModules;
+        return _qualifiedModules;
+    }
+
+    /// The imported modules a bare `name` can come from.
+    auto modulesProviding(string name) const
+    {
+        return _imports.filter!(i => i.provides(name)).map!(i => i.name);
     }
 
     const(SymbolId)* resolveLocal(string name) const
@@ -326,7 +353,7 @@ private final class NameResolver
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
     {
-        string[] visible = hasPrelude && name != preludeName ? [preludeName] : [];
+        ModuleAccess[] imports = hasPrelude && name != preludeName ? [ModuleAccess(preludeName, true, true)] : [];
         if (mod.library !is null) _nativeLibraries[name] = mod.library.name;
         foreach (decl; mod.declarations)
         {
@@ -337,15 +364,26 @@ private final class NameResolver
                 (const AliasDecl _) {},
                 (const ImportStmt importStmt) {
                     auto imported = importStmt.path.join(".");
-                    if (!visible.canFind(imported))
+                    auto index = imports.countUntil!(i => i.name == imported);
+                    if (index < 0)
                     {
-                        visible ~= imported;
+                        imports ~= ModuleAccess(imported);
+                        index = imports.length - 1;
                     }
+                    auto access = &imports[index];
+                    if (importStmt.names.length > 0)
+                    {
+                        access.names ~= importStmt.names.map!(n => n.name).array;
+                        return;
+                    }
+                    access.qualified = true;
+                    if (!importStmt.isStatic) access.everyName = true;
                 },
             );
         }
 
-        auto moduleScope = new Scope(visible);
+        auto moduleScope = new Scope(imports);
+        auto visible = moduleScope.qualifiedModules;
         foreach (ref decl; mod.declarations)
         {
             decl.kind.match!(
@@ -553,6 +591,10 @@ private final class NameResolver
         _currentModule = name;
         foreach (decl; mod.declarations)
         {
+            decl.kind.match!((const ImportStmt importStmt) => checkSelectedNames(importStmt), (_) {});
+        }
+        foreach (decl; mod.declarations)
+        {
             decl.kind.match!(
                 (ref const FunctionDecl func) {
                     auto declScope = genericScope(func.typeParams, _moduleScopes[name], false);
@@ -605,6 +647,28 @@ private final class NameResolver
                 (const AliasDecl _) {},
                 (const ImportStmt _) {},
             );
+        }
+    }
+
+    /// Reports each name a selective import lists that its module doesn't have, or keeps private.
+    private void checkSelectedNames(const ImportStmt importStmt)
+    {
+        auto imported = importStmt.path.join(".");
+        auto moduleScope = imported in _moduleScopes;
+        if (moduleScope is null) return;
+        foreach (selected; importStmt.names)
+        {
+            if (visibleSymbol(imported, selected.name) !is null || visibleType(imported, selected.name) !is null) continue;
+            if ((*moduleScope).resolveLocal(selected.name) !is null || (*moduleScope).resolveLocalType(selected.name) !is null)
+            {
+                _collector.reportError(DiagnosticCode.PrivateMember, selected.span,
+                    "'%s' is private to '%s'".format(selected.name, imported));
+            }
+            else
+            {
+                _collector.reportError(DiagnosticCode.UnknownModuleMember, selected.span,
+                    "Module '%s' has no '%s'".format(imported, selected.name));
+            }
         }
     }
 
@@ -692,7 +756,7 @@ private final class NameResolver
     /// The visible functions named `name` in each imported module that has any, a group per module.
     private Id!FunctionDecl[][] importedFunctions(string name, const Scope scopeTable)
     {
-        return scopeTable.visibleModules.map!(m => visibleFunctions(m, name)).filter!(g => g.length > 0).array;
+        return scopeTable.modulesProviding(name).map!(m => visibleFunctions(m, name)).filter!(g => g.length > 0).array;
     }
 
     /// Records `expr` as naming one of `candidates`, or as naming the function when there's one.
@@ -745,7 +809,7 @@ private final class NameResolver
     /// A bare name in a sum declares a marker, so one an import also provides would quietly be a new type.
     private void reportImportedMember(const TypeDecl marker, const Scope current)
     {
-        auto owners = current.visibleModules.filter!(m => visibleType(m, marker.name) !is null).array;
+        auto owners = current.modulesProviding(marker.name).filter!(m => visibleType(m, marker.name) !is null).array;
         if (owners.length == 0) return;
         _collector.reportError(DiagnosticCode.AmbiguousName, marker.nameSpan,
             "`%s` is also a type in `%s`; write `%s.%s` to use that one, or rename this member"
@@ -805,14 +869,12 @@ private final class NameResolver
                     resolvedType = current.resolveType(name);
                     if (resolvedType is null)
                     {
-                        auto owners = current.visibleModules
+                        auto owners = current.modulesProviding(name)
                             .filter!(m => visibleType(m, name) !is null)
                             .array;
                         if (owners.length > 1)
                         {
-                            _collector.reportError(DiagnosticCode.AmbiguousName, type.span,
-                                "'%s' is defined in more than one imported module (%s); qualify it, e.g. '%s.%s'"
-                                    .format(name, owners.join(", "), owners[0], name));
+                            _collector.reportError(DiagnosticCode.AmbiguousName, type.span, ambiguityMessage(name, owners, current));
                             return;
                         }
                         if (owners.length == 1)
@@ -824,7 +886,7 @@ private final class NameResolver
                 else
                 {
                     auto moduleName = named.path[0 .. $ - 1].join(".");
-                    if (current.visibleModules.canFind(moduleName))
+                    if (current.qualifiedModules.canFind(moduleName))
                     {
                         resolvedType = _moduleScopes[moduleName].resolveLocalType(name);
                         if (resolvedType !is null && !isVisible(*resolvedType, moduleName))
@@ -907,7 +969,7 @@ private final class NameResolver
         }
         else
         {
-            reportModuleRootClash(name, span, current.visibleModules);
+            reportModuleRootClash(name, span, current.qualifiedModules);
         }
         // Declared even after a clash, so later uses resolve to what the user meant here.
         current.declare(name, symbol);
@@ -1218,7 +1280,13 @@ private final class NameResolver
             if (!isFunction(*symbol)) return Candidates.init;
             own = visibleFunctions(_currentModule, name);
         }
-        return Candidates(own ~ importedFunctions(name, scopeTable));
+        return candidatesFor(name, own, scopeTable);
+    }
+
+    /// This module's functions `own` named `name`, then a group per imported module.
+    private Candidates candidatesFor(string name, Id!FunctionDecl[] own, const Scope scopeTable)
+    {
+        return Candidates(own ~ importedFunctions(name, scopeTable), scopeTable.qualifiedModules);
     }
 
     /// Resolves an identifier or a member access chain, which may start with a module path.
@@ -1251,7 +1319,7 @@ private final class NameResolver
             if (isFunction(*local))
             {
                 auto own = visibleFunctions(_currentModule, name);
-                return recordFunctions(expr, name, Candidates(own ~ importedFunctions(name, scopeTable)));
+                return recordFunctions(expr, name, candidatesFor(name, own, scopeTable));
             }
             recordCapture(*local, name, expr.span, scopeTable);
             return recordValue(expr, name, *local);
@@ -1259,7 +1327,7 @@ private final class NameResolver
 
         const(SymbolId)[] found;
         string[] owners;
-        foreach (m; scopeTable.visibleModules)
+        foreach (m; scopeTable.modulesProviding(name))
         {
             if (auto symbol = visibleSymbol(m, name))
             {
@@ -1269,7 +1337,7 @@ private final class NameResolver
         }
         if (found.length > 0 && found.all!(f => isFunction(f)))
         {
-            return recordFunctions(expr, name, Candidates([cast(Id!FunctionDecl[]) null] ~ importedFunctions(name, scopeTable)));
+            return recordFunctions(expr, name, candidatesFor(name, null, scopeTable));
         }
         if (found.length == 1)
         {
@@ -1277,9 +1345,7 @@ private final class NameResolver
         }
         if (found.length > 1)
         {
-            _collector.reportError(DiagnosticCode.AmbiguousName, expr.span,
-                "'%s' is defined in more than one imported module (%s); qualify it, e.g. '%s.%s'"
-                    .format(name, owners.join(", "), owners[0], name));
+            _collector.reportError(DiagnosticCode.AmbiguousName, expr.span, ambiguityMessage(name, owners, scopeTable));
             return Path(Path.Kind.Error);
         }
 
@@ -1291,6 +1357,15 @@ private final class NameResolver
             ? "`Some` takes exactly one value, and can't be used as a function"
             : "Unknown name '%s'".format(name));
         return Path(Path.Kind.Error);
+    }
+
+    /// The error for a bare `name` that more than one of `owners` provides.
+    private static string ambiguityMessage(string name, const string[] owners, const Scope current)
+    {
+        auto message = "'%s' is defined in more than one imported module (%s)".format(name, owners.join(", "));
+        auto qualifiable = owners.find!(m => current.qualifiedModules.canFind(m));
+        if (!qualifiable.empty) return message ~ "; qualify it, e.g. '%s.%s'".format(qualifiable.front, name);
+        return message ~ "; list it in only one of the imports";
     }
 
     /// Records that `expr` names `symbol`. An alias stands for its type, so the name of a product
@@ -1384,7 +1459,7 @@ private final class NameResolver
             return object;
         case Path.Kind.Module:
             auto nested = object.name ~ "." ~ access.member;
-            if (scopeTable.visibleModules.canFind(nested))
+            if (scopeTable.qualifiedModules.canFind(nested))
             {
                 return *modulePath(expr, nested, scopeTable);
             }
@@ -1425,12 +1500,12 @@ private final class NameResolver
     /// `name` as a visible module (recording the resolution) or a prefix of one, else null.
     private Path* modulePath(const Expr expr, string name, const Scope scopeTable)
     {
-        if (scopeTable.visibleModules.canFind(name))
+        if (scopeTable.qualifiedModules.canFind(name))
         {
             _resolutions[expr.id] = SymbolId(_moduleIds[name]);
             return new Path(Path.Kind.Module, name);
         }
-        if (scopeTable.visibleModules.any!(m => m.startsWith(name ~ ".")))
+        if (scopeTable.qualifiedModules.any!(m => m.startsWith(name ~ ".")))
         {
             return new Path(Path.Kind.Package, name);
         }

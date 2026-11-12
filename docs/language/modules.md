@@ -47,11 +47,22 @@ A public function or constant can't mention a private type in its signature. A p
 
 ## Forms of import
 
-These are also part of the design, in addition to plain `import`:
+```silver
+import a.b : first, Second    // selective
+static import a.b             // qualified only
+```
+
+A selective import gives unqualified access to the names it lists and nothing else: not the module's other names, and not `a.b.first`. A listed name can be a function, constant, type or alias, and it brings everything of that name, so all of a module's `first` overloads, or a type along with its constructor. A sum's members are names of their own, so `import a.b : Shape` doesn't bring `Circle`. Naming something the module doesn't have, or keeps private, is an error.
+
+A static import gives qualified access only, as `a.b.name`. Its functions can't be called as methods, since `x.f()` looks `f` up as a plain name would.
+
+Imports of the same module combine, so `static import a.b` alongside `import a.b : first` allows `first` and `a.b.anything`.
+
+The rules for plain imports apply to each form. A module's own declarations beat imports, and a name is ambiguous only where it's used, and only when more than one import gives it unqualified: `import a` with `static import b` lets a bare `shared` mean `a.shared`. A local can be named like the first part of a module's path only when nothing imports that module with qualified access.
+
+These are also part of the design:
 
 ```silver
-import a.b : first, second    // selective
-static import a.b             // qualified only
 public import a.b : first     // forwards names to importers
 ```
 
@@ -66,4 +77,4 @@ Imports can also be renamed. A symbol's identity is its declaring module, so rea
 
 ## Current implementation
 
-- Only plain `import a.b` is available.
+- `public import` and renamed imports aren't available.

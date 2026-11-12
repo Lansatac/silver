@@ -1,0 +1,24 @@
+import imports_support.shapes : Shape, Circle, Square, area, sides, describe
+import imports_support.labels : describe, twice
+
+// `labels` also has an `area`, but only `shapes`' is selected.
+def total(shapes: [Shape]): Float {
+    mutable val sum = 0.0
+    for shape in shapes {
+        sum = sum + area(shape)
+    }
+    return sum
+}
+
+def main(): Unit {
+    printl(total([Circle(1.0), Square(2.0)]))
+    printl(sides)
+    // One `describe` from each module, chosen by the argument.
+    printl(describe(1))
+    printl(describe("one"))
+    printl(sides.twice())
+
+    // Unrelated to the imported module's path, since a selective import gives no qualified access.
+    val imports_support = 5
+    printl(imports_support)
+}

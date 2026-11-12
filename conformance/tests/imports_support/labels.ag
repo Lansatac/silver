@@ -1,0 +1,7 @@
+module imports_support.labels
+
+def describe(text: String): String => "label {text}"
+
+def area(): Int => 7
+
+def twice(n: Int): Int => n * 2

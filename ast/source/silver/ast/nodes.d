@@ -611,11 +611,22 @@ struct ExprStmt
     Expr expr;
 }
 
-/// `import a.b`; `path` is the dotted name split into parts, e.g. ["a", "b"].
+/// `import a.b`, `import a.b : first, second` or `static import a.b`; `path` is the dotted name
+/// split into parts, e.g. ["a", "b"].
 struct ImportStmt
 {
     Id!ImportStmt id;
     string[] path;
+    /// What a selective import lists, empty for any other import.
+    ImportedName[] names;
+    bool isStatic;
+}
+
+/// One name a selective import lists.
+struct ImportedName
+{
+    string name;
+    Span span;
 }
 
 /// `name: Type` in a function declaration.
@@ -846,7 +857,12 @@ private string printImport(const ImportStmt i)
     import std.array : join;
     import std.format : format;
 
-    return format("(import %s)", i.path.join("."));
+    import std.algorithm : map;
+
+    auto path = i.path.join(".");
+    if (i.isStatic) return format("(static import %s)", path);
+    if (i.names.length > 0) return format("(import %s : %s)", path, i.names.map!(n => n.name).join(" "));
+    return format("(import %s)", path);
 }
 
 private string printFunctionDecl(const FunctionDecl f)

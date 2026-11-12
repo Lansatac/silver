@@ -158,8 +158,10 @@ private final class Lowering
         switch (cst.name)
         {
         case "Silver.ImportStatement":
-            auto path = qualifiedName(cst[0]);
-            return [Decl(spanOf(cst, file), DeclKind(ImportStmt(ids.next!ImportStmt, path)))];
+            auto names = cst.children[1 .. $].map!(n => ImportedName(n.matches[0], spanOf(n, file))).array;
+            return [Decl(spanOf(cst, file), DeclKind(ImportStmt(ids.next!ImportStmt, qualifiedName(cst[0]), names)))];
+        case "Silver.StaticImport":
+            return [Decl(spanOf(cst, file), DeclKind(ImportStmt(ids.next!ImportStmt, qualifiedName(cst[0]), null, true)))];
         case "Silver.FunctionDeclaration":
         case "Silver.NativeFunctionDeclaration":
         case "Silver.IntrinsicFunctionDeclaration":

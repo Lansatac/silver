@@ -129,6 +129,13 @@ immutable Case[] moduleDeclarations = [
 immutable Case[] imports = [
     declaresAs("import module", "(import module)"),
     declaresAs("import io\nimport a.b.c", ["(import io)", "(import a.b.c)"]),
+    declaresAs("import a.b : first, Second", "(import a.b : first Second)"),
+    declaresAs("import a.b :\n    first,\n    second", "(import a.b : first second)"),
+    declaresAs("static import a.b", "(static import a.b)"),
+    declaresAs("static import a; import b", ["(static import a)", "(import b)"]),
+    rejectsDeclaration("import a.b :"),
+    rejectsDeclaration("import a.b : val"),
+    parsesAs("static(1)", "(call static 1)"),
 ];
 
 immutable Case[] destructuring = [
