@@ -118,7 +118,8 @@ A generic function that calls itself with an ever larger type, such as `def grow
 
 ## Open questions
 
-- Bounds: saying what a type parameter can do, as in `T: Ord` or `T: Json`, so generic code can order values and use functions written for them. This is the interfaces design, which isn't settled. See [the proposal](../proposals/interfaces.md).- A type parameter as a sum member by itself, as in `type Maybe<T> = T | Nothing`.
+- Bounds: saying what a type parameter can do, as in `T: Ord` or `T: Json`, so generic code can order values and use functions written for them. This is the interfaces design, which isn't settled. See [the proposal](../proposals/interfaces.md).
+- A type parameter as a sum member by itself, as in `type Maybe<T> = T | Nothing`.
 - Generic aliases, as in `alias Pair<T> = (T, T)`.
 - Type parameters on a nested `def`.
 - Leaving some type arguments to inference, as in `convert<_, Int>(x)`.

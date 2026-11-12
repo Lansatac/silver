@@ -96,12 +96,28 @@ def length<R: Sized, T, U>(m: Map<R, T, U>): Int => length(m.source)
 def opIndex<R: Indexed<T>, T, U>(m: Map<R, T, U>, index: Int): U => m.transform(m.source[index])
 ```
 
+`Sized` and `Indexed<T>` are the capabilities `for` uses to loop by index:
+
+```silver
+interface Sized { def length(value: Self): Int }
+
+interface Indexed<T> {
+    def length(value: Self): Int
+    def opIndex(value: Self, index: Int): T
+}
+```
+
 `Map` is a range exactly when its source is, which its `next` says through its own bound. `filter` is the same shape, looping until an element passes.
 
 The library's adapters return their own named types, not an opaque `Range<U>` (decided, November 2026). An opaque result has only what its signature promises, so `[1, 2, 3].map(double)` would lose the array's length and indexing. Named, a `Map` has a `length` and an `opIndex` exactly when its source does, through functions like the two above, and `for` over it loops by index. The cost is that `Map` is public and appears in error messages. Nobody has to write it, since `val` infers it.
 
 - **Considered**: an overload of `map` per capability, returning `Indexed<U>` for an indexed source. It needs a rule for which bound is more specific, and an overload for each combination.
 - **Considered**: keeping the result opaque and letting capability queries (`static if R: Sized`) see the real type. That recovers the fast path inside generic code, but `doubled[1]` still can't be written.
+
+So a result keeps what its source can do, as D's ranges do, wherever its type is known: where the chain is written, where it's passed to a function that asks for the capability (`binarySearch<R: Indexed<T>, T>` takes `xs.map(f)`), and where a generic function returns the named type. Two things D has are missing:
+
+- **A generic consumer sees only its bounds.** `toArray` below steps even over an indexed chain, and can't size its result first. An overload can't fix it, since two functions differing only in their bounds are duplicates, and an overload is chosen where the call is written. This waits for [capability queries](interfaces.md#capability-queries-a-direction-not-in-the-first-version).
+- **An opaque return hides capabilities** (open). `def evens(xs: [Int]): Range<Int>` promises only stepping, so a function wrapping a pipeline loses its source's indexing unless it writes out `Filter<Map<[Int], Int, Int>, Int>`. D's `auto` keeps it. Candidates: inferring such a function's result type, or letting capabilities show through an opaque type.
 
 One pull on `[1, 2, 3].map(double).filter(big)`: the filter asks the map, the map asks the array and gets `1`, returns `2`, the filter rejects it and asks again, gets `4`, and returns `4` with a new filter over the rest.
 
@@ -121,7 +137,7 @@ def toArray<T>(range: Range<T>): [T] {
 
 An interface name in a type position means "some type that satisfies it", decided when the program is compiled.
 
-- **In a parameter** it's shorthand for a bounded type parameter. `source: Range<T>` means `<S: Range<T>>(source: S)`. To say two parameters have the same type, name it.
+- **In a parameter** it's shorthand for a bounded type parameter. `source: Range<T>` means `<S: Range<T>>(source: S)`. To say two parameters have the same type, name it. The hidden parameter is never written at a call and doesn't count as one, so `toArray<Int>(xs)` gives only `T`. A lambda or a nested `def` can't have such a parameter, since neither can be generic, and the error says to name the type.
 - **In a return** it's opaque: the function returns one specific type, which the compiler knows and callers can't name. `def evens(xs: [Int]): Range<Int>`.
 - **On a binding** it's a view of the one type the value has (decided, November 2026). After `val thing: Range<Int> = [1, 2, 3]`, `thing` is an array underneath and only what `Range<Int>` provides can be used, so `thing[0]` is an error. It's the only annotation a binding can have when the value came from an opaque return. A `mutable val` annotated this way still has one type, so it can't be given a range of another type.
 
@@ -132,7 +148,7 @@ What this gives:
 
 Proposed, not yet confirmed:
 
-- Two opaque types are the same only when they come from the same function with the same type arguments. `evens(a) == evens(b)` is fine, and `evens(a) == odds(a)` is a mismatch even when both hide the same type, or callers would depend on the implementation.
+- Two opaque types are the same only when they come from the same function with the same type arguments and the same witnesses. `evens(a) == evens(b)` is fine, and `evens(a) == odds(a)` is a mismatch even when both hide the same type, or callers would depend on the implementation.
 - In a result, an interface name can sit inside a tuple, an option, an array or a type argument, each occurrence with its own hidden type, as `splitAt` returning `([T], Range<T>)` needs. It can't sit inside a function type, so `flatMap` names the type: `f: (T) -> R` with `R: Range<U>`.
 - A function of an interface can't return an interface type. Each conforming function would hide a different type, which is an associated type without a name.
 - An opaque value can be passed to the interface's functions, looped over, compared with `==` and printed. Printing shows the real structure.
@@ -173,7 +189,7 @@ The cost is allocation. Products are heap values today, so each step of an adapt
 
 ### When the program is compiled
 
-The search is cheap: one lookup per bound, proportional to the functions of that name in scope, adding per layer of a chain and never multiplying, and it caches per module. The real costs are the number of instances (each distinct chain compiles each adapter again), conformances that never terminate (covered by the instance nesting limit), and making the error say which layer of a chain failed to conform.
+The search is cheap: one lookup per bound, proportional to the functions of that name in scope, adding per layer of a chain and never multiplying, and it caches per module. The real costs are the number of instances (each distinct chain compiles each adapter again), conformances that never terminate (a bound that needs itself fails, and the search has a depth limit: see [interfaces](interfaces.md#conformance)), and making the error say which layer of a chain failed to conform.
 
 ## Prerequisites, in order
 
@@ -209,6 +225,7 @@ Not needed for ranges: capability queries (`static if R: Sized`), an explicit ad
 - Strings: not ranges by default, with `.bytes` and `.chars`.
 - Capabilities beyond stepping forward and indexing (which `for` now uses), such as stepping from the end. An adapter keeps its source's indexing by being a named type with a conditional `opIndex`.
 - How a stateful source hands its state back.
+- How a function that returns a pipeline keeps its source's capabilities without naming the adapter types; see "Adapters".
 
 ## Before deciding
 
