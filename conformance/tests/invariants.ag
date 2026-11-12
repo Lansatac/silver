@@ -1,0 +1,52 @@
+// Values that keep their types' invariants, made in every way a value can come about.
+
+import invariants_support.bounds
+
+type Span(low: Int, high: Int) invariant low <= high
+type Labeled(span: Span, label: String) invariant label != ""
+type NonEmpty<T>(items: [T]) invariant length(items) > 0
+type Shape = Circle(radius: Float) invariant (radius > 0.0) | Nothing
+
+def widen(mutable span: Span): Unit {
+    span.low -= 1
+    span.high += 1
+}
+
+def describe(shape: Shape): String => match shape {
+    Circle(r) => "circle {r}"
+    Nothing => "nothing"
+}
+
+def main(): Unit {
+    // Construction, from another module too, whose private function the invariant calls
+    printl(Span(1, 2))
+    printl(Percent(40))
+    printl(percent(101))
+
+    // `with` checks once every update is made, so fields can move past each other
+    val span = Span(1, 2)
+    printl(span with (low = 5, high = 9))
+
+    // Assigning a field, through a path, and a mutable argument written back
+    mutable val labeled = Labeled(Span(0, 0), "a")
+    labeled.span.high = 10
+    labeled.label = "b"
+    widen(mutable labeled.span)
+    printl(labeled)
+
+    // Generic types, inline sum members, and a constructor used as a function value
+    printl(NonEmpty(["x"]))
+    printl(describe(Circle(2.0)))
+    val make: (Int, Int) -> Span = Span
+    printl(make(3, 4))
+    val n = 7
+    printl([1, 2].map(x => Span(x, x + n)))
+}
+
+def map(xs: [Int], f: (Int) -> Span): [Span] {
+    mutable val out: [Span] = []
+    for x in xs {
+        out ~= [f(x)]
+    }
+    out
+}

@@ -1,0 +1,7 @@
+type Shape = Circle(radius: Float) invariant (radius > 0.0) | Nothing
+
+def main(): Unit {
+    val r = -1.0
+    val shape: Shape = Circle(r)
+    printl(shape)
+}

@@ -655,6 +655,9 @@ struct FunctionDecl
     string symbol;
     bool isPrivate;
     TypeParam[] typeParams;
+    /// For the function holding a type's invariant, that type; otherwise invalid. Its name can't be
+    /// written, and its parameters name the fields, which hide anything of the same name.
+    Id!TypeDecl invariantOf;
 }
 
 enum FunctionKind
@@ -698,6 +701,9 @@ struct TypeDecl
     /// `intrinsic type Name(params)`, which the compiler implements. `fields` are its
     /// constructor's parameters; a value of it has no fields.
     bool intrinsic;
+    /// The function holding the invariant, which syntax lowering declares beside the type with the
+    /// fields as its parameters, or an invalid ID when it has none.
+    Id!FunctionDecl invariantFunction;
 }
 
 /// `alias Name = Type`, a second name for a type. Sema expands it, so the backends never see one.

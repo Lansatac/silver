@@ -1,0 +1,7 @@
+type NonEmpty<T>(items: [T]) invariant length(items) > 0
+
+def main(): Unit {
+    val words: [String] = []
+    printl(NonEmpty([1]))
+    printl(NonEmpty(words))
+}

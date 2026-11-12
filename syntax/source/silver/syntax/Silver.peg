@@ -85,11 +85,13 @@ Silver:
     BreakStatement       < BREAK
     ContinueStatement    < CONTINUE
 
-    TypeDeclaration      < :TYPE Nl? TypeName (Nl? TypeParameters)? (Fields / Nl? :'=' !'=' Nl? SumMembers)?
+    TypeDeclaration      < :TYPE Nl? TypeName (Nl? TypeParameters)? (Fields Invariant? / Nl? :'=' !'=' Nl? SumMembers)?
+    Invariant            < Nl? :INVARIANT Nl? Expression
     AliasDeclaration     < :ALIAS Nl? TypeName (Nl? TypeParameters)? Nl? :'=' !'=' Nl? Type
     SumMembers           < SumMember (LeadingNl? :BitOrOperator Nl? SumMember)*
     SumMember            < InlineMember / Type
-    InlineMember         < TypeName Fields
+    InlineMember         < TypeName Fields InlineInvariant?
+    InlineInvariant      < Nl? :INVARIANT Nl? :'(' Nl? Expression Nl? :')'
     # The parens are kept so `type M()` still has a node, which sema rejects in favor of `type M`
     Fields               < '(' Nl? FieldList Nl? ')'
     FieldList            < (Field (Nl? ',' Nl? Field)*)?
@@ -256,9 +258,10 @@ Silver:
     WITH                <- Kword("with")
     MATCH               <- Kword("match")
     ALIAS               <- Kword("alias")
+    INVARIANT           <- Kword("invariant")
     UNDERSCORE          <- Kword("_")
 
-    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / INTRINSIC / PRIVATE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / WITH / UNDERSCORE
+    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / INTRINSIC / PRIVATE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / WITH / INVARIANT / UNDERSCORE
     IdentChar           <- [a-zA-Z0-9_]
     Identifier          <- !Keyword ValueName
 

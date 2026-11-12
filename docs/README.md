@@ -18,7 +18,7 @@ These documents describe the language as designed. Where the implementation does
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, maps | Implemented, except maps; element assignment always copies |
 | [Strings](language/strings.md) | Text, interpolation, views | Partial: no byte or character views |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
-| [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, invariants, `match` | Implemented, except invariants |
+| [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, invariants, `match` | Implemented |
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
 | [Modules](language/modules.md) | Files, imports, visibility | Partial: no import forms beyond `import a.b` |

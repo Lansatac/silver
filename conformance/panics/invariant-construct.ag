@@ -1,0 +1,7 @@
+type Span(low: Int, high: Int) invariant low <= high
+
+def main(): Unit {
+    val low = 3
+    printl(Span(low, 4))
+    printl(Span(low, 2))
+}

@@ -573,7 +573,8 @@ private final class NameResolver
 
                     if (func.body !is null)
                     {
-                        resolveBody(func.params, *func.body, declScope);
+                        resolveBody(func.params, *func.body, declScope, Id!Expr.init, Id!VarDecl.init,
+                            func.invariantOf.isValid);
                     }
                 },
                 (ref const TypeDecl type) {
@@ -862,8 +863,9 @@ private final class NameResolver
     }
 
     /// Resolves a function or lambda body in a new scope holding its params, inside `enclosing`.
+    /// An invariant's params are the type's fields, which hide what they're named like.
     private void resolveBody(const Param[] params, const Expr body, Scope enclosing,
-        Id!Expr lambda = Id!Expr.init, Id!VarDecl selfBinding = Id!VarDecl.init)
+        Id!Expr lambda = Id!Expr.init, Id!VarDecl selfBinding = Id!VarDecl.init, bool isInvariant = false)
     {
         auto functionScope = new Scope(enclosing);
         functionScope.lambda = lambda;
@@ -871,6 +873,11 @@ private final class NameResolver
         foreach (param; params)
         {
             if (param.name == discardName) continue;
+            if (isInvariant)
+            {
+                functionScope.declare(param.name, SymbolId(param.id));
+                continue;
+            }
             declareLocal(param.name, param.nameSpan, SymbolId(param.id), functionScope,
                 DiagnosticCode.DuplicateParameter, "'%s' is already a parameter of this function");
         }

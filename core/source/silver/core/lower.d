@@ -1,7 +1,8 @@
 module silver.core.lower;
 
-import std.algorithm : any, canFind, filter, map;
+import std.algorithm : any, canFind, filter, map, sort;
 import std.array : array;
+import std.range : iota;
 import std.format : format;
 import std.sumtype : match;
 import std.typecons : Rebindable, rebindable;
@@ -537,7 +538,34 @@ private final class Lowering
     private Expr construct(Type type, Expr[] fields, Span span)
     {
         if (isCellType(type)) return Expr(type, span, ExprKind(Cell(CellOp.New, fields)));
-        return Expr(type, span, ExprKind(Construct(fields)));
+        return checked(Expr(type, span, ExprKind(Construct(fields))));
+    }
+
+    /// `value`, after a panic if it breaks its type's invariant. The check is made where the value
+    /// comes about, so the panic says where that is.
+    private Expr checked(Expr value)
+    {
+        auto invariant_ = invariantOf(value.type);
+        if (!invariant_.isValid) return value;
+
+        auto span = value.span;
+        auto held = temp("checked", value.type);
+        auto fields = _analysis.fieldsOf(value.type);
+        auto args = fields.length.iota.map!(i => field(use(held, span), i, fields[i].type)).array;
+        auto typeArgs = types[value.type].match!((const NominalData nominal) => nominal.args, _ => null);
+        auto holds = Expr(types.bool_, span, ExprKind(Call(slotFor(invariant_, typeArgs), args)));
+        auto condition = _sources.text(_analysis.declarationOf(invariant_).body.span);
+        auto message = stringLiteral("The invariant of %s doesn't hold: %s".format(types.describe(value.type), condition), span);
+        auto failure = Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.panic, [message], [false])));
+        return Expr(value.type, span, ExprKind(Block([let(held, value), eval(when(not(holds), failure))],
+            boxed(use(held, span)))));
+    }
+
+    /// The function holding the invariant of `type`, or an invalid ID when it has none.
+    private Id!(ast.FunctionDecl) invariantOf(Type type)
+    {
+        auto decl = declOf(type);
+        return decl.isValid ? _analysis.declarationOf(decl).invariantFunction : Id!(ast.FunctionDecl).init;
     }
 
     /// A function that calls the native `func`, for using it as a value.
@@ -833,10 +861,19 @@ private final class Lowering
         auto span = e.span;
         auto result = temp("with", type, true);
         Stmt[] statements = [let(result, lowerExpr(*with_.object))];
+        // Invariants are checked once every update is made, for each value along the paths.
+        bool[const(size_t)[]] changed;
         foreach (i, path; _analysis.updatePathsOf(e.id))
         {
             auto value = lowerExpr(with_.updates[i].value);
-            statements ~= assign(result, rebuild(use(result, span), stepsOf(type, path), value));
+            statements ~= assign(result, rebuild(use(result, span), stepsOf(type, path), value, false));
+            foreach (depth; 0 .. path.length) changed[path[0 .. depth]] = true;
+        }
+        foreach (prefix; changed.keys.sort!((a, b) => a.length > b.length))
+        {
+            Expr value = use(result, span);
+            foreach (step; stepsOf(type, prefix)) value = field(value, step.index, step.type);
+            if (invariantOf(value.type).isValid) statements ~= eval(checked(value));
         }
         return Expr(type, span, ExprKind(Block(statements, boxed(use(result, span)))));
     }
@@ -853,13 +890,15 @@ private final class Lowering
         return steps;
     }
 
-    /// `object`, a pure expression, with the field at the end of `steps` replaced by `value`.
-    private Expr rebuild(Expr object, const Step[] steps, Expr value)
+    /// `object`, a pure expression, with the field at the end of `steps` replaced by `value`. Each
+    /// value rebuilt is checked against its invariant, innermost first, unless `checks` is false.
+    private Expr rebuild(Expr object, const Step[] steps, Expr value, bool checks = true)
     {
         if (steps.length == 0) return value;
         auto inner = field(object, steps[0].index, steps[0].type);
-        auto updated = Update(boxed(object), steps[0].index, boxed(rebuild(inner, steps[1 .. $], value)));
-        return Expr(object.type, value.span, ExprKind(updated));
+        auto updated = Update(boxed(object), steps[0].index, boxed(rebuild(inner, steps[1 .. $], value, checks)));
+        auto rebuilt = Expr(object.type, value.span, ExprKind(updated));
+        return checks ? checked(rebuilt) : rebuilt;
     }
 
     /// The local a place like `a.b.c` starts at, and the steps from it.

@@ -965,7 +965,8 @@ private final class Lowering
     }
 
     /// `type Name`, `type Name()`, `type Name(fields)` or `type Name = members`, and for a sum a
-    /// declaration of each member it defines inline, which from here on is a type like any other.
+    /// declaration of each member it defines inline, which from here on is a type like any other,
+    /// and for a product with an invariant, the function holding it.
     private Decl[] convertTypeDeclaration(ParseTree cst)
     {
         cst.validateNodeIs("Silver.TypeDeclaration");
@@ -973,8 +974,10 @@ private final class Lowering
         auto name = cst[0];
         auto rest = cst.children[1 .. $];
         TypeParam[] typeParams;
+        ParseTree typeParamsCst;
         if (rest.length > 0 && rest[0].name == "Silver.TypeParameters")
         {
+            typeParamsCst = rest[0];
             typeParams = convertTypeParameters(rest[0]);
             rest = rest[1 .. $];
         }
@@ -993,7 +996,15 @@ private final class Lowering
                 auto inline = convertProduct(member[0][0], member[0][1]);
                 inline.typeParams = mentioned(typeParams, inline.fields);
                 inline.inheritsParams = inline.typeParams.length > 0;
-                declarations ~= Decl(spanOf(member[0], file), DeclKind(inline));
+                Decl[] check;
+                if (member[0].children.length > 2)
+                {
+                    auto own = mentioned(freshTypeParams(typeParamsCst), inline.fields);
+                    auto f = invariantFunction(inline, member[0][1], member[0][2][0], own);
+                    inline.invariantFunction = f.id;
+                    check = [Decl(spanOf(member[0][2], file), DeclKind(f))];
+                }
+                declarations ~= Decl(spanOf(member[0], file), DeclKind(inline)) ~ check;
                 auto args = inline.typeParams.map!(p => TypeExpr(ids.next!TypeExpr, inline.nameSpan,
                     TypeExprKind(NamedType([p.name], null)))).array;
                 members ~= SumMember(TypeExpr(ids.next!TypeExpr, inline.nameSpan, TypeExprKind(NamedType([inline.name], args))), true);
@@ -1004,7 +1015,41 @@ private final class Lowering
         }
         auto product = convertProduct(name, rest.length > 0 ? rest[0] : ParseTree.init);
         product.typeParams = typeParams;
-        return [Decl(span, DeclKind(product))];
+        if (rest.length > 1)
+        {
+            auto f = invariantFunction(product, rest[0], rest[1][0], freshTypeParams(typeParamsCst));
+            product.invariantFunction = f.id;
+            declarations = [Decl(spanOf(rest[1], file), DeclKind(f))];
+        }
+        return Decl(span, DeclKind(product)) ~ declarations;
+    }
+
+    /// The type parameters `cst` declares, as nodes of their own, or none for an empty tree.
+    private TypeParam[] freshTypeParams(ParseTree cst)
+    {
+        return cst.name.length > 0 ? convertTypeParameters(cst) : null;
+    }
+
+    /// The function holding `type`'s invariant `condition`, whose parameters are the `fields` and
+    /// whose type parameters, `typeParams`, match the type's. Its nodes are its own, so sema checks
+    /// it as any other function.
+    private FunctionDecl invariantFunction(const TypeDecl type, ParseTree fields, ParseTree condition,
+        TypeParam[] typeParams)
+    {
+        Param[] params;
+        foreach (list; fields.children)
+        {
+            foreach (field; list.children)
+            {
+                params ~= Param(ids.next!Param, field.matches[0], spanOf(field[0], file), convertTypeExpression(field[1]));
+            }
+        }
+        auto span = spanOf(condition, file);
+        auto bool_ = TypeExpr(ids.next!TypeExpr, span, TypeExprKind(NamedType(["Bool"], null)));
+        auto f = FunctionDecl(ids.next!FunctionDecl, "invariant " ~ type.name, type.nameSpan, params,
+            boxed(convertExpression(condition)), bool_, FunctionKind.ordinary, null, true, typeParams);
+        f.invariantOf = type.id;
+        return f;
     }
 
     /// The parameters in `params` that a field in `fields` names, in their order. A field can only

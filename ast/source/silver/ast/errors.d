@@ -81,6 +81,8 @@ enum DiagnosticCode : string
     AmbiguousOverload = "T0034",
     /// Two functions of one name in a module that a call couldn't tell apart.
     DuplicateOverload = "T0035",
+    /// A value built from literals alone that breaks its type's invariant.
+    InvariantViolated = "T0036",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

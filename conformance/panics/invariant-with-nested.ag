@@ -1,0 +1,8 @@
+type Point(x: Int, y: Int) invariant x != y
+type Line(start: Point, end: Point)
+
+def main(): Unit {
+    val line = Line(Point(1, 2), Point(3, 4))
+    printl(line with (start.x = 2, start.y = 1))
+    printl(line with (end.x = 4))
+}

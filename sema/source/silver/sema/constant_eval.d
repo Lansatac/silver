@@ -2,6 +2,7 @@
 /// final until then. What would panic at runtime is reported here instead.
 module silver.sema.constant_eval;
 
+import std.algorithm : all, canFind;
 import std.format : format;
 import std.sumtype;
 
@@ -11,10 +12,12 @@ import silver.sema.resolve;
 import silver.sema.type;
 
 /// The value of each constant in `modules` that has one. `unevaluable` are the constants whose
-/// initializers already have errors, and `negatedLiterals` the integer literals under a `-`.
+/// initializers already have errors, and `negatedLiterals` the integer literals under a `-`. Each
+/// of `literalConstructions`, a call building a type with an invariant from literals, is reported
+/// if the invariant is a constant expression that's false for them.
 package ConstValue[Id!ConstDecl] evaluateConstants(M)(M modules, TypeTable types, const Type[Id!Expr] exprTypes,
     const Resolution resolutions, const bool[Id!ConstDecl] unevaluable, const bool[Id!Expr] negatedLiterals,
-    Collector collector)
+    Collector collector, const(Expr)[] literalConstructions)
 {
     auto evaluator = ConstantEvaluator(types, exprTypes, resolutions, unevaluable, negatedLiterals, collector);
     foreach (mod; modules)
@@ -26,6 +29,11 @@ package ConstValue[Id!ConstDecl] evaluateConstants(M)(M modules, TypeTable types
                 (_) {},
             );
         }
+    }
+    // An invariant with an error in it may have no type to evaluate by.
+    if (!collector.hasErrors)
+    {
+        foreach (call; literalConstructions) evaluator.checkInvariant(call);
     }
     return evaluator._constants;
 }
@@ -42,6 +50,66 @@ private struct ConstantEvaluator
     /// True while a constant's dependencies are being evaluated, and false once they're done.
     private bool[Id!ConstDecl] _evaluating;
     private bool[Id!ConstDecl] _cycleReported;
+    /// While an invariant is evaluated, the values of its parameters. A failure then isn't
+    /// reported, since the program panics there anyway.
+    private ConstValue[Id!Param] _params;
+    private bool _checkingInvariant;
+
+    /// Reports `call` if it builds a value that breaks its type's invariant, where that invariant
+    /// uses only what a constant may and so can be evaluated here.
+    private void checkInvariant(const Expr call)
+    {
+        auto type = _resolutions.constructions[call.id];
+        auto invariant_ = _resolutions.declarations.functions[_resolutions.declarations.types[type].invariantFunction];
+        if (!isConstantExpr(*invariant_.body, invariant_.params)) return;
+        auto args = call.kind.match!((const CallExpr c) => c.args, _ => assert(0, "a construction is a call"));
+
+        _checkingInvariant = true;
+        scope (exit)
+        {
+            _checkingInvariant = false;
+            _params = null;
+        }
+        foreach (i, param; invariant_.params)
+        {
+            auto value = constantValue(args[i]);
+            if (value is null) return;
+            _params[param.id] = *value;
+        }
+        auto holds = constantValue(*invariant_.body);
+        if (holds is null || (*holds).get!(const bool)) return;
+        _collector.reportError(DiagnosticCode.InvariantViolated, call.span,
+            "This breaks the invariant of `%s`, so building it would panic"
+                .format(_resolutions.declarations.types[type].name));
+    }
+
+    /// Whether `expr` uses only what a constant's initializer may, and `params`.
+    private bool isConstantExpr(const Expr expr, const Param[] params)
+    {
+        bool named(const Expr name)
+        {
+            auto symbol = name.id in _resolutions.resolutions;
+            return symbol !is null && (*symbol).match!(
+                (const Id!ConstDecl _) => true,
+                (const Id!Param p) => params.canFind!(q => q.id == p),
+                _ => false,
+            );
+        }
+
+        return expr.kind.match!(
+            (const BoolLiteral _) => true,
+            (const IntLiteral _) => true,
+            (const FloatLiteral _) => true,
+            (const StringLiteral _) => true,
+            (const UnitLiteral _) => true,
+            (const InterpolatedString interpolated) => interpolated.parts.all!(p => isConstantExpr(p, params)),
+            (const UnaryExpr unary) => isConstantExpr(*unary.operand, params),
+            (const BinaryExpr binary) => isConstantExpr(*binary.left, params) && isConstantExpr(*binary.right, params),
+            (const Identifier _) => named(expr),
+            (const MemberAccess _) => named(expr),
+            _ => false,
+        );
+    }
 
     /// Evaluates a constant's initializer once, after the constants it names, so that any of
     /// them being unusable is settled first. That goes for a short-circuited operand as well,
@@ -152,6 +220,11 @@ private struct ConstantEvaluator
 
     private const(ConstValue)* namedConstantValue(const Expr name)
     {
+        if (auto symbol = name.id in _resolutions.resolutions)
+        {
+            auto param = (*symbol).match!((const Id!Param p) => p in _params, _ => null);
+            if (param !is null) return param;
+        }
         return constantNamedBy(name) in _constants;
     }
 
@@ -223,7 +296,7 @@ private struct ConstantEvaluator
 
     private const(ConstValue)* reportConstantFailure(const Expr expr, ConstantFailure failure)
     {
-        _collector.reportError(DiagnosticCode.ConstantEvaluationFailed, expr.span, failure.msg);
+        if (!_checkingInvariant) _collector.reportError(DiagnosticCode.ConstantEvaluationFailed, expr.span, failure.msg);
         return null;
     }
 

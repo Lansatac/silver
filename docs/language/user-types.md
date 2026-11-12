@@ -167,9 +167,10 @@ val r = if val Circle(radius) = shape => radius else 0.0
 - A one-member sum over an existing type, such as `type Id = Int`, is a nominal wrapper with implicit injection. It may be rejected if it proves a footgun.
 - A built-in checked construction that returns `T?` where the invariant doesn't hold.
 - Whether the panic for a broken invariant shows the value's fields.
+- Whether an invariant can name a field whose type contains a `Ref`, whose cell changes without going through the type.
 - An invariant that's costly to check, or that a module maintains step by step, such as a sorted array. Checking it at every construction is too slow. This is what `opaque type` is for; see [Modules](modules.md).
 
 ## Current implementation
 
-- Invariants aren't available, and `invariant` isn't reserved yet.
+- An invariant may name a field whose type contains a `Ref`, although the cell can change without going through the type.
 - Everything else above is implemented.

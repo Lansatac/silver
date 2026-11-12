@@ -63,6 +63,9 @@ private final class TypeChecker
     private bool[Id!Expr] _negatedLiterals;
     /// Constants whose initializer already has an error, which evaluating would only repeat.
     private bool[Id!ConstDecl] _unevaluable;
+    /// Constructions of a type with an invariant from literals alone, which are checked once the
+    /// literals' types are final.
+    private const(Expr)[] _literalConstructions;
 
     Typing checkProgram(const Program program)
     {
@@ -146,7 +149,7 @@ private final class TypeChecker
 
         // Last, because an integer literal's type isn't final until everything's been checked.
         _typing.constants = evaluateConstants(programModules, _types, _typing.exprTypes, _resolutions, _unevaluable,
-            _negatedLiterals, _collector);
+            _negatedLiterals, _collector, _literalConstructions);
 
         return _typing;
     }
@@ -1494,6 +1497,11 @@ private final class TypeChecker
 
     private Type synthesizeCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected)
     {
+        if (auto decl = expr.id in _resolutions.constructions)
+        {
+            auto invariant_ = _resolutions.declarations.types[*decl].invariantFunction;
+            if (invariant_.isValid && call.args.all!(a => isLiteral(a))) _literalConstructions ~= expr;
+        }
         Type[] typed;
         if (auto candidates = call.callee.id in _resolutions.overloads)
         {
@@ -1719,6 +1727,24 @@ private final class TypeChecker
                 (const NominalData m) => m.decl == n.decl
                     ? n.args.length.iota.all!(i => couldBe(n.args[i], m.args[i], params))
                     : _typing.members.get(n.decl, null).any!(member => declOf(member) == m.decl),
+                _ => false,
+            ),
+            _ => false,
+        );
+    }
+
+    /// A literal of a primitive type, or a negated number literal.
+    private static bool isLiteral(const Expr arg)
+    {
+        return arg.kind.match!(
+            (const BoolLiteral _) => true,
+            (const IntLiteral _) => true,
+            (const FloatLiteral _) => true,
+            (const StringLiteral _) => true,
+            (const UnitLiteral _) => true,
+            (const UnaryExpr unary) => unary.op == UnaryOp.Minus && unary.operand.kind.match!(
+                (const IntLiteral _) => true,
+                (const FloatLiteral _) => true,
                 _ => false,
             ),
             _ => false,
