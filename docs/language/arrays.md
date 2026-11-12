@@ -21,6 +21,8 @@ A literal may have a trailing comma, and can span lines.
 
 `xs[a..b]` is the half-open slice from `a` to `b`, whose bounds are of one integer type. It panics when `a > b`, `a < 0`, or `b > length(xs)`.
 
+Either bound can be left out: `xs[a..]` runs to the end, as `xs[a..length(xs)]` would with `xs` evaluated once, and `xs[..b]` starts at 0. `xs[..]` isn't allowed, since it would just be `xs`.
+
 `length(xs)` is the number of elements, as an `Int`, and `at(xs, i)` is `xs[i]` with an `Int` index. Both are prelude functions, so they can be called as methods (`xs.at(i)`), and they're what lets an array be looped over like any value with a `length` and an `at` (see [`for`](control-flow.md#for)).
 
 ## Assigning elements
@@ -66,7 +68,7 @@ A slice keeps its whole underlying storage alive.
 
 ## Ranges
 
-`a..b` is a half-open numeric range. It is accepted as a slice index and as the iterable of a `for`. It has no meaning elsewhere until ranges are designed as values.
+`a..b` is a half-open numeric range. It is accepted as a slice index and as the iterable of a `for`. It has no meaning elsewhere until ranges are designed as values. A range with a bound left out exists only inside a slice.
 
 ## Maps
 
@@ -81,7 +83,7 @@ Maps share the bracket syntax, with `:` between key and value:
 
 - A form of indexing that returns `T?`.
 - Which paths can be assigned beyond a plain variable, such as `game.board[i] = v` and `grid[y][x] = v`, and whether `mutable` arguments work on an element.
-- Pre-sizing an array before appending.
+- Pre-sizing an array before appending, and making one of `n` copies of a value. Leaning towards the range form (a repeating range collected into an array) once ranges exist, rather than an array function now.
 - The semantics of maps.
 
 ## Current implementation

@@ -157,7 +157,9 @@ Silver:
     MemberAccess         < :'.' Nl? identifier
     SafeMemberAccess     < :"?." Nl? identifier
     PropagateNone        <- "?" !("?" / "." !".")
-    IndexArgs            < :'[' Nl? Expression Nl? :']'
+    IndexArgs            < :'[' Nl? (SliceFrom / SliceTo / Expression) Nl? :']'
+    SliceFrom            < CoalesceExpression LeadingNl? :".." &(Nl? ']')
+    SliceTo              < :".." Nl? CoalesceExpression
     CallArgs             < '(' Nl? (Argument (Nl? :',' Nl? Argument)* Nl?)? ')'
     Argument             < (MUTABLE Nl?)? Expression
     WithUpdate           < :WITH Nl? :'(' Nl? FieldUpdate (Nl? :',' Nl? FieldUpdate)* Nl? :')'

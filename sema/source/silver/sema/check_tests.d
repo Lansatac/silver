@@ -1834,11 +1834,15 @@ unittest
 {
     auto a = analyzedMain(`val xs = ["a"]
     val one = xs[0]
-    val some = xs[0..1]`);
+    val some = xs[0..1]
+    val rest = xs[1..]
+    val start = xs[..1]`);
     a.shouldHaveNoDiagnostics();
     a.shouldTypeEveryExpression();
     a.shouldDeclareType(At("one", 1), "String");
     a.shouldDeclareType(At("some", 1), "[String]");
+    a.shouldDeclareType(At("rest", 1), "[String]");
+    a.shouldDeclareType(At("start", 1), "[String]");
 
     analyzedMain(`val i: UInt8 = 0
     val j: Int16 = 1
@@ -1847,6 +1851,9 @@ unittest
     analyzedMain(`val f = 1.0
     print([1][f])`).shouldReport(DiagnosticCode.TypeMismatch, At("f", 2));
     analyzedMain(`print([1][0.."a"])`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
+    analyzedMain(`print([1]["a"..])`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
+    analyzedMain(`print([1][.."a"])`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
+    analyzedMain(`print("abc"[1..])`).shouldReport(DiagnosticCode.InvalidOperand, At(`"abc"`, 1));
     analyzedMain(`print("abc"[0])`).shouldReport(DiagnosticCode.InvalidOperand, At(`"abc"`, 1));
     analyzedMain(`print(length("abc"))`).shouldReport(DiagnosticCode.TypeMismatch, At(`"abc"`, 1));
 }

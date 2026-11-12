@@ -797,7 +797,22 @@ private final class Lowering
         case "Silver.PropagateNone":
             return Expr(ids.next!Expr, span, ExprKind(PropagateExpr(boxed(lhs))));
         case "Silver.IndexArgs":
-            return Expr(ids.next!Expr, span, ExprKind(IndexExpr(boxed(lhs), boxed(convertExpression(op[0])))));
+            // `xs[a..]` and `xs[..b]` are ranges with a bound left out, which only a slice allows.
+            auto index = op[0];
+            Expr bounds;
+            if (index.name == "Silver.SliceFrom")
+            {
+                bounds = Expr(ids.next!Expr, spanOf(index, file), ExprKind(RangeExpr(boxed(convertExpression(index[0])), null)));
+            }
+            else if (index.name == "Silver.SliceTo")
+            {
+                bounds = Expr(ids.next!Expr, spanOf(index, file), ExprKind(RangeExpr(null, boxed(convertExpression(index[0])))));
+            }
+            else
+            {
+                bounds = convertExpression(index);
+            }
+            return Expr(ids.next!Expr, span, ExprKind(IndexExpr(boxed(lhs), boxed(bounds))));
         case "Silver.TypeArguments":
             auto typeArgs = op.children.map!(a => convertTypeExpression(a)).array;
             auto named = lhs.kind.match!(

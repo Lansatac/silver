@@ -1096,8 +1096,8 @@ private final class NameResolver
                 resolveExpr(*index.index, scopeTable);
             },
             (const RangeExpr range) {
-                resolveExpr(*range.start, scopeTable);
-                resolveExpr(*range.end, scopeTable);
+                if (range.start !is null) resolveExpr(*range.start, scopeTable);
+                if (range.end !is null) resolveExpr(*range.end, scopeTable);
             },
             (const TupleLiteral literal) {
                 foreach (element; literal.elements)

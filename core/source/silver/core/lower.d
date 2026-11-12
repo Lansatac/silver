@@ -797,8 +797,16 @@ private final class Lowering
         auto array = lowerExpr(*index.object);
         if (auto range = ast.asRange(index.index))
         {
-            return Expr(type, span, ExprKind(Slice(boxed(array), boxed(lowerExpr(*range.start)),
-                boxed(lowerExpr(*range.end)))));
+            auto start = range.start is null ? intLiteral(types.int_, 0, span) : lowerExpr(*range.start);
+            if (range.end !is null)
+            {
+                return Expr(type, span, ExprKind(Slice(boxed(array), boxed(start), boxed(lowerExpr(*range.end)))));
+            }
+            // `xs[a..]` ends at the length of the array it slices, which is evaluated once.
+            auto held = temp("sliced", array.type);
+            auto end = Expr(types.int_, span, ExprKind(Length(boxed(use(held, span)))));
+            auto slice = Expr(type, span, ExprKind(Slice(boxed(use(held, span)), boxed(start), boxed(end))));
+            return Expr(type, span, ExprKind(Block([let(held, array)], boxed(slice))));
         }
         return Expr(type, span, ExprKind(Index(boxed(array), boxed(lowerExpr(*index.index)))));
     }

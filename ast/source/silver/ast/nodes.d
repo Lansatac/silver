@@ -351,7 +351,8 @@ struct IndexExpr
     Expr* index;
 }
 
-/// `start..end`, half open. Only a slice or a `for` takes one for now.
+/// `start..end`, half open. Only a slice or a `for` takes one for now. In a slice, either bound
+/// can be left out (null), as in `xs[a..]` and `xs[..b]`.
 struct RangeExpr
 {
     Expr* start;
@@ -479,7 +480,8 @@ string printExpr(const Expr e)
             return "(map" ~ entries ~ ")";
         },
         (const IndexExpr i) => format("(index %s %s)", printExpr(*i.object), printExpr(*i.index)),
-        (const RangeExpr r) => format("(.. %s %s)", printExpr(*r.start), printExpr(*r.end)),
+        (const RangeExpr r) => format("(.. %s %s)", r.start is null ? "_" : printExpr(*r.start),
+            r.end is null ? "_" : printExpr(*r.end)),
         (const TupleLiteral t) => format("(tuple%s)", t.elements.map!(e => " " ~ printExpr(e)).join),
         (const WithExpr w) => format("(with %s%s)", printExpr(*w.object),
             w.updates.map!(u => format(" (%-(%s.%) %s)", u.path, printExpr(u.value))).join),

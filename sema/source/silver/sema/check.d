@@ -870,8 +870,8 @@ private final class TypeChecker
         }
         else
         {
-            checkConsumedInteger(*range.start, ctx);
-            checkConsumedInteger(*range.end, ctx);
+            if (range.start !is null) checkConsumedInteger(*range.start, ctx);
+            if (range.end !is null) checkConsumedInteger(*range.end, ctx);
             _typing.exprTypes[index.index.id] = objectType;
         }
         if (objectType == _types.error) return objectType;
