@@ -34,6 +34,17 @@ unittest
     tested("test \"a\" {\n    val f: (Bool) -> Unit = expect\n}").shouldReport(DiagnosticCode.InvalidOperand, At("expect", 1));
 }
 
+@("panics takes work with no parameters and gives a String?, only in test code")
+unittest
+{
+    tested("test \"a\" {\n    val message: String? = panics(() => 1 / 0)\n    val unit = panics((): Unit => panic(\"x\"))\n"
+        ~ "    val check: (() -> Int) -> String? = panics\n    def nested(): String? => panics(() => ())\n}")
+        .shouldHaveNoDiagnostics();
+    tested("test \"a\" => panics(7)").shouldReport(DiagnosticCode.TypeMismatch, At("7", 1));
+    tested("def check(): String? => panics(() => 1)").shouldReport(DiagnosticCode.PanicsOutsideTest, At("panics", 1));
+    tested("def check(): (() -> Int) -> String? => panics").shouldReport(DiagnosticCode.PanicsOutsideTest, At("panics", 1));
+}
+
 @("? in a test's own body stops the test, and in a lambda or nested def it still returns from that")
 unittest
 {

@@ -55,7 +55,32 @@ test "first element" {
 }
 ```
 
-`panics { ... }`, valid only in test code, tests a panic and its message.
+## panics
+
+`panics(work)` runs `work`, a function taking nothing, and gives a `String?`: the message of the panic that ended it, or `None` if it returned. Whatever `work` returns is dropped. Like `expect`, it's available only in test code.
+
+```silver
+test "powInt panics as arithmetic does" {
+    expect(panics(() => powInt(2, 63)) == "Integer overflow")
+    expect(panics(() => powInt(2, 10)) == None)
+}
+```
+
+The message is the panic's own, without `panic: ` or where it happened, so a test doesn't depend on a line number. A failed `assert` gives every line it would print: `Assertion failed: ...`, then the condition and values.
+
+It's an ordinary value, so `expect` reports a wrong or missing panic as it reports anything else:
+
+```
+powers.ag(2,5): Expectation failed: panics(() => powInt(2, 3)) == "Integer overflow"
+    left: None
+    right: Some(Integer overflow)
+```
+
+- Every panic is caught, including recursion too deep for the stack. A crash is still a crash.
+- The test carries on afterwards, and a later panic outside `panics` ends it as usual.
+- A `panics` inside `work` catches only its own panic.
+- `work` is a lambda like any other: it can't capture a `mutable val`, `?` in it returns from it, and `expect` in it records a failure.
+- A `Ref` that was in the middle of an `update` when the panic happened stays that way, so using it afterwards panics with `Ref is being updated`.
 
 ## Running tests
 
@@ -98,4 +123,5 @@ Matchers, fixtures, property testing, snapshots and reporters belong in librarie
 
 - `assert`, `test`, `expect` and `silver test` are available on both backends. `silver test -b llvm` compiles the tests, and `-b both` runs them both ways and fails a test the two backends disagree on.
 - A directory's tests are those of every `.ag` file under it, each loaded as a program of its own.
-- `panics`, companion files, `--filter`, `--format json` and the library hooks aren't available yet.
+- `panics` is available on both backends. Its work can't be a function that returns `Never`, such as `() => panic("x")`, because a type parameter doesn't take `Never` yet; `(): Unit => panic("x")` works.
+- Companion files, `--filter`, `--format json` and the library hooks aren't available yet.

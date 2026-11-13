@@ -27,8 +27,8 @@ static immutable RuntimeFunction[string] runtime = [
     "silver_array_format": RuntimeFunction("void", ["ptr", "i64", "ptr", "ptr"]),
 
     "silver_string_compare": RuntimeFunction("i32", ["ptr", "i64", "ptr", "i64"]),
-    "silver_panic":       RuntimeFunction("void", ["ptr"], "noreturn"),
-    "silver_panic_message": RuntimeFunction("void", ["ptr", "i64"], "noreturn"),
+    "silver_panic":       RuntimeFunction("void", ["ptr", "ptr"], "noreturn"),
+    "silver_panic_message": RuntimeFunction("void", ["ptr", "ptr", "i64"], "noreturn"),
     "silver_exit_error":  RuntimeFunction("void", ["ptr", "i64"], "noreturn"),
 
     "silver_test_start":   RuntimeFunction("void", ["ptr"]),
@@ -36,4 +36,7 @@ static immutable RuntimeFunction[string] runtime = [
     "silver_test_end":     RuntimeFunction("void", []),
     "silver_test_failed":  RuntimeFunction("void", ["ptr", "i64"]),
     "silver_test_stopped": RuntimeFunction("void", ["ptr", "i64"], "noreturn"),
+    "silver_panics_enter": RuntimeFunction("void", ["ptr"]),
+    "silver_panics_leave": RuntimeFunction("void", ["ptr"]),
+    "silver_panics_message": RuntimeFunction("void", ["ptr", "ptr"]),
 ];

@@ -29,6 +29,7 @@ enum Intrinsic
     panic,
     assert_,
     expect,
+    panics,
     get,
     set,
     update,

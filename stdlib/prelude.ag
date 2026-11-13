@@ -26,3 +26,5 @@ intrinsic def assert(condition: Bool, message: String): Unit
 // In a test, records a failure when `condition` is false, shown as `assert` shows it, and carries on.
 intrinsic def expect(condition: Bool): Unit
 intrinsic def expect(condition: Bool, message: String): Unit
+// In a test, runs `work` and gives the message of the panic that ended it, or `None` if it returned.
+intrinsic def panics<T>(work: () -> T): String?

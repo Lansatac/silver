@@ -91,6 +91,8 @@ enum DiagnosticCode : string
     UntypedErrorUnion = "T0039",
     /// Assigning a field an invariant names, through it, or passing it as `mutable`.
     InvariantFieldChanged = "T0040",
+    /// `panics` outside a test.
+    PanicsOutsideTest = "T0041",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

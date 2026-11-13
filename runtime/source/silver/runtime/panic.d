@@ -8,22 +8,21 @@ import core.stdc.string : strlen;
 
 import silver.runtime.testing : panicInTest;
 
-/// Prints `message` to stderr and exits with `panicStatus`, or in a test, ends the test. The message
-/// should already say where in the Silver source the failure happened.
-extern (C) noreturn silver_panic(const(char)* message) nothrow @nogc
+/// Prints `message` to stderr after `location`, which says where in the Silver source the failure
+/// happened and is null for a failure of the runtime's own, and exits with `panicStatus`. In a test
+/// it ends the test instead, or the `panics` call it's inside.
+extern (C) noreturn silver_panic(const(char)* location, const(char)* message) nothrow @nogc
 {
-    panicInTest(message, strlen(message));
-    fflush(stdout);
-    fprintf(stderr, "panic: %s\n", message);
-    exit(panicStatus);
+    silver_panic_message(location, message, strlen(message));
 }
 
-/// The `panic` intrinsic. `message` isn't NUL-terminated, and generated code has put the location in it.
-extern (C) noreturn silver_panic_message(const(char)* message, size_t length) nothrow @nogc
+/// The `panic` intrinsic, whose `message` isn't NUL-terminated.
+extern (C) noreturn silver_panic_message(const(char)* location, const(char)* message, size_t length) nothrow @nogc
 {
-    panicInTest(message, length);
+    panicInTest(location, message, length);
     fflush(stdout);
-    fprintf(stderr, "panic: %.*s\n", cast(int) length, message);
+    if (location is null) fprintf(stderr, "panic: %.*s\n", cast(int) length, message);
+    else fprintf(stderr, "panic: %s: %.*s\n", location, cast(int) length, message);
     exit(panicStatus);
 }
 
@@ -43,5 +42,5 @@ noreturn panic(string message) nothrow
 {
     import std.string : toStringz;
 
-    silver_panic(message.toStringz);
+    silver_panic(null, message.toStringz);
 }

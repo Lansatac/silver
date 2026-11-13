@@ -1891,7 +1891,7 @@ private final class Lowering
                 assert(0, "`assert` and `expect` are expanded from what's written, and sema rejects them as values");
             case Intrinsic.exitWithError:
                 assert(0, "only the wrapper lowering makes for `main` calls `exitWithError`");
-            case Intrinsic.print, Intrinsic.printl, Intrinsic.read, Intrinsic.panic:
+            case Intrinsic.print, Intrinsic.printl, Intrinsic.read, Intrinsic.panic, Intrinsic.panics:
                 break;
         }
         bool[] anyArgs;

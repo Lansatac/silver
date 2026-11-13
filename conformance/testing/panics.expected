@@ -1,0 +1,18 @@
+FAIL "a failed expectation shows what happened instead" at panics.ag(19,6)
+    panics.ag(20,5): Expectation failed: panics(() => powInt(2, 3)) == "Integer overflow"
+        left: None
+        right: Some(Integer overflow)
+    panics.ag(21,5): Expectation failed: panics(() => boom(1)) == "Integer overflow"
+        left: Some(boom 1)
+        right: Some(Integer overflow)
+FAIL "the test carries on, and a later panic still ends it" at panics.ag(29,6)
+    panic: panics.ag(4,38): boom 2
+    Output:
+        Some(boom 1)
+FAIL "expect works inside the work" at panics.ag(52,6)
+    panics.ag(54,9): Expectation failed: 1 == 2
+        left: 1
+        right: 2
+FAIL "a Ref caught in an update stays in it" at panics.ag(59,6)
+    panic: panics.ag(62,12): Ref is being updated
+6 passed, 4 failed

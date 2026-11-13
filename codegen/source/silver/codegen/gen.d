@@ -239,6 +239,8 @@ private final class Generator
     /// function's index, once one has been asked for.
     private string[size_t] _thunks;
     private string[] _thunkDefinitions;
+    /// The guard for `panics` calls, by the LLVM type their work returns.
+    private string[string] _panicsGuards;
     /// The descriptor of each function used as a value, by the function's index.
     private string[size_t] _descriptors;
 
@@ -800,6 +802,8 @@ private final class Generator
                 return emitExplicitPanic(call.args[0], e.span);
             case Intrinsic.exitWithError:
                 return emitExitWithError(call.args[0]);
+            case Intrinsic.panics:
+                return emitPanics(call.args[0], e.span);
             case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect:
                 assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, and the others operations on a Cell");
         }
@@ -889,15 +893,68 @@ private final class Generator
             .withValue(null);
     }
 
-    /// `panic(message)`: the message, with the location first, as other panics have.
+    /// `panics(work)`: `Some` of the message of the panic that ended `work`, or `None` if it returned.
+    /// The work runs through a guard nested in the running test's.
+    private Fragment emitPanics(const Expr work, Span span)
+    {
+        auto returned = llvmType(functionData(work.type).ret, span);
+        auto closure = emitExpr(work);
+        auto descriptor = _function.extract(closureLayout, closure.value, 0);
+        auto code = _function.load("ptr", descriptor.value);
+        auto env = _function.extract(closureLayout, closure.value, 1);
+        auto panicked = _function.call("i1", panicsGuard(returned), ["ptr " ~ code.value, "ptr " ~ env.value]);
+
+        auto noneLabel = _function.newLabel("panics.none");
+        auto caughtLabel = _function.newLabel("panics.caught");
+        auto doneLabel = _function.newLabel("panics.done");
+        auto layout = optionLayout(sliceLayout);
+        auto message = callRuntimeForString("silver_panics_message", []);
+        auto tagged = _function.insert(layout, "undef", "i1", "true", 0);
+        auto some = _function.insert(layout, tagged.value, sliceLayout, message.value, 1);
+        auto result = _function.result("phi %s [ zeroinitializer, %%%s ], [ %s, %%%s ]"
+            .format(layout, noneLabel, some.value, caughtLabel));
+        return closure.then(descriptor).then(code).then(env).then(panicked)
+            .then(Fragment.jump(noneLabel)).then(Fragment.label(noneLabel))
+            .then(Fragment.branch(panicked.value, caughtLabel, doneLabel))
+            .then(Fragment.label(caughtLabel)).then(message).then(tagged).then(some)
+            .then(Fragment.jump(doneLabel))
+            .then(Fragment.label(doneLabel)).then(result);
+    }
+
+    /// The guard for a `panics` call whose work returns the LLVM type `returned`, which says whether
+    /// the work panicked. The runtime keeps the guard it runs under and puts it back afterwards,
+    /// since nothing the guard computed before a jump back to it can be relied on after.
+    private string panicsGuard(string returned)
+    {
+        if (auto existing = returned in _panicsGuards) return *existing;
+        auto name = "@silver.panics.guard.%s".format(_panicsGuards.length);
+        _panicsGuards[returned] = name;
+        foreach (used; ["silver_panics_enter", "silver_panics_leave"]) _usedRuntime[used] = true;
+        _thunkDefinitions ~= "define private i1 %s(ptr %%code, ptr %%env) noinline {\n.entry:\n".format(name)
+            ~ "  call void @silver_panics_enter(ptr @silver.test.jump)\n"
+            ~ "  %frame = call ptr @llvm.frameaddress.p0(i32 0)\n"
+            ~ "  store ptr %frame, ptr @silver.test.jump\n"
+            ~ "  %stack = call ptr @llvm.stacksave.p0()\n"
+            ~ "  %slot = getelementptr [5 x ptr], ptr @silver.test.jump, i64 0, i64 2\n"
+            ~ "  store ptr %stack, ptr %slot\n"
+            ~ "  %jumped = call i32 @llvm.eh.sjlj.setjmp(ptr @silver.test.jump)\n"
+            ~ "  %fresh = icmp eq i32 %jumped, 0\n"
+            ~ "  br i1 %fresh, label %run, label %done\nrun:\n"
+            ~ (returned == "void" ? "  call void %code(ptr %env)\n" : "  %%.r = call %s %%code(ptr %%env)\n".format(returned))
+            ~ "  br label %done\ndone:\n"
+            ~ "  %panicked = phi i1 [ false, %run ], [ true, %.entry ]\n"
+            ~ "  call void @silver_panics_leave(ptr @silver.test.jump)\n"
+            ~ "  ret i1 %panicked\n}\n";
+        return name;
+    }
+
+    /// `panic(message)`, which says where it is as other panics do.
     private Fragment emitExplicitPanic(const Expr message, Span span)
     {
         auto text = emitExpr(message);
-        auto prefix = stringConstant(located(span) ~ ": ");
-        auto joined = text.then(emitConcat([prefix, text.value], "i8", "1"));
-        auto parts = sliceParts(joined.value);
-        return joined.then(parts.code)
-            .then(callRuntime("silver_panic_message", [parts.data, parts.length]))
+        auto parts = sliceParts(text.value);
+        return text.then(parts.code)
+            .then(callRuntime("silver_panic_message", [cString(located(span)), parts.data, parts.length]))
             .then(Fragment.unreachable())
             .then(Fragment.label(_function.newLabel("after.panic")))
             .withValue(null);
@@ -1171,7 +1228,7 @@ private final class Generator
     /// Panics with `message` and the location of `span`, ending the current block.
     private Fragment emitPanic(Span span, string message)
     {
-        return callRuntime("silver_panic", [cString("%s: %s".format(located(span), message))])
+        return callRuntime("silver_panic", [cString(located(span)), cString(message)])
             .then(Fragment.unreachable());
     }
 

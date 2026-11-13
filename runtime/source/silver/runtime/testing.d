@@ -8,12 +8,16 @@
 ///   S  the test stopped, as `?` on `None` does   P  the test panicked
 ///   O  some of what the test printed             E  the test is over
 ///
+/// A `panics` call runs its work through a guard of its own, nested in the test's. A panic under
+/// it is kept for the call to hand back rather than recorded.
+///
 /// A test with no `E` crashed. `SILVER_TEST_FROM` names the index to start at, so the runner can
 /// carry on after one.
 module silver.runtime.testing;
 
 import core.stdc.stdio : fflush, fprintf, fwrite, snprintf, stdout;
-import core.stdc.stdlib : getenv, strtoull;
+import core.stdc.stdlib : abort, getenv, realloc, strtoull;
+import core.stdc.string : strlen;
 
 /// Whether the program is running its tests rather than `main`.
 __gshared bool testing;
@@ -22,6 +26,15 @@ private __gshared bool inTest;
 private alias Jump = extern (C) void function() nothrow @nogc;
 private __gshared Jump escape;
 private __gshared size_t firstTest;
+/// How many `panics` calls are running, each inside the one before.
+private __gshared size_t panicsDepth;
+/// The guard each of them runs under, `jumpSize` pointers apiece.
+private __gshared void** outerGuards;
+private __gshared size_t outerGuardsRoom;
+private __gshared const(char)* caughtMessage;
+private __gshared size_t caughtLength;
+/// How many pointers LLVM's setjmp buffer holds.
+private enum jumpSize = 5;
 
 version (Windows)
 {
@@ -78,12 +91,57 @@ noreturn silver_test_stopped(const(char)* message, size_t length)
     leave();
 }
 
-/// A panic in a test, which ends it. Returns if no test is running.
-void panicInTest(const(char)* message, size_t length) @nogc
+/// A panic in a test, which ends it, or ends the `panics` call it's under. Returns if no test is
+/// running.
+void panicInTest(const(char)* location, const(char)* message, size_t length) @nogc
 {
     if (!inTest) return;
-    record('P', message, length);
+    if (panicsDepth > 0)
+    {
+        caughtMessage = message;
+        caughtLength = length;
+        escape();
+        assert(0, "the guard doesn't return here");
+    }
+    auto locationLength = location is null ? 0 : strlen(location);
+    fprintf(stdout, "P %zu\n", locationLength == 0 ? length : locationLength + 2 + length);
+    if (locationLength > 0)
+    {
+        fwrite(location, 1, locationLength, stdout);
+        fwrite(": ".ptr, 1, 2, stdout);
+    }
+    if (length > 0) fwrite(message, 1, length, stdout);
+    fwrite("\n".ptr, 1, 1, stdout);
+    fflush(stdout);
     leave();
+}
+
+/// Starts a `panics` call, keeping the guard that `jump` holds while the call's own is there.
+void silver_panics_enter(void** jump)
+{
+    if (panicsDepth == outerGuardsRoom)
+    {
+        outerGuardsRoom = outerGuardsRoom == 0 ? 8 : outerGuardsRoom * 2;
+        outerGuards = cast(void**) realloc(outerGuards, outerGuardsRoom * jumpSize * (void*).sizeof);
+        if (outerGuards is null) abort();
+    }
+    outerGuards[panicsDepth * jumpSize .. (panicsDepth + 1) * jumpSize] = jump[0 .. jumpSize];
+    panicsDepth++;
+}
+
+/// Ends a `panics` call, however its work ended, putting back the guard it was under.
+void silver_panics_leave(void** jump)
+{
+    panicsDepth--;
+    jump[0 .. jumpSize] = outerGuards[panicsDepth * jumpSize .. (panicsDepth + 1) * jumpSize];
+}
+
+/// The message of the panic that ended the `panics` call that has just left, without its location.
+void silver_panics_message(const(char)** data, size_t* length)
+{
+    *data = caughtMessage;
+    *length = caughtLength;
+    caughtMessage = null;
 }
 
 private noreturn leave() @nogc

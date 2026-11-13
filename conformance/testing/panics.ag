@@ -1,0 +1,68 @@
+import std.math
+import std.ref
+
+def boom(n: Int): Int => if n > 0 => panic("boom {n}") else n
+
+def forever(n: Int): Int => 1 + forever(n + 1)
+
+test "a panic's message comes back without its location" {
+    expect(panics(() => powInt(2, 63)) == "Integer overflow")
+    expect(panics(() => boom(3)) == "boom 3")
+    expect(panics(() => [1, 2][5]) == "Index is out of range")
+}
+
+test "work that returns gives None" {
+    expect(panics(() => powInt(2, 3)) == None)
+    expect(panics(() => printl("ran")) == None)
+}
+
+test "a failed expectation shows what happened instead" {
+    expect(panics(() => powInt(2, 3)) == "Integer overflow")
+    expect(panics(() => boom(1)) == "Integer overflow")
+}
+
+test "an assert's message has its values" {
+    val n = -1
+    expect(panics(() => assert(n >= 0, "n is negative")) == "Assertion failed: n is negative\n    condition: n >= 0\n    left: -1\n    right: 0")
+}
+
+test "the test carries on, and a later panic still ends it" {
+    val first = panics(() => boom(1))
+    printl(first)
+    printl(boom(2))
+    printl("not reached")
+}
+
+test "nested calls catch their own panic" {
+    val outer = panics(() => {
+        val inner = panics(() => boom(1))
+        printl(inner)
+        expect(inner == "boom 1")
+        boom(2)
+    })
+    expect(outer == "boom 2")
+    expect(panics(() => panics(() => boom(4))) == None)
+}
+
+test "a stack overflow is caught" {
+    expect(panics(() => forever(0)) == "Stack overflow")
+    expect(panics(() => boom(5)) == "boom 5")
+}
+
+test "expect works inside the work" {
+    expect(panics(() => {
+        expect(1 == 2)
+        boom(6)
+    }) == "boom 6")
+}
+
+test "a Ref caught in an update stays in it" {
+    val cell = Ref(1)
+    expect(panics(() => cell.update(n => boom(n))) == "boom 1")
+    printl(cell.get())
+}
+
+test "panics as a function value" {
+    val check: (() -> Int) -> String? = panics
+    expect(check(() => boom(7)) == "boom 7")
+}

@@ -1351,17 +1351,25 @@ private final class TypeChecker
         return decl.kind == FunctionKind.intrinsic && decl.name == name;
     }
 
-    /// `call`, of type `type`, reported if it calls `expect` outside a test.
+    /// `call`, of type `type`, reported if it calls `expect` or `panics` outside a test.
     private Type placeExpect(const Expr call, Type type)
     {
         auto callee = calleeOf(call.id);
         if (callee is null) callee = call.id in _typing.methodCallees;
-        if (!_inTest && callee !is null && isIntrinsic(*callee, "expect"))
+        if (_inTest || callee is null) return type;
+        if (isIntrinsic(*callee, "expect"))
         {
             _collector.reportError(DiagnosticCode.ExpectOutsideTest, call.span,
                 "`expect` records a failure for a test to report, so it can only be used in one; `assert` stops the program instead");
         }
+        if (isIntrinsic(*callee, "panics")) reportPanicsOutsideTest(call.span);
         return type;
+    }
+
+    private void reportPanicsOutsideTest(Span span)
+    {
+        _collector.reportError(DiagnosticCode.PanicsOutsideTest, span,
+            "`panics` survives a panic so that a test can check it, so it can only be used in one");
     }
 
     /// Whether `symbol` is an intrinsic with an `Any` parameter, which has no function type to be a value of.
@@ -3992,6 +4000,11 @@ private final class TypeChecker
     /// What `name`, which resolution found to be `symbol`, is as a value.
     private Type namedValue(const Expr name, SymbolId symbol, Type expected)
     {
+        if (!_inTest && symbol.match!((const Id!FunctionDecl f) => isIntrinsic(f, "panics"), _ => false))
+        {
+            reportPanicsOutsideTest(name.span);
+            return _types.error;
+        }
         auto generic = genericNamed(name);
         if (generic.found && !takesAnyIntrinsically(symbol)) return instantiateValue(name, generic, expected);
         if (generic.found) _declarer.resolveTypeArguments(generic.written);

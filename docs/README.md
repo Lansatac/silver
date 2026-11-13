@@ -24,7 +24,7 @@ These documents describe the language as designed. Where the implementation does
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
 | [Modules](language/modules.md) | Files, imports, visibility | Partial: no `forward import` or renamed imports |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the standard library's natives |
-| [Testing](language/testing.md) | `test`, `assert`, `expect`, the test runner | Partial: no companion files, `panics`, `--filter` or `--format json` |
+| [Testing](language/testing.md) | `test`, `assert`, `expect`, `panics`, the test runner | Partial: no companion files, `--filter` or `--format json` |
 
 ## Not designed yet
 
