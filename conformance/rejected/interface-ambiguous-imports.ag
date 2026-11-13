@@ -1,0 +1,9 @@
+// Two imported modules that fit a bound equally well, with nothing to qualify.
+import interfaces_support.json
+import interfaces_support.things : Thing
+import interfaces_support.one
+import interfaces_support.two
+
+def main(): Unit {
+    printl(encode(Thing(1)))
+}

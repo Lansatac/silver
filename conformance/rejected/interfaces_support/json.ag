@@ -1,0 +1,5 @@
+module interfaces_support.json
+
+interface Json { def toJson(value: Self): String }
+def toJson(x: Int): String => "{x}"
+def encode<T: Json>(item: T): String => toJson(item)

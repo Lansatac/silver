@@ -1,0 +1,8 @@
+// An interface isn't the type of an element: each value has one type.
+interface Json { def toJson(value: Self): String }
+
+def all(items: [Json]): Int => length(items)
+
+def main(): Unit {
+    printl(all([1]))
+}

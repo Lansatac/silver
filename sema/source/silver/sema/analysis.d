@@ -196,6 +196,30 @@ final class Analysis
         return _typing.typeArguments.get(name, null);
     }
 
+    /// The function found for each function that the bounds of the generic function `name` uses
+    /// declare, in the order `witnessIndexOf` indexes, or null if it has no bounds. Inside a
+    /// generic function they're in terms of its type parameters, and one whose function is a
+    /// function a bound of it supplies stands for the witness the instance was given.
+    const(Witness)[] witnessesOf(Id!Expr name) const
+    {
+        return _typing.witnesses.get(name, null);
+    }
+
+    /// For a function that a bound supplies inside a generic function, where its witness is among
+    /// those of each instance of that function; null for any other function.
+    const(size_t)* witnessIndexOf(Id!FunctionDecl func) const
+    {
+        auto requirement = func in _resolution.requirements;
+        return requirement is null ? null : &requirement.index;
+    }
+
+    /// The type parameters of `func`, which its type arguments are in the order of: those it
+    /// declares, then one for each parameter whose type is an interface name.
+    const(TypeParam)[] typeParametersOf(Id!FunctionDecl func) const
+    {
+        return _resolution.typeParamsOf(func);
+    }
+
     /// `type` with the type parameters in `substitution` replaced, which interns types the checker
     /// never saw, like `Box<[Int]>` for an instance. Interning only adds to the table: no type
     /// already handed out changes, so this is still a query.

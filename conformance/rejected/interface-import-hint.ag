@@ -1,0 +1,7 @@
+// Only what this module sees is searched, so the type's own function has to be imported.
+import interfaces_support.json
+import interfaces_support.things : Thing
+
+def main(): Unit {
+    printl(encode(Thing(1)))
+}

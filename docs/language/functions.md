@@ -131,6 +131,8 @@ describe([true])   // describe<T>([T])
 - Two `def`s of one name in a scope are allowed when their parameter types differ. A different return type doesn't make them differ, and neither does `mutable` alone, an alias of the same type, or other names for the type parameters.
 - A local or parameter holding a function wins outright and isn't overloaded.
 - The type a call is expected to have never chooses, since functions aren't overloaded on their return type.
+- A [bound](interfaces.md#bounds) doesn't make two functions differ either. A function whose bound the arguments' types don't satisfy doesn't fit a call, so the choice goes on among the others; see [Interfaces](interfaces.md#a-failed-bound-doesnt-fit).
+- Inside a function with a bound, the functions the bound supplies are among the current module's.
 
 A call chooses among the functions of its name like this:
 

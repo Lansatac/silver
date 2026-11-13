@@ -1,0 +1,8 @@
+// A bound names an interface.
+type Point(x: Int, y: Int)
+
+def show<T: Point>(item: T): Int => 1
+
+def main(): Unit {
+    printl(1)
+}

@@ -20,6 +20,12 @@ package struct Typing
     /// For each use of a generic function, by the expression naming it, what its type parameters stand
     /// for, in terms of the type parameters of the function the use is in.
     Type[][Id!Expr] typeArguments;
+    /// For each use of a function with bounds, by the expression naming it, the function found for
+    /// each function its bounds declare, in the order of `Resolution.boundFunctions`.
+    Witness[][Id!Expr] witnesses;
+    /// What each bound of a type parameter names, in the order written. One that couldn't be
+    /// resolved is there too, and isn't `valid`.
+    Bound[][Id!TypeParam] bounds;
     const(Expr)[][Id!Expr] concatOperands;
     const(CallExpr)*[Id!Expr] methodCalls;
     Id!FunctionDecl[Id!Expr] methodCallees;
@@ -63,8 +69,29 @@ struct FunctionUse
 {
     Id!FunctionDecl func;
     Type[] typeArgs;
+    Witness[] witnesses;
 
     bool found() const => func.isValid;
+}
+
+/// An interface with its type arguments, as a bound names it.
+struct Bound
+{
+    Id!InterfaceDecl decl;
+    Type[] args;
+
+    bool valid() const => decl.isValid;
+}
+
+/// The function found for a function that a bound declares: which one, what its type parameters
+/// stand for, and the witnesses its own bounds need, all in terms of the function the search was
+/// made in. When `func` is one a bound of that function supplies, it stands for whichever function
+/// the instance being compiled was given for it.
+struct Witness
+{
+    Id!FunctionDecl func;
+    Type[] typeArgs;
+    Witness[] witnesses;
 }
 
 /// How a `for` loops over a value: by index with `length` and `opIndex` when `index` is set, and

@@ -1,0 +1,8 @@
+// A bound on a type's parameter would make the conformance part of the type.
+interface Json { def toJson(value: Self): String }
+
+type Document<T: Json>(items: [T])
+
+def main(): Unit {
+    printl(1)
+}

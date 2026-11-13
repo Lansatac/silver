@@ -1,0 +1,3 @@
+T0043: `encode` needs `T` to be a `Json`, and `Thing` isn't one: no `toJson` in scope takes `Thing`
+    interfaces_support.json.toJson(Int) takes `Int` there, not `Thing`
+    `interfaces_support.things` has a `toJson(Thing)` that would fit; import it to use that one

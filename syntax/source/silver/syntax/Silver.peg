@@ -20,6 +20,7 @@ Silver:
                             / IntrinsicFunctionDeclaration
                             / TypeDeclaration
                             / AliasDeclaration
+                            / InterfaceDeclaration
                             / ConstantDeclaration
                             / TestDeclaration
                             )
@@ -40,7 +41,7 @@ Silver:
                             / ExpressionStatement
                             )
 
-    PrivateDeclaration   < :PRIVATE Nl? (FunctionDeclaration / NativeFunctionDeclaration / IntrinsicFunctionDeclaration / IntrinsicAlias / IntrinsicType / TypeDeclaration / AliasDeclaration / ConstantDeclaration)
+    PrivateDeclaration   < :PRIVATE Nl? (FunctionDeclaration / NativeFunctionDeclaration / IntrinsicFunctionDeclaration / IntrinsicAlias / IntrinsicType / TypeDeclaration / AliasDeclaration / InterfaceDeclaration / ConstantDeclaration)
 
     QualifiedName        <- ValueName ('.' ValueName)*
 
@@ -77,7 +78,7 @@ Silver:
     IntrinsicAlias       < :INTRINSIC Nl? :ALIAS Nl? TypeName
     IntrinsicType        < :INTRINSIC Nl? :TYPE Nl? TypeName (Nl? TypeParameters)? Nl? Fields
     TypeParameters       < :'<' Nl? TypeParameter (Nl? :',' Nl? TypeParameter)* Nl? :'>'
-    TypeParameter        < TypeName
+    TypeParameter        < TypeName (Nl? :':' Nl? NamedType (Nl? :BitAndOperator Nl? NamedType)*)?
     Params               < (Param (Nl? ',' Nl? Param)*)?
     Param                < (MUTABLE Nl?)? BindingName TypeAnnotation
 
@@ -91,6 +92,9 @@ Silver:
     TypeDeclaration      < :TYPE Nl? TypeName (Nl? TypeParameters)? (Fields Invariant? / Nl? :'=' !'=' Nl? SumMembers)?
     # The `else` is required; lowering reports one that's missing
     Invariant            < Nl? :INVARIANT Nl? Expression (Nl? :ELSE Nl? Expression)?
+    InterfaceDeclaration < :INTERFACE Nl? TypeName (Nl? TypeParameters)? Nl? :'{' Sep? (InterfaceFunction (Sep InterfaceFunction)* Sep?)? :'}'
+    # The type parameters and the body aren't allowed, but lowering can say so better than a parse error could
+    InterfaceFunction    < :DEF Nl? Identifier (Nl? TypeParameters)? Nl? :'(' Nl? Params Nl? :')' TypeAnnotation (Nl? :'=>' Nl? Expression / Block)?
     AliasDeclaration     < :ALIAS Nl? TypeName (Nl? TypeParameters)? Nl? :'=' !'=' Nl? Type
     SumMembers           < SumMember (LeadingNl? :BitOrOperator Nl? SumMember)*
     SumMember            < InlineMember / SumMemberType
@@ -267,11 +271,12 @@ Silver:
     WITH                <- Kword("with")
     MATCH               <- Kword("match")
     ALIAS               <- Kword("alias")
+    INTERFACE           <- Kword("interface")
     INVARIANT           <- Kword("invariant")
     TEST                <- Kword("test")
     UNDERSCORE          <- Kword("_")
 
-    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / INTRINSIC / PRIVATE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / WITH / INVARIANT / UNDERSCORE
+    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / INTRINSIC / PRIVATE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / INTERFACE / WITH / INVARIANT / UNDERSCORE
     IdentChar           <- [a-zA-Z0-9_]
     Identifier          <- !Keyword ValueName
 

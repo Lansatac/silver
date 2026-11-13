@@ -38,6 +38,10 @@ enum DiagnosticCode : string
     IntrinsicOutsideStandardLibrary = "S0024",
     /// An `intrinsic def` or `intrinsic alias` the compiler doesn't implement.
     UnknownIntrinsic = "S0025",
+    /// An interface named where a type is wanted.
+    InterfaceIsNotAType = "S0026",
+    /// A type named where a bound wants an interface.
+    NotAnInterface = "S0027",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",
@@ -93,6 +97,12 @@ enum DiagnosticCode : string
     InvariantFieldChanged = "T0040",
     /// `panics` outside a test.
     PanicsOutsideTest = "T0041",
+    /// A bound where there can't be one, or an interface declared in a way the language doesn't allow.
+    InvalidBound = "T0042",
+    /// A type argument that doesn't satisfy a bound.
+    UnsatisfiedBound = "T0043",
+    /// A search for a conformance that keeps needing a larger one.
+    BoundSearchTooDeep = "T0044",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

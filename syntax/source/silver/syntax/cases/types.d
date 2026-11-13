@@ -130,10 +130,43 @@ immutable Case[] generics = [
     rejectsDeclaration("def f<t>(x: t): Int => 1"),
     rejectsDeclaration("def f<>(): Int => 1"),
     rejectsDeclaration("def f<T,>(): Int => 1"),
-    rejectsDeclaration("type Box<T: Eq>(value: T)"),
+    // Sema reports a bound on a type's parameter.
+    declaresAs("type Box<T: Eq>(value: T)", "(type Box<T: Eq> (value: T))"),
     rejectsDeclaration("native def f<T>(x: Int): Int"),
     rejectsDeclaration("alias Two<T> = (T, T)"),
     rejects("def f<T>(x: T): T => x"),
+
+    declaresAs("interface Json { def toJson(value: Self): String }", "(interface Json (def toJson (value: Self): String))"),
+    declaresAs("interface Range<T> {
+    def next(range: Self): (T, Self)?
+}", "(interface Range<T> (def next (range: Self): (T, Self)?))"),
+    declaresAs("interface
+Indexed<T>
+{
+    def length(value: Self): Int
+
+    def opIndex(value: Self, index: Int): T
+}",
+        "(interface Indexed<T> (def length (value: Self): Int) (def opIndex (value: Self, index: Int): T))"),
+    declaresAs("interface Pair { def a(x: Self): Int; def b(x: Self): Int }", "(interface Pair (def a (x: Self): Int) (def b (x: Self): Int))"),
+    declaresAs("private interface Anything { }", "(private (interface Anything))"),
+    declaresAs("def encode<T: Json>(item: T): String => f(item)", "(def encode<T: Json> (item: T): String (call f item))"),
+    declaresAs("def f<T: A & B, U: lib.C<T, Int>>(x: T): T => x", "(def f<T: A & B, U: lib.C<T, Int>> (x: T): T x)"),
+    declaresAs("def f<T:
+    A &
+    B>(x: T): T => x", "(def f<T: A & B> (x: T): T x)"),
+    declaresAs("def total(range: Range<Int>): Int => 0", "(def total (range: Range<Int>): Int 0)"),
+    rejectsDeclaration("interface json { }"),
+    rejectsDeclaration("interface Json"),
+    rejectsDeclaration("interface Json { def toJson(value: Self): String => \"\" }"),
+    rejectsDeclaration("interface Json { def toJson(value: Self): String { \"\" } }"),
+    rejectsDeclaration("interface Json { def toJson<T>(value: Self): T }"),
+    rejectsDeclaration("interface Json { val x: Int = 1 }"),
+    rejectsDeclaration("def f<T: [Int]>(x: T): T => x"),
+    rejectsDeclaration("def f<T: A | B>(x: T): T => x"),
+    rejectsDeclaration("def f<T: >(x: T): T => x"),
+    rejects("interface Json { }"),
+    rejects("val interface = 1"),
 
     parsesAs("val e = empty<Int>()", "(val e (call empty<Int>))"),
     parsesAs("val e = std.x.empty<Int>()", "(val e (call (. (. std x) empty<Int>)))"),

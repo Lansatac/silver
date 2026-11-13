@@ -1,0 +1,90 @@
+// Interfaces and bounds: a type conforms by having the functions, with nothing declaring it.
+
+interface Json {
+    def toJson(value: Self): String
+}
+
+interface HasArea { def area(shape: Self): Int }
+
+interface Named { def name(value: Self): String }
+interface Titled { def name(value: Self): String }
+
+type Point(x: Int, y: Int)
+type Box<T>(value: T)
+type Circle(r: Int)
+type Square(side: Int)
+type Shape = Circle | Square
+
+def toJson(value: Int): String => "{value}"
+def toJson(value: Bool): String => if value => "true" else "false"
+def toJson(p: Point): String => "[{toJson(p.x)}, {toJson(p.y)}]"
+// Conditional: a Box is a Json exactly when what it holds is.
+def toJson<T: Json>(b: Box<T>): String => "box({toJson(b.value)})"
+def toJson<A: Json, B: Json>(pair: (A, B)): String {
+    val (a, b) = pair
+    "({toJson(a)}; {b.toJson()})"
+}
+// Inside, `toJson(v)` is the function the bound supplies, which fits a `T` exactly, and not this one.
+def toJson<T: Json>(x: T?): String => match x {
+    None => "null"
+    Some(v) => toJson(v)
+}
+
+def area(s: Shape): Int => match s {
+    c: Circle => 3 * c.r * c.r
+    q: Square => q.side * q.side
+}
+
+def name(p: Point): String => "point"
+
+def encode<T: Json>(item: T): String => "<" ~ toJson(item) ~ ">"
+// A generic calling a generic: the bound on `T` is passed along, and `Box<T>` is searched here.
+def twice<T: Json>(item: T): String => encode(item) ~ encode(Box(item))
+def viaMethod<T: Json>(item: T): String => item.toJson()
+// A witness that takes more than the type: a `Circle` promotes into `Shape`.
+def measure<T: HasArea>(shape: T): Int => area(shape)
+def measurer<T: HasArea>(shape: T): (T) -> Int => area
+// Two bounds, and two that declare the same function.
+def described<T: Json & Named>(item: T): String => name(item) ~ " " ~ toJson(item)
+def titled<T: Named & Titled>(item: T): String => name(item) ~ "/" ~ item.name()
+
+// A function whose bound fails steps aside for one that fits.
+def show<T: Json>(item: T): String => "json " ~ toJson(item)
+def show(item: String): String => "string " ~ item
+def show<T>(item: [T]): String => "{length(item)} values"
+
+def main(): Unit {
+    printl(encode(1))
+    printl(encode(true))
+    printl(encode(Point(1, 2)))
+    printl(encode(Box(Point(3, 4))))
+    printl(encode(Box(Box(5))))
+    printl(encode((1, Point(6, 7))))
+
+    val none: Point? = None
+    printl(encode(none))
+    printl(encode(Some(8)))
+    val boxed: Box<Int>? = Box(9)
+    printl(encode(boxed))
+
+    printl(twice(Point(10, 11)))
+    printl(viaMethod(12))
+    printl(Point(13, 14).encode())
+    printl(encode<Int>(15))
+
+    printl(measure(Circle(2)))
+    printl(measure(Square(3)))
+    printl(measurer(Square(1))(Square(4)))
+
+    printl(described(Point(16, 17)))
+    printl(titled(Point(18, 19)))
+
+    printl(show(20))
+    printl(show("text"))
+    printl(show([1.5, 2.5]))
+
+    val asValue: (Point) -> String = encode
+    printl(asValue(Point(21, 22)))
+    val written = encode<Box<Bool>>
+    printl(written(Box(false)))
+}

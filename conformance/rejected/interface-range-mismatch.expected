@@ -1,0 +1,1 @@
+T0043: `total` needs a `Range<Int>`, and `[String]` isn't one: `next<T>([T])` returns `(String, [String])?`, where `(Int, [String])?` is needed

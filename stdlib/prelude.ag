@@ -28,3 +28,5 @@ intrinsic def expect(condition: Bool): Unit
 intrinsic def expect(condition: Bool, message: String): Unit
 // In a test, runs `work` and gives the message of the panic that ended it, or `None` if it returned.
 intrinsic def panics<T>(work: () -> T): String?
+// Says which type is meant to a function that takes no value of it, as in `fromJson(Of<Point>, text)`.
+type Of<T>

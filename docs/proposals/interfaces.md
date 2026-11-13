@@ -1,6 +1,6 @@
 # Proposal: structural interfaces with call-site conformance
 
-**Status: proposed, partly decided.** Nothing here is implemented. Decided: `==` and printing aren't interfaces, and belong to the type (see "Operators and printing"), and the conformance rules, which a critic and evaluator review tightened. Still open: capability queries, stored structure, the adapter form, what `opCompare` returns, and hashing. It builds on [generics](../language/generics.md): `<>` type parameters, bodies checked once with each `T` opaque, and monomorphization.
+**Status: the first version is implemented**, and described in [Interfaces](../language/interfaces.md): interfaces with parameters, bounds on module-level functions, conformance by the call's own lookup, and an interface name as a parameter type. This document keeps the reasoning and what was rejected. Decided and not implemented: `==` and printing aren't interfaces, and belong to the type (see "Operators and printing"). Still open: capability queries, stored structure, the adapter form, what `opCompare` returns, and hashing. It builds on [generics](../language/generics.md): `<>` type parameters, bodies checked once with each `T` opaque, and monomorphization.
 
 The [ranges proposal](ranges.md) builds on this one and suggests changes to it: an answer to open question 1, interface names as types, and overloading as a prerequisite.
 

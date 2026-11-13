@@ -1,0 +1,1 @@
+T0043: `encode` needs `T` to be a `Json`, and `Thing` isn't one: a `toJson` in more than one imported module (interfaces_support.one, interfaces_support.two) takes `Thing`; declare one in this module that calls the one you mean

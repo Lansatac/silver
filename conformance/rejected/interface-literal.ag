@@ -1,0 +1,10 @@
+// A literal takes its default type before the bound is looked into.
+interface Json { def toJson(value: Self): String }
+def toJson(x: UInt8): String => "{x}"
+def encode<T: Json>(item: T): String => toJson(item)
+
+def main(): Unit {
+    printl(toJson(1))
+    printl(encode<UInt8>(1))
+    printl(encode(1))
+}

@@ -9,7 +9,7 @@ import silver.ast.id;
 
 /// The node kinds that get IDs. One NodeIds is shared by every module in a Program.
 alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt, TypeDecl, Field, ConstDecl, Pattern, AliasDecl,
-    TypeParam);
+    TypeParam, InterfaceDecl);
 
 /// The types every module can name, which no declaration can take the name of.
 enum Builtin
@@ -52,7 +52,7 @@ struct Decl
     DeclKind kind;
 }
 
-alias DeclKind = SumType!(ImportStmt, FunctionDecl, TypeDecl, ConstDecl, AliasDecl);
+alias DeclKind = SumType!(ImportStmt, FunctionDecl, TypeDecl, ConstDecl, AliasDecl, InterfaceDecl);
 
 /// A type as written in source. Names aren't resolved, so `Int` is a NamedType
 /// like any other; the checker's resolved types are a separate representation.
@@ -695,12 +695,14 @@ struct Param
     bool annotated = true;
 }
 
-/// `T` in `def first<T>(...)` or `type Box<T>(...)`.
+/// `T` in `def first<T>(...)` or `type Box<T>(...)`, or `T: Json & Sized`.
 struct TypeParam
 {
     Id!TypeParam id;
     string name;
     Span span;
+    /// The interfaces the type has to satisfy, as written.
+    TypeExpr[] bounds;
 }
 
 /// `def name(params): Type => expr` or `def name(params): Type { ... }`.
@@ -737,6 +739,9 @@ enum FunctionKind
     native,
     /// `intrinsic def`, which the compiler implements.
     intrinsic,
+    /// A function an interface declares, or one a bound supplies inside a generic function. It
+    /// has a signature only, and a call of it is a call of whatever conforms.
+    required,
 }
 
 /// `name: Type` in a type declaration.
@@ -790,6 +795,20 @@ struct AliasDecl
     bool isPrivate;
     /// `intrinsic alias Name`, written with no target.
     bool intrinsic;
+}
+
+/// `interface Name<T> { def f(value: Self): T }`: the functions a type has to have to satisfy it.
+struct InterfaceDecl
+{
+    Id!InterfaceDecl id;
+    string name;
+    Span nameSpan;
+    TypeParam[] typeParams;
+    /// `Self`, the type that conforms, which each function's signature can name.
+    TypeParam self;
+    /// Each has the kind `required`.
+    FunctionDecl[] functions;
+    bool isPrivate;
 }
 
 /// One alternative of `type Name = A(x: Int) | B | geo.C`.
@@ -863,6 +882,7 @@ string printDecl(const Decl d)
         (const AliasDecl a) => marked(a.isPrivate, a.intrinsic
             ? "(intrinsic alias " ~ a.name ~ ")"
             : "(alias " ~ a.name ~ " = " ~ printTypeExpr(a.target) ~ ")"),
+        (const InterfaceDecl i) => marked(i.isPrivate, printInterfaceDecl(i)),
     );
 }
 
@@ -939,7 +959,18 @@ private string printFunctionDecl(const FunctionDecl f)
             return format("(native%s def %s %s)", symbol, f.name, printSignature(f));
         case FunctionKind.intrinsic:
             return format("(intrinsic def %s%s %s)", f.name, printTypeParams(f.typeParams), printSignature(f));
+        case FunctionKind.required:
+            return format("(def %s %s)", f.name, printSignature(f));
     }
+}
+
+private string printInterfaceDecl(const InterfaceDecl i)
+{
+    import std.algorithm : map;
+    import std.array : join;
+    import std.format : format;
+
+    return format("(interface %s%s%-( %s%))", i.name, printTypeParams(i.typeParams), i.functions.map!(f => printFunctionDecl(f)));
 }
 
 /// `<T, U>`, or nothing when `params` is empty.
@@ -948,7 +979,9 @@ private string printTypeParams(const(TypeParam)[] params)
     import std.algorithm : map;
     import std.array : join;
 
-    return params.length == 0 ? "" : "<" ~ params.map!(p => p.name).join(", ") ~ ">";
+    static string bounded(const TypeParam p) => p.bounds.length == 0 ? p.name
+        : p.name ~ ": " ~ p.bounds.map!(b => printTypeExpr(b)).join(" & ");
+    return params.length == 0 ? "" : "<" ~ params.map!(p => bounded(p)).join(", ") ~ ">";
 }
 
 private string printTypeDecl(const TypeDecl t)

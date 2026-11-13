@@ -59,7 +59,7 @@ private final class IdCheck
     void visit(const FunctionDecl f, Span span)
     {
         see(f.id, f.nameSpan);
-        foreach (p; f.typeParams) see(p.id, p.span);
+        foreach (p; f.typeParams) visit(p);
         foreach (p; f.params)
         {
             see(p.id, p.nameSpan);
@@ -67,6 +67,20 @@ private final class IdCheck
         }
         visit(f.returnType);
         visit(f.body);
+    }
+
+    void visit(const TypeParam p)
+    {
+        see(p.id, p.span);
+        foreach (bound; p.bounds) visit(bound);
+    }
+
+    void visit(const InterfaceDecl i, Span span)
+    {
+        see(i.id, i.nameSpan);
+        see(i.self.id, i.nameSpan);
+        foreach (p; i.typeParams) visit(p);
+        foreach (f; i.functions) visit(f, span);
     }
 
     void visit(const TypeDecl t, Span span)

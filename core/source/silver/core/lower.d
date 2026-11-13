@@ -11,7 +11,7 @@ import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
 import silver.core.nodes;
 import silver.sema : Analysis, FunctionUse, IndexFunctions, LoopFunctions, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
-    Substitution, SymbolId, Type, TypeTable;
+    Substitution, SymbolId, Type, TypeTable, Witness;
 
 /// A parameter's local name. Discarded ones get a name no Silver identifier can have, so several
 /// in one function stay distinct where a backend names them.
@@ -34,7 +34,7 @@ Program lowerProgram(const ref ast.Program program, const Analysis analysis)
 Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis, const ast.SourceMap sources)
 {
     auto lowering = new Lowering(analysis, sources);
-    auto entry = lowering.slotFor(root);
+    auto entry = lowering.slotFor(InstanceKey(root));
     lowering.lowerPending();
     entry = lowering.reportingErrors(entry);
     auto program = Program(rebindable(analysis.types), lowering.functions, entry, lowering.libraries);
@@ -52,7 +52,7 @@ Program lowerTests(const ref ast.Program program, const Analysis analysis)
     {
         decl.kind.match!(
             (const ast.FunctionDecl f) {
-                if (f.testName !is null) tests ~= TestCase(f.testName, lowering.slotFor(f.id), f.nameSpan);
+                if (f.testName !is null) tests ~= TestCase(f.testName, lowering.slotFor(InstanceKey(f.id)), f.nameSpan);
             },
             (_) {},
         );
@@ -67,11 +67,13 @@ Program lowerTests(const ref ast.Program program, const Analysis analysis)
 /// How deeply an instance's type arguments can nest, which only polymorphic recursion reaches.
 enum instanceNestingLimit = 64;
 
-/// A function with its type arguments, which are empty for one that isn't generic.
+/// A function with its type arguments, which are empty for one that isn't generic, and the
+/// instance behind each function its bounds declare, as `Lowering.witnessId` numbers them.
 private struct InstanceKey
 {
     Id!(ast.FunctionDecl) decl;
     immutable(Type)[] args;
+    immutable(uint)[] witnesses;
 }
 
 /// The Analysis as one instance of a generic function reads it: every type it answers with has
@@ -85,7 +87,7 @@ private struct Instance
     const(Analysis) base() const => analysis;
     alias base this;
 
-    private Type concrete(Type type) const => analysis.instantiate(type, substitution);
+    Type concrete(Type type) const => analysis.instantiate(type, substitution);
 
     private FunctionData signature(Type type) const
     {
@@ -106,7 +108,7 @@ private struct Instance
     FunctionData signatureOf(Id!(ast.FunctionDecl) func, immutable(Type)[] typeArgs) const
     {
         Substitution instance;
-        foreach (i, param; analysis.declarationOf(func).typeParams) instance[param.id] = typeArgs[i];
+        foreach (i, param; analysis.typeParametersOf(func)) instance[param.id] = typeArgs[i];
         return analysis.types[analysis.instantiate(analysis.typeOf(func), instance)].match!(
             (const FunctionData data) => data,
             (_) => assert(0, "a function's type is a function type"),
@@ -154,7 +156,7 @@ private struct Instance
 
     private FunctionUse concrete(const FunctionUse f) const
     {
-        return FunctionUse(f.func, f.typeArgs.map!(t => concrete(t)).array);
+        return FunctionUse(f.func, f.typeArgs.map!(t => concrete(t)).array, cast(Witness[]) f.witnesses);
     }
 
     /// What the type parameters of the generic `name` uses stand for in this instance.
@@ -220,6 +222,12 @@ private final class Lowering
     private size_t[Id!(ast.FunctionDecl)] _nativeWrappers;
     /// An intrinsic used as a value, by the instance it is.
     private size_t[InstanceKey] _intrinsicWrappers;
+    /// The instances that stand behind a bound's functions, each under the number an `InstanceKey`
+    /// names it by.
+    private InstanceKey[] _witnesses;
+    private uint[InstanceKey] _witnessIds;
+    /// A witness used as a value of a function type that isn't its own, by the instance and that type.
+    private size_t[Type][InstanceKey] _adapters;
 
     /// The source, for the condition `assert` shows.
     private const ast.SourceMap _sources;
@@ -230,14 +238,12 @@ private final class Lowering
         _sources = sources;
     }
 
-    /// Where `func` with the type arguments `args` is in `functions`, giving it a slot and
-    /// queueing it the first time.
-    size_t slotFor(Id!(ast.FunctionDecl) func, immutable(Type)[] args = null)
+    /// Where the instance `key` is in `functions`, giving it a slot and queueing it the first time.
+    size_t slotFor(InstanceKey key)
     {
-        auto key = InstanceKey(func, args);
         if (auto existing = key in _slots) return *existing;
         if (_current != key) _neededBy[key] = _current;
-        if (args.any!(a => types.depth(a) > instanceNestingLimit)) reportNesting(key);
+        if (key.args.any!(a => types.depth(a) > instanceNestingLimit)) reportNesting(key);
         auto slot = reserveSlot();
         _slots[key] = slot;
         _pending ~= key;
@@ -273,7 +279,7 @@ private final class Lowering
 
         auto name = printedName(key);
         if (!_analysis.isOverloaded(key.decl)) return name;
-        auto declared = _analysis.signatureOf(key.decl);
+        auto declared = _analysis.signatureOf(key.decl, key.args);
         auto params = declared.params.length.iota.map!(i => (declared.isMutable(i) ? "mutable " : "") ~ types.describe(declared.params[i]));
         return "%s(%-(%s, %))".format(name, params);
     }
@@ -320,6 +326,50 @@ private final class Lowering
             auto lowered = lowerFunction(key);
             functions[_slots[key]] = lowered;
         }
+        nameWitnesses();
+    }
+
+    /// Adds its witnesses to the name of each instance that another shares its function and type
+    /// arguments with, which only a program with two conformances of one type has.
+    private void nameWitnesses()
+    {
+        InstanceKey[][InstanceKey] alike;
+        foreach (key; _slots.byKey) alike[InstanceKey(key.decl, key.args)] ~= key;
+        foreach (keys; alike.byValue)
+        {
+            if (keys.length < 2) continue;
+            foreach (key; keys) functions[_slots[key]].name ~= " with %-(%s, %)".format(key.witnesses.map!(w => witnessName(w)));
+        }
+    }
+
+    /// `json.toJson<Int>`, with the witnesses it was given in turn.
+    private string witnessName(uint id)
+    {
+        auto key = _witnesses[id];
+        auto own = "%s.%s".format(_analysis.moduleOf(key.decl), instanceName(key));
+        return key.witnesses.length == 0 ? own : "%s [%-(%s, %)]".format(own, key.witnesses.map!(w => witnessName(w)));
+    }
+
+    /// The number of the instance that `witness`, found in the function being lowered, stands for
+    /// in the instance of it being lowered.
+    private uint witnessId(const Witness witness)
+    {
+        if (auto index = _analysis.witnessIndexOf(witness.func)) return _current.witnesses[*index];
+        auto key = InstanceKey(witness.func, witness.typeArgs.map!(t => _analysis.concrete(t)).array.idup,
+            witness.witnesses.map!(w => witnessId(w)).array.idup);
+        if (auto existing = key in _witnessIds) return *existing;
+        auto id = cast(uint) _witnesses.length;
+        _witnesses ~= key;
+        _witnessIds[key] = id;
+        return id;
+    }
+
+    /// The instance a use of `func` means, given the type arguments and witnesses sema recorded for
+    /// the use. A function a bound supplies is whichever one this instance was given for it.
+    private InstanceKey instanceOf(Id!(ast.FunctionDecl) func, immutable(Type)[] typeArgs, const(Witness)[] witnesses)
+    {
+        if (auto index = _analysis.witnessIndexOf(func)) return _witnesses[_current.witnesses[*index]];
+        return InstanceKey(func, typeArgs, witnesses.map!(w => witnessId(w)).array.idup);
     }
 
     private Function lowerFunction(InstanceKey key)
@@ -327,7 +377,7 @@ private final class Lowering
         auto func = _analysis.declarationOf(key.decl);
         assert(func.kind == ast.FunctionKind.ordinary, "a call to a native or an intrinsic has a node of its own, so they never get a slot");
         Substitution substitution;
-        foreach (i, param; func.typeParams) substitution[param.id] = key.args[i];
+        foreach (i, param; _analysis.typeParametersOf(key.decl)) substitution[param.id] = key.args[i];
         _analysis = Instance(_analysis.analysis, substitution);
         _current = key;
         _span = func.nameSpan;
@@ -585,26 +635,55 @@ private final class Lowering
             return Expr(type, span, ExprKind(MakeClosure(self.slot, self.captures.map!(c => use(c, span)).array)));
         }
         return symbol.match!(
-            (const Id!(ast.FunctionDecl) func) => functionValue(func, type, span, _analysis.typeArgumentsOf(name)),
+            (const Id!(ast.FunctionDecl) func) => functionValue(
+                instanceOf(func, _analysis.typeArgumentsOf(name), _analysis.witnessesOf(name)), type, span),
             (const Id!(ast.ConstDecl) constant) => constantValue(constant, span),
             (const Id!(ast.TypeDecl) decl) => typeValue(decl, type, span),
             (_) => notLowered!Expr("a reference to that kind of name"),
         );
     }
 
-    /// A named function used as a value, with the type arguments of the instance it is.
-    private Expr functionValue(Id!(ast.FunctionDecl) func, Type type, Span span, immutable(Type)[] typeArgs)
+    /// The instance `key` of a named function, used as a value of `type`.
+    private Expr functionValue(InstanceKey key, Type type, Span span)
     {
-        auto decl = _analysis.declarationOf(func);
+        auto decl = _analysis.declarationOf(key.decl);
+        auto signature = _analysis.signatureOf(key.decl, key.args);
+        // A witness can take more than the bound's function does, as a call's arguments are promoted.
+        auto wanted = functionData(type);
+        if (wanted.params != signature.params || wanted.ret != signature.ret)
+        {
+            return Expr(type, span, ExprKind(MakeClosure(adapter(key, type), null)));
+        }
         final switch (decl.kind)
         {
             case ast.FunctionKind.ordinary:
-                return Expr(type, span, ExprKind(MakeClosure(slotFor(func, typeArgs), null)));
+                return Expr(type, span, ExprKind(MakeClosure(slotFor(key), null)));
             case ast.FunctionKind.native:
-                return Expr(type, span, ExprKind(MakeClosure(nativeWrapper(func), null)));
+                return Expr(type, span, ExprKind(MakeClosure(nativeWrapper(key.decl), null)));
             case ast.FunctionKind.intrinsic:
-                return Expr(type, span, ExprKind(MakeClosure(intrinsicWrapper(func, type, typeArgs), null)));
+                return Expr(type, span, ExprKind(MakeClosure(intrinsicWrapper(key.decl, type, key.args), null)));
+            case ast.FunctionKind.required:
+                assert(0, "a function a bound supplies is replaced by its witness");
         }
+    }
+
+    /// A function of type `type` that calls the instance `key`, whose parameters take what
+    /// `type`'s do after a promotion.
+    private size_t adapter(InstanceKey key, Type type)
+    {
+        if (auto existing = key in _adapters)
+        {
+            if (auto slot = type in *existing) return *slot;
+        }
+        auto slot = reserveSlot();
+        _adapters[key][type] = slot;
+        auto signature = functionData(type);
+        Local[] params;
+        foreach (i, param; signature.params) params ~= new Local("arg.%s".format(i), param, signature.isMutable(i));
+        auto body = callInstance(key, params.map!(p => use(p, _span)).array, _span);
+        functions[slot] = Function(instanceName(key), _analysis.moduleOf(key.decl), params, null, signature.ret, body,
+            FunctionOrigin.derived, printedName(key));
+        return slot;
     }
 
     /// A function that does what the intrinsic `func` does, for using it as a value of the
@@ -646,8 +725,8 @@ private final class Lowering
         auto fields = _analysis.fieldsOf(value.type);
         auto args = fields.length.iota.map!(i => field(value, i, fields[i].type)).array;
         auto typeArgs = types[value.type].match!((const NominalData nominal) => nominal.args, _ => null);
-        auto holds = Expr(types.bool_, span, ExprKind(Call(slotFor(decl.invariantFunction, typeArgs), args)));
-        auto error = Expr(types.errorOf(result), span, ExprKind(Call(slotFor(decl.invariantError, typeArgs), args)));
+        auto holds = Expr(types.bool_, span, ExprKind(Call(slotFor(InstanceKey(decl.invariantFunction, typeArgs)), args)));
+        auto error = Expr(types.errorOf(result), span, ExprKind(Call(slotFor(InstanceKey(decl.invariantError, typeArgs)), args)));
         return Expr(result, span, ExprKind(If(boxed(holds), boxed(then), boxed(inject(0, error, result)))));
     }
 
@@ -1755,45 +1834,61 @@ private final class Lowering
                 (Expr[] args, Expr* callee) => Expr(type, span, ExprKind(CallClosure(callee, args))));
         }
 
-        auto decl = _analysis.declarationOf(*calleeId);
-        auto typeArgs = _analysis.typeArgumentsOf(call.callee.id);
-        auto signature = _analysis.signatureOf(*calleeId, typeArgs);
+        auto callee = instanceOf(*calleeId, _analysis.typeArgumentsOf(call.callee.id), _analysis.witnessesOf(call.callee.id));
+        auto signature = _analysis.signatureOf(callee.decl, callee.args);
+        // What a bound supplies is called as its witness, which the arguments are promoted to fit.
+        if (_analysis.witnessIndexOf(*calleeId) !is null)
+        {
+            return callWith(written, signature, type, span, null, (Expr[] args, Expr* _) => callInstance(callee, args, span));
+        }
+        auto decl = _analysis.declarationOf(callee.decl);
         final switch (decl.kind)
         {
             case ast.FunctionKind.ordinary:
-                auto target = slotFor(*calleeId, typeArgs);
+                auto target = slotFor(callee);
                 return callWith(written, signature, type, span, null,
                     (Expr[] args, Expr* _) => Expr(signature.ret, span, ExprKind(Call(target, args))));
             case ast.FunctionKind.native:
-                noteLibrary(*calleeId);
+                noteLibrary(callee.decl);
                 auto symbol = decl.symbol;
                 return callWith(written, signature, type, span, null,
                     (Expr[] args, Expr* _) => Expr(signature.ret, span, ExprKind(ForeignCall(symbol, args))));
             case ast.FunctionKind.intrinsic:
-                return lowerIntrinsic(*calleeId, written, signature, span);
+                return lowerIntrinsic(callee.decl, written, signature, span);
+            case ast.FunctionKind.required:
+                assert(0, "a function a bound supplies is replaced by its witness");
         }
     }
 
     /// A call of a function that syntax uses, given its arguments as values.
     private Expr callUse(const FunctionUse f, Expr[] args, Span span)
     {
-        return callDirect(f.func, f.typeArgs.idup, args, span);
+        return callInstance(instanceOf(f.func, f.typeArgs.idup, f.witnesses), args, span);
     }
 
-    /// A call of the instance of `callee` with `typeArgs`, given its arguments as values.
-    private Expr callDirect(Id!(ast.FunctionDecl) callee, immutable(Type)[] typeArgs, Expr[] args, Span span)
+    /// A call of the instance `callee`, given its arguments as values, each of which is its
+    /// parameter's type or is promoted to it.
+    private Expr callInstance(InstanceKey callee, Expr[] args, Span span)
     {
-        auto decl = _analysis.declarationOf(callee);
-        auto signature = _analysis.signatureOf(callee, typeArgs);
+        auto decl = _analysis.declarationOf(callee.decl);
+        auto signature = _analysis.signatureOf(callee.decl, callee.args);
+        foreach (i, ref arg; args)
+        {
+            if (!signature.isMutable(i)) arg = promote(arg, arg.type, signature.params[i]);
+        }
         final switch (decl.kind)
         {
             case ast.FunctionKind.ordinary:
-                return Expr(signature.ret, span, ExprKind(Call(slotFor(callee, typeArgs), args)));
+                return Expr(signature.ret, span, ExprKind(Call(slotFor(callee), args)));
             case ast.FunctionKind.native:
-                noteLibrary(callee);
+                noteLibrary(callee.decl);
                 return Expr(signature.ret, span, ExprKind(ForeignCall(decl.symbol, args)));
             case ast.FunctionKind.intrinsic:
-                return intrinsicCall(_analysis.intrinsicOf(callee), args, signature, span);
+                auto intrinsic = _analysis.intrinsicOf(callee.decl);
+                if (intrinsic == Intrinsic.assert_ || intrinsic == Intrinsic.expect) return notLowered!Expr("`%s` as a conformance".format(decl.name));
+                return intrinsicCall(intrinsic, args, signature, span);
+            case ast.FunctionKind.required:
+                assert(0, "a function a bound supplies is replaced by its witness");
         }
     }
 
@@ -3196,6 +3291,32 @@ def f(): Unit => grow(1)
     assert(error !is null, "expected the nesting limit");
     error.diagnostic.code.should.equal(DiagnosticCode.InstanceNestingTooDeep);
     error.diagnostic.message.canFind("f\n    -> grow<Int>\n    -> grow<[Int]>").should.equal(true);
+}
+
+@("a call of a function a bound supplies is a call of the instance's witness, its argument promoted to fit")
+unittest
+{
+    auto result = loweredFunction(`
+interface HasArea { def area(shape: Self): Int }
+type Circle(r: Int)
+type Square(side: Int)
+type Shape = Circle | Square
+def area(s: Shape): Int => 1
+def area(n: Int): Int => n
+def measure<T: HasArea>(shape: T): Int => area(shape)
+
+def f(): Int => measure(Circle(2)) + measure(3)
+`, "f");
+    print(result.program).should.equal(
+`def f(): Int Add(measure<Circle>(Circle(2)), measure<Int>(3))
+
+def measure<Circle>(shape: Circle): Int area(Shape)(Shape#0(shape))
+
+def measure<Int>(shape: Int): Int area(Int)(shape)
+
+def area(Shape)(s: Shape): Int 1
+
+def area(Int)(n: Int): Int n`);
 }
 
 @("a Ref is a cell, and update takes the contents out while its change runs")

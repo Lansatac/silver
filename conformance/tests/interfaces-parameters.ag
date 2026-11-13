@@ -1,0 +1,102 @@
+// Interface parameters: a type that depends on the conforming type is a parameter of the interface.
+
+interface Range<T> {
+    def next(range: Self): (T, Self)?
+}
+
+interface Sized { def length(value: Self): Int }
+
+interface Indexed<T> {
+    def length(value: Self): Int
+    def opIndex(value: Self, index: Int): T
+}
+
+interface Add<Rhs> { def add(a: Self, b: Rhs): Self }
+
+interface FromText { def fromText(of: Of<Self>, text: String): Self? }
+interface Zero { def zero(of: Of<Self>): Self }
+
+type Countdown(from: Int)
+type Vec(x: Float)
+type Shift(by: Int)
+type Point(x: Int, y: Int)
+type Box<T>(value: T)
+
+def next<T>(xs: [T]): (T, [T])? => if length(xs) == 0 => None else (xs[0], xs[1..])
+def next(c: Countdown): (Int, Countdown)? => if c.from == 0 => None else (c.from, Countdown(c.from - 1))
+
+// An adapter is a range exactly when its source is, and keeps what its source can do.
+type Map<R, T, U>(source: R, transform: (T) -> U)
+def map<R: Range<T>, T, U>(source: R, transform: (T) -> U): Map<R, T, U> => Map(source, transform)
+def next<R: Range<T>, T, U>(m: Map<R, T, U>): (U, Map<R, T, U>)? {
+    val (item, rest) = next(m.source)?
+    (m.transform(item), Map(rest, m.transform))
+}
+def length<R: Sized, T, U>(m: Map<R, T, U>): Int => length(m.source)
+def opIndex<R: Indexed<T>, T, U>(m: Map<R, T, U>, index: Int): U => m.transform(m.source[index])
+
+def collect<R: Range<T>, T>(range: R): [T] {
+    mutable val result: [T] = []
+    for item in range { result ~= [item] }
+    result
+}
+def firstOf<R: Range<T>, T>(range: R): T? {
+    val (item, rest) = next(range)?
+    item
+}
+def size<T: Sized>(value: T): Int => length(value)
+def last<R: Indexed<T>, T>(values: R): T => values[length(values) - 1]
+
+def add(a: Vec, b: Vec): Vec => Vec(a.x + b.x)
+def add(a: Vec, b: Float): Vec => Vec(a.x + b)
+def add(a: Shift, b: Int): Shift => Shift(a.by + b)
+def plus<T: Add<R>, R>(a: T, b: R): T => add(a, b)
+def doubled<T: Add<T>>(a: T): T => add(a, a)
+// `R` is in no argument that has a type: the one `add` that takes a `T` says what it is.
+def scaled<T: Add<R>, R>(a: T, by: (T) -> R): T => add(a, by(a))
+
+def fromText(of: Of<Point>, text: String): Point? => if text == "origin" => Point(0, 0) else None
+def fromText(of: Of<Int>, text: String): Int? => if text == "one" => 1 else None
+def fromText<T: FromText>(text: String): T? => fromText(Of<T>, text)
+def zero(of: Of<Int>): Int => 0
+def zero(of: Of<String>): String => ""
+def zero<T: Zero>(of: Of<Box<T>>): Box<T> => Box(zero(Of<T>))
+def zero<T: Zero>(): T => zero(Of<T>)
+
+def main(): Unit {
+    // The element type is read off the `next` that is found.
+    printl(collect([1, 2, 3]))
+    printl(collect(["a", "b"]))
+    printl(collect(Countdown(3)))
+    printl(firstOf(Countdown(5)))
+    printl(firstOf(collect<[Bool], Bool>([])))
+
+    // The bound says what `x` is before the lambda is typed.
+    printl(collect([1, 2, 3].map(x => x * 2)))
+    printl(collect(Countdown(3).map(x => "n{x}").map(s => s ~ "!")))
+
+    // Capabilities follow the type: a Map of an array has a length and an index, so `for` loops
+    // over it by index, and a Map of a Countdown is only stepped.
+    val twice = [1, 2, 3].map(x => x * 2)
+    printl(size(twice))
+    printl(twice[1])
+    printl(last(twice))
+    printl(size([1.5]))
+    for x in twice { print(x) }
+    printl("")
+    for x in Countdown(3).map(x => x * 10) { print(x) }
+    printl("")
+
+    printl(plus(Vec(1.0), Vec(2.0)).x)
+    printl(plus(Vec(1.0), 2.5).x)
+    printl(doubled(Vec(4.0)).x)
+    printl(scaled(Shift(1), s => s.by + 1).by)
+
+    printl(fromText<Point>("origin"))
+    printl(fromText<Point>("elsewhere"))
+    val one: Int? = fromText("one")
+    printl(one)
+    printl(zero<Box<Box<Int>>>())
+    val empty: String = zero()
+    printl(length([empty]))
+}

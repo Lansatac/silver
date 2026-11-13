@@ -1,0 +1,6 @@
+// A function is found by what it's given, so it has to be given a Self.
+interface Zero { def zero(): Self }
+
+def main(): Unit {
+    printl(1)
+}

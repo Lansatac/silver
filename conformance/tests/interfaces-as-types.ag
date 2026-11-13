@@ -1,0 +1,71 @@
+// An interface name as a parameter type stands for some type that satisfies it.
+
+interface Range<T> {
+    def next(range: Self): (T, Self)?
+}
+
+interface Json { def toJson(value: Self): String }
+
+type Countdown(from: Int)
+
+def next<T>(xs: [T]): (T, [T])? => if length(xs) == 0 => None else (xs[0], xs[1..])
+def next(c: Countdown): (Int, Countdown)? => if c.from == 0 => None else (c.from, Countdown(c.from - 1))
+def toJson(x: Int): String => "{x}"
+def toJson(x: String): String => "\"{x}\""
+
+// `<S: Range<T>, T>(range: S)`, with `S` never written.
+def toArray<T>(range: Range<T>): [T] {
+    mutable val result: [T] = []
+    for item in range { result ~= [item] }
+    result
+}
+def total(range: Range<Int>): Int {
+    mutable val sum = 0
+    for item in range { sum += item }
+    sum
+}
+def render(item: Json): String => "<" ~ toJson(item) ~ ">"
+// Each interface-typed parameter has a type of its own.
+def zip<A, B>(left: Range<A>, right: Range<B>): [(A, B)] {
+    mutable val pairs: [(A, B)] = []
+    mutable val l = left
+    mutable val r = right
+    while val stepLeft = next(l) {
+        val (a, restLeft) = stepLeft
+        if val stepRight = next(r) {
+            val (b, restRight) = stepRight
+            pairs ~= [(a, b)]
+            l = restLeft
+            r = restRight
+        } else {
+            return pairs
+        }
+    }
+    pairs
+}
+def joined<T: Json>(items: Range<T>, separator: String): String {
+    mutable val out = ""
+    for item in items {
+        if out != "" { out = out ~ separator }
+        out = out ~ toJson(item)
+    }
+    out
+}
+
+def main(): Unit {
+    printl(toArray(Countdown(3)))
+    printl(Countdown(2).toArray())
+    printl(toArray(["a", "b"]))
+    // Only `T` is a type argument.
+    printl(toArray<Int>([4, 5]))
+    printl(total([1, 2, 3]))
+    printl(total(Countdown(4)))
+    printl(render(1))
+    printl(render("one"))
+    printl(zip(Countdown(3), ["x", "y"]))
+    printl(joined(Countdown(3), ", "))
+    printl(joined(["a", "b"], "+"))
+
+    val asValue: (Countdown) -> [Int] = toArray
+    printl(asValue(Countdown(1)))
+}

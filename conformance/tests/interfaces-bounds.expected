@@ -1,0 +1,23 @@
+<1>
+<true>
+<[1, 2]>
+<box([3, 4])>
+<box(box(5))>
+<(1; [6, 7])>
+<null>
+<8>
+<box(9)>
+<[10, 11]><box([10, 11])>
+12
+<[13, 14]>
+<15>
+12
+9
+16
+point [16, 17]
+point/point
+json 20
+string text
+2 values
+<[21, 22]>
+<box(false)>

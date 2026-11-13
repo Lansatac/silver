@@ -1,0 +1,4 @@
+module interfaces_support.things
+
+type Thing(id: Int)
+def toJson(t: Thing): String => "thing {t.id}"

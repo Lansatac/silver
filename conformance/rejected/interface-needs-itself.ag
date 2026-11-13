@@ -1,0 +1,8 @@
+// A function that takes a T? doesn't make T a Json through itself.
+interface Json { def toJson(value: Self): String }
+def toJson<T: Json>(x: T?): String => "option"
+def encode<T: Json>(item: T): String => toJson(item)
+
+def main(): Unit {
+    printl(encode(1))
+}

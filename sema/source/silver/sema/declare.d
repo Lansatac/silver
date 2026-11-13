@@ -162,6 +162,10 @@ package final class Declarer
 
     package Type resolveNamedType(const TypeExpr typeExpr)
     {
+        if (auto hidden = typeExpr.id in _resolutions.sugarParams)
+        {
+            return parameterType(*_resolutions.declarations.typeParams[*hidden]);
+        }
         auto symbol = typeExpr.id in _resolutions.typeResolutions;
         if (symbol is null) return _types.error;
         auto named = typeExpr.kind.match!((const NamedType n) => n, (_) => assert(0, "only a named type resolves to a symbol"));
@@ -180,7 +184,104 @@ package final class Declarer
             (const Id!TypeDecl decl) => instanceType(decl, named, typeExpr.span),
             (const Id!AliasDecl decl) => withoutArguments(aliasType(decl)),
             (const Id!TypeParam param) => withoutArguments(parameterType(*_resolutions.declarations.typeParams[param])),
+            // Name resolution only lets an interface through as a bound, which isn't resolved as a type.
+            (const Id!InterfaceDecl _) => _types.error,
         );
+    }
+
+    /// What each bound of each of `params` names, for `typing.bounds`.
+    package void declareBounds(const(TypeParam)[] params)
+    {
+        foreach (param; params)
+        {
+            Bound[] bounds;
+            foreach (written; param.bounds) bounds ~= resolveBound(written);
+            if (bounds.length > 0) _typing.bounds[param.id] = bounds;
+        }
+    }
+
+    /// The interface and type arguments `written` names, or a bound that isn't valid when name
+    /// resolution didn't find an interface, which it reported.
+    private Bound resolveBound(const TypeExpr written)
+    {
+        auto symbol = written.id in _resolutions.typeResolutions;
+        auto decl = symbol is null ? Id!InterfaceDecl.init
+            : (*symbol).match!((const Id!InterfaceDecl i) => i, _ => Id!InterfaceDecl.init);
+        if (!decl.isValid) return Bound.init;
+        auto named = written.kind.match!((const NamedType n) => n, (_) => assert(0, "a bound is written as a named type"));
+        auto interface_ = _resolutions.declarations.interfaces[decl];
+        auto args = resolveTypeArguments(named.args);
+        auto wanted = interface_.typeParams.length;
+        if (args.length != wanted)
+        {
+            auto name = named.path.join(".");
+            _collector.reportError(DiagnosticCode.WrongTypeArgumentCount, written.span, wanted == 0
+                ? "`%s` takes no type arguments".format(name)
+                : args.length == 0
+                    ? "`%s` needs its type arguments, as in `%s`".format(name, example(name, wanted, ""))
+                    : "`%s` takes %s type arguments, got %s".format(name, wanted, args.length));
+            args = _types.error.repeat(wanted).array;
+        }
+        return Bound(decl, args);
+    }
+
+    /// What `bound`'s interface calls each of its type parameters and `Self`, when `self` conforms.
+    package Substitution substitutionOf(const Bound bound, Type self)
+    {
+        auto interface_ = _resolutions.declarations.interfaces[bound.decl];
+        Substitution substitution;
+        substitution[interface_.self.id] = self;
+        foreach (i, param; interface_.typeParams) substitution[param.id] = bound.args[i];
+        return substitution;
+    }
+
+    /// `Json`, or `Range<Int>`.
+    package string describe(const Bound bound)
+    {
+        auto name = _resolutions.declarations.interfaces[bound.decl].name;
+        return bound.args.length == 0 ? name : "%s<%-(%s, %)>".format(name, bound.args.map!(a => _types.describe(a)));
+    }
+
+    /// The signature of each function a bound of `func` supplies inside it: the interface's, for
+    /// the type parameter with the bound. Every interface's functions have their signatures by now.
+    package void declareBoundFunctions(Id!FunctionDecl func)
+    {
+        foreach (supplied; _resolutions.boundFunctions.get(func, null))
+        {
+            auto requirement = _resolutions.requirements[supplied];
+            auto bound = _typing.bounds[requirement.param][requirement.bound];
+            auto self = parameterType(*_resolutions.declarations.typeParams[requirement.param]);
+            _typing.symbolTypes[SymbolId(supplied)] = _types.substitute(_typing.symbolTypes[SymbolId(requirement.declared)],
+                substitutionOf(bound, self));
+        }
+    }
+
+    /// Declares the signatures of `interface_`'s functions, reporting what the first version of
+    /// interfaces leaves out.
+    package void declareInterface(const InterfaceDecl interface_)
+    {
+        foreach (param; interface_.typeParams)
+        {
+            if (param.bounds.length == 0) continue;
+            _collector.reportError(DiagnosticCode.InvalidBound, param.bounds[0].span,
+                "An interface's type parameter can't have a bound; put it on the function that uses `%s`".format(interface_.name));
+        }
+        foreach (i, func; interface_.functions)
+        {
+            declareSignature(func);
+            auto params = _types[_typing.symbolTypes[SymbolId(func.id)]].match!((const FunctionData f) => f.params, _ => null);
+            auto repeated = interface_.functions[0 .. i].canFind!(earlier => earlier.name == func.name
+                && _types[_typing.symbolTypes[SymbolId(earlier.id)]].match!((const FunctionData f) => f.params == params, _ => false));
+            if (repeated)
+            {
+                _collector.reportError(DiagnosticCode.DuplicateOverload, func.nameSpan,
+                    "`%s` already declares a `%s` that takes these parameter types".format(interface_.name, func.name));
+            }
+            if (params.canFind(_types.error) || params.any!(p => _types.mentionsParameter(p, interface_.self.id))) continue;
+            _collector.reportError(DiagnosticCode.InvalidBound, func.nameSpan,
+                ("`%s` has to take a `Self`, since a function is found by what it's given; for one that only "
+                    ~ "returns a `Self`, take `of: Of<Self>` to say which type is meant").format(func.name));
+        }
     }
 
     /// `decl` with the type arguments `named` gives it, which have to be all of them.
@@ -316,7 +417,7 @@ package final class Declarer
             _typing.symbolTypes[SymbolId(param.id)] = params[i];
         }
         auto returnType = resolveType(func.returnType);
-        if (func.kind != FunctionKind.ordinary)
+        if (func.kind == FunctionKind.native || func.kind == FunctionKind.intrinsic)
         {
             foreach (param; func.params.filter!(p => p.mutable))
             {

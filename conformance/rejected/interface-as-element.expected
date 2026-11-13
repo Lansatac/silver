@@ -1,0 +1,1 @@
+S0026: `Json` is an interface, which is only a type as the whole type of a module-level `def`'s parameter; use a type parameter with a bound, as in `<T: Json>`, or a sum type of the types it holds

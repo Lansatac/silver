@@ -1,0 +1,12 @@
+// Each bound here needs the same bound of a larger type, so the search is given up.
+interface Grow { def grow(value: Self): Int }
+interface Next<U> { def step(value: Self): U }
+type Wrap<T>(value: T)
+
+def step<T>(x: T): Wrap<T> => Wrap(x)
+def grow<T: Next<U>, U: Grow>(x: T): Int => 1
+def needsGrow<T: Grow>(x: T): Int => grow(x)
+
+def main(): Unit {
+    printl(needsGrow(1))
+}

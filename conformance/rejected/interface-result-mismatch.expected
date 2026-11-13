@@ -1,0 +1,1 @@
+T0043: `encode` needs `T` to be a `Json`, and `Plain` isn't one: `toJson(Plain)` returns `Int`, where `String` is needed

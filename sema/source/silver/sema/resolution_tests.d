@@ -295,6 +295,7 @@ NameIndex indexNames(const Module m)
             (const TypeDecl t) => indexer.visit(t),
             (const ConstDecl c) => indexer.visit(c),
             (const AliasDecl _) {},
+            (const InterfaceDecl _) {},
             (const ImportStmt _) {},
         );
     }

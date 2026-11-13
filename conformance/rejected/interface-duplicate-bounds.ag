@@ -1,0 +1,10 @@
+// Two functions that differ only in their bounds can't be told apart by a call.
+interface Json { def toJson(value: Self): String }
+interface Yaml { def toYaml(value: Self): String }
+
+def write<T: Json>(item: T): String => toJson(item)
+def write<T: Yaml>(item: T): String => toYaml(item)
+
+def main(): Unit {
+    printl(1)
+}

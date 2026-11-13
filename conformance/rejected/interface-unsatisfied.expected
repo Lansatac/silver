@@ -1,0 +1,2 @@
+T0043: `encode` needs `T` to be a `Json`, and `Plain` isn't one: no `toJson` in scope takes `Plain`
+    toJson(Int) takes `Int` there, not `Plain`

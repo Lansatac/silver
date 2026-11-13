@@ -1,0 +1,1 @@
+T0035: `write` already takes `<T: Json>(T)`; overloads need different parameter types, and a bound alone doesn't make one

@@ -1,0 +1,7 @@
+module interfaces_support.things
+
+type Foo(id: Int)
+type Bar(id: Int)
+
+// What makes a Bar a Json, for whoever imports it.
+def toJson(b: Bar): String => "bar{b.id}"

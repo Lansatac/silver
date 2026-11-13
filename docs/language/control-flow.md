@@ -134,7 +134,7 @@ How deep a program can recurse isn't specified, and differs between the interpre
 
 ## Open questions
 
-- Whether `for` will require a `Range` interface by name once interfaces exist. A type that works with `for` now would still satisfy it.
+- Whether `for` will require a `Range` [interface](interfaces.md) by name. A type that works with `for` now would satisfy it.
 
 ## Current implementation
 

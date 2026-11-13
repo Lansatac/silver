@@ -1,0 +1,18 @@
+module interfaces_support.json
+
+interface Json {
+    def toJson(value: Self): String
+}
+
+def toJson(x: Int): String => "{x}"
+def toJson<T: Json>(x: T?): String => match x {
+    None => "null"
+    Some(v) => toJson(v)
+}
+def toJson<T: Json>(xs: [T]): String {
+    mutable val out = "["
+    for x in xs { out = out ~ toJson(x) ~ ";" }
+    out ~ "]"
+}
+
+def encode<T: Json>(item: T): String => "json:" ~ toJson(item)

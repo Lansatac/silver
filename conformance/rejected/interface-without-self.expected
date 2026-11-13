@@ -1,0 +1,1 @@
+T0042: `zero` has to take a `Self`, since a function is found by what it's given; for one that only returns a `Self`, take `of: Of<Self>` to say which type is meant

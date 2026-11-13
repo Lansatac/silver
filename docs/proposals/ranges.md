@@ -137,7 +137,7 @@ def toArray<T>(range: Range<T>): [T] {
 
 An interface name in a type position means "some type that satisfies it", decided when the program is compiled.
 
-- **In a parameter** it's shorthand for a bounded type parameter. `source: Range<T>` means `<S: Range<T>>(source: S)`. To say two parameters have the same type, name it. The hidden parameter is never written at a call and doesn't count as one, so `toArray<Int>(xs)` gives only `T`. A lambda or a nested `def` can't have such a parameter, since neither can be generic, and the error says to name the type.
+- **In a parameter** (implemented; see [Interfaces](../language/interfaces.md#an-interface-name-as-a-parameter-type)) it's shorthand for a bounded type parameter. `source: Range<T>` means `<S: Range<T>>(source: S)`. To say two parameters have the same type, name it. The hidden parameter is never written at a call and doesn't count as one, so `toArray<Int>(xs)` gives only `T`. A lambda or a nested `def` can't have such a parameter, since neither can be generic, and the error says to name the type.
 - **In a return** it's opaque: the function returns one specific type, which the compiler knows and callers can't name. `def evens(xs: [Int]): Range<Int>`.
 - **On a binding** it's a view of the one type the value has (decided). After `val thing: Range<Int> = [1, 2, 3]`, `thing` is an array underneath and only what `Range<Int>` provides can be used, so `thing[0]` is an error. It's the only annotation a binding can have when the value came from an opaque return. A `mutable val` annotated this way still has one type, so it can't be given a range of another type.
 
@@ -194,9 +194,9 @@ The search is cheap: one lookup per bound, proportional to the functions of that
 ## Prerequisites, in order
 
 1. Stage 1 generics (implemented).
-2. Overloading: `next` for arrays, `Countdown`, `Map` and `Filter` are all named `next`.
-3. Interfaces: structural conformance, parameters that conformance determines, witnesses.
-4. Interface names as types, with opaque returns and the erased form.
+2. Overloading (implemented): `next` for arrays, `Countdown`, `Map` and `Filter` are all named `next`.
+3. Interfaces: structural conformance, parameters that conformance determines, witnesses (implemented).
+4. Interface names as types (implemented for parameters), with opaque returns and the erased form.
 5. The range library.
 6. Small products by value, for chains to be fast when compiled.
 

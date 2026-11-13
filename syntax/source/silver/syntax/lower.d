@@ -1,6 +1,6 @@
 module silver.syntax.lower;
 
-import std.algorithm : canFind, map;
+import std.algorithm : canFind, filter, map;
 import std.array : array;
 import std.format : format;
 import std.sumtype : match;
@@ -147,6 +147,7 @@ private final class Lowering
                 (ref TypeDecl type) { type.isPrivate = true; },
                 (ref ConstDecl constant) { constant.isPrivate = true; },
                 (ref AliasDecl alias_) { alias_.isPrivate = true; },
+                (ref InterfaceDecl interface_) { interface_.isPrivate = true; },
                 (ref ImportStmt _) {},
             );
         }
@@ -174,6 +175,8 @@ private final class Lowering
             }
             auto alias_ =AliasDecl(ids.next!AliasDecl, cst[0].matches[0], spanOf(cst[0], file), convertTypeExpression(cst[1]));
             return [Decl(spanOf(cst, file), DeclKind(alias_))];
+        case "Silver.InterfaceDeclaration":
+            return [Decl(spanOf(cst, file), DeclKind(convertInterfaceDeclaration(cst)))];
         case "Silver.ConstantDeclaration":
             return [Decl(spanOf(cst, file), DeclKind(convertConstantDeclaration(cst)))];
         case "Silver.TestDeclaration":
@@ -904,6 +907,9 @@ private final class Lowering
         case "Silver.IntrinsicFunctionDeclaration":
             kind = FunctionKind.intrinsic;
             break;
+        case "Silver.InterfaceFunction":
+            kind = FunctionKind.required;
+            break;
         default:
             cst.validateNodeIs("Silver.FunctionDeclaration");
         }
@@ -930,6 +936,12 @@ private final class Lowering
                     throw new ParseException(Diagnostic(DiagnosticCode.ParseError, spanOf(child, file),
                         "A `native def` can't take type parameters, since a C function has one signature", Severity.Error));
                 }
+                if (kind == FunctionKind.required)
+                {
+                    throw new ParseException(Diagnostic(DiagnosticCode.ParseError, spanOf(child, file),
+                        "A function of an interface can't take type parameters of its own; the interface's are in scope",
+                        Severity.Error));
+                }
                 typeParams = convertTypeParameters(child);
                 break;
             case "Silver.Params":
@@ -946,6 +958,11 @@ private final class Lowering
                 break;
             case "Silver.Block":
             case "Silver.Expression":
+                if (kind == FunctionKind.required)
+                {
+                    throw new ParseException(Diagnostic(DiagnosticCode.ParseError, spanOf(child, file),
+                        "A function of an interface has no body; it says what a type has to have", Severity.Error));
+                }
                 body = boxed(convertExpression(child));
                 break;
             default:
@@ -959,7 +976,31 @@ private final class Lowering
     private TypeParam[] convertTypeParameters(ParseTree cst)
     {
         cst.validateNodeIs("Silver.TypeParameters");
-        return cst.children.map!(p => TypeParam(ids.next!TypeParam, p.matches[0], spanOf(p, file))).array;
+        TypeParam[] params;
+        foreach (p; cst.children)
+        {
+            auto bounds = p.children.filter!(c => c.name == "Silver.NamedType").map!(b => convertTypeExpression(b)).array;
+            params ~= TypeParam(ids.next!TypeParam, p.matches[0], Span(file, p.begin, p.begin + p.matches[0].length), bounds);
+        }
+        return params;
+    }
+
+    /// `interface Name<T> { def f(value: Self): T }`.
+    private InterfaceDecl convertInterfaceDeclaration(ParseTree cst)
+    {
+        cst.validateNodeIs("Silver.InterfaceDeclaration");
+        auto nameSpan = spanOf(cst[0], file);
+        InterfaceDecl decl;
+        decl.id = ids.next!InterfaceDecl;
+        decl.name = cst[0].matches[0];
+        decl.nameSpan = nameSpan;
+        decl.self = TypeParam(ids.next!TypeParam, "Self", nameSpan);
+        foreach (child; cst.children[1 .. $])
+        {
+            if (child.name == "Silver.TypeParameters") decl.typeParams = convertTypeParameters(child);
+            else decl.functions ~= convertFunctionDeclaration(child);
+        }
+        return decl;
     }
 
     /// `NATIVE LIBRARY StringLiteral`. `previous` is the one the module already has, if any.

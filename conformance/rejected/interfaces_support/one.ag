@@ -1,0 +1,5 @@
+module interfaces_support.one
+
+import interfaces_support.things : Thing
+
+def toJson(t: Thing): String => "one"

@@ -14,7 +14,7 @@ import silver.sema.target : intrinsicAlias, intrinsicNamed, isIntrinsicType, Tar
 /// An `Id!AliasDecl` is only ever in a scope: a use of one records what it stands for.
 alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module, Id!TypeDecl, Id!ConstDecl, Id!AliasDecl);
 
-alias TypeSymbol = SumType!(Builtin, Id!TypeDecl, Id!AliasDecl, Id!TypeParam);
+alias TypeSymbol = SumType!(Builtin, Id!TypeDecl, Id!AliasDecl, Id!TypeParam, Id!InterfaceDecl);
 
 private bool isFunction(const SymbolId symbol)
 {
@@ -64,6 +64,9 @@ package struct Declarations
     /// The module each function is declared in.
     string[Id!FunctionDecl] functionModules;
     const(TypeDecl)*[Id!TypeDecl] types;
+    /// The module each type is declared in.
+    string[Id!TypeDecl] typeModules;
+    const(InterfaceDecl)*[Id!InterfaceDecl] interfaces;
     const(ConstDecl)*[Id!ConstDecl] constants;
     const(AliasDecl)*[Id!AliasDecl] aliases;
     const(VarDecl)*[Id!VarDecl] locals;
@@ -95,6 +98,60 @@ package struct Resolution
     Declarations declarations;
     /// The `native library` of each module that names one.
     string[string] nativeLibraries;
+    /// Each module's own top-level scope, by module name.
+    const(Scope)[string] moduleScopes;
+    /// The type parameters a function has beyond those it declares: one for each parameter whose
+    /// type is an interface name, in parameter order. They come after the declared ones.
+    const(TypeParam)[][Id!FunctionDecl] hiddenParams;
+    /// For a parameter type that's an interface name, the hidden type parameter it stands for.
+    Id!TypeParam[Id!TypeExpr] sugarParams;
+    /// The functions a generic function's bounds supply inside it, in the order its witnesses are
+    /// kept: by type parameter, then bound, then the interface's function.
+    Id!FunctionDecl[][Id!FunctionDecl] boundFunctions;
+    /// What each of those functions stands for.
+    Requirement[Id!FunctionDecl] requirements;
+
+    /// The type parameters of `func`: those it declares, then its hidden ones.
+    const(TypeParam)[] typeParamsOf(Id!FunctionDecl func) const
+    {
+        return declarations.functions[func].typeParams ~ hiddenParams.get(func, null);
+    }
+
+    /// The module-level functions a plain `name` finds from the module `from`, grouped as for a
+    /// plain name. Something else of that module's named `name` hides them all.
+    Candidates functionsFrom(string from, string name) const
+    {
+        auto own = moduleScopes[from];
+        if (auto symbol = own.resolveLocal(name))
+        {
+            if (!isFunction(*symbol)) return Candidates.init;
+        }
+        Id!FunctionDecl[][] groups = [own.functionsNamed(name)];
+        foreach (m; own.modulesProviding(name))
+        {
+            auto visible = publicFunctions(m, name);
+            if (visible.length > 0) groups ~= visible;
+        }
+        return Candidates(groups);
+    }
+
+    /// The functions named `name` that the module `m` lets other modules see.
+    Id!FunctionDecl[] publicFunctions(string m, string name) const
+    {
+        return moduleScopes[m].functionsNamed(name).filter!(f => !declarations.functions[f].isPrivate).array;
+    }
+}
+
+/// A function that a bound supplies inside the generic function `owner`: the interface's function
+/// `declared`, for the bound at `bound` among those of `param`. `index` is where its witness is
+/// among `owner`'s.
+package struct Requirement
+{
+    Id!FunctionDecl owner;
+    Id!TypeParam param;
+    size_t bound;
+    Id!FunctionDecl declared;
+    size_t index;
 }
 
 /// The builtin or declared type `symbol` is another name for. It's still an alias if it stands
@@ -156,6 +213,8 @@ package final class Scope
     private TypeSymbol[string] _typeTable;
     /// Every function of each name, in declaration order, for a module's scope.
     private Id!FunctionDecl[][string] _functions;
+    /// For a generic function's scope, the functions its bounds supply, by name.
+    private Id!FunctionDecl[][string] _boundFunctions;
     /// The lambda this is the outermost scope of, if any, and the local that lambda is bound to
     /// when it's a nested `def`.
     Id!Expr lambda;
@@ -256,6 +315,18 @@ package final class Scope
         return _functions.get(name, null).dup;
     }
 
+    void declareBoundFunction(string name, Id!FunctionDecl func)
+    {
+        _boundFunctions[name] ~= func;
+    }
+
+    /// The functions named `name` that the bounds of the function this is inside supply.
+    Id!FunctionDecl[] boundFunctionsNamed(string name) const
+    {
+        if (auto found = name in _boundFunctions) return (*found).dup;
+        return _parent is null ? null : _parent.boundFunctionsNamed(name);
+    }
+
     override string toString() const
     {
         import std.algorithm : map;
@@ -317,6 +388,12 @@ private final class NameResolver
 
     private Target _target;
     private string[string] _nativeLibraries;
+    private const(TypeParam)[][Id!FunctionDecl] _hiddenParams;
+    private Id!TypeParam[Id!TypeExpr] _sugarParams;
+    private Id!FunctionDecl[][Id!FunctionDecl] _boundFunctions;
+    private Requirement[Id!FunctionDecl] _requirements;
+    /// Where the nodes resolution makes up get their IDs.
+    private NodeIds _ids;
 
     this(Collector collector, Target target)
     {
@@ -326,6 +403,9 @@ private final class NameResolver
 
     Resolution resolveProgram(const Program program)
     {
+        // The program's own source of IDs, which is there for passes that make nodes: no node here
+        // changes, and the ones made are new.
+        _ids = cast(NodeIds) program.ids;
         // Sorted so diagnostics come out in the same order every run.
         auto modules = program.sortedModules;
         foreach (mod; modules)
@@ -346,7 +426,7 @@ private final class NameResolver
             resolveModule(mod.name, mod);
         }
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
-            _operatorLookups, _declarations, _nativeLibraries);
+            _operatorLookups, _declarations, _nativeLibraries, cast(const(Scope)[string]) _moduleScopes, _hiddenParams, _sugarParams, _boundFunctions, _requirements);
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
@@ -360,6 +440,7 @@ private final class NameResolver
                 (const TypeDecl _) {},
                 (const ConstDecl _) {},
                 (const AliasDecl _) {},
+                (const InterfaceDecl _) {},
                 (const ImportStmt importStmt) {
                     auto imported = importStmt.path.join(".");
                     auto index = imports.countUntil!(i => i.name == imported);
@@ -407,8 +488,33 @@ private final class NameResolver
                         moduleScope.declareFunction(func.name, func.id);
                     }
                 },
+                (ref const InterfaceDecl interface_) {
+                    _declarations.interfaces[interface_.id] = &interface_;
+                    _declarations.typeParams[interface_.self.id] = &interface_.self;
+                    foreach (ref func; interface_.functions)
+                    {
+                        _declarations.functions[func.id] = &func;
+                        _declarations.functionModules[func.id] = name;
+                    }
+                    if (moduleScope.resolveLocalType(interface_.name) !is null)
+                    {
+                        _collector.reportError(DiagnosticCode.DuplicateDeclaration, interface_.nameSpan,
+                            "'%s' is already declared in this module".format(interface_.name));
+                    }
+                    else if (universal.resolveLocalType(interface_.name) !is null || isReserved(interface_.name)
+                        || interface_.name == selfName)
+                    {
+                        _collector.reportError(DiagnosticCode.DuplicateDeclaration, interface_.nameSpan,
+                            "'%s' is a built-in name".format(interface_.name));
+                    }
+                    else
+                    {
+                        moduleScope.declare(interface_.name, TypeSymbol(interface_.id));
+                    }
+                },
                 (ref const TypeDecl type) {
                     _declarations.types[type.id] = &type;
+                    _declarations.typeModules[type.id] = name;
                     if (type.intrinsic) checkIntrinsic(name, type.nameSpan, "intrinsic type", isIntrinsicType(type.name));
                     if (moduleScope.resolveLocalType(type.name) !is null || moduleScope.resolveLocal(type.name) !is null)
                     {
@@ -417,7 +523,7 @@ private final class NameResolver
                                 .format(type.name, type.name)
                             : "'%s' is already declared in this module".format(type.name));
                     }
-                    else if (universal.resolveLocalType(type.name) !is null || isReserved(type.name))
+                    else if (universal.resolveLocalType(type.name) !is null || isReserved(type.name) || type.name == selfName)
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan,
                             "'%s' is a built-in name".format(type.name));
@@ -444,7 +550,7 @@ private final class NameResolver
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, alias_.nameSpan,
                             "'%s' is already declared in this module".format(alias_.name));
                     }
-                    else if (universal.resolveLocalType(alias_.name) !is null || isReserved(alias_.name))
+                    else if (universal.resolveLocalType(alias_.name) !is null || isReserved(alias_.name) || alias_.name == selfName)
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, alias_.nameSpan,
                             "'%s' is a built-in name".format(alias_.name));
@@ -480,6 +586,7 @@ private final class NameResolver
                 (const ConstDecl constant) => reportModuleRootClash(constant.name, constant.nameSpan, visible),
                 (const TypeDecl _) {},
                 (const AliasDecl _) {},
+                (const InterfaceDecl _) {},
                 (const ImportStmt _) {},
             );
         }
@@ -596,20 +703,31 @@ private final class NameResolver
             decl.kind.match!(
                 (ref const FunctionDecl func) {
                     auto declScope = genericScope(func.typeParams, _moduleScopes[name], false);
+                    foreach (ref typeParam; func.typeParams)
+                    {
+                        foreach (bound; typeParam.bounds) resolveTypeExpr(bound, declScope, InterfaceUse.bound);
+                    }
+                    // Only a module-level `def` can stand in a type parameter for an interface name.
+                    auto sugared = func.kind == FunctionKind.ordinary && func.testName is null && !func.invariantOf.isValid;
                     foreach (ref param; func.params)
                     {
                         _declarations.params[param.id] = &param;
-                        resolveTypeExpr(param.type, declScope);
+                        resolveTypeExpr(param.type, declScope, sugared ? InterfaceUse.parameter : InterfaceUse.none);
                     }
                     resolveTypeExpr(func.returnType, declScope);
                     if (!func.isPrivate)
                     {
+                        foreach (ref typeParam; func.typeParams)
+                        {
+                            foreach (bound; typeParam.bounds) reportPrivateType(bound, "a public function's signature");
+                        }
                         foreach (ref param; func.params)
                         {
                             reportPrivateType(param.type, "a public function's signature");
                         }
                         reportPrivateType(func.returnType, "a public function's signature");
                     }
+                    declScope = declareBounds(func, declScope, name);
 
                     if (func.body !is null)
                     {
@@ -643,9 +761,75 @@ private final class NameResolver
                     resolveExpr(constant.value, _moduleScopes[name]);
                 },
                 (const AliasDecl _) {},
+                (ref const InterfaceDecl interface_) {
+                    auto declScope = genericScope(interface_.typeParams, _moduleScopes[name], false);
+                    if (declScope is _moduleScopes[name]) declScope = new Scope(declScope);
+                    declScope.declare(selfName, TypeSymbol(interface_.self.id));
+                    foreach (ref func; interface_.functions)
+                    {
+                        foreach (ref param; func.params)
+                        {
+                            _declarations.params[param.id] = &param;
+                            resolveTypeExpr(param.type, declScope);
+                            if (!interface_.isPrivate) reportPrivateType(param.type, "a public interface");
+                        }
+                        resolveTypeExpr(func.returnType, declScope);
+                        if (!interface_.isPrivate) reportPrivateType(func.returnType, "a public interface");
+                    }
+                },
                 (const ImportStmt _) {},
             );
         }
+    }
+
+    /// Gives `func` a hidden type parameter for each parameter whose type is an interface name, and
+    /// declares the functions its bounds supply in its scope, which is `declScope` or a new one
+    /// inside it.
+    private Scope declareBounds(ref const FunctionDecl func, Scope declScope, string moduleName)
+    {
+        TypeParam[] hidden;
+        foreach (ref param; func.params)
+        {
+            if (interfaceNamed(param.type) is null) continue;
+            hidden ~= TypeParam(_ids.next!TypeParam, printTypeExpr(param.type), param.type.span, [cast() param.type]);
+            _sugarParams[param.type.id] = hidden[$ - 1].id;
+        }
+        foreach (ref param; hidden) _declarations.typeParams[param.id] = &param;
+        if (hidden.length > 0) _hiddenParams[func.id] = hidden;
+
+        Scope bodyScope;
+        size_t index;
+        foreach (ref typeParam; func.typeParams ~ hidden)
+        {
+            foreach (b, bound; typeParam.bounds)
+            {
+                auto interface_ = interfaceNamed(bound);
+                if (interface_ is null) continue;
+                foreach (ref declared; interface_.functions)
+                {
+                    auto supplied = new FunctionDecl(_ids.next!FunctionDecl, declared.name, bound.span, cast(Param[]) declared.params,
+                        null, cast() declared.returnType, FunctionKind.required);
+                    _declarations.functions[supplied.id] = supplied;
+                    _declarations.functionModules[supplied.id] = moduleName;
+                    _requirements[supplied.id] = Requirement(func.id, typeParam.id, b, declared.id, index++);
+                    _boundFunctions[func.id] ~= supplied.id;
+                    if (bodyScope is null) bodyScope = new Scope(declScope);
+                    bodyScope.declareBoundFunction(declared.name, supplied.id);
+                }
+            }
+        }
+        return bodyScope is null ? declScope : bodyScope;
+    }
+
+    /// The interface `type` names, or null if it doesn't name one.
+    private const(InterfaceDecl)* interfaceNamed(const TypeExpr type)
+    {
+        auto symbol = type.id in _typeResolutions;
+        if (symbol is null) return null;
+        return (*symbol).match!(
+            (const Id!InterfaceDecl i) => _declarations.interfaces[i],
+            _ => cast(const(InterfaceDecl)*) null,
+        );
     }
 
     /// Reports each name a selective import lists that its module doesn't have, or keeps private.
@@ -689,7 +873,7 @@ private final class NameResolver
             {
                 problem = "`%s` is already a type parameter of this declaration";
             }
-            else if (universal.resolveLocalType(param.name) !is null || isReserved(param.name))
+            else if (universal.resolveLocalType(param.name) !is null || isReserved(param.name) || param.name == selfName)
             {
                 problem = "'%s' is a built-in name";
             }
@@ -726,6 +910,7 @@ private final class NameResolver
         return !symbol.match!(
             (const Id!TypeDecl t) => _declarations.types[t].isPrivate,
             (const Id!AliasDecl a) => _declarations.aliases[a].isPrivate,
+            (const Id!InterfaceDecl i) => _declarations.interfaces[i].isPrivate,
             (const Builtin _) => false,
             (const Id!TypeParam _) => false,
         );
@@ -782,6 +967,7 @@ private final class NameResolver
                 auto isPrivate = (*symbol).match!(
                     (const Id!TypeDecl t) => _declarations.types[t].isPrivate,
                     (const Id!AliasDecl a) => _declarations.aliases[a].isPrivate,
+                    (const Id!InterfaceDecl i) => _declarations.interfaces[i].isPrivate,
                     (const Builtin _) => false,
                     (const Id!TypeParam _) => false,
                 );
@@ -850,13 +1036,15 @@ private final class NameResolver
                     (const Id!TypeDecl _) => false,
                     (const Id!AliasDecl a) => (a in _recursiveAliases) !is null || isConstantType(_declarations.aliases[a].target),
                     (const Id!TypeParam _) => false,
+                    (const Id!InterfaceDecl _) => false,
                 );
             },
             _ => false,
         );
     }
 
-    private void resolveTypeExpr(const TypeExpr type, const Scope current)
+    /// `use` says what the type as a whole is for; the types inside it are never an interface's place.
+    private void resolveTypeExpr(const TypeExpr type, const Scope current, InterfaceUse use = InterfaceUse.none)
     {
         type.kind.match!(
             (const NamedType named) {
@@ -905,6 +1093,13 @@ private final class NameResolver
                         "Unknown type `%s`".format(named.path.join(".")));
                     return;
                 }
+                auto isInterface = (*resolvedType).match!((const Id!InterfaceDecl _) => true, _ => false);
+                auto allowed = isInterface ? use == InterfaceUse.bound || use == InterfaceUse.parameter : use != InterfaceUse.bound;
+                if (!allowed)
+                {
+                    reportInterfaceUse(named.path.join("."), type.span, use);
+                    return;
+                }
                 _typeResolutions[type.id] = *resolvedType;
             },
             (const OptionType option) => resolveTypeExpr(*option.inner, current),
@@ -928,6 +1123,29 @@ private final class NameResolver
                 }
             },
         );
+    }
+
+    /// Reports the interface `name` where a type is wanted, or a type where a bound wants an interface.
+    private void reportInterfaceUse(string name, Span span, InterfaceUse use)
+    {
+        final switch (use)
+        {
+            case InterfaceUse.bound:
+                _collector.reportError(DiagnosticCode.NotAnInterface, span,
+                    "`%s` is a type, and a bound names an interface".format(name));
+                return;
+            case InterfaceUse.lambdaParameter:
+                _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
+                    ("`%s` is an interface, and only a module-level `def` can take any type that satisfies one; "
+                        ~ "name the type this parameter takes").format(name));
+                return;
+            case InterfaceUse.none:
+            case InterfaceUse.parameter:
+                _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
+                    ("`%s` is an interface, which is only a type as the whole type of a module-level `def`'s parameter; "
+                        ~ "use a type parameter with a bound, as in `<T: %s>`, or a sum type of the types it holds").format(name, name));
+                return;
+        }
     }
 
     /// Resolves a function or lambda body in a new scope holding its params, inside `enclosing`.
@@ -1089,7 +1307,7 @@ private final class NameResolver
                 foreach (ref param; lambda.params)
                 {
                     _declarations.params[param.id] = &param;
-                    if (param.annotated) resolveTypeExpr(param.type, scopeTable);
+                    if (param.annotated) resolveTypeExpr(param.type, scopeTable, InterfaceUse.lambdaParameter);
                 }
                 if (lambda.returnType !is null) resolveTypeExpr(*lambda.returnType, scopeTable);
                 resolveBody(lambda.params, *lambda.body, scopeTable, expr.id, lambda.self);
@@ -1292,11 +1510,11 @@ private final class NameResolver
     /// The module-level functions a plain `name` finds, grouped as for a plain name.
     private Candidates moduleFunctions(string name, const Scope scopeTable)
     {
-        Id!FunctionDecl[] own;
+        auto own = scopeTable.boundFunctionsNamed(name);
         if (auto symbol = scopeTable.resolveInModule(name))
         {
             if (!isFunction(*symbol)) return Candidates.init;
-            own = visibleFunctions(_currentModule, name);
+            own ~= visibleFunctions(_currentModule, name);
         }
         return candidatesFor(name, own, scopeTable);
     }
@@ -1330,18 +1548,21 @@ private final class NameResolver
     /// every visible module, then as a module path.
     private Path resolveName(const Expr expr, string name, Scope scopeTable)
     {
+        // What a bound supplies is one of this module's functions, inside the function with the bound.
+        auto supplied = scopeTable.boundFunctionsNamed(name);
         if (auto local = scopeTable.resolve(name))
         {
             // A nested def is a local, so a function found here is one of this module's, and
             // imported functions of the name are tried when none of this module's fits.
             if (isFunction(*local))
             {
-                auto own = visibleFunctions(_currentModule, name);
+                auto own = supplied ~ visibleFunctions(_currentModule, name);
                 return recordFunctions(expr, name, candidatesFor(name, own, scopeTable));
             }
             recordCapture(*local, name, expr.span, scopeTable);
             return recordValue(expr, name, *local);
         }
+        if (supplied.length > 0) return recordFunctions(expr, name, candidatesFor(name, supplied, scopeTable));
 
         const(SymbolId)[] found;
         string[] owners;
@@ -1412,6 +1633,7 @@ private final class NameResolver
             },
             (const Id!AliasDecl _) => false,
             (const Id!TypeParam _) => false,
+            (const Id!InterfaceDecl _) => false,
         );
         if (isValue) return Path(Path.Kind.Value);
 
@@ -1527,6 +1749,23 @@ private final class NameResolver
         }
         return null;
     }
+}
+
+/// What an interface calls the type that conforms to it.
+private enum selfName = "Self";
+
+/// What a type expression is there for, which says whether it can name an interface.
+private enum InterfaceUse
+{
+    /// A type, which an interface isn't.
+    none,
+    /// A bound, which has to be an interface.
+    bound,
+    /// The whole type of a module-level `def`'s parameter, where an interface name stands for a
+    /// hidden type parameter with that bound.
+    parameter,
+    /// The whole type of a lambda's or nested `def`'s parameter, which can't be generic.
+    lambdaParameter,
 }
 
 /// The names the language gives meaning to, which no declaration can take.

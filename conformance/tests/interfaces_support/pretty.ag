@@ -1,0 +1,10 @@
+module interfaces_support.pretty
+
+import interfaces_support.things : Foo
+import interfaces_support.json
+
+// In this module a Foo is a Json another way.
+def toJson(f: Foo): String => "Foo \{ id: {f.id} \}"
+
+def pretty(f: Foo): String => encode(f)
+def prettyAll(fs: [Foo]): String => encode(fs)

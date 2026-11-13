@@ -1,0 +1,1 @@
+S0026: `Json` is an interface, and only a module-level `def` can take any type that satisfies one; name the type this parameter takes
