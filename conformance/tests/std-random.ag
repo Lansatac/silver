@@ -13,15 +13,22 @@ def main(): Unit {
     mutable val inRange = true
     mutable val same = true
     for _ in 0..1000 {
-        val x = nextInt(mutable a, 6)
+        val x = nextInt(mutable a, 6)!
         inRange = inRange && x >= 0 && x < 6
-        same = same && x == nextInt(mutable b, 6)
+        same = same && x == nextInt(mutable b, 6)!
     }
     printl(inRange)
     printl(same)
 
     // A bound of one has only one answer.
-    printl(nextInt(mutable a, 1))
+    printl(nextInt(mutable a, 1)!)
+
+    // A bound that isn't positive is an error, and leaves the generator where it was.
+    mutable val c = seeded(42)
+    mutable val fresh = seeded(42)
+    printl(nextInt(mutable c, 0))
+    printl(nextInt(mutable c, -3))
+    printl(next(mutable c) == next(mutable fresh))
 
     // A split generator doesn't replay its parent.
     mutable val parent = seeded(7)

@@ -798,6 +798,8 @@ private final class Generator
                 return emitRead();
             case Intrinsic.panic:
                 return emitExplicitPanic(call.args[0], e.span);
+            case Intrinsic.exitWithError:
+                return emitExitWithError(call.args[0]);
             case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect:
                 assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, and the others operations on a Cell");
         }
@@ -898,6 +900,18 @@ private final class Generator
             .then(callRuntime("silver_panic_message", [parts.data, parts.length]))
             .then(Fragment.unreachable())
             .then(Fragment.label(_function.newLabel("after.panic")))
+            .withValue(null);
+    }
+
+    /// `main` returned an error, which `message` is, formatted.
+    private Fragment emitExitWithError(const Expr message)
+    {
+        auto text = emitExpr(message);
+        auto parts = sliceParts(text.value);
+        return text.then(parts.code)
+            .then(callRuntime("silver_exit_error", [parts.data, parts.length]))
+            .then(Fragment.unreachable())
+            .then(Fragment.label(_function.newLabel("after.exit")))
             .withValue(null);
     }
 
@@ -1415,11 +1429,44 @@ private final class Generator
         return payload == "void" ? "{ i1 }" : "{ i1, %s }".format(payload);
     }
 
+    // An error union is `{ i1, T, E }`: whether it's `Ok`, then a slot for each side, with one that
+    // has no operand left out. Nothing is boxed.
+
+    private bool isErrorUnion(Type type)
+    {
+        return _program.types.isErrorUnion(type);
+    }
+
+    private string errorUnionLayout(Type type, Span span)
+    {
+        auto sides = [llvmType(_program.types.successOf(type), span), llvmType(_program.types.errorOf(type), span)]
+            .filter!(s => s != "void").array;
+        return "{ i1%-(, %s%) }".format(sides);
+    }
+
+    /// Where member `member` (0 for the error, 1 for the value) of the error union `type` is in its
+    /// layout, or 0 when it has no operand.
+    private size_t errorUnionSlot(Type type, size_t member, Span span)
+    {
+        auto success = llvmType(_program.types.successOf(type), span) != "void";
+        if (member == 1) return success ? 1 : 0;
+        if (llvmType(_program.types.errorOf(type), span) == "void") return 0;
+        return success ? 2 : 1;
+    }
+
     private Fragment emit(const Expr e, const Inject inject)
     {
         auto type = e.type;
         auto layout = llvmType(type, e.span);
         auto payload = inject.payload is null ? Fragment.init : emitExpr(*inject.payload);
+        if (isErrorUnion(type))
+        {
+            auto tagged = payload.then(_function.insert(layout, "zeroinitializer", "i1", inject.member == 1 ? "true" : "false", 0));
+            auto slot = errorUnionSlot(type, inject.member, e.span);
+            if (slot == 0 || payload.value is null) return tagged;
+            auto side = llvmType(inject.payload.type, e.span);
+            return tagged.then(_function.insert(layout, tagged.value, side, payload.value, slot));
+        }
         if (isOption(type))
         {
             if (inject.member == 0) return payload.withValue("zeroinitializer");
@@ -1450,7 +1497,7 @@ private final class Generator
         auto subject = emitExpr(*test.subject);
         auto type = test.subject.type;
         auto layout = llvmType(type, e.span);
-        if (isOption(type))
+        if (isOption(type) || isErrorUnion(type))
         {
             auto tag = _function.extract(layout, subject.value, 0);
             if (test.member == 1) return subject.then(tag);
@@ -1468,6 +1515,7 @@ private final class Generator
         auto memberLayout = llvmType(e.type, e.span);
         if (memberLayout == "void") return subject.withValue(null);
         if (isOption(type)) return subject.then(_function.extract(layout, subject.value, 1));
+        if (isErrorUnion(type)) return subject.then(_function.extract(layout, subject.value, errorUnionSlot(type, payload.member, e.span)));
         if (isAllMarkers(type, e.span)) return subject.withValue("null");
         auto pointer = _function.extract(layout, subject.value, 1);
         if (memberLayout == "ptr") return subject.then(pointer);
@@ -1758,6 +1806,7 @@ private final class Generator
         if (type == types.string_ || type == types.emptyArray || types.isArray(type)) return sliceLayout;
         if (types.isFunction(type)) return closureLayout;
         if (types.isOption(type)) return optionLayout(llvmType(types.optionInner(type), span));
+        if (types.isErrorUnion(type)) return errorUnionLayout(type, span);
         if (types.isTuple(type)) return recordLayout(type, span);
         if (type in _program.recordFields) return "ptr";
         if (type in _program.cellContents) return "ptr";

@@ -51,7 +51,21 @@ def sum(a: Int?, b: Int?): Int? {
 
 A bare `x?` used only to exit early must be written `_ = x?`, like any unused value.
 
-`?`, `??`, `if val` and `?.` are designed to work on an error union, `T ! E`, as well. See [Errors](errors.md).
+`?`, `??`, `if val` and `?.` work on an error union, `T ! E`, as well. See [Errors](errors.md).
+
+### Asserting: postfix `!`
+
+`x!` is the payload of `x`. If `x` is `None`, the program panics at that line, showing `x` as written:
+
+```silver
+val port = lookup("port")!
+```
+
+```
+panic: server.ag(4,16): `lookup("port")` was None
+```
+
+It's how a caller says that a missing value here would be a bug. It follows its operand on the same line. See [Errors](errors.md#asserting-it-worked-).
 
 ### Field access: `?.`
 

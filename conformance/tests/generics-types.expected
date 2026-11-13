@@ -11,12 +11,12 @@ Pair(left, 2)
 Pair(2, left)
 6
 true
-Ok(1)
-Error(bad)
+Good(1)
+Bad(bad)
 11
 true
 false
-Ok(written)
+Good(written)
 true
 Cons(a, Cons(b, Cons(c, Nil)))
 3

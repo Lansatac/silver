@@ -1,52 +1,79 @@
-// Values that keep their types' invariants, made in every way a value can come about.
+// Values of types with invariants, made in every way a value can come about, and the errors
+// building one gives when the invariant doesn't hold.
 
 import invariants_support.bounds
 
-type Span(low: Int, high: Int) invariant low <= high
-type Labeled(span: Span, label: String) invariant label != ""
-type NonEmpty<T>(items: [T]) invariant length(items) > 0
-type Shape = Circle(radius: Float) invariant (radius > 0.0) | Nothing
+type Reversed(low: Int, high: Int)
+type Blank
+type Empty
+type NotPositive(radius: Float)
 
-def widen(mutable span: Span): Unit {
-    span.low -= 1
-    span.high += 1
-}
+type Span(low: Int, high: Int) invariant low <= high else Reversed(low, high)
+type Labeled(span: Span, label: String) invariant label != "" else Blank
+type NonEmpty<T>(items: [T]) invariant length(items) > 0 else Empty
+type Shape = Circle(radius: Float) invariant (radius > 0.0) else (NotPositive(radius)) | Nothing
+type Tally<T> = Counted(value: T, count: Int) invariant (count > 0) else ("no count") | Missing
+type Point(x: Int, y: Int) invariant x != y else "x and y are equal"
+type Line(start: Point, end: Point)
 
 def describe(shape: Shape): String => match shape {
     Circle(r) => "circle {r}"
     Nothing => "nothing"
 }
 
-def main(): Unit {
-    // Construction, from another module too, whose private function the invariant calls
-    printl(Span(1, 2))
-    printl(Percent(40))
-    printl(percent(101))
+def widened(span: Span, by: Int): Span ! Reversed => span with (low = span.low - by, high = span.high + by)
 
-    // `with` checks once every update is made, so fields can move past each other
-    val span = Span(1, 2)
-    printl(span with (low = 5, high = 9))
-
-    // Assigning a field, through a path, and a mutable argument written back
-    mutable val labeled = Labeled(Span(0, 0), "a")
-    labeled.span.high = 10
-    labeled.label = "b"
-    widen(mutable labeled.span)
-    printl(labeled)
-
-    // Generic types, inline sum members, and a constructor used as a function value
-    printl(NonEmpty(["x"]))
-    printl(describe(Circle(2.0)))
-    val make: (Int, Int) -> Span = Span
-    printl(make(3, 4))
-    val n = 7
-    printl([1, 2].map(x => Span(x, x + n)))
+def checked(low: Int, high: Int): String => match Span(low, high) {
+    Ok(span) => "fine: {span}"
+    Error(Reversed(a, b)) => "{a} is above {b}"
 }
 
-def map(xs: [Int], f: (Int) -> Span): [Span] {
-    mutable val out: [Span] = []
-    for x in xs {
-        out ~= [f(x)]
-    }
-    out
+def build(make: (Int, Int) -> Span ! Reversed, low: Int, high: Int): Span ! Reversed => make(low, high)
+
+def main(): Unit {
+    // Construction yields the value or the error, from another module too, whose private function
+    // the invariant calls.
+    printl(Span(1, 2))
+    printl(Span(3, 2))
+    printl(Percent(40))
+    printl(Percent(101))
+    printl(checked(1, 5))
+    printl(checked(5, 1))
+
+    // `?`, `??` and `!` on a construction.
+    printl(widened(Span(1, 2)!, 3))
+    printl(widened(Span(1, 2)!, -3))
+    printl(Percent(150) ?? Percent(100)!)
+
+    // `with` checks once every update is made, so fields can move past each other, and a `with`
+    // that changes no field the invariant names is a plain value.
+    val span = Span(1, 2)!
+    printl(span with (low = 5, high = 9))
+    printl(span with (low = 6))
+    mutable val labeled = Labeled(span, "a")!
+    printl(labeled with (span = Span(0, 0)!))
+    printl(labeled with (label = ""))
+    printl(labeled with (span.high = 10))
+
+    // A field the invariant doesn't name is assigned as usual.
+    labeled.span = Span(-1, 1)!
+    printl(labeled)
+    mutable val line = Line(Point(1, 2)!, Point(3, 4)!)
+    line.start = (line.start with (x = 5)) ?? line.start
+    printl(line)
+    printl(line with (start.x = 2, start.y = 1))
+    printl(line with (end.x = 4))
+
+    // Generic types, inline sum members, and a constructor used as a function value.
+    val words: [String] = []
+    printl(NonEmpty(["x"]))
+    printl(NonEmpty(words))
+    printl(Circle(2.0))
+    printl(Circle(-1.0))
+    printl(describe(Circle(2.0)!))
+    printl(Counted("a", 1))
+    printl(Counted(1.5, 0))
+    val make: (Int, Int) -> Span ! Reversed = Span
+    printl(make(3, 4))
+    printl(build(Span, 4, 3))
 }

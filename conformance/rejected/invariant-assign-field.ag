@@ -1,0 +1,7 @@
+type Reversed(low: Int, high: Int)
+type Span(low: Int, high: Int) invariant low <= high else Reversed(low, high)
+
+def main(): Unit {
+    mutable val span = Span(1, 5)!
+    span.low = 5
+}

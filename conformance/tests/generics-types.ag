@@ -2,7 +2,7 @@
 
 type Box<T>(value: T)
 type Pair<A, B>(left: A, right: B)
-type Result<T, E> = Ok(value: T) | Error(error: E)
+type Result<T, E> = Good(value: T) | Bad(error: E)
 type List<T> = Cons(head: T, rest: List<T>) | Nil
 type Tag<T>
 type Shape<T> = Circle(radius: T) | Named(box: Box<T>) | Nothing
@@ -10,8 +10,8 @@ type Shape<T> = Circle(radius: T) | Named(box: Box<T>) | Nothing
 def swap<A, B>(pair: Pair<A, B>): Pair<B, A> => Pair(pair.right, pair.left)
 
 def unwrap<T, E>(result: Result<T, E>, fallback: T): T => match result {
-    Ok(value) => value
-    Error(_) => fallback
+    Good(value) => value
+    Bad(_) => fallback
 }
 
 def size<T>(list: List<T>): Int => match list {
@@ -47,16 +47,16 @@ def main(): Unit {
     printl(swap(pair).left * 3)
     printl(pair with (right = 3) == Pair("left", 3))
 
-    val ok: Result<Int, String> = Ok(1)
-    val error: Result<Int, String> = Error("bad")
+    val ok: Result<Int, String> = Good(1)
+    val error: Result<Int, String> = Bad("bad")
     printl(ok)
     printl(error)
     printl(unwrap(ok, 0) + unwrap(error, 10))
-    printl(ok == Ok(1))
-    printl(error == Ok(1))
-    val explicit: Result<String, Int> = Ok<String>("written")
+    printl(ok == Good(1))
+    printl(error == Good(1))
+    val explicit: Result<String, Int> = Good<String>("written")
     printl(explicit)
-    val member: Ok<Bool> = Ok(true)
+    val member: Good<Bool> = Good(true)
     printl(member.value)
 
     val list = listOf(["a", "b", "c"])

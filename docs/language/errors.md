@@ -74,7 +74,7 @@ val bad: Int ! ParseError = Error(BadDigit(2))
 
 ## Using an error union
 
-An error union can't be used where a `T` is wanted, and can't be left unused. Every use says what happens to the error.
+An error union can't be used where a `T` is wanted, and can't be left unused. Every use says what happens to the error, and `_ = save(config)` says it's dropped on purpose.
 
 ### Passing it on: `?`
 
@@ -137,6 +137,18 @@ match factorial(n) {
 
 A type added to a function's errors is a compile error at every `match` that has to handle it.
 
+A pattern inside `Error(...)` can name a member of a declared sum that the list names, as widening does. With `Int ! ParseError | Missing`, `Error(Empty)` matches, and the arms cover `ParseError` once they cover each of its members, or take it whole with `Error(e: ParseError)`:
+
+```silver
+match port(path) {
+    Ok(number) => listen(number)
+    Error(Empty) => printl("the setting is empty")
+    Error(BadDigit(at)) => printl("not a digit at {at}")
+    Error(TooLarge) => printl("too large")
+    Error(Missing(key)) => printl("no {key}")
+}
+```
+
 ### In a test
 
 `?` in a test's body stops the test and reports the error, as it reports `None`. An error is a value, so a test checks one with `expect(parseInt("12a") == Error(BadDigit(2)))`.
@@ -145,7 +157,9 @@ A type added to a function's errors is a compile error at every `match` that has
 
 - **An error** is for a failure the caller couldn't have ruled out first: a file that isn't there, text that isn't a number, input that's out of range.
 - **An option** is for absence with one obvious reason, such as a missing key or the end of input.
-- **A panic** is for a bug. The built-in operations panic: arithmetic, indexing and slicing, conversions, and constructing a value that breaks its invariant. They're written constantly, almost always where they can't fail, and an error from each would bury the code.
+- **A panic** is for a bug. The built-in operations panic: arithmetic, indexing and slicing, and conversions. They're written constantly, almost always where they can't fail, and an error from each would bury the code.
+
+Building a value of a type with an [invariant](user-types.md#invariants) isn't one of them. It's where unchecked data is checked, so it yields an error.
 
 A function that changes a `mutable` parameter and then returns an error has still returned, so the change is written back.
 
@@ -161,7 +175,7 @@ val b = factorial(count - used)?         // the caller doesn't, and passes it on
 val c = factorial(count - used) ?? 1     // or chooses a value
 ```
 
-The exceptions are the operations the language itself defines as panicking. An arithmetic operator inside a library function behaves as it does anywhere, and so do the prelude functions that are those operations by another name (`at`, `opIndex`, `opIndexAssign`, `opSlice`). `panic` and `assert` are there to panic.
+The exceptions are the operations the language itself defines as panicking. An arithmetic operator inside a library function behaves as it does anywhere, and so do the functions that are those operations by another name: `at`, `opIndex`, `opIndexAssign` and `opSlice` in the prelude, and `powInt` in `std.math`, which is exponentiation without a symbol. Using a `Ref` from inside its own `update` is a misuse of the cell, and panics too. `panic` and `assert` are there to panic.
 
 ## main
 
@@ -174,25 +188,25 @@ def main(): Unit ! IoError | ParseError {
 }
 ```
 
-An error returned from `main` is printed to standard error as `error: ` and the value, and the program exits with status 1. A panic exits with a different status, so a script can tell a program that reported a failure from one that's broken.
+An error returned from `main` is printed to standard error as `error: ` and the value, and the program exits with status 1. A panic exits with status 101, so a script can tell a program that reported a failure from one that's broken.
+
+```
+error: Missing(port)
+```
 
 ## Open questions
 
 - How a function names a list of errors it receives, as a helper that describes a `Negative | Overflow` would. A list is written only after `!` today, so the helper takes a declared sum.
-- Whether `_ = save(config)` should be allowed to discard an error, or should have to say `save(config) ?? ()`.
-- The names `Ok` and `Error`. `Error` is a name programs want for their own types.
-- The exit status of a panic, which waits on program arguments and exit codes.
+- The exit statuses, 1 and 101, which are placeholders until program arguments and exit codes are designed.
 - What `IoError` is, and `read()` returning `String? ! IoError` so that the end of input and a failure to read are told apart.
-- Whether `powInt`, and maths written for speed, count as arithmetic under the standard library's rule.
+- Whether other maths written for speed counts as arithmetic under the standard library's rule, as `powInt` does.
 - A record of where an error was passed on by `?`, printed when it reaches `main` or a `!`.
 
 Two proposals build on this: [checked operations](../proposals/checked-operations.md), a form of the built-in operations that yields an option where they'd panic, and [recovering from a panic](../proposals/recover.md).
 
 ## Current implementation
 
-None of this is implemented.
+The implementation matches this description, except:
 
-- `?` works on options only, and `T ! E`, `Ok`, `Error` and postfix `!` don't exist. A generic sum such as `type Result<T, E> = Ok(value: T) | Error(error: E)` works, with a `match` at each call.
-- `main` returns `Unit`.
-- `std.math`'s `factorial` panics on a negative number and on overflow.
-- The interpreter and compiled programs report a panic differently, and both exit with status 1.
+- `read()` returns `String?`, since `IoError` isn't designed.
+- `Ok` and `Error` can't be passed as function values, as `Some` can't.

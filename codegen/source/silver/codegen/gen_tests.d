@@ -408,8 +408,8 @@ unittest
 @("codegen lays out each instance of a generic type from its own field and member types")
 unittest
 {
-    auto source = "type Pair<A, B>(left: A, right: B)\ntype Result<T, E> = Ok(value: T) | Error(error: E)\ntype Tag<T>\n"
-        ~ "def main(): Unit {\n    val p = Pair(1, 2.5)\n    val q = Pair((), true)\n    val r: Result<Int, String> = Ok(1)\n"
+    auto source = "type Pair<A, B>(left: A, right: B)\ntype Result<T, E> = Good(value: T) | Bad(error: E)\ntype Tag<T>\n"
+        ~ "def main(): Unit {\n    val p = Pair(1, 2.5)\n    val q = Pair((), true)\n    val r: Result<Int, String> = Good(1)\n"
         ~ "    val t = Tag<Int>\n    printl(p)\n    printl(q)\n    printl(r)\n    printl(t)\n}";
     auto ir = generateSource(source);
 
@@ -420,5 +420,5 @@ unittest
 
     Run run;
     if (!compileAndRun(source, run)) return;
-    run.output.should.equal("Pair(1, 2.5)\nPair((), true)\nOk(1)\nTag\n");
+    run.output.should.equal("Pair(1, 2.5)\nPair((), true)\nGood(1)\nTag\n");
 }

@@ -1,0 +1,78 @@
+type Negative
+type Overflow
+type ParseError = Blank | BadDigit(at: Int)
+type Missing(key: String)
+type ConfigError = ParseError | Missing
+
+def parse(text: String): Int ! ParseError => match text {
+    "" => Error(Blank)
+    "8080" => 8080
+    "21" => 21
+    "4" => 4
+    _ => Error(BadDigit(1))
+}
+
+def lookup(key: String): String? => if key == "port" => Some("8080") else if key == "bad" => Some("80x") else None
+
+// `?` passes the error on, widening it into a list that holds it.
+def port(key: String): Int ! ParseError | Missing {
+    val raw = lookup(key) ?? { return Error(Missing(key)) }
+    val number = parse(raw)?
+    number
+}
+
+// Widening into a declared sum that has the error as a member.
+def config(key: String): Int ! ConfigError {
+    val raw = lookup(key) ?? { return Error(Missing(key)) }
+    parse(raw)? + 1
+}
+
+// A single error widens into a list, and a list into a longer one.
+def checked(n: Int): Int ! Negative => if n < 0 => Error(Negative) else n
+def bounded(n: Int): Int ! Negative | Overflow {
+    val value = checked(n)?
+    if value > 100 => Error(Overflow) else value
+}
+def anything(n: Int): Int ! Negative | Overflow | Missing => bounded(n)? * 2
+
+// An error union as an option, by its `??`.
+def optional(key: String): Int? {
+    val value = port(key) ?? { return None }
+    value
+}
+
+// A mutable argument is written back when the function returns an error.
+def countdown(mutable n: Int): Unit ! Negative {
+    n -= 1
+    if n < 0 {
+        return Error(Negative)
+    }
+}
+
+def main(): Unit {
+    printl(port("port"))
+    printl(port("bad"))
+    printl(port("host"))
+    printl(config("port"))
+    printl(config("bad"))
+    printl(config("host"))
+    printl(bounded(5))
+    printl(bounded(-5))
+    printl(bounded(500))
+    printl(anything(5))
+    printl(anything(-1))
+    printl(optional("port"))
+    printl(optional("host"))
+
+    // A lambda's return type is inferred from its `?`s.
+    val doubled = (text: String) => parse(text)? * 2
+    printl(doubled("21"))
+    printl(doubled("2x"))
+    val both = (text: String): Int ! ParseError | Negative => checked(parse(text)?)? + 1
+    printl(both("4"))
+    printl(both(""))
+
+    mutable val n = 0
+    printl(countdown(mutable n))
+    printl(n)
+}

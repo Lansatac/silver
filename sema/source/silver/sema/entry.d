@@ -79,10 +79,12 @@ package void checkEntryPointReturn(Id!FunctionDecl entryPoint, const ref Resolut
         (const FunctionData f) => f.ret,
         _ => typing.types.error,
     );
-    if (returnType != typing.types.unit && returnType != typing.types.error)
+    auto types = typing.types;
+    auto fallible = types.isErrorUnion(returnType) && types.successOf(returnType) == types.unit;
+    if (returnType != types.unit && returnType != types.error && !fallible)
     {
         collector.reportError(DiagnosticCode.MainInvalidDefinition, resolution.declarations.functions[entryPoint].nameSpan,
-            "`main` must return `Unit`");
+            "`main` must return `Unit`, or `Unit ! E` for an error type `E`");
     }
 }
 

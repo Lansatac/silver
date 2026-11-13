@@ -85,6 +85,12 @@ enum DiagnosticCode : string
     InvariantViolated = "T0036",
     /// `expect` outside a test.
     ExpectOutsideTest = "T0037",
+    /// An error list that repeats a type or lists one that can't be an error.
+    InvalidErrorType = "T0038",
+    /// `Ok(x)` or `Error(e)` where nothing says which error union it is.
+    UntypedErrorUnion = "T0039",
+    /// Assigning a field an invariant names, through it, or passing it as `mutable`.
+    InvariantFieldChanged = "T0040",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

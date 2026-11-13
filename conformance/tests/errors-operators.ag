@@ -1,0 +1,81 @@
+type Negative
+type Overflow
+type ParseError = Blank | BadDigit(at: Int) | TooLarge
+type Missing(key: String)
+type Point(x: Int, y: Int)
+
+def factorial(n: Int): Int ! Negative | Overflow {
+    if n < 0 {
+        return Error(Negative)
+    }
+    if n > 20 {
+        return Error(Overflow)
+    }
+    if n == 0 => 1 else factorial(n - 1)? * n
+}
+
+def parse(text: String): Int ! ParseError => if text == "" => Error(Blank) else if text == "x" => Error(BadDigit(0)) else 7
+
+def read(key: String): Int ! ParseError | Missing => if key == "k" => parse("")? else Error(Missing(key))
+
+def point(ok: Bool): Point ! Missing => if ok => Point(1, 2) else Error(Missing("p"))
+
+def describe(n: Int): String => match factorial(n) {
+    Ok(value) => "{n}! is {value}"
+    Error(Negative) => "not defined below zero"
+    Error(Overflow) => "too large for an Int"
+}
+
+// A pattern reaches through a declared sum the list names.
+def explain(key: String): String => match read(key) {
+    Ok(v) => "value {v}"
+    Error(Blank) => "blank"
+    Error(BadDigit(at)) => "bad digit at {at}"
+    Error(TooLarge) => "too large"
+    Error(Missing(name)) => "no {name}"
+}
+
+def kind(key: String): String => match read(key) {
+    Ok(_) => "ok"
+    Error(e: ParseError) => "parse error {e}"
+    Error(m: Missing) => "missing {m.key}"
+}
+
+def main(): Unit {
+    printl(describe(5))
+    printl(describe(-1))
+    printl(describe(21))
+    printl(explain("k"))
+    printl(explain("q"))
+    printl(kind("k"))
+    printl(kind("q"))
+
+    // `??` drops the error, with the result types it has on an option.
+    printl(parse("1") ?? 0)
+    printl(parse("x") ?? 0)
+    printl(parse("x") ?? None)
+    printl(parse("1") ?? None)
+    printl(parse("x") ?? parse("1") ?? -1)
+
+    // `if val` binds the value, or with `Error(p)`, the error.
+    if val n = parse("1") {
+        printl("parsed {n}")
+    }
+    val fallback = if val n = parse("x") => n else -1
+    printl(fallback)
+    if val Error(reason) = read("q") {
+        printl("failed: {reason}")
+    }
+    if val Error(BadDigit(at)) = parse("x") {
+        printl("at {at}")
+    }
+
+    // `?.` keeps the error.
+    printl(point(true)?.x)
+    printl(point(false)?.y)
+
+    // `!` is the value when there is one.
+    printl(factorial(5)!)
+    val maybe: Int? = 3
+    printl(maybe! + 1)
+}

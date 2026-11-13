@@ -25,9 +25,12 @@ private struct PatternHead
     string key;
     string label;
     const(Type)[] args;
+    /// A declared sum an error list names, whose own members are what's written.
+    bool transparent;
 
     string render(const(string)[] parts) const
     {
+        if (transparent) return parts[0] == "_" ? "_: " ~ label : parts[0];
         return label ~ (parts.length > 0 ? "(" ~ parts.join(", ") ~ ")" : "");
     }
 }
@@ -51,6 +54,17 @@ private struct Coverage
         if (type == _types.bool_) return [PatternHead("false", "false"), PatternHead("true", "true")];
         return _types[type].match!(
             (const OptionData option) => [PatternHead("none", "None"), PatternHead("some", "Some", [option.inner])],
+            (const ErrorUnionData u) => [PatternHead("error", "Error", [u.error]), PatternHead("ok", "Ok", [u.success])],
+            (const ErrorListData list) {
+                PatternHead[] heads;
+                foreach (i, member; list.members)
+                {
+                    auto key = "member%s".format(i);
+                    if (_declarer.isSum(member)) heads ~= PatternHead(key, _types.describe(member), [member], true);
+                    else heads ~= PatternHead(key, _types.describe(member), _declarer.fieldsOf(member).map!(f => f.type).array);
+                }
+                return heads;
+            },
             (const TupleData tuple) => [PatternHead("tuple", "", tuple.elements)],
             (const NominalData nominal) {
                 auto members = _declarer.membersOf(type);

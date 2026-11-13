@@ -172,6 +172,8 @@ private final class IdCheck
             },
             (const SomePattern s) => visit(*s.inner),
             (const NonePattern _) {},
+            (const OkPattern o) => visit(*o.inner),
+            (const ErrorPattern e) => visit(*e.inner),
             (const LiteralPattern l) => visit(l.value),
         );
     }
@@ -227,6 +229,9 @@ private final class IdCheck
             },
             (const SomeExpr s) => visit(s.value),
             (const PropagateExpr p) => visit(p.operand),
+            (const OkExpr o) => visit(o.value),
+            (const ErrorExpr e) => visit(e.value),
+            (const AssertExpr a) => visit(a.operand),
             (const SafeMemberAccess m) => visit(m.object),
             (const ArrayLiteral a) {
                 foreach (element; a.elements)
@@ -289,6 +294,10 @@ private final class IdCheck
         see(t.id, t.span);
         t.kind.match!(
             (const OptionType o) => visit(*o.inner),
+            (const ErrorUnionType u) {
+                visit(*u.success);
+                foreach (error; u.errors) visit(error);
+            },
             (const ArrayType a) => visit(*a.element),
             (const NamedType n) {
                 foreach (arg; n.args)

@@ -1,0 +1,20 @@
+5! is 120
+not defined below zero
+too large for an Int
+blank
+no q
+parse error Blank
+missing q
+7
+0
+None
+Some(7)
+7
+parsed 7
+-1
+failed: Missing(q)
+at 0
+Ok(1)
+Error(Missing(p))
+120
+4

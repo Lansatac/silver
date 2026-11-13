@@ -1,0 +1,1 @@
+T0040: `start` is in the invariant of `Line`, so it changes only through `with`, as in `line = (line with (start = ...))?`

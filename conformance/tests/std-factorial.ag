@@ -1,0 +1,15 @@
+import std.math
+
+def main(): Unit {
+    printl(factorial(0))
+    printl(factorial(5))
+    printl(factorial(20))
+    printl(factorial(21))
+    printl(factorial(-1))
+    printl(factorial(20)!)
+    printl(match factorial(-3) {
+        Ok(value) => "{value}"
+        Error(Negative) => "not defined below zero"
+        Error(Overflow) => "too large for an Int"
+    })
+}

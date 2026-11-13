@@ -32,6 +32,9 @@ private string shape(TypeTable table, Type type)
         (const TupleData t) => "Tuple/" ~ t.elements.length.to!string,
         (const ErrorType _) => "Error",
         (const TypeParamData _) => "Parameter",
+        (const ErrorUnionData _) => "ErrorUnion",
+        (const ErrorListData l) => "ErrorList/" ~ l.members.length.to!string,
+        (const FailureData _) => "Failure",
     );
 }
 
@@ -167,4 +170,34 @@ unittest
     assert(table.isTuple(pair));
     assert(table.tupleElements(pair) == [table.int_, table.string_]);
     assert(table.describe(table.option(table.tuple([pair, table.bool_]))) == "((Int, String), Bool)?");
+}
+
+@("TypeTable makes one error list whatever the order and repeats, and a list of one its member")
+unittest
+{
+    auto table = new TypeTable;
+    auto list = table.errorList([table.int_, table.string_]);
+
+    assert(list == table.errorList([table.string_, table.int_, table.string_]));
+    assert(table.errorList([table.int_]) == table.int_);
+    assert(table.errorList([list, table.bool_]) == table.errorList([table.bool_, table.string_, table.int_]));
+    assert(table.listed(list).length == 2);
+    assert(table.listed(table.int_) == [table.int_]);
+    shape(table, list).should.equal("ErrorList/2");
+}
+
+@("TypeTable describes an error union as it's written, with parentheses where one would parse otherwise")
+unittest
+{
+    auto table = new TypeTable;
+    auto union_ = table.errorUnion(table.int_, table.string_);
+    auto function_ = table.function_([table.string_], union_);
+
+    assert(table.describe(union_) == "Int ! String");
+    assert(table.describe(table.option(union_)) == "(Int ! String)?");
+    assert(table.describe(function_) == "(String) -> Int ! String");
+    assert(table.describe(table.errorUnion(function_, table.bool_)) == "((String) -> Int ! String) ! Bool");
+    assert(table.describe(table.errorUnion(union_, table.bool_)) == "(Int ! String) ! Bool");
+    assert(table.describe(table.failure(table.bool_)) == "Error(Bool)");
+    assert(table.successOf(union_) == table.int_ && table.errorOf(union_) == table.string_);
 }

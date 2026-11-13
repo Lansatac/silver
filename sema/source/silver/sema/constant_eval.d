@@ -79,7 +79,7 @@ private struct ConstantEvaluator
         auto holds = constantValue(*invariant_.body);
         if (holds is null || (*holds).get!(const bool)) return;
         _collector.reportError(DiagnosticCode.InvariantViolated, call.span,
-            "This breaks the invariant of `%s`, so building it would panic"
+            "This breaks the invariant of `%s`, so `!` would always panic here"
                 .format(_resolutions.declarations.types[type].name));
     }
 

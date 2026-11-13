@@ -1,0 +1,7 @@
+Ok(1)
+Ok(120)
+Ok(2432902008176640000)
+Error(Overflow)
+Error(Negative)
+2432902008176640000
+not defined below zero

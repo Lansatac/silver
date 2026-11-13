@@ -1,0 +1,25 @@
+Ok(42)
+Ok(42)
+Error(BadDigit(2))
+Ok(255)
+Error(Missing(port))
+Error(Missing(host))
+Error(TooLarge)
+true
+true
+true
+true
+false
+false
+true
+true
+Ok(())
+Ok(None)
+Ok(Some(3))
+Ok(Error(Empty))
+[Ok(1), Error(Empty), Ok(3)]
+(Error(Empty), a)
+Ok(7)
+Error(Missing(k))
+Ok(1)
+Error(Empty)

@@ -18,8 +18,13 @@ def next(mutable rng: Rng): UInt64 {
     c ^ (c >> 31)
 }
 
-// Uniform in 0..bound.
-def nextInt(mutable rng: Rng, bound: Int): Int {
+type EmptyRange
+
+// Uniform in 0..bound, which is empty when the bound isn't positive.
+def nextInt(mutable rng: Rng, bound: Int): Int ! EmptyRange {
+    if bound <= 0 {
+        return Error(EmptyRange)
+    }
     // Values below the threshold are redrawn, since taking them
     // would make the low results slightly more likely.
     val range = UInt64(bound)

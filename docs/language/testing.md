@@ -46,7 +46,7 @@ panic: main.ag(2,1): Assertion failed: scores differ
 
 Without a message, the condition takes its place on the first line. A comparison is `==`, `!=`, `<`, `<=`, `>` or `>=`; any other condition, such as `a && b`, is shown without values. The message is evaluated only when the condition is false. `assert` can't be used as a function value, since it has to see the condition it's given.
 
-Postfix `?` in a test stops the test and reports that the value was `None`. In a lambda or nested `def` inside a test, `?` returns from that function as it does anywhere else.
+Postfix `?` in a test stops the test and reports that the value was `None`, or the error it found, as in `` `parse("1x")` failed with BadDigit(1), so the test stopped ``. In a lambda or nested `def` inside a test, `?` returns from that function as it does anywhere else.
 
 ```silver
 test "first element" {
@@ -76,7 +76,7 @@ FAIL "first element" at lookup.ag(12,6)
 3 passed, 1 failed
 ```
 
-Each failed test lists its failures in the order they happened, so a panic, or `?` finding `None`, comes last. The exit status is 0 only when every test ran and passed.
+Each failed test lists its failures in the order they happened, so a panic, or `?` finding `None` or an error, comes last. The exit status is 0 only when every test ran and passed.
 
 `--filter` selects tests by name. The interpreter is the default, with a flag to compile or to use both.
 

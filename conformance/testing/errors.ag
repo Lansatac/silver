@@ -1,0 +1,25 @@
+type BadDigit(at: Int)
+
+def parse(text: String): Int ! BadDigit => if text == "12" => 12 else Error(BadDigit(1))
+
+test "? passes the value on" {
+    val n = parse("12")?
+    expect(n == 12)
+}
+
+test "? on an error stops the test and reports it" {
+    printl("before")
+    val n = parse("1x")?
+    printl("not reached {n}")
+}
+
+test "an error is a value to compare" {
+    expect(parse("1x") == Error(BadDigit(1)))
+    expect(parse("12") == 12)
+    expect(parse("1x") == 12)
+}
+
+test "! panics in a test" {
+    val n = parse("1x")!
+    printl("not reached {n}")
+}

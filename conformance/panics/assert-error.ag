@@ -1,0 +1,9 @@
+type BadDigit(at: Int)
+
+def parse(text: String): Int ! BadDigit => if text == "8080" => 8080 else Error(BadDigit(2))
+
+def main(): Unit {
+    printl(parse("8080")!)
+    val port = parse("80x0")!
+    printl(port)
+}

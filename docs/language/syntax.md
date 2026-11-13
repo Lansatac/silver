@@ -77,7 +77,7 @@ From loosest to tightest:
 | `+` `-` `~` `+%` `-%` | left |
 | `*` `/` `%` `*%` | left |
 | prefix `-` `!` `~` | |
-| postfix: call, index, `.`, `?.`, `?`, `with` | left |
+| postfix: call, index, `.`, `?.`, `?`, `!`, `with` | left |
 
 The condition of an `if` or `while`, the iterable of a `for` and the subject of a `match` are parsed below lambda level. A lambda in one of those positions needs parentheses.
 

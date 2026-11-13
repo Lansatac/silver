@@ -67,6 +67,75 @@ final class TypeTable
         return registerTypeData(TypeData(OptionData(inner)));
     }
 
+    /// `success ! error`. The error side is a type, or a list made by `errorList`.
+    Type errorUnion(Type success, Type error)
+    {
+        return registerTypeData(TypeData(ErrorUnionData(success, error)));
+    }
+
+    /// The error list of `members`, which is its one member when there's only one. A member that's
+    /// a list itself, as a type parameter can become, contributes its own members, and order and
+    /// repeats don't matter.
+    Type errorList(const(Type)[] members)
+    {
+        import std.algorithm : sort, uniq;
+
+        Type[] flat;
+        foreach (member; members)
+        {
+            flat ~= listed(member);
+        }
+        auto sorted = std.array.array(flat.sort!((a, b) => a.index < b.index).uniq);
+        if (sorted.length == 1) return sorted[0];
+        return registerTypeData(TypeData(ErrorListData(sorted.idup)));
+    }
+
+    /// The type of a bare `Error(e)` with `e: error`, which every error union it fits takes.
+    Type failure(Type error)
+    {
+        return registerTypeData(TypeData(FailureData(error)));
+    }
+
+    bool isErrorUnion(Type t) const
+    {
+        return _types[t.index].match!((const ErrorUnionData _) => true, _ => false);
+    }
+
+    /// The `T` of the error union `t`.
+    Type successOf(Type t) const
+    {
+        return _types[t.index].match!(
+            (const ErrorUnionData u) => u.success,
+            (_) => assert(0, "not an error union"),
+        );
+    }
+
+    /// The `E` of the error union or failure type `t`.
+    Type errorOf(Type t) const
+    {
+        return _types[t.index].match!(
+            (const ErrorUnionData u) => u.error,
+            (const FailureData f) => f.error,
+            (_) => assert(0, "not an error union"),
+        );
+    }
+
+    bool isFailure(Type t) const
+    {
+        return _types[t.index].match!((const FailureData _) => true, _ => false);
+    }
+
+    bool isErrorList(Type t) const
+    {
+        return _types[t.index].match!((const ErrorListData _) => true, _ => false);
+    }
+
+    /// What `t` lists, as a list of one when it isn't an error list.
+    immutable(Type)[] listed(Type t) const
+    {
+        return _types[t.index].match!((const ErrorListData l) => l.members, _ => [t].idup);
+    }
+
     Type array(Type element)
     {
         return registerTypeData(TypeData(ArrayData(element)));
@@ -133,6 +202,9 @@ final class TypeTable
         return _types[t.index].match!(
             (const TypeParamData _) => true,
             (const OptionData o) => mentionsParameter(o.inner),
+            (const ErrorUnionData u) => mentionsParameter(u.success) || mentionsParameter(u.error),
+            (const ErrorListData l) => l.members.any!(m => mentionsParameter(m)),
+            (const FailureData f) => mentionsParameter(f.error),
             (const ArrayData a) => mentionsParameter(a.element),
             (const FunctionData f) => f.params.any!(p => mentionsParameter(p)) || mentionsParameter(f.ret),
             (const TupleData tuple) => tuple.elements.any!(e => mentionsParameter(e)),
@@ -147,6 +219,9 @@ final class TypeTable
         return _types[t.index].match!(
             (const TypeParamData p) => p.param == param,
             (const OptionData o) => mentionsParameter(o.inner, param),
+            (const ErrorUnionData u) => mentionsParameter(u.success, param) || mentionsParameter(u.error, param),
+            (const ErrorListData l) => l.members.any!(m => mentionsParameter(m, param)),
+            (const FailureData f) => mentionsParameter(f.error, param),
             (const ArrayData a) => mentionsParameter(a.element, param),
             (const FunctionData f) => f.params.any!(p => mentionsParameter(p, param)) || mentionsParameter(f.ret, param),
             (const TupleData tuple) => tuple.elements.any!(e => mentionsParameter(e, param)),
@@ -161,6 +236,9 @@ final class TypeTable
         if (t == error) return true;
         return _types[t.index].match!(
             (const OptionData o) => mentionsError(o.inner),
+            (const ErrorUnionData u) => mentionsError(u.success) || mentionsError(u.error),
+            (const ErrorListData l) => l.members.any!(m => mentionsError(m)),
+            (const FailureData f) => mentionsError(f.error),
             (const ArrayData a) => mentionsError(a.element),
             (const FunctionData f) => f.params.any!(p => mentionsError(p)) || mentionsError(f.ret),
             (const TupleData tuple) => tuple.elements.any!(e => mentionsError(e)),
@@ -175,6 +253,9 @@ final class TypeTable
         size_t deepest(const(Type)[] inner) => inner.length == 0 ? 0 : 1 + inner.map!(i => depth(i)).maxElement;
         return _types[t.index].match!(
             (const OptionData o) => deepest([o.inner]),
+            (const ErrorUnionData u) => deepest([u.success, u.error]),
+            (const ErrorListData l) => deepest(l.members),
+            (const FailureData f) => deepest([f.error]),
             (const ArrayData a) => deepest([a.element]),
             (const FunctionData f) => deepest(f.params ~ f.ret),
             (const TupleData tuple) => deepest(tuple.elements),
@@ -193,6 +274,9 @@ final class TypeTable
                 return replaced is null ? t : *replaced;
             },
             (const OptionData o) => option(substitute(o.inner, substitution)),
+            (const ErrorUnionData u) => errorUnion(substitute(u.success, substitution), substitute(u.error, substitution)),
+            (const ErrorListData l) => errorList(std.array.array(l.members.map!(m => substitute(m, substitution)))),
+            (const FailureData f) => failure(substitute(f.error, substitution)),
             (const ArrayData a) => array(substitute(a.element, substitution)),
             (const FunctionData f) => function_(std.array.array(f.params.map!(p => substitute(p, substitution))),
                 substitute(f.ret, substitution), f.mutables),
@@ -272,6 +356,9 @@ final class TypeTable
         return _types[t.index].match!(
             (const Primitive p) => p.kind.text,
             (const OptionData o) => describeOptionInner(o.inner) ~ "?",
+            (const ErrorUnionData u) => describeGrouped(u.success) ~ " ! " ~ describe(u.error),
+            (const ErrorListData l) => l.members.map!(m => describeGrouped(m)).join(" | "),
+            (const FailureData f) => "Error(" ~ describe(f.error) ~ ")",
             (const NoneType _) => "None",
             (const ArrayData a) => "[" ~ describe(a.element) ~ "]",
             (const EmptyArrayType _) => "[]",
@@ -291,9 +378,23 @@ final class TypeTable
         auto needsParens = _types[inner.index].match!(
             (const OptionData _) => true,
             (const FunctionData _) => true,
+            (const ErrorUnionData _) => true,
+            (const ErrorListData _) => true,
             _ => false,
         );
         return needsParens ? "(" ~ describe(inner) ~ ")" : describe(inner);
+    }
+
+    /// A type carries one `!`, and `(Int) -> Int ! E` returns an error union, so the success side
+    /// or a listed error that's one of those needs parentheses.
+    private string describeGrouped(Type part) const
+    {
+        auto needsParens = _types[part.index].match!(
+            (const ErrorUnionData _) => true,
+            (const FunctionData _) => true,
+            _ => false,
+        );
+        return needsParens ? "(" ~ describe(part) ~ ")" : describe(part);
     }
 }
 
@@ -402,5 +503,25 @@ struct ErrorType
 {
 }
 
+/// `T ! E`.
+struct ErrorUnionData
+{
+    Type success;
+    Type error;
+}
+
+/// `A | B` after `!`: at least two types, ordered by their index so the order written doesn't
+/// matter. It's a sum whose members are those types.
+struct ErrorListData
+{
+    immutable(Type)[] members;
+}
+
+/// A bare `Error(e)`, before the error union it lands in gives it a success type.
+struct FailureData
+{
+    Type error;
+}
+
 alias TypeData = SumType!(Primitive, OptionData, NoneType, ArrayData, EmptyArrayType, FunctionData, NominalData, TupleData,
-    ErrorType, TypeParamData);
+    ErrorType, TypeParamData, ErrorUnionData, ErrorListData, FailureData);

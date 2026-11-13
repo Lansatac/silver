@@ -1,7 +1,0 @@
-type Span(low: Int, high: Int) invariant low <= high
-
-def build(make: (Int, Int) -> Span): Span => make(2, 1)
-
-def main(): Unit {
-    printl(build(Span))
-}

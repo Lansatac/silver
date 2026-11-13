@@ -2,6 +2,6 @@ module invariants_support.bounds
 
 private def inRange(value: Int): Bool => 0 <= value && value <= 100
 
-type Percent(value: Int) invariant inRange(value)
+type OutOfRange(value: Int)
 
-def percent(value: Int): Percent? => if inRange(value) => Percent(value) else None
+type Percent(value: Int) invariant inRange(value) else OutOfRange(value)

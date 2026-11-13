@@ -417,7 +417,7 @@ private final class NameResolver
                                 .format(type.name, type.name)
                             : "'%s' is already declared in this module".format(type.name));
                     }
-                    else if (universal.resolveLocalType(type.name) !is null || type.name == "Some" || type.name == "None")
+                    else if (universal.resolveLocalType(type.name) !is null || isReserved(type.name))
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan,
                             "'%s' is a built-in name".format(type.name));
@@ -444,7 +444,7 @@ private final class NameResolver
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, alias_.nameSpan,
                             "'%s' is already declared in this module".format(alias_.name));
                     }
-                    else if (universal.resolveLocalType(alias_.name) !is null || alias_.name == "Some" || alias_.name == "None")
+                    else if (universal.resolveLocalType(alias_.name) !is null || isReserved(alias_.name))
                     {
                         _collector.reportError(DiagnosticCode.DuplicateDeclaration, alias_.nameSpan,
                             "'%s' is a built-in name".format(alias_.name));
@@ -576,6 +576,7 @@ private final class NameResolver
                 );
             },
             (const OptionType option) => reaches(*option.inner, target, seen),
+            (const ErrorUnionType u) => reaches(*u.success, target, seen) || through(u.errors),
             (const ArrayType array) => reaches(*array.element, target, seen),
             (const FunctionType func) => through(func.params) || reaches(*func.returnType, target, seen),
             (const UnitType _) => false,
@@ -688,7 +689,7 @@ private final class NameResolver
             {
                 problem = "`%s` is already a type parameter of this declaration";
             }
-            else if (universal.resolveLocalType(param.name) !is null || param.name == "Some" || param.name == "None")
+            else if (universal.resolveLocalType(param.name) !is null || isReserved(param.name))
             {
                 problem = "'%s' is a built-in name";
             }
@@ -791,6 +792,10 @@ private final class NameResolver
                 }
             },
             (const OptionType option) => reportPrivateType(*option.inner, where),
+            (const ErrorUnionType u) {
+                reportPrivateType(*u.success, where);
+                foreach (error; u.errors) reportPrivateType(error, where);
+            },
             (const ArrayType array) => reportPrivateType(*array.element, where),
             (const FunctionType func) {
                 foreach (param; func.params) reportPrivateType(param, where);
@@ -903,6 +908,10 @@ private final class NameResolver
                 _typeResolutions[type.id] = *resolvedType;
             },
             (const OptionType option) => resolveTypeExpr(*option.inner, current),
+            (const ErrorUnionType u) {
+                resolveTypeExpr(*u.success, current);
+                foreach (error; u.errors) resolveTypeExpr(error, current);
+            },
             (const ArrayType array) => resolveTypeExpr(*array.element, current),
             (const FunctionType func) {
                 foreach (param; func.params)
@@ -1139,6 +1148,9 @@ private final class NameResolver
             (const SomeExpr some) => resolveExpr(*some.value, scopeTable),
             (const NoneLiteral _) {},
             (const PropagateExpr propagate) => resolveExpr(*propagate.operand, scopeTable),
+            (const OkExpr ok) => resolveExpr(*ok.value, scopeTable),
+            (const ErrorExpr error) => resolveExpr(*error.value, scopeTable),
+            (const AssertExpr assertion) => resolveExpr(*assertion.operand, scopeTable),
             (const SafeMemberAccess access) => resolveExpr(*access.object, scopeTable),
             (const ArrayLiteral literal) {
                 foreach (element; literal.elements)
@@ -1229,6 +1241,8 @@ private final class NameResolver
             },
             (ref const SomePattern some) => declarePattern(*some.inner, scopeTable),
             (ref const NonePattern _) {},
+            (ref const OkPattern ok) => declarePattern(*ok.inner, scopeTable),
+            (ref const ErrorPattern error) => declarePattern(*error.inner, scopeTable),
             (ref const LiteralPattern _) {},
         );
     }
@@ -1357,8 +1371,8 @@ private final class NameResolver
         {
             return *path;
         }
-        _collector.reportError(DiagnosticCode.UnknownName, expr.span, name == "Some"
-            ? "`Some` takes exactly one value, and can't be used as a function"
+        _collector.reportError(DiagnosticCode.UnknownName, expr.span, isReserved(name) && name != "None"
+            ? "`%s` takes exactly one value, and can't be used as a function".format(name)
             : "Unknown name '%s'".format(name));
         return Path(Path.Kind.Error);
     }
@@ -1513,4 +1527,10 @@ private final class NameResolver
         }
         return null;
     }
+}
+
+/// The names the language gives meaning to, which no declaration can take.
+private bool isReserved(string name)
+{
+    return name == "Some" || name == "None" || name == "Ok" || name == "Error";
 }

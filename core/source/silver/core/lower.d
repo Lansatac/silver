@@ -1,6 +1,6 @@
 module silver.core.lower;
 
-import std.algorithm : any, canFind, filter, map, sort;
+import std.algorithm : any, canFind, countUntil, filter, map, sort;
 import std.array : array;
 import std.range : iota;
 import std.format : format;
@@ -10,7 +10,7 @@ import std.typecons : Rebindable, rebindable;
 import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
 import silver.core.nodes;
-import silver.sema : Analysis, FunctionUse, IndexFunctions, LoopFunctions, ConstInt, ConstUInt, ConstUnit, ConstValue, FunctionData, Intrinsic, NominalData, Primitive,
+import silver.sema : Analysis, FunctionUse, IndexFunctions, LoopFunctions, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
     Substitution, SymbolId, Type, TypeTable;
 
 /// A parameter's local name. Discarded ones get a name no Silver identifier can have, so several
@@ -36,6 +36,7 @@ Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis, const ast
     auto lowering = new Lowering(analysis, sources);
     auto entry = lowering.slotFor(root);
     lowering.lowerPending();
+    entry = lowering.reportingErrors(entry);
     auto program = Program(rebindable(analysis.types), lowering.functions, entry, lowering.libraries);
     lowering.describeTypes(program);
     return program;
@@ -284,6 +285,26 @@ private final class Lowering
         return key.args.length == 0 ? name : "%s<%-(%s, %)>".format(name, key.args.map!(a => types.describe(a)));
     }
 
+    /// The entry point for `main` at `slot`: `main` itself, or when it returns an error union, a
+    /// function that calls it and exits with the error printed when there is one.
+    size_t reportingErrors(size_t slot)
+    {
+        auto main = functions[slot];
+        if (!types.isErrorUnion(main.returnType)) return slot;
+        auto span = main.body.span;
+        _span = span;
+        _moduleName = main.moduleName;
+        auto result = temp("result", main.returnType);
+        auto call = Expr(main.returnType, span, ExprKind(Call(slot, [])));
+        auto message = formatted(payload(use(result, span), 0));
+        auto exit = Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.exitWithError, [message], [false])));
+        auto body = Expr(types.unit, span, ExprKind(Block([let(result, call),
+            eval(when(not(isMember(use(result, span), 1)), exit))], null)));
+        auto entry = reserveSlot();
+        functions[entry] = Function("main.entry", main.moduleName, null, null, types.unit, body, FunctionOrigin.derived);
+        return entry;
+    }
+
     private size_t reserveSlot()
     {
         functions ~= Function.init;
@@ -369,6 +390,14 @@ private final class Lowering
                     foreach (field; fields) visitType(field);
                 },
                 (const silver.sema.OptionData option) => visitType(option.inner),
+                (const ErrorUnionData u) {
+                    visitType(u.success);
+                    visitType(u.error);
+                },
+                (const ErrorListData list) {
+                    program.sumMembers[type] = list.members;
+                    foreach (member; list.members) visitType(member);
+                },
                 (const silver.sema.ArrayData array) => visitType(array.element),
                 (const silver.sema.TupleData tuple) {
                     foreach (element; tuple.elements) visitType(element);
@@ -471,11 +500,25 @@ private final class Lowering
         auto type = _analysis.typeOf(e.id);
         // A constructor of a member its sum owns builds the member, then becomes the sum.
         auto member = _analysis.constructedMemberOf(e.id);
-        auto built = member is null ? type : *member;
+        Type built = member is null ? type : *member;
+        // A bare `Error(e)` is its error until the error union it lands in wraps it.
+        if (types.isFailure(built)) built = types.errorOf(built);
         auto value = lowerRaw(e, built);
-        if (member !is null) value = inject(_analysis.memberIndexFor(type, built), value, type);
+        if (member !is null) value = types.isErrorUnion(built) ? asSum(value, type) : inject(_analysis.memberIndexFor(type, built), value, type);
         if (auto option = _analysis.promotionOf(e.id)) value = promote(value, type, *option);
         return value;
+    }
+
+    /// `value`, a member with an invariant built as an error union, as the error union `type` of its sum.
+    private Expr asSum(Expr value, Type type)
+    {
+        auto span = value.span;
+        auto held = temp("member", value.type);
+        auto sum = types.successOf(type);
+        auto member = inject(_analysis.memberIndexFor(sum, types.successOf(value.type)), payload(use(held, span), 1), sum);
+        auto chosen = Expr(type, span, ExprKind(If(boxed(isMember(use(held, span), 1)), boxed(inject(1, member, type)),
+            boxed(inject(0, payload(use(held, span), 0), type)))));
+        return Expr(type, span, ExprKind(Block([let(held, value)], boxed(chosen))));
     }
 
     /// `e` as a value of `type`, before anything sema records on top of it is applied.
@@ -508,6 +551,11 @@ private final class Lowering
             // this; one that's dropped is nothing.
             (const ast.NoneLiteral _) => Expr(types.unit, span, ExprKind(UnitLit())),
             (const ast.PropagateExpr propagate) => lowerPropagate(propagate, type, span),
+            (const ast.OkExpr ok) => make(ExprKind(Inject(1, boxed(lowerExpr(*ok.value))))),
+            (const ast.ErrorExpr error) => types.isErrorUnion(type)
+                ? make(ExprKind(Inject(0, boxed(lowerExpr(*error.value)))))
+                : lowerExpr(*error.value),
+            (const ast.AssertExpr assertion) => lowerAssert(assertion, type, span),
             (const ast.SafeMemberAccess access) => lowerSafeMember(e, access, type),
             (const ast.ArrayLiteral literal) => make(ExprKind(ArrayLit(literal.elements.map!(el => lowerExpr(el)).array))),
             (const ast.IndexExpr index) => lowerIndex(e, index, type, span),
@@ -577,38 +625,30 @@ private final class Lowering
         return slot;
     }
 
-    /// A value of `type`, a tuple or a declared type that isn't a sum, built from `fields`.
+    /// A value of `type`, a tuple or a declared type that isn't a sum, built from `fields`. For a
+    /// type with an invariant, `type` is the error union its construction yields.
     private Expr construct(Type type, Expr[] fields, Span span)
     {
         if (isCellType(type)) return Expr(type, span, ExprKind(Cell(CellOp.New, fields)));
-        return checked(Expr(type, span, ExprKind(Construct(fields))));
+        if (!types.isErrorUnion(type)) return Expr(type, span, ExprKind(Construct(fields)));
+        auto held = temp("built", types.successOf(type));
+        auto built = Expr(held.type, span, ExprKind(Construct(fields)));
+        return Expr(type, span, ExprKind(Block([let(held, built)],
+            boxed(checked(use(held, span), inject(1, use(held, span), type), type)))));
     }
 
-    /// `value`, after a panic if it breaks its type's invariant. The check is made where the value
-    /// comes about, so the panic says where that is.
-    private Expr checked(Expr value)
+    /// `then` if `value`, which is pure, keeps its type's invariant, and otherwise the error the
+    /// invariant gives, as `result`, an error union.
+    private Expr checked(Expr value, Expr then, Type result)
     {
-        auto invariant_ = invariantOf(value.type);
-        if (!invariant_.isValid) return value;
-
+        auto decl = _analysis.declarationOf(declOf(value.type));
         auto span = value.span;
-        auto held = temp("checked", value.type);
         auto fields = _analysis.fieldsOf(value.type);
-        auto args = fields.length.iota.map!(i => field(use(held, span), i, fields[i].type)).array;
+        auto args = fields.length.iota.map!(i => field(value, i, fields[i].type)).array;
         auto typeArgs = types[value.type].match!((const NominalData nominal) => nominal.args, _ => null);
-        auto holds = Expr(types.bool_, span, ExprKind(Call(slotFor(invariant_, typeArgs), args)));
-        auto condition = _sources.text(_analysis.declarationOf(invariant_).body.span);
-        auto message = stringLiteral("The invariant of %s doesn't hold: %s".format(types.describe(value.type), condition), span);
-        auto failure = Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.panic, [message], [false])));
-        return Expr(value.type, span, ExprKind(Block([let(held, value), eval(when(not(holds), failure))],
-            boxed(use(held, span)))));
-    }
-
-    /// The function holding the invariant of `type`, or an invalid ID when it has none.
-    private Id!(ast.FunctionDecl) invariantOf(Type type)
-    {
-        auto decl = declOf(type);
-        return decl.isValid ? _analysis.declarationOf(decl).invariantFunction : Id!(ast.FunctionDecl).init;
+        auto holds = Expr(types.bool_, span, ExprKind(Call(slotFor(decl.invariantFunction, typeArgs), args)));
+        auto error = Expr(types.errorOf(result), span, ExprKind(Call(slotFor(decl.invariantError, typeArgs), args)));
+        return Expr(result, span, ExprKind(If(boxed(holds), boxed(then), boxed(inject(0, error, result)))));
     }
 
     /// A function that calls the native `func`, for using it as a value.
@@ -645,17 +685,19 @@ private final class Lowering
         auto slot = reserveSlot();
         _constructors[type] = slot;
         auto signature = functionData(type);
-        auto record = signature.ret;
+        // A type with an invariant builds an error union of itself.
+        auto record = types.isErrorUnion(signature.ret) ? types.successOf(signature.ret) : signature.ret;
         if (declOf(record) != decl)
         {
+            if (types.isErrorUnion(signature.ret)) return notLowered!size_t("a generic sum's member with an invariant as a function value");
             auto members = _analysis.membersOf(record).filter!(m => declOf(m) == decl);
             assert(!members.empty, "a constructor builds its type, or a member of its sum");
             record = members.front;
         }
         Local[] params;
         foreach (field; _analysis.fieldsOf(record)) params ~= new Local(field.name, field.type);
-        Expr body = construct(record, params.map!(p => use(p, _span)).array, _span);
-        if (signature.ret != record) body = inject(_analysis.memberIndexFor(signature.ret, record), body, signature.ret);
+        Expr body = construct(types.isErrorUnion(signature.ret) ? signature.ret : record, params.map!(p => use(p, _span)).array, _span);
+        if (signature.ret != record && !types.isErrorUnion(signature.ret)) body = inject(_analysis.memberIndexFor(signature.ret, record), body, signature.ret);
         auto name = typeName(record) ~ typeArgumentsOf(record);
         functions[slot] = Function(name, _moduleName, params, null, signature.ret, body, FunctionOrigin.derived, name);
         return slot;
@@ -797,6 +839,8 @@ private final class Lowering
         auto left = lowerExpr(*binary.left);
         auto option = temp("option", left.type);
         auto present = left.type == type ? use(option, span) : payload(use(option, span), 1);
+        // An error union's value is kept as an option when the fallback is one.
+        if (types.isErrorUnion(left.type) && types.isOption(type) && present.type != type) present = inject(1, present, type);
         auto choice = Expr(type, span, ExprKind(If(boxed(isMember(use(option, span), 1)), boxed(present),
             boxed(lowerExpr(*binary.right)))));
         return Expr(type, span, ExprKind(Block([let(option, left)], boxed(choice))));
@@ -807,13 +851,42 @@ private final class Lowering
     {
         auto operand = lowerExpr(*propagate.operand);
         auto option = temp("option", operand.type);
-        auto stop = "%s: `%s` was None, so the test stopped"
-            .format(located(span), _sources.text(propagate.operand.span));
-        auto leave = _testBody ? testFailure(stringLiteral(stop, span), true, span)
-            : Expr(types.never, span, ExprKind(Return(boxed(noneOf(_returnType, span)))));
+        auto source = _sources.text(propagate.operand.span);
+        Expr leave;
+        if (types.isErrorUnion(operand.type))
+        {
+            auto error = payload(use(option, span), 0);
+            auto stop = Expr(types.string_, span, ExprKind(Prim(PrimOp.Concat, [
+                stringLiteral("%s: `%s` failed with ".format(located(span), source), span), formatted(error),
+                stringLiteral(", so the test stopped", span)])));
+            auto passed = _testBody ? Expr.init : inject(0, promote(error, error.type, types.errorOf(_returnType)), _returnType);
+            leave = _testBody ? testFailure(stop, true, span) : Expr(types.never, span, ExprKind(Return(boxed(passed))));
+        }
+        else
+        {
+            auto stop = "%s: `%s` was None, so the test stopped".format(located(span), source);
+            leave = _testBody ? testFailure(stringLiteral(stop, span), true, span)
+                : Expr(types.never, span, ExprKind(Return(boxed(noneOf(_returnType, span)))));
+        }
         auto choice = Expr(type, span, ExprKind(If(boxed(isMember(use(option, span), 1)),
             boxed(payload(use(option, span), 1)), boxed(leave))));
         return Expr(type, span, ExprKind(Block([let(option, operand)], boxed(choice))));
+    }
+
+    /// `x!`: the value, or a panic that shows `x` as written and its error, or that it was `None`.
+    private Expr lowerAssert(const ast.AssertExpr assertion, Type type, Span span)
+    {
+        auto operand = lowerExpr(*assertion.operand);
+        auto held = temp("checked", operand.type);
+        auto source = _sources.text(assertion.operand.span);
+        auto message = types.isErrorUnion(operand.type)
+            ? Expr(types.string_, span, ExprKind(Prim(PrimOp.Concat, [stringLiteral("`%s` failed: ".format(source), span),
+                formatted(payload(use(held, span), 0))])))
+            : stringLiteral("`%s` was None".format(source), span);
+        auto failure = Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.panic, [message], [false])));
+        auto choice = Expr(type, span, ExprKind(If(boxed(isMember(use(held, span), 1)),
+            boxed(payload(use(held, span), 1)), boxed(failure))));
+        return Expr(type, span, ExprKind(Block([let(held, operand)], boxed(choice))));
     }
 
     /// `x?.f`: `None` if `x` is, and otherwise its field, which isn't wrapped again when it's an
@@ -827,8 +900,9 @@ private final class Lowering
         auto record = payload(use(option, span), 1);
         auto value = field(record, index, fieldTypes(record.type)[index]);
         if (value.type != type) value = inject(1, value, type);
+        auto absent = types.isErrorUnion(type) ? inject(0, payload(use(option, span), 0), type) : noneOf(type, span);
         auto choice = Expr(type, span, ExprKind(If(boxed(isMember(use(option, span), 1)), boxed(value),
-            boxed(noneOf(type, span)))));
+            boxed(absent))));
         return Expr(type, span, ExprKind(Block([let(option, object)], boxed(choice))));
     }
 
@@ -845,10 +919,31 @@ private final class Lowering
     private Expr promote(Expr value, Type from, Type to)
     {
         if (from == to || from == types.never) return value;
-        if (_analysis.membersOf(to).length > 0)
+        if (types.isErrorUnion(to))
         {
+            auto error = types.errorOf(to);
+            if (types.isFailure(from)) return inject(0, promote(value, types.errorOf(from), error), to);
+            if (!types.isErrorUnion(from) || types.successOf(from) != types.successOf(to))
+            {
+                return inject(1, promote(value, from, types.successOf(to)), to);
+            }
+            // Widening: the value as it is, or the error as one of `to`'s.
+            auto held = temp("widened", from);
+            auto widened = Expr(to, value.span, ExprKind(If(boxed(isMember(use(held, value.span), 1)),
+                boxed(inject(1, payload(use(held, value.span), 1), to)),
+                boxed(inject(0, promote(payload(use(held, value.span), 0), types.errorOf(from), error), to)))));
+            return Expr(to, value.span, ExprKind(Block([let(held, value)], boxed(widened))));
+        }
+        auto members = _analysis.membersOf(to);
+        if (members.length > 0)
+        {
+            if (!members.canFind(from) && from != types.none && from != types.emptyArray)
+            {
+                return types.isErrorList(from) || isSum(from) && !members.any!(m => _analysis.membersOf(m).canFind(from))
+                    ? reinject(value, from, to) : throughMember(value, from, to);
+            }
             auto index = _analysis.memberIndexFor(to, from);
-            return inject(index, promote(value, from, _analysis.membersOf(to)[index]), to);
+            return inject(index, promote(value, from, members[index]), to);
         }
         if (from == types.none)
         {
@@ -865,6 +960,31 @@ private final class Lowering
         }
         if (types.isOption(to)) return inject(1, promote(value, from, types.optionInner(to)), to);
         return value;
+    }
+
+    /// `value`, a sum or error list each of whose members fits the sum or error list `to`, as `to`:
+    /// whichever member it is, promoted on its own.
+    private Expr reinject(Expr value, Type from, Type to)
+    {
+        auto span = value.span;
+        auto held = temp("error", from);
+        auto members = _analysis.membersOf(from);
+        Expr chain = promote(payload(use(held, span), members.length - 1), members[$ - 1], to);
+        foreach_reverse (i; 0 .. members.length - 1)
+        {
+            chain = Expr(to, span, ExprKind(If(boxed(isMember(use(held, span), i)),
+                boxed(promote(payload(use(held, span), i), members[i], to)), boxed(chain))));
+        }
+        return Expr(to, span, ExprKind(Block([let(held, value)], boxed(chain))));
+    }
+
+    /// `value` as the error list `to`, through the declared sum `to` names that has `from` as a member.
+    private Expr throughMember(Expr value, Type from, Type to)
+    {
+        auto members = _analysis.membersOf(to);
+        auto index = members.countUntil!(m => _analysis.membersOf(m).canFind(from));
+        assert(index >= 0, "sema only widens through a sum the list names");
+        return inject(index, promote(value, from, members[index]), to);
     }
 
     private Expr lowerInterpolated(const ast.InterpolatedString interpolated, Span span)
@@ -921,23 +1041,27 @@ private final class Lowering
     private Expr lowerWith(const ast.Expr e, const ast.WithExpr with_, Type type)
     {
         auto span = e.span;
-        auto result = temp("with", type, true);
+        auto checks = _analysis.withChecksOf(e.id);
+        auto object = checks.length > 0 ? types.successOf(type) : type;
+        auto result = temp("with", object, true);
         Stmt[] statements = [let(result, lowerExpr(*with_.object))];
-        // Invariants are checked once every update is made, for each value along the paths.
-        bool[const(size_t)[]] changed;
         foreach (i, path; _analysis.updatePathsOf(e.id))
         {
             auto value = lowerExpr(with_.updates[i].value);
-            statements ~= assign(result, rebuild(use(result, span), stepsOf(type, path), value, false));
-            foreach (depth; 0 .. path.length) changed[path[0 .. depth]] = true;
+            statements ~= assign(result, rebuild(use(result, span), stepsOf(object, path), value));
         }
-        foreach (prefix; changed.keys.sort!((a, b) => a.length > b.length))
+        if (checks.length == 0) return Expr(type, span, ExprKind(Block(statements, boxed(use(result, span)))));
+
+        // Once every update is made, each value whose invariant names a field updated in it is
+        // checked, innermost first.
+        Expr chain = inject(1, use(result, span), type);
+        foreach_reverse (prefix; checks)
         {
             Expr value = use(result, span);
-            foreach (step; stepsOf(type, prefix)) value = field(value, step.index, step.type);
-            if (invariantOf(value.type).isValid) statements ~= eval(checked(value));
+            foreach (step; stepsOf(object, prefix)) value = field(value, step.index, step.type);
+            chain = checked(value, chain, type);
         }
-        return Expr(type, span, ExprKind(Block(statements, boxed(use(result, span)))));
+        return Expr(type, span, ExprKind(Block(statements, boxed(chain))));
     }
 
     /// The steps through a value of `type` that the field indexes `path` take.
@@ -952,15 +1076,14 @@ private final class Lowering
         return steps;
     }
 
-    /// `object`, a pure expression, with the field at the end of `steps` replaced by `value`. Each
-    /// value rebuilt is checked against its invariant, innermost first, unless `checks` is false.
-    private Expr rebuild(Expr object, const Step[] steps, Expr value, bool checks = true)
+    /// `object`, a pure expression, with the field at the end of `steps` replaced by `value`. Nothing
+    /// is checked: an assignment can't reach a field an invariant names, and `with` checks afterwards.
+    private Expr rebuild(Expr object, const Step[] steps, Expr value)
     {
         if (steps.length == 0) return value;
         auto inner = field(object, steps[0].index, steps[0].type);
-        auto updated = Update(boxed(object), steps[0].index, boxed(rebuild(inner, steps[1 .. $], value, checks)));
-        auto rebuilt = Expr(object.type, value.span, ExprKind(updated));
-        return checks ? checked(rebuilt) : rebuilt;
+        auto updated = Update(boxed(object), steps[0].index, boxed(rebuild(inner, steps[1 .. $], value)));
+        return Expr(object.type, value.span, ExprKind(updated));
     }
 
     /// The local a place like `a.b.c` starts at, and the steps from it.
@@ -1478,6 +1601,12 @@ private final class Lowering
     /// checked, and the lets for what the pattern binds. `value` is pure, so it can be repeated.
     private void takeApart(const ast.Pattern pattern, Expr value, ref Expr[] tests, ref Stmt[] binds)
     {
+        Type list;
+        if (auto through = _analysis.listMemberThrough(pattern.id, list))
+        {
+            tests ~= isMember(value, *through);
+            value = payload(value, *through);
+        }
         if (auto index = _analysis.memberTestOf(pattern.id))
         {
             tests ~= isMember(value, *index);
@@ -1506,6 +1635,14 @@ private final class Lowering
             },
             (const ast.NonePattern _) {
                 tests ~= isMember(value, 0);
+            },
+            (const ast.OkPattern ok) {
+                tests ~= isMember(value, 1);
+                takeApart(*ok.inner, payload(value, 1), tests, binds);
+            },
+            (const ast.ErrorPattern error) {
+                tests ~= isMember(value, 0);
+                takeApart(*error.inner, payload(value, 0), tests, binds);
             },
             (const ast.LiteralPattern literal) {
                 auto expected = lowerExpr(*literal.value);
@@ -1752,6 +1889,8 @@ private final class Lowering
                 return updateCell(args[0], args[1], span);
             case Intrinsic.assert_, Intrinsic.expect:
                 assert(0, "`assert` and `expect` are expanded from what's written, and sema rejects them as values");
+            case Intrinsic.exitWithError:
+                assert(0, "only the wrapper lowering makes for `main` calls `exitWithError`");
             case Intrinsic.print, Intrinsic.printl, Intrinsic.read, Intrinsic.panic:
                 break;
         }
@@ -1898,7 +2037,7 @@ private final class Lowering
             }
             body = Expr(types.bool_, span, ExprKind(Block(statements, boxed(boolLiteral(true, span)))));
         }
-        else if (isSum(type) || types.isOption(type))
+        else if (isSum(type) || types.isOption(type) || types.isErrorUnion(type))
         {
             // The arms test `a`'s tag, and the last needs no test.
             auto count = memberCount(type);
@@ -1999,6 +2138,12 @@ private final class Lowering
             auto some = concat(text("Some("), formatted(payload(value(), 1)), text(")"));
             body = Expr(types.string_, span, ExprKind(If(boxed(isMember(value(), 1)), boxed(some), boxed(text("None")))));
         }
+        else if (types.isErrorUnion(type))
+        {
+            auto ok = concat(text("Ok("), formatted(payload(value(), 1)), text(")"));
+            auto error = concat(text("Error("), formatted(payload(value(), 0)), text(")"));
+            body = Expr(types.string_, span, ExprKind(If(boxed(isMember(value(), 1)), boxed(ok), boxed(error))));
+        }
         else if (isSum(type))
         {
             auto count = memberCount(type);
@@ -2071,12 +2216,13 @@ private final class Lowering
     /// How many members a sum or option has.
     private size_t memberCount(Type type)
     {
-        return types.isOption(type) ? 2 : _analysis.membersOf(type).length;
+        return types.isOption(type) || types.isErrorUnion(type) ? 2 : _analysis.membersOf(type).length;
     }
 
     /// The type of member `index` of a sum or option.
     private Type memberType(Type type, size_t index)
     {
+        if (types.isErrorUnion(type)) return index == 0 ? types.errorOf(type) : types.successOf(type);
         if (types.isOption(type))
         {
             assert(index == 1, "an option's None has no payload");

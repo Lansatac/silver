@@ -1,0 +1,6 @@
+def lookup(key: String): String? => if key == "a" => Some("1") else None
+
+def main(): Unit {
+    printl(lookup("a")!)
+    printl(lookup("b")!)
+}

@@ -15,7 +15,7 @@ These documents describe the language as designed. Where the implementation does
 | [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading, operator functions | Partial: no tail calls, `opEquals`, `opCompare` or `opString` |
 | [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented |
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
-| [Errors](language/errors.md) | `T ! E`, `?` and `!` on errors, what panics, `main` | Designed, not implemented |
+| [Errors](language/errors.md) | `T ! E`, `?` and `!` on errors, what panics, `main` | Implemented, except `read()` returning an error |
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, maps | Implemented, except maps; element assignment always copies |
 | [Strings](language/strings.md) | Text, interpolation, views | Partial: no byte or character views |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |

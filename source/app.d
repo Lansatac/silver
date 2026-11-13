@@ -7,7 +7,7 @@ import std.range;
 import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, SourceContext;
 import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Toolchain;
 import silver.core : lowerProgram, printCore = print;
-import silver.interpreter.evaluator : Evaluator;
+import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed, RuntimeError;
 import silver.loader : load, standardLibraryPath;
 import silver.sema : analyze, Analysis, Target;
 
@@ -54,9 +54,20 @@ int interpret(string programFile, string[] importPaths, bool emitCore = false)
         auto evaluator = new Evaluator(lowered, true);
         evaluator.run();
     }
+    catch (RuntimeError e)
+    {
+        stdout.flush();
+        stderr.writeln(panicReport(e.diagnostic, context.sources));
+        return panicStatus;
+    }
+    catch (ProgramFailed e)
+    {
+        stdout.flush();
+        stderr.writeln("error: ", e.msg);
+        return 1;
+    }
     catch (DiagnosticException e)
     {
-        writeln();
         printDiagnostic(e.diagnostic, context);
         return 1;
     }

@@ -39,7 +39,7 @@ final class Evaluator
         return _output;
     }
 
-    /// Throws: RuntimeError when the program panics.
+    /// Throws: RuntimeError when the program panics, and ProgramFailed when `main` returns an error.
     void run()
     {
         runOnLargeStack(&runProgram);
@@ -103,8 +103,10 @@ final class Evaluator
     /// it's set to the callee's locals once the call ends, so mutable params can be written back.
     private Value invoke(size_t target, Value[] args, Value[] captures, Frame* frame)
     {
-        checkStack();
         auto func = &_program.functions[target];
+        // At the function being entered, as compiled code checks on entry.
+        try checkStack();
+        catch (CodedException error) throw new RuntimeError(Diagnostic(error.code, func.body.span, error.msg));
         auto locals = new Frame;
         foreach (i, param; func.params)
         {
@@ -634,6 +636,8 @@ final class Evaluator
                 return Value(Record(1, [Value(line)]));
             case Intrinsic.panic:
                 throw new CodedException(DiagnosticCode.ExplicitPanic, args[0].as!string);
+            case Intrinsic.exitWithError:
+                throw new ProgramFailed(args[0].as!string);
             case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect:
                 assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, and the others operations on a Cell");
         }

@@ -1,0 +1,68 @@
+type Empty
+type ParseError = Blank | BadDigit(at: Int) | TooLarge
+type Missing(key: String)
+type ConfigError = ParseError | Missing
+
+def main(): Unit {
+    // A value promotes, `Ok` and `Error` are written out, and a literal adapts to the success type.
+    val good: Int ! ParseError = 42
+    val alsoGood: Int ! ParseError = Ok(42)
+    val bad: Int ! ParseError = Error(BadDigit(2))
+    val small: UInt8 ! Empty = 255
+    printl(good)
+    printl(alsoGood)
+    printl(bad)
+    printl(small)
+
+    // The error side checks what `Error` holds, so a member of a sum or of a list fits.
+    val listed: Int ! Empty | Missing = Error(Missing("port"))
+    val member: Int ! ConfigError = Error(Missing("host"))
+    val through: Int ! ParseError | Missing = Error(TooLarge)
+    printl(listed)
+    printl(member)
+    printl(through)
+
+    // Order in a list doesn't matter.
+    val swapped: Int ! Missing | Empty = listed
+    printl(swapped == listed)
+
+    // Structural equality, with the other side checked against the error union.
+    printl(good == 42)
+    printl(good == alsoGood)
+    printl(bad == Error(BadDigit(2)))
+    printl(bad == Error(BadDigit(3)))
+    printl(bad == 42)
+    printl(Error(Missing("port")) == listed)
+    printl(good != bad)
+
+    // `Unit ! E`, an option on the success side, and an error union nested in another.
+    val done: Unit ! Empty = ()
+    val absent: Int? ! Empty = None
+    val present: Int? ! Empty = 3
+    val nested: (Int ! Empty) ! Missing = Ok(Error(Empty))
+    printl(done)
+    printl(absent)
+    printl(present)
+    printl(nested)
+
+    // In arrays, tuples, `if` arms and blocks.
+    val results: [Int ! Empty] = [1, Error(Empty), 3]
+    printl(results)
+    val pair: (Int ! Empty, String) = (Error(Empty), "a")
+    printl(pair)
+    val chosen: Int ! Empty = if length(results) > 2 => 7 else Error(Empty)
+    printl(chosen)
+    val block: String ! Missing = {
+        val key = "k"
+        Error(Missing(key))
+    }
+    printl(block)
+
+    // A bare `Error` beside a value makes an error union.
+    val inferred = (n: Int) => if n >= 0 => n else Error(Empty)
+    printl(inferred(1))
+    printl(inferred(-1))
+
+    // An error union can be discarded on purpose.
+    _ = bad
+}

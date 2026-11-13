@@ -73,3 +73,15 @@ immutable Case[] optionalChaining = [
     parsesAs("a = b?.c? + 1", "(assign a (Add (? (?. b c)) 1))"),
     parsesAs("a = f()? ?? 0", "(assign a (Coalesce (? (call f)) 0))"),
 ];
+
+immutable Case[] assertions = [
+    parsesAs("a = b!", "(assign a (! b))"),
+    parsesAs("a = f(1)!", "(assign a (! (call f 1)))"),
+    parsesAs("a = f(1)!.x", "(assign a (. (! (call f 1)) x))"),
+    parsesAs("a = b! + 1", "(assign a (Add (! b) 1))"),
+    parsesAs("a = b != c", "(assign a (NotEqual b c))"),
+    parsesAs("a = b! == c", "(assign a (Equal (! b) c))"),
+    parsesAs("a = !b!", "(assign a (Not (! b)))"),
+    parsesAs("a = b!?", "(assign a (? (! b)))"),
+    parsesAs("a = b\n!c", ["(assign a b)", "(Not c)"]),
+];

@@ -374,6 +374,14 @@ private final class Lowering
         {
             return Pattern(ids.next!Pattern, span, PatternKind(SomePattern(boxed(arguments[0]))));
         }
+        if (path == ["Ok"] && arguments.length == 1)
+        {
+            return Pattern(ids.next!Pattern, span, PatternKind(OkPattern(boxed(arguments[0]))));
+        }
+        if (path == ["Error"] && arguments.length == 1)
+        {
+            return Pattern(ids.next!Pattern, span, PatternKind(ErrorPattern(boxed(arguments[0]))));
+        }
         auto type = TypeExpr(ids.next!TypeExpr, spanOf(cst[0], file), TypeExprKind(NamedType(path, null)));
         return Pattern(ids.next!Pattern, span, PatternKind(ConstructorPattern(type, arguments)));
     }
@@ -421,6 +429,14 @@ private final class Lowering
         case "Silver.BaseType":
             return convertTypeExpression(cst[0]);
         case "Silver.Type":
+        case "Silver.SumMemberType":
+            // `OptionalType`, then `ErrorTypes` or a single `OptionalType` after `!`.
+            auto success = convertTypeExpression(cst[0]);
+            if (cst.children.length == 1) return success;
+            auto listed = cst[1].name == "Silver.ErrorTypes" ? cst[1].children : cst.children[1 .. $];
+            auto errors = listed.map!(e => convertTypeExpression(e)).array;
+            return TypeExpr(ids.next!TypeExpr, spanOf(cst, file), TypeExprKind(ErrorUnionType(boxed(success), errors)));
+        case "Silver.OptionalType":
             // `BaseType OptionMark?`
             auto base = convertTypeExpression(cst[0]);
             if (cst.children.length == 1)
@@ -784,6 +800,9 @@ private final class Lowering
             if (!mutables.canFind(true)) mutables = null;
             auto isSome = lhs.kind.match!((const Identifier callee) => callee.name == "Some" && callee.typeArgs.length == 0, _ => false);
             if (isSome && args.length == 1 && mutables is null) return Expr(ids.next!Expr, span, ExprKind(SomeExpr(boxed(args[0]))));
+            auto reserved = lhs.kind.match!((const Identifier callee) => callee.typeArgs.length == 0 ? callee.name : null, _ => null);
+            if (reserved == "Ok" && args.length == 1 && mutables is null) return Expr(ids.next!Expr, span, ExprKind(OkExpr(boxed(args[0]))));
+            if (reserved == "Error" && args.length == 1 && mutables is null) return Expr(ids.next!Expr, span, ExprKind(ErrorExpr(boxed(args[0]))));
             return Expr(ids.next!Expr, span, ExprKind(CallExpr(boxed(lhs), args, mutables)));
         case "Silver.WithUpdate":
             FieldUpdate[] updates;
@@ -800,6 +819,8 @@ private final class Lowering
             return Expr(ids.next!Expr, span, ExprKind(SafeMemberAccess(boxed(lhs), op.matches[0])));
         case "Silver.PropagateNone":
             return Expr(ids.next!Expr, span, ExprKind(PropagateExpr(boxed(lhs))));
+        case "Silver.AssertSuccess":
+            return Expr(ids.next!Expr, span, ExprKind(AssertExpr(boxed(lhs))));
         case "Silver.IndexArgs":
             // `xs[a..]` and `xs[..b]` are ranges with a bound left out, which only a slice allows.
             auto index = op[0];
@@ -1013,10 +1034,12 @@ private final class Lowering
                 Decl[] check;
                 if (member[0].children.length > 2)
                 {
-                    auto own = mentioned(freshTypeParams(typeParamsCst), inline.fields);
-                    auto f = invariantFunction(inline, member[0][1], member[0][2][0], own);
+                    auto invariant_ = member[0][2];
+                    auto f = invariantFunction(inline, member[0][1], invariant_[0], mentioned(freshTypeParams(typeParamsCst), inline.fields));
+                    auto e = invariantErrorFunction(inline, member[0][1], invariant_, mentioned(freshTypeParams(typeParamsCst), inline.fields));
                     inline.invariantFunction = f.id;
-                    check = [Decl(spanOf(member[0][2], file), DeclKind(f))];
+                    inline.invariantError = e.id;
+                    check = [Decl(spanOf(invariant_, file), DeclKind(f)), Decl(spanOf(invariant_, file), DeclKind(e))];
                 }
                 declarations ~= Decl(spanOf(member[0], file), DeclKind(inline)) ~ check;
                 auto args = inline.typeParams.map!(p => TypeExpr(ids.next!TypeExpr, inline.nameSpan,
@@ -1032,8 +1055,10 @@ private final class Lowering
         if (rest.length > 1)
         {
             auto f = invariantFunction(product, rest[0], rest[1][0], freshTypeParams(typeParamsCst));
+            auto e = invariantErrorFunction(product, rest[0], rest[1], freshTypeParams(typeParamsCst));
             product.invariantFunction = f.id;
-            declarations = [Decl(spanOf(rest[1], file), DeclKind(f))];
+            product.invariantError = e.id;
+            declarations = [Decl(spanOf(rest[1], file), DeclKind(f)), Decl(spanOf(rest[1], file), DeclKind(e))];
         }
         return Decl(span, DeclKind(product)) ~ declarations;
     }
@@ -1050,6 +1075,37 @@ private final class Lowering
     private FunctionDecl invariantFunction(const TypeDecl type, ParseTree fields, ParseTree condition,
         TypeParam[] typeParams)
     {
+        auto span = spanOf(condition, file);
+        auto bool_ = TypeExpr(ids.next!TypeExpr, span, TypeExprKind(NamedType(["Bool"], null)));
+        auto f = FunctionDecl(ids.next!FunctionDecl, "invariant " ~ type.name, type.nameSpan, fieldParams(fields),
+            boxed(convertExpression(condition)), bool_, FunctionKind.ordinary, null, true, typeParams);
+        f.invariantOf = type.id;
+        return f;
+    }
+
+    /// The function holding the `else` of `type`'s invariant, declared as `invariantFunction` is.
+    /// Sema infers its return type, so the one written here is a placeholder.
+    private FunctionDecl invariantErrorFunction(const TypeDecl type, ParseTree fields, ParseTree invariant_,
+        TypeParam[] typeParams)
+    {
+        if (invariant_.children.length < 2)
+        {
+            throw new ParseException(Diagnostic(DiagnosticCode.ParseError, spanOf(invariant_, file),
+                "An invariant needs `else` and the error a value that breaks it gives, as in `invariant low <= high else Reversed(low, high)`",
+                Severity.Error));
+        }
+        auto error = invariant_[1];
+        auto placeholder = TypeExpr(ids.next!TypeExpr, spanOf(error, file), TypeExprKind(UnitType()));
+        auto f = FunctionDecl(ids.next!FunctionDecl, "invariant error " ~ type.name, type.nameSpan, fieldParams(fields),
+            boxed(convertExpression(error)), placeholder, FunctionKind.ordinary, null, true, typeParams);
+        f.invariantOf = type.id;
+        f.invariantErrorOf = type.id;
+        return f;
+    }
+
+    /// A parameter for each of `fields`, with nodes of its own.
+    private Param[] fieldParams(ParseTree fields)
+    {
         Param[] params;
         foreach (list; fields.children)
         {
@@ -1058,12 +1114,7 @@ private final class Lowering
                 params ~= Param(ids.next!Param, field.matches[0], spanOf(field[0], file), convertTypeExpression(field[1]));
             }
         }
-        auto span = spanOf(condition, file);
-        auto bool_ = TypeExpr(ids.next!TypeExpr, span, TypeExprKind(NamedType(["Bool"], null)));
-        auto f = FunctionDecl(ids.next!FunctionDecl, "invariant " ~ type.name, type.nameSpan, params,
-            boxed(convertExpression(condition)), bool_, FunctionKind.ordinary, null, true, typeParams);
-        f.invariantOf = type.id;
-        return f;
+        return params;
     }
 
     /// The parameters in `params` that a field in `fields` names, in their order. A field can only
@@ -1079,6 +1130,10 @@ private final class Lowering
                     foreach (arg; n.args) visit(arg);
                 },
                 (const OptionType o) => visit(*o.inner),
+                (const ErrorUnionType u) {
+                    visit(*u.success);
+                    foreach (e; u.errors) visit(e);
+                },
                 (const ArrayType a) => visit(*a.element),
                 (const FunctionType f) {
                     foreach (p; f.params) visit(p);

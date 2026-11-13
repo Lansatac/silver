@@ -11,7 +11,7 @@ import silver.sema.resolution_tests;
 private enum declarations = `
 type Box<T>(value: T)
 type Pair<A, B>(left: A, right: B)
-type Result<T, E> = Ok(value: T) | Error(error: E)
+type Result<T, E> = Good(value: T) | Bad(error: E)
 type List<T> = Cons(head: T, rest: List<T>) | Nil
 def identity<T>(x: T): T => x
 def first<T>(values: [T]): T? => if length(values) == 0 => None else values[0]
@@ -98,7 +98,7 @@ unittest
 @("an instance is described with its type arguments, and two instances are different types")
 unittest
 {
-    auto a = analyzedGeneric("    val qb = Box(1)\n    val r: Result<Int, String> = Ok(1)\n    val l: List<Bool> = Nil");
+    auto a = analyzedGeneric("    val qb = Box(1)\n    val r: Result<Int, String> = Good(1)\n    val l: List<Bool> = Nil");
     a.shouldHaveNoDiagnostics();
     a.shouldDeclareType(At("qb", 1), "Box<Int>");
     a.shouldDeclareType(At("r", 1), "Result<Int, String>");
@@ -109,10 +109,10 @@ unittest
 @("an inline member takes the parameters of its sum that it mentions")
 unittest
 {
-    auto a = analyzedGeneric("    val o: Ok<Int> = Ok(1)\n    val e: Error<String> = Error(\"no\")\n    val n: Nil = Nil");
+    auto a = analyzedGeneric("    val o: Good<Int> = Good(1)\n    val e: Bad<String> = Bad(\"no\")\n    val n: Nil = Nil");
     a.shouldHaveNoDiagnostics();
-    a.shouldHaveType("Ok(1)", "Ok<Int>");
-    a.shouldHaveType(`Error("no")`, "Error<String>");
+    a.shouldHaveType("Good(1)", "Good<Int>");
+    a.shouldHaveType(`Bad("no")`, "Bad<String>");
     analyzedGeneric("    val n: List<Int> = Nil<Int>").shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("Nil", 2));
 }
 
@@ -140,7 +140,7 @@ unittest
 {
     analyzedModule(`
 type Box<T>(value: T)
-type Result<T, E> = Ok(value: T) | Error(error: E)
+type Result<T, E> = Good(value: T) | Bad(error: E)
 def f<T, E>(x: T, xs: [T], o: T?, b: Box<T>, r: Result<T, E>): (T, [T]) {
     val y = x
     val g = () => y
@@ -152,8 +152,8 @@ def f<T, E>(x: T, xs: [T], o: T?, b: Box<T>, r: Result<T, E>): (T, [T]) {
     }
     val again = b with (value = xs[0])
     val chosen = match r {
-        Ok(value) => value
-        Error(_) => again.value
+        Good(value) => value
+        Bad(_) => again.value
     }
     if val some = maybe { _ = some }
     (chosen, [fallback])
@@ -270,14 +270,14 @@ unittest
 @("a constructor of an owned member builds its sum, whose type arguments all have to be found")
 unittest
 {
-    auto a = analyzedGeneric(`    val r: Result<Int, String> = Ok(1)
-    val s: Result<Bool, Int> = Ok<Bool>(true)
+    auto a = analyzedGeneric(`    val r: Result<Int, String> = Good(1)
+    val s: Result<Bool, Int> = Good<Bool>(true)
     val l: List<String> = Cons("a", Nil)`);
     a.shouldHaveNoDiagnostics();
-    a.shouldHaveType("Ok(1)", "Result<Int, String>");
-    a.shouldHaveType("Ok<Bool>(true)", "Result<Bool, Int>");
+    a.shouldHaveType("Good(1)", "Result<Int, String>");
+    a.shouldHaveType("Good<Bool>(true)", "Result<Bool, Int>");
     a.shouldHaveType("Nil", 2, "List<String>");
-    analyzedGeneric("    val r = Ok(1)").shouldReport(DiagnosticCode.CannotInferTypeArgument, At("Ok", 2));
+    analyzedGeneric("    val r = Good(1)").shouldReport(DiagnosticCode.CannotInferTypeArgument, At("Good", 2));
     analyzedGeneric("    val n = Nil").shouldReport(DiagnosticCode.CannotInferTypeArgument, At("Nil", 2));
 }
 
@@ -325,10 +325,10 @@ unittest
 @("a constructor pattern sees an instance's fields, and coverage works on instances")
 unittest
 {
-    auto a = analyzedGeneric(`    val r: Result<Int, String> = Ok(1)
+    auto a = analyzedGeneric(`    val r: Result<Int, String> = Good(1)
     val n = match r {
-        Ok(v) => v
-        Error(message) => 0
+        Good(v) => v
+        Bad(message) => 0
     }`);
     a.shouldHaveNoDiagnostics();
     a.shouldDeclareType(At("v", 1), "Int");

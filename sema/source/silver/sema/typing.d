@@ -40,7 +40,19 @@ package struct Typing
     Type[Id!Expr] constructedMembers;
     Type[Id!Pattern] patternSubjects;
     size_t[Id!Pattern] patternMembers;
+    /// For a pattern on an error list that reaches through a declared sum the list names, which
+    /// member that sum is, and the list. Its `patternSubjects` entry is the sum.
+    size_t[Id!Pattern] patternsThrough;
+    Type[Id!Pattern] patternListSubjects;
     Id!TypeDecl[Id!Pattern] patternConstructors;
+    /// What the invariant of each type that has one gives when it doesn't hold, in terms of the
+    /// type's own parameters.
+    Type[Id!TypeDecl] invariantErrors;
+    /// The fields each invariant's condition names, which change only through `with`.
+    string[][Id!TypeDecl] invariantMentions;
+    /// For a `with` that checks invariants, the place of each value it checks, as field indexes
+    /// from the whole value, longest first. The empty path is the whole value.
+    size_t[][][Id!Expr] withChecks;
 }
 
 struct FieldInfo { string name; Type type; }

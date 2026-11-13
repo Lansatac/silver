@@ -1,5 +1,0 @@
-import std.math
-
-def main(): Unit {
-    printl(factorial(-1))
-}

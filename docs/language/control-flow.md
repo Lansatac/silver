@@ -122,6 +122,12 @@ A panic stops the program with a message. Integer overflow, an out-of-range inde
 val result = if isValid => compute() else panic("invalid state")
 ```
 
+A panic prints `panic: `, where it happened and the message to standard error, and the program exits with status 101:
+
+```
+panic: main.ag(12,5): invalid state
+```
+
 A panic is for a bug. A failure a correct program can meet, such as a missing file or text that isn't a number, is an option or an error: see [Errors](errors.md).
 
 How deep a program can recurse isn't specified, and differs between the interpreter and compiled programs.

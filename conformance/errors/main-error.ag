@@ -1,0 +1,10 @@
+type Missing(key: String)
+type BadDigit(at: Int)
+
+def lookup(key: String): String ! Missing => if key == "port" => "80" else Error(Missing(key))
+
+def main(): Unit ! Missing | BadDigit {
+    printl(lookup("port")?)
+    printl(lookup("host")?)
+    printl("not reached")
+}

@@ -43,6 +43,7 @@ package final class Declarer
         return type.kind.match!(
             (const NamedType _) => resolveNamedType(type),
             (const OptionType option) => optionOf(resolveType(*option.inner), type.span),
+            (const ErrorUnionType u) => errorUnionOf(resolveType(*u.success), u.errors),
             (const ArrayType array) => arrayOf(resolveType(*array.element), type.span),
             (const FunctionType func) => _types.function_(
                 func.params.map!(p => resolveType(p)).array, resolveType(*func.returnType), func.mutableParams),
@@ -80,6 +81,41 @@ package final class Declarer
         return _types.option(inner);
     }
 
+    /// `success ! errors`, or `error` if a listed type is repeated or can't be an error, which is
+    /// reported at the type as written.
+    package Type errorUnionOf(Type success, const(TypeExpr)[] written)
+    {
+        auto failed = success == _types.error;
+        Type[] errors;
+        foreach (w; written)
+        {
+            auto type = resolveType(w);
+            if (type == _types.error)
+            {
+                failed = true;
+            }
+            else if (type == _types.never || type == _types.any)
+            {
+                _collector.reportError(DiagnosticCode.InvalidErrorType, w.span,
+                    "`%s` can't be an error".format(_types.describe(type)));
+                failed = true;
+            }
+            else if (errors.canFind(type))
+            {
+                _collector.reportError(DiagnosticCode.InvalidErrorType, w.span,
+                    "`%s` is already listed".format(_types.describe(type)));
+                failed = true;
+            }
+            errors ~= type;
+        }
+        if (success == _types.any)
+        {
+            _collector.reportError(DiagnosticCode.InvalidOptionPayload, written[0].span, "An error union can't hold `Any`");
+            failed = true;
+        }
+        return failed ? _types.error : _types.errorUnion(success, _types.errorList(errors));
+    }
+
     /// The array of `element`, or `error` (reported at `span`) if there can't be one.
     package Type arrayOf(Type element, Span span)
     {
@@ -99,6 +135,15 @@ package final class Declarer
         return _types.error;
     }
 
+    /// `constructor` is `Ok` or `Error`.
+    package Type reportUntypedErrorUnion(string constructor, Span span)
+    {
+        _collector.reportError(DiagnosticCode.UntypedErrorUnion, span,
+            "This `%s` has no error union to take its type from; annotate one, as in `val x: Int ! E = %s(...)`"
+                .format(constructor, constructor));
+        return _types.error;
+    }
+
     package Type reportUntypedEmptyArray(Span span)
     {
         _collector.reportError(DiagnosticCode.UntypedEmptyArray, span,
@@ -111,6 +156,7 @@ package final class Declarer
     {
         if (type == _types.none) return reportUntypedNone(span);
         if (type == _types.emptyArray) return reportUntypedEmptyArray(span);
+        if (_types.isFailure(type)) return reportUntypedErrorUnion("Error", span);
         return type;
     }
 
@@ -385,6 +431,9 @@ package final class Declarer
             auto yData = _types[y];
             return _types[x].match!(
                 (const OptionData o) => yData.match!((const OptionData p) => unify(o.inner, p.inner), _ => false),
+                (const ErrorUnionData u) => yData.match!(
+                    (const ErrorUnionData p) => unify(u.success, p.success) && unify(u.error, p.error), _ => false),
+                (const ErrorListData l) => yData.match!((const ErrorListData p) => all(l.members, p.members), _ => false),
                 (const ArrayData a) => yData.match!((const ArrayData p) => unify(a.element, p.element), _ => false),
                 (const TupleData t) => yData.match!((const TupleData p) => all(t.elements, p.elements), _ => false),
                 (const FunctionData f) => yData.match!(
@@ -524,6 +573,7 @@ package final class Declarer
                 auto substitution = substitutionOf(type);
                 return declared.map!(m => _types.substitute(m, substitution)).array;
             },
+            (const ErrorListData list) => list.members.dup,
             _ => (Type[]).init,
         );
     }

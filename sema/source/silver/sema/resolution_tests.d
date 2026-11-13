@@ -361,6 +361,8 @@ private final class Indexer
             (const SomePattern s) => visit(*s.inner),
             (const NonePattern _) {},
             (const LiteralPattern l) => visit(l.value),
+            (const OkPattern o) => visit(*o.inner),
+            (const ErrorPattern e) => visit(*e.inner),
         );
     }
 

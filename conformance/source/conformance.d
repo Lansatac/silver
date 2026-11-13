@@ -9,13 +9,13 @@ version (unittest)
     import std.parallelism : taskPool;
     import std.path : baseName, buildNormalizedPath, buildPath, dirName, dirSeparator, stripExtension;
     import std.process : environment, pipeProcess, Redirect, thisProcessID, wait;
-    import std.range : chunks;
+    import std.range : chunks, front;
     import std.stdio : File, stdin, writeln;
     import std.string : lineSplitter, replace, startsWith, strip;
     import silver.ast : DiagnosticException, formatDiagnostic, Program, SourceContext;
     import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Toolchain;
     import silver.core : lowerProgram, CoreProgram = Program;
-    import silver.interpreter.evaluator : Evaluator;
+    import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed;
     import silver.loader : load, standardLibraryPath;
     import silver.sema : analyze, Analysis, Target;
     import silver.testing : report, runFile, TestBackend;
@@ -33,6 +33,8 @@ version (unittest)
         string expected;
         /// The panic message, from `.panic`. Only `panics/` cases have one.
         string panicMessage;
+        /// The error `main` returns, as printed, from `.error`. Only `errors/` cases have one.
+        string errorMessage;
         /// The program's standard input, from `.stdin`. Null when the case has none.
         string inputPath;
     }
@@ -49,8 +51,10 @@ version (unittest)
             assert(exists(expectedPath), "Missing expected output file for " ~ entry.name);
             auto panicPath = buildPath(casesDirectory, name ~ ".panic");
             auto panicMessage = exists(panicPath) ? readText(panicPath).strip : null;
+            auto errorPath = buildPath(casesDirectory, name ~ ".error");
+            auto errorMessage = exists(errorPath) ? readText(errorPath).strip : null;
             auto inputPath = buildPath(casesDirectory, name ~ ".stdin");
-            result ~= Case(name, entry.name, readText(expectedPath).normalizeNewlines, panicMessage,
+            result ~= Case(name, entry.name, readText(expectedPath).normalizeNewlines, panicMessage, errorMessage,
                 exists(inputPath) ? inputPath : null);
         }
         assert(result.length > 0, "No conformance .ag files were found in " ~ directory);
@@ -68,6 +72,32 @@ version (unittest)
     Case[] panicCases()
     {
         return casesIn("panics");
+    }
+
+    /// Programs whose `main` returns an error. Both backends must print it after the same output
+    /// and exit with status 1.
+    Case[] errorCases()
+    {
+        return casesIn("errors");
+    }
+
+    /// Programs sema rejects, whose `.expected` is the first error as `code: message`. Neither
+    /// backend sees them.
+    Case[] rejectedCases()
+    {
+        return casesIn("rejected");
+    }
+
+    /// Analyzes the rejected case `c`, and returns why it wasn't rejected as expected, or null.
+    string runRejected(Case c)
+    {
+        auto context = new SourceContext();
+        Program program;
+        Analysis analysis;
+        if (loadAndAnalyze(c, context, program, analysis) is null) return "expected `" ~ c.expected.strip ~ "`, but it was accepted";
+        auto first = context.collector.errors.front;
+        auto reported = (cast(string) first.code) ~ ": " ~ first.message;
+        return reported == c.expected.strip ? null : "expected `" ~ c.expected.strip ~ "`, got `" ~ reported ~ "`";
     }
 
     /// Programs run for their tests, whose `.expected` is what `silver test` reports, with each
@@ -313,12 +343,13 @@ version (unittest)
                 .replace("\ndef main(", "\ndef " ~ bundleEntry ~ "(");
             write(buildPath(directory, moduleName ~ ".ag"), source);
             imports ~= "import " ~ moduleName ~ "\n";
-            calls ~= "    " ~ moduleName ~ "." ~ bundleEntry ~ "()\n";
+            // Dropped, since a `main` can return `Unit ! E`.
+            calls ~= "    _ = " ~ moduleName ~ "." ~ bundleEntry ~ "()\n";
             expected ~= c.expected;
         }
         auto path = buildPath(directory, "bundle.ag");
         write(path, imports ~ "def main(): Unit {\n" ~ calls ~ "}\n");
-        return Bundle(Case(name, path, expected, null, null), members);
+        return Bundle(Case(name, path, expected, null, null, null), members);
     }
 
     /// Why each case in `all` failed when compiled, by name; a case that passed has no entry.
@@ -399,16 +430,87 @@ version (unittest)
         {
             return failure;
         }
-        if (run.status != 1)
+        if (run.status != panicStatus)
         {
-            return "expected exit status 1, got " ~ run.status.to!string ~ ":\n" ~ run.output;
+            return "expected exit status " ~ panicStatus.to!string ~ ", got " ~ run.status.to!string ~ ":\n" ~ run.output;
         }
         if (!run.output.startsWith(c.expected ~ "panic: ") || !run.output.canFind(c.panicMessage))
         {
             return "output differs.\n--- expected\n" ~ c.expected ~ "panic: ... " ~ c.panicMessage
                 ~ "\n--- actual\n" ~ run.output;
         }
+        // The interpreted run reports its own failure, so only a report it gives is compared.
+        auto interpreted = interpretedPanicReport(c);
+        if (interpreted !is null && run.output != c.expected ~ interpreted ~ "\n")
+        {
+            return "the report differs from the interpreter's.\n--- interpreted\n" ~ c.expected ~ interpreted
+                ~ "\n--- compiled\n" ~ run.output;
+        }
         return null;
+    }
+
+    /// What the interpreter's driver reports when it runs the panic case `c`, or null if it doesn't panic.
+    string interpretedPanicReport(Case c)
+    {
+        auto context = new SourceContext();
+        Program program;
+        CoreProgram lowered;
+        if (prepare(c, context, program, lowered) !is null) return null;
+        try
+        {
+            runWithInput(c, new Evaluator(lowered));
+        }
+        catch (DiagnosticException e)
+        {
+            return panicReport(e.diagnostic, context.sources);
+        }
+        return null;
+    }
+
+    /// Compiles and runs the error case `c`, and returns why it didn't report its error as expected, or null.
+    string runCompiledError(Case c, const Toolchain toolchain, string workDirectory)
+    {
+        CompiledRun run;
+        if (auto failure = compileAndRun(c, toolchain, workDirectory, run))
+        {
+            return failure;
+        }
+        if (run.status != 1)
+        {
+            return "expected exit status 1, got " ~ run.status.to!string ~ ":\n" ~ run.output;
+        }
+        return compareOutput(c, run.output, c.expected ~ "error: " ~ c.errorMessage ~ "\n");
+    }
+
+    /// Interprets the error case `c`, and returns why `main` didn't return the expected error, or null.
+    string runInterpretedError(Case c)
+    {
+        auto context = new SourceContext();
+        Program program;
+        CoreProgram lowered;
+        if (auto failure = prepare(c, context, program, lowered))
+        {
+            return failure;
+        }
+
+        auto evaluator = new Evaluator(lowered);
+        try
+        {
+            runWithInput(c, evaluator);
+        }
+        catch (ProgramFailed e)
+        {
+            if (e.msg != c.errorMessage)
+            {
+                return "expected the error `" ~ c.errorMessage ~ "`, got `" ~ e.msg ~ "`";
+            }
+            return compareOutput(c, evaluator.output);
+        }
+        catch (DiagnosticException e)
+        {
+            return "the program failed at runtime: " ~ formatDiagnostic(e.diagnostic, context.sources);
+        }
+        return "expected the error `" ~ c.errorMessage ~ "`, but the program finished";
     }
 
     /// Interprets the panic case `c`, and returns why it didn't fail as expected, or null.
@@ -465,11 +567,16 @@ version (unittest)
     /// Why `actual` isn't `c`'s expected output, or null if it is.
     string compareOutput(Case c, string actual)
     {
-        if (actual == c.expected)
+        return compareOutput(c, actual, c.expected);
+    }
+
+    string compareOutput(Case c, string actual, string expected)
+    {
+        if (actual == expected)
         {
             return null;
         }
-        return "output differs.\n--- expected\n" ~ c.expected ~ "\n--- actual\n" ~ actual;
+        return "output differs.\n--- expected\n" ~ expected ~ "\n--- actual\n" ~ actual;
     }
 }
 
@@ -515,7 +622,7 @@ unittest
     assert(problems is null, problems);
 }
 
-@("Compiled programs that panic report the expected error and exit with status 1")
+@("Compiled programs that panic report what the interpreter does and exit with the panic status")
 unittest
 {
     Toolchain toolchain;
@@ -560,5 +667,46 @@ unittest
     auto all = testingCases;
     auto failed = failuresByName(all, inParallel(all, (Case c) => runTesting(c, TestBackend.llvm, tempDir)));
     auto problems = pendingProblems("Compiled testing", all, failed, compiledPending);
+    assert(problems is null, problems);
+}
+
+@("Interpreted programs whose main returns an error report it")
+unittest
+{
+    auto all = errorCases;
+    auto failed = failuresByName(all, inParallel(all, (Case c) => runInterpretedError(c)));
+    auto problems = pendingProblems("Interpreted error", all, failed, interpretedPending);
+    assert(problems is null, problems);
+}
+
+@("Compiled programs whose main returns an error print it and exit with status 1")
+unittest
+{
+    Toolchain toolchain;
+    if (auto missing = findToolchain(toolchain))
+    {
+        writeln("    note: ", missing, " Compiled error conformance was skipped.");
+        return;
+    }
+
+    auto workDirectory = buildPath(tempDir, "silver-conformance-errors-" ~ thisProcessID.to!string);
+    mkdirRecurse(workDirectory);
+
+    auto all = errorCases;
+    auto failed = failuresByName(all, inParallel(all, (Case c) => runCompiledError(c, toolchain, workDirectory)));
+    auto problems = pendingProblems("Compiled error", all, failed, compiledPending);
+    if (problems is null)
+    {
+        rmdirRecurse(workDirectory);
+    }
+    assert(problems is null, problems);
+}
+
+@("Programs that sema rejects report the expected error")
+unittest
+{
+    auto all = rejectedCases;
+    auto failed = failuresByName(all, inParallel(all, (Case c) => runRejected(c)));
+    auto problems = pendingProblems("Rejected", all, failed, interpretedPending);
     assert(problems is null, problems);
 }

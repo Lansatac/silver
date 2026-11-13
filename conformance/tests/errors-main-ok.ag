@@ -1,0 +1,5 @@
+type Missing(key: String)
+
+def main(): Unit ! Missing {
+    printl("finished")
+}

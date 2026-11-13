@@ -105,7 +105,14 @@ struct TupleType
     TypeExpr[] elements;
 }
 
-alias TypeExprKind = SumType!(OptionType, ArrayType, NamedType, FunctionType, UnitType, TupleType);
+/// `T ! E`, or `T ! A | B` with `errors` in the order written.
+struct ErrorUnionType
+{
+    TypeExpr* success;
+    TypeExpr[] errors;
+}
+
+alias TypeExprKind = SumType!(OptionType, ArrayType, NamedType, FunctionType, UnitType, TupleType, ErrorUnionType);
 
 /// Prints a type the way it's written in source.
 string printTypeExpr(const TypeExpr t)
@@ -122,6 +129,7 @@ string printTypeExpr(const TypeExpr t)
             ~ printTypeExpr(*f.returnType),
         (const UnitType u) => "()",
         (const TupleType t) => "(" ~ t.elements.map!printTypeExpr.join(", ") ~ ")",
+        (const ErrorUnionType u) => printErrorPart(*u.success) ~ " ! " ~ u.errors.map!printErrorPart.join(" | "),
     );
 }
 
@@ -141,9 +149,22 @@ private string printOptionInner(const TypeExpr inner)
     auto needsParens = inner.kind.match!(
         (const FunctionType _) => true,
         (const OptionType _) => true,
+        (const ErrorUnionType _) => true,
         _ => false,
     );
     return needsParens ? "(" ~ printTypeExpr(inner) ~ ")" : printTypeExpr(inner);
+}
+
+/// A type carries one `!`, and `(Int) -> Int ! E` returns an error union, so either side of `!`
+/// needs parentheses when it's one of those.
+private string printErrorPart(const TypeExpr part)
+{
+    auto needsParens = part.kind.match!(
+        (const FunctionType _) => true,
+        (const ErrorUnionType _) => true,
+        _ => false,
+    );
+    return needsParens ? "(" ~ printTypeExpr(part) ~ ")" : printTypeExpr(part);
 }
 
 struct Expr
@@ -157,7 +178,7 @@ struct Expr
 alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, InterpolatedString, Identifier,
     UnaryExpr, BinaryExpr, CallExpr, MemberAccess, WhileExpr, ForExpr, IfExpr, BlockExpr, UnitLiteral,
     SomeExpr, NoneLiteral, PropagateExpr, SafeMemberAccess, ArrayLiteral, MapLiteral, IndexExpr, RangeExpr,
-    TupleLiteral, WithExpr, MatchExpr, Lambda);
+    TupleLiteral, WithExpr, MatchExpr, Lambda, OkExpr, ErrorExpr, AssertExpr);
 
 /// `(x, y) => body`. A `def` inside a block is one of these bound to a local.
 struct Lambda
@@ -318,6 +339,24 @@ struct PropagateExpr
     Expr* operand;
 }
 
+/// `Ok(x)`.
+struct OkExpr
+{
+    Expr* value;
+}
+
+/// `Error(e)`.
+struct ErrorExpr
+{
+    Expr* value;
+}
+
+/// `x!`: the value of an option or error union, or a panic.
+struct AssertExpr
+{
+    Expr* operand;
+}
+
 /// `object?.member`.
 struct SafeMemberAccess
 {
@@ -469,6 +508,9 @@ string printExpr(const Expr e)
         (const SomeExpr s) => format("(Some %s)", printExpr(*s.value)),
         (const NoneLiteral _) => "None",
         (const PropagateExpr p) => format("(? %s)", printExpr(*p.operand)),
+        (const OkExpr o) => format("(Ok %s)", printExpr(*o.value)),
+        (const ErrorExpr e) => format("(Error %s)", printExpr(*e.value)),
+        (const AssertExpr a) => format("(! %s)", printExpr(*a.operand)),
         (const SafeMemberAccess m) => format("(?. %s %s)", printExpr(*m.object), m.member),
         (const ArrayLiteral a) => format("(array%s)", a.elements.map!(e => " " ~ printExpr(e)).join),
         (const MapLiteral m) {
@@ -579,7 +621,20 @@ struct LiteralPattern
     Expr* value;
 }
 
-alias PatternKind = SumType!(VarDecl, TuplePattern, ConstructorPattern, SomePattern, NonePattern, LiteralPattern);
+/// `Ok(p)`.
+struct OkPattern
+{
+    Pattern* inner;
+}
+
+/// `Error(p)`.
+struct ErrorPattern
+{
+    Pattern* inner;
+}
+
+alias PatternKind = SumType!(VarDecl, TuplePattern, ConstructorPattern, SomePattern, NonePattern, LiteralPattern,
+    OkPattern, ErrorPattern);
 
 /// The tuple literal `value` is when `pattern` takes it apart element by element, so each element is
 /// bound as its own `val` would be and no tuple is built; null when the whole value is taken apart.
@@ -668,6 +723,9 @@ struct FunctionDecl
     /// For the function holding a type's invariant, that type; otherwise invalid. Its name can't be
     /// written, and its parameters name the fields, which hide anything of the same name.
     Id!TypeDecl invariantOf;
+    /// For the function holding what a type's invariant gives when it doesn't hold, that type;
+    /// otherwise invalid. `invariantOf` is set too, and its return type is inferred.
+    Id!TypeDecl invariantErrorOf;
     /// For a `test`, its name, which the function's own name can't be written as; otherwise null.
     string testName;
 }
@@ -716,6 +774,8 @@ struct TypeDecl
     /// The function holding the invariant, which syntax lowering declares beside the type with the
     /// fields as its parameters, or an invalid ID when it has none.
     Id!FunctionDecl invariantFunction;
+    /// The function holding the invariant's `else`, declared beside it in the same way.
+    Id!FunctionDecl invariantError;
 }
 
 /// `alias Name = Type`, a second name for a type. Sema expands it, so the backends never see one.
@@ -847,6 +907,8 @@ string printPattern(const Pattern pattern)
             ~ (c.arguments.length > 0 ? "(" ~ c.arguments.map!printPattern.join(", ") ~ ")" : ""),
         (const SomePattern s) => "Some(" ~ printPattern(*s.inner) ~ ")",
         (const NonePattern _) => "None",
+        (const OkPattern o) => "Ok(" ~ printPattern(*o.inner) ~ ")",
+        (const ErrorPattern e) => "Error(" ~ printPattern(*e.inner) ~ ")",
         (const LiteralPattern l) => printExpr(*l.value),
     );
 }

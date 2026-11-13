@@ -1,0 +1,7 @@
+type Reversed(low: Int, high: Int)
+type Span(low: Int, high: Int) invariant low <= high else Reversed(low, high)
+
+def main(): Unit {
+    printl(Span(1, 2)!)
+    printl(Span(3, 2)!)
+}

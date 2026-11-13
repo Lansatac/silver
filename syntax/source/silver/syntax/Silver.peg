@@ -89,12 +89,13 @@ Silver:
     ContinueStatement    < CONTINUE
 
     TypeDeclaration      < :TYPE Nl? TypeName (Nl? TypeParameters)? (Fields Invariant? / Nl? :'=' !'=' Nl? SumMembers)?
-    Invariant            < Nl? :INVARIANT Nl? Expression
+    # The `else` is required; lowering reports one that's missing
+    Invariant            < Nl? :INVARIANT Nl? Expression (Nl? :ELSE Nl? Expression)?
     AliasDeclaration     < :ALIAS Nl? TypeName (Nl? TypeParameters)? Nl? :'=' !'=' Nl? Type
     SumMembers           < SumMember (LeadingNl? :BitOrOperator Nl? SumMember)*
-    SumMember            < InlineMember / Type
+    SumMember            < InlineMember / SumMemberType
     InlineMember         < TypeName Fields InlineInvariant?
-    InlineInvariant      < Nl? :INVARIANT Nl? :'(' Nl? Expression Nl? :')'
+    InlineInvariant      < Nl? :INVARIANT Nl? :'(' Nl? Expression Nl? :')' (Nl? :ELSE Nl? :'(' Nl? Expression Nl? :')')?
     # The parens are kept so `type M()` still has a node, which sema rejects in favor of `type M`
     Fields               < '(' Nl? FieldList Nl? ')'
     FieldList            < (Field (Nl? ',' Nl? Field)*)?
@@ -104,7 +105,11 @@ Silver:
 
     TypeAnnotation       < Nl? :':' Nl? Type
 
-    Type                 <- BaseType OptionMark?
+    Type                 < OptionalType (:'!' !'=' Nl? ErrorTypes)?
+    # A list would run into the sum's own `|`, so a member's error side is one type
+    SumMemberType        < OptionalType (:'!' !'=' Nl? OptionalType)?
+    ErrorTypes           < OptionalType (LeadingNl? :BitOrOperator Nl? OptionalType)*
+    OptionalType         <- BaseType OptionMark?
     OptionMark           <- "?"
     BaseType             < FunctionType / UnitType / ArrayType / ParenType / NamedType
     # One element is grouping and more are a tuple, so the two share a parse
@@ -158,10 +163,11 @@ Silver:
     UnaryOperator        < "-" / "!" / "~"
 
     Postfix              < Eval PostfixOp*
-    PostfixOp            < CallArgs / IndexArgs / Nl? (SafeMemberAccess / MemberAccess / PropagateNone / WithUpdate / TypeArguments)
+    PostfixOp            < CallArgs / IndexArgs / AssertSuccess / Nl? (SafeMemberAccess / MemberAccess / PropagateNone / WithUpdate / TypeArguments)
     MemberAccess         < :'.' Nl? identifier
     SafeMemberAccess     < :"?." Nl? identifier
     PropagateNone        <- "?" !("?" / "." !".")
+    AssertSuccess        <- "!" !"="
     IndexArgs            < :'[' Nl? (SliceFrom / SliceTo / Expression) Nl? :']'
     SliceFrom            < CoalesceExpression LeadingNl? :".." &(Nl? ']')
     SliceTo              < :".." Nl? CoalesceExpression

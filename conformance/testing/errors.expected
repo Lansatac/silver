@@ -1,0 +1,11 @@
+FAIL "? on an error stops the test and reports it" at errors.ag(10,6)
+    errors.ag(12,13): `parse("1x")` failed with BadDigit(1), so the test stopped
+    Output:
+        before
+FAIL "an error is a value to compare" at errors.ag(16,6)
+    errors.ag(19,5): Expectation failed: parse("1x") == 12
+        left: Error(BadDigit(1))
+        right: Ok(12)
+FAIL "! panics in a test" at errors.ag(22,6)
+    panic: errors.ag(23,13): `parse("1x")` failed: BadDigit(1)
+1 passed, 3 failed

@@ -1,0 +1,1 @@
+T0040: `low` is in the invariant of `Span`, so it changes only through `with`, as in `span = (span with (low = ...))?`

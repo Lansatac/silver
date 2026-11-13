@@ -1,0 +1,12 @@
+type Point(x: Int, y: Int)
+type Backwards
+type Line(start: Point, end: Point) invariant start.x <= end.x else Backwards
+
+def push(mutable p: Point): Unit {
+    p.x += 10
+}
+
+def main(): Unit {
+    mutable val line = Line(Point(0, 0), Point(5, 5))!
+    push(mutable line.start)
+}

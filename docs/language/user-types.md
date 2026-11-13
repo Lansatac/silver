@@ -40,43 +40,56 @@ The result has the original's type. Each value is checked against its field, so 
 
 ### Invariants
 
-A product can state a condition that every value of it meets:
+A product can state a condition that every value of it meets, and the error that building one gives when the condition doesn't hold:
 
 ```silver
-type Percent(value: Int) invariant 0 <= value && value <= 100
-type Span(low: Int, high: Int) invariant low <= high
-type NonEmpty<T>(items: [T]) invariant length(items) > 0
+type OutOfRange(value: Int)
+type Reversed(low: Int, high: Int)
+type Empty
+
+type Percent(value: Int) invariant 0 <= value && value <= 100 else OutOfRange(value)
+type Span(low: Int, high: Int) invariant low <= high else Reversed(low, high)
+type NonEmpty<T>(items: [T]) invariant length(items) > 0 else Empty
 ```
 
-The invariant is a `Bool` expression over the fields. A name in it refers to a field first, and otherwise resolves as it would in a function of the module, so it can call functions and use constants, private ones included. A marker has no fields and can't have one.
+The invariant is a `Bool` expression over the fields. A name in it refers to a field first, and otherwise resolves as it would in a function of the module, so it can call functions and use constants, private ones included. The `else` is required. Its expression is written over the fields in the same way, is evaluated only when the condition is false, and can be of any type. A marker has no fields and can't have an invariant.
 
-A value that would break its invariant is never produced: the program panics instead, with a message naming the type and showing the invariant. So a function that receives a `Span` never checks it again. The invariant is checked wherever a value of the type comes about, in the type's own module as much as anywhere else:
+A value that would break its invariant is never produced, so a function that receives a `Span` never checks it again. Building one yields an [error union](errors.md), and the caller says what a failure means:
 
-- **Construction**, including through an alias and through the constructor used as a function value. When every argument is a literal and the invariant uses only what a constant's initializer may, a violation is a compile error, as `UInt8(256)` is.
-- **`with`**, once, after every update is applied. `span with (low = 5, high = 9)` is fine even where `low = 5` alone would cross `high`, which makes `with` the way to change several fields together.
-- **Assigning a field** of a `mutable val` or a mutable parameter, after the write. Assigning through a path such as `line.start.x = 2` checks each type along the path, innermost first.
-- **A `mutable` argument written back**, for the types around the place it's written to. After `advance(mutable line.start)`, `Line` is checked; `advance` has already kept `Point`'s.
+```silver
+val volume = Percent(number)?                    // Percent ! OutOfRange: pass the error on
+val capped = Percent(number) ?? Percent(100)     // or choose a value
+val half = Percent(50)!                          // or say it can't fail
+```
+
+A value of the type comes about in two ways, in the type's own module as much as anywhere else:
+
+- **Construction** of a `T` whose invariant gives an `E` is a `T ! E`. That includes construction through an alias, and the constructor used as a function value, which is a `(Int) -> Percent ! OutOfRange`.
+- **`with`** that updates a field the invariant mentions is a `T ! E` too. The invariant is checked once, after every update is applied, so `span with (low = 5, high = 9)` is fine even where `low = 5` alone would cross `high`. A `with` that updates only other fields is a plain `T`.
+
+A field the invariant mentions changes only through `with`. Assigning to it is a compile error, since a statement has nowhere to put an error, and so is assigning through it, as in `line.start.x = 2` where `Line`'s invariant mentions `start`, or passing it as a `mutable` argument. A field the invariant doesn't mention is assigned as usual.
+
+```silver
+type TooEarly
+type Meeting(time: Span, title: String) invariant time.low >= 0 else TooEarly
+
+meeting.title = "Review"                              // fine
+meeting.time = later                                  // error: `time` is in the invariant of `Meeting`
+meeting = (meeting with (time = later))?
+```
+
+When `!` follows a construction whose arguments are all literals, and the invariant uses only what a constant's initializer may, the check is made at compile time, and a violation is a compile error, as `UInt8(256)` is.
 
 Reading a field, matching and destructuring check nothing. Equality and printing are unchanged.
 
-An invariant should have no effects. How many times it's evaluated isn't specified, so a check that can't fail, such as one after assigning a field the invariant doesn't mention, may be skipped.
-
-A construction that can fail without stopping the program is an ordinary function that returns an option, sharing the condition with the invariant by name:
-
-```silver
-def isPercent(value: Int): Bool => 0 <= value && value <= 100
-
-type Percent(value: Int) invariant isPercent(value)
-
-def percent(value: Int): Percent? => if isPercent(value) => Percent(value) else None
-```
+An invariant and its `else` should have no effects. How many times the condition is evaluated isn't specified.
 
 In a generic type the invariant is checked once, where it's written, like a generic function's body. So it can't order a value whose type mentions a type parameter.
 
-A member that a sum declares inline can have an invariant, written in parentheses, since `|` would otherwise read as the operator:
+A member that a sum declares inline can have an invariant, with the condition and the error each written in parentheses, since `|` would otherwise read as the operator. Its constructor then yields the sum or the error, so `Circle(r)` is a `Shape ! NotPositive`:
 
 ```silver
-type Shape = Circle(radius: Float) invariant (radius > 0.0) | Square(side: Float) | Nothing
+type Shape = Circle(radius: Float) invariant (radius > 0.0) else (NotPositive(radius)) | Square(side: Float) | Nothing
 ```
 
 ## Sums
@@ -148,6 +161,7 @@ The patterns are:
 | `_` | anything |
 | a literal | that value |
 | `Some(p)`, `None` | options |
+| `Ok(p)`, `Error(p)` | error unions; see [Errors](errors.md#match) |
 | `(p, q)` | a tuple, with nested patterns |
 
 A match must be exhaustive, and the error names what's missing, including through nested patterns and tuples. `Bool` is exhausted by `true` and `false`, while integer and string literals need a `_`. An unreachable arm is an error.
@@ -156,7 +170,7 @@ Bindings are immutable and in scope only in their arm.
 
 A pattern compares by structure: a member pattern looks at the value's fields, and never calls the type's `opEquals`. So for a type whose `opEquals` treats `Fraction(1, 2)` and `Fraction(2, 4)` as equal, `f == Fraction(1, 2)` can be true where the pattern `Fraction(1, 2)` doesn't match `f`. To branch on the type's own equality, compare with `==`.
 
-`if val` is the one-arm form. It takes a constructor pattern, including `Some(p)` and `None`, and doesn't need to be exhaustive:
+`if val` is the one-arm form. It takes a constructor pattern, including `Some(p)`, `None`, `Ok(p)` and `Error(p)`, and doesn't need to be exhaustive:
 
 ```silver
 val r = if val Circle(radius) = shape => radius else 0.0
@@ -168,12 +182,12 @@ val r = if val Circle(radius) = shape => radius else 0.0
 - Named constants as patterns, as in `match p { origin => ... }`, and whether one compares with `==`, since it's a whole value rather than a structure
 - Named patterns, alongside named arguments
 - A one-member sum over an existing type, such as `type Id = Int`, is a nominal wrapper with implicit injection. It may be rejected if it proves a footgun.
-- A built-in checked construction that returns `T?` where the invariant doesn't hold.
-- Whether the panic for a broken invariant shows the value's fields.
+- A `with` through a path that reaches two types with invariants, such as `line with (start.x = 2)`, where the two errors differ. A list of errors is never invented, so for now the inner value is built first.
 - Whether an invariant can name a field whose type contains a `Ref`, whose cell changes without going through the type.
 - An invariant that's costly to check, or that a module maintains step by step, such as a sorted array. Checking it at every construction is too slow. This is what `opaque type` is for; see [Modules](modules.md).
 
 ## Current implementation
 
 - An invariant may name a field whose type contains a `Ref`, although the cell can change without going through the type.
+- An invariant's `else` can't build a value of a type whose own invariant is declared after it.
 - Everything else above is implemented.

@@ -237,6 +237,7 @@ final class Analysis
     {
         return _typing.types[type].match!(
             (const NominalData nominal) => _typing.members.get(nominal.decl, null).map!(m => instantiate(m, substitutionOf(type))).array,
+            (const ErrorListData list) => list.members.dup,
             _ => (Type[]).init,
         );
     }
@@ -274,6 +275,15 @@ final class Analysis
         return pattern in _typing.patternMembers;
     }
 
+    /// For a pattern on an error list that reaches through a declared sum the list names, the list
+    /// and which of its members that sum is, which is tested before the pattern. Null otherwise.
+    const(size_t)* listMemberThrough(Id!Pattern pattern, out Type list) const
+    {
+        auto index = pattern in _typing.patternsThrough;
+        if (index !is null) list = _typing.patternListSubjects[pattern];
+        return index;
+    }
+
     /// The declaration a constructor pattern takes apart.
     Id!TypeDecl constructorOf(Id!Pattern pattern) const
     {
@@ -301,6 +311,13 @@ final class Analysis
     const(size_t[])[] updatePathsOf(Id!Expr with_) const
     {
         return _typing.updatePaths[with_];
+    }
+
+    /// The places of the values a `with` checks the invariants of, longest first, the empty path being
+    /// the whole value. Empty when it checks none, and its type is the object's.
+    const(size_t[])[] withChecksOf(Id!Expr with_) const
+    {
+        return _typing.withChecks.get(with_, null);
     }
 
     /// The node an ID was given to. Name resolution records every declaration, so an ID

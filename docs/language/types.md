@@ -10,6 +10,7 @@ Silver is statically typed. Types trail what they describe (`name: Type`), and t
 | `Unit` | `()`, the only value |
 | `Never` | none; the type of an expression that doesn't finish |
 | `T?` | see [Options](options.md) |
+| `T ! E` | see [Errors](errors.md) |
 | `[T]` | see [Arrays](arrays.md) |
 | `(A, B)` | see [Tuples](tuples.md) |
 | `(A, B) -> C` | see [Functions](functions.md) |
@@ -30,6 +31,7 @@ val size = if isValid => compute() else { return None }
 Values do not convert implicitly, with a small number of exceptions called *promotions*. Each is one step, happens where a known type is expected, and is never chained:
 
 - `T` promotes to `T?`.
+- `T` promotes to `T ! E`, and an error union widens to one whose errors include its own.
 - A member of a sum type promotes to the sum.
 
 Expected types flow through assignments, arguments, returns, `if` arms, block values, constructor fields and collection elements. A number literal adapts to its expected type in the same way (see [Numbers](numbers.md)).
@@ -82,6 +84,7 @@ Ordering with `<`, `<=`, `>` and `>=` is defined only for numbers and strings.
 | `()` | `()` |
 | `"text"` | `text` |
 | `Some(1)`, `None` | `Some(1)`, `None` |
+| `Ok(1)`, `Error(Empty)` | `Ok(1)`, `Error(Empty)` |
 | `[1, 2]`, `["a"]` | `[1, 2]`, `[a]` |
 | `(1, "a")` | `(1, a)` |
 | a product or member `Point(1, 2)` | `Point(1, 2)` |

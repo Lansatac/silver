@@ -1,7 +1,0 @@
-type Span(low: Int, high: Int) invariant low <= high
-
-def main(): Unit {
-    val span = Span(1, 5)
-    printl(span with (low = 4))
-    printl(span with (low = 6))
-}

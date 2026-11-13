@@ -39,6 +39,9 @@ private struct InferredReturn
     Type[] types;
     /// Each postfix `?`, which returns `None`.
     Span[] nones;
+    /// What each postfix `?` on an error union passes on, and where it is.
+    Type[] errors;
+    Span[] errorSpans;
 }
 
 
@@ -72,6 +75,8 @@ private final class TypeChecker
     private size_t _elementPlaces;
     /// Whether the body being checked is a test's, or a lambda or nested `def` in one.
     private bool _inTest;
+    /// The types with an invariant whose `else` hasn't been typed yet, so nothing can build one.
+    private bool[Id!TypeDecl] _pendingInvariants;
 
     Typing checkProgram(const Program program)
     {
@@ -119,6 +124,34 @@ private final class TypeChecker
                     },
                     (const AliasDecl _) {},
                     (const ImportStmt _) {},
+                );
+            }
+        }
+
+        // After every signature, since an invariant's `else` can call anything, and before any body,
+        // since a body can build the type.
+        noteInvariantMentions();
+        foreach (mod; programModules)
+        {
+            foreach (decl; mod.declarations)
+            {
+                decl.kind.match!(
+                    (const TypeDecl t) {
+                        if (t.invariantError.isValid) _pendingInvariants[t.id] = true;
+                    },
+                    (_) {},
+                );
+            }
+        }
+        foreach (mod; programModules)
+        {
+            foreach (decl; mod.declarations)
+            {
+                decl.kind.match!(
+                    (const TypeDecl t) {
+                        if (t.invariantError.isValid) inferInvariantError(t);
+                    },
+                    (_) {},
                 );
             }
         }
@@ -265,10 +298,73 @@ private final class TypeChecker
             (const FunctionData fd)=>fd.ret,
             (_)=>_types.error
             );
-        if (func.body is null) return;
+        // An invariant's `else` was checked when its type was inferred.
+        if (func.body is null || func.invariantErrorOf.isValid) return;
         _inTest = func.testName !is null;
         scope (exit) _inTest = false;
         checkBody(*func.body, returnType, _inTest);
+    }
+
+    /// The fields each invariant's condition names: those of its function's parameters that
+    /// something resolves to, since only the condition can see them.
+    private void noteInvariantMentions()
+    {
+        bool[SymbolId] resolved;
+        foreach (symbol; _resolutions.resolutions.byValue) resolved[symbol] = true;
+        foreach (type; _resolutions.declarations.types.byValue)
+        {
+            if (!type.invariantFunction.isValid) continue;
+            auto condition = _resolutions.declarations.functions[type.invariantFunction];
+            _typing.invariantMentions[type.id] = condition.params.filter!(p => (SymbolId(p.id) in resolved) !is null)
+                .map!(p => p.name.idup).array;
+        }
+    }
+
+    /// What `type`'s invariant gives when it doesn't hold, from its `else`, and its constructor
+    /// as a function returning an error union of that.
+    private void inferInvariantError(const TypeDecl type)
+    {
+        auto func = _resolutions.declarations.functions[type.invariantError];
+        auto params = signatureOf(func.id).params;
+        auto error = inferReturn(*func.body);
+        _pendingInvariants.remove(type.id);
+        if (error == _types.never)
+        {
+            _collector.reportError(DiagnosticCode.InvalidErrorType, func.body.span,
+                "An invariant's `else` has to give the error, not stop the program");
+            error = _types.error;
+        }
+        _typing.symbolTypes[SymbolId(func.id)] = _types.function_(params, error);
+
+        // The function has type parameters of its own, in the type's order.
+        Substitution toType;
+        foreach (i, param; func.typeParams) toType[param.id] = _declarer.parameterType(type.typeParams[i]);
+        auto own = _types.substitute(error, toType);
+        _typing.invariantErrors[type.id] = own;
+        auto constructor = SymbolId(type.id);
+        _typing.symbolTypes[constructor] = _types[_typing.symbolTypes[constructor]].match!(
+            (const FunctionData f) => _types.function_(f.params, own == _types.error ? own : _types.errorUnion(f.ret, own)),
+            (_) => _typing.symbolTypes[constructor],
+        );
+    }
+
+    /// Whether the invariant of `type`, a declared type, names its field `field`.
+    private bool invariantMentions(Type type, string field)
+    {
+        auto decl = declOf(type);
+        if (!decl.isValid) return false;
+        auto mentioned = decl in _typing.invariantMentions;
+        return mentioned !is null && (*mentioned).canFind(field);
+    }
+
+    /// What the invariant of the declared type `type` gives when it doesn't hold, or `Type.init`
+    /// when it has none.
+    private Type invariantErrorOf(Type type)
+    {
+        auto decl = declOf(type);
+        if (!decl.isValid) return Type.init;
+        auto error = decl in _typing.invariantErrors;
+        return error is null ? Type.init : _types.substitute(*error, _declarer.substitutionOf(type));
     }
 
     /// The function type of `lambda`, checking its body. `expected` supplies what it leaves out.
@@ -343,6 +439,7 @@ private final class TypeChecker
         {
             joined = join(joined, _types.none, span, "Return values");
         }
+        if (inferred.errors.length > 0 && joined != _types.error) joined = withPassedErrors(joined, inferred, body.span);
         joined = _declarer.requireTyped(joined, body.span);
         if (joined == _types.error) return joined;
         if (optional && joined != _types.never && !_types.isOption(joined)) joined = _declarer.optionOf(joined, body.span);
@@ -353,6 +450,47 @@ private final class TypeChecker
             if (type != _types.never && type != joined) coerce(inferred.values[i], type, joined);
         }
         return joined;
+    }
+
+    /// The error union a lambda returns when its `?`s pass on errors and its values join to
+    /// `joined`. One error has to take in the others, since a list is never invented.
+    private Type withPassedErrors(Type joined, const InferredReturn inferred, Span span)
+    {
+        if (inferred.nones.length > 0)
+        {
+            _collector.reportError(DiagnosticCode.InvalidPropagation, inferred.nones[0],
+                "This `?` returns `None`, where another one here passes on an error; write the lambda's return type");
+            return _types.error;
+        }
+        auto success = joined;
+        Type reason = inferred.errors[0];
+        Span at = inferred.errorSpans[0];
+        if (_types.isErrorUnion(joined) || _types.isFailure(joined))
+        {
+            success = _types.isErrorUnion(joined) ? _types.successOf(joined) : _types.never;
+            reason = _types.errorOf(joined);
+            at = span;
+        }
+        foreach (i, error; inferred.errors)
+        {
+            if (errorFits(error, reason)) continue;
+            if (!errorFits(reason, error))
+            {
+                _collector.reportError(DiagnosticCode.InvalidPropagation, inferred.errorSpans[i],
+                    "This `?` passes on `%s`, and %s `%s`; write the lambda's return type, as in `(...): %s ! %s | %s => ...`"
+                        .format(_types.describe(error), at == span ? "its value is" : "another passes on", _types.describe(reason),
+                            _types.describe(success == _types.never ? _types.unit : success), _types.describe(reason), _types.describe(error)));
+                return _types.error;
+            }
+            reason = error;
+        }
+        if (success == _types.never)
+        {
+            _collector.reportError(DiagnosticCode.UntypedErrorUnion, span,
+                "Nothing this lambda returns says what its value is; write its return type");
+            return _types.error;
+        }
+        return _types.errorUnion(_declarer.requireTyped(success, span), reason);
     }
 
     /// Checks a function or lambda body in a fresh context, against its return type.
@@ -393,10 +531,22 @@ private final class TypeChecker
                 return thenType == _types.never && elseType == _types.never ? _types.never : _types.unit;
             },
             (const MatchExpr match_) => checkDiscardedMatch(match_, expr.span, ctx),
-            (_) => synthesize(expr, ctx),
+            (_) {
+                auto type = synthesize(expr, ctx);
+                if (_types.isErrorUnion(type)) reportUnhandled(expr.span, type);
+                return type;
+            },
         );
         _typing.exprTypes[expr.id] = type;
         return type;
+    }
+
+    /// An error union dropped where its value isn't used, which would lose the error.
+    private void reportUnhandled(Span span, Type type)
+    {
+        _collector.reportError(DiagnosticCode.UnusedValue, span,
+            "This `%s` could be an error, which would be lost here; pass it on with `?`, assert that it worked with `!`, or drop it with `_ = ...`"
+                .format(_types.describe(type)));
     }
 
     private void checkStmt(const Stmt stmt, BodyContext ctx)
@@ -416,7 +566,11 @@ private final class TypeChecker
             // mistake, as with `val y = x` and `-1` from a `- 1` that started a line.
             (const ExprStmt expr) {
                 auto type = synthesize(expr.expr, ctx);
-                if (type != _types.unit && type != _types.never && type != _types.error)
+                if (_types.isErrorUnion(type))
+                {
+                    reportUnhandled(expr.expr.span, type);
+                }
+                else if (type != _types.unit && type != _types.never && type != _types.error)
                 {
                     _collector.reportError(DiagnosticCode.UnusedValue, expr.expr.span,
                         "This value of type `%s` is unused; bind it with `val`, or drop it with `_ = ...`"
@@ -579,7 +733,20 @@ private final class TypeChecker
     {
         return target.kind.match!(
             (const Identifier _) => checkBindingMutable(target, use),
-            (const MemberAccess access) => checkAssignable(*access.object, use),
+            (const MemberAccess access) {
+                // The outermost invariant first, so the `with` the message suggests is allowed.
+                if (!checkAssignable(*access.object, use)) return false;
+                auto object = access.object.id in _typing.exprTypes;
+                if (object !is null && invariantMentions(*object, access.member))
+                {
+                    auto name = spelledPlace(*access.object);
+                    _collector.reportError(DiagnosticCode.InvariantFieldChanged, target.span,
+                        "`%s` is in the invariant of `%s`, so it changes only through `with`, as in `%s = (%s with (%s = ...))?`"
+                            .format(access.member, _types.describe(*object), name, name, access.member));
+                    return false;
+                }
+                return true;
+            },
             (const IndexExpr index) {
                 if (use == "assigned to" && asRange(index.index) is null) return checkAssignable(*index.object, use);
                 _collector.reportError(DiagnosticCode.InvalidAssignmentTarget, target.span, use == "assigned to"
@@ -785,6 +952,17 @@ private final class TypeChecker
         );
     }
 
+    /// A place as it's written, with an index shown as `[...]`.
+    private string spelledPlace(const Expr place)
+    {
+        return place.kind.match!(
+            (const Identifier name) => name.name,
+            (const MemberAccess access) => spelledPlace(*access.object) ~ "." ~ access.member,
+            (const IndexExpr index) => spelledPlace(*index.object) ~ "[...]",
+            _ => "...",
+        );
+    }
+
     /// Reports each of `paths` that is, or is inside or around, one before it.
     private void reportOverlaps(const(string[])[] paths, const(Span)[] spans, string message)
     {
@@ -938,8 +1116,10 @@ private final class TypeChecker
         if (sum is null) return type;
 
         _typing.constructedMembers[expr.id] = type;
-        _typing.exprTypes[expr.id] = *sum;
-        return *sum;
+        // A member with an invariant yields the sum or its error.
+        auto result = _types.isErrorUnion(type) ? _types.errorUnion(*sum, _types.errorOf(type)) : *sum;
+        _typing.exprTypes[expr.id] = result;
+        return result;
     }
 
     /// `expected`, when there is one, is only for inferring the type arguments of a generic use.
@@ -977,6 +1157,15 @@ private final class TypeChecker
             (const SomeExpr some) => _declarer.optionOf(synthesize(*some.value, ctx), some.value.span),
             (const NoneLiteral _) => _types.none,
             (const PropagateExpr propagate) => synthesizePropagate(propagate, expr.span, ctx),
+            (const OkExpr ok) {
+                synthesize(*ok.value, ctx);
+                return _declarer.reportUntypedErrorUnion("Ok", expr.span);
+            },
+            (const ErrorExpr error) {
+                auto reason = _declarer.requireTyped(synthesize(*error.value, ctx), error.value.span);
+                return reason == _types.error ? reason : _types.failure(reason);
+            },
+            (const AssertExpr assertion) => synthesizeAssert(assertion, ctx),
             (const SafeMemberAccess access) => synthesizeSafeMember(expr, access, ctx),
             (const ArrayLiteral literal) => synthesizeArrayLiteral(literal, ctx),
             (const MapLiteral literal) => synthesizeMapLiteral(literal, expr.span, ctx),
@@ -1278,23 +1467,89 @@ private final class TypeChecker
     {
         auto operandType = _declarer.requireTyped(synthesize(*propagate.operand, ctx), propagate.operand.span);
         if (operandType == _types.error) return operandType;
+        auto returnType = ctx.returnType;
+        auto checked = ctx.inferred is null && !ctx.testBody && returnType != _types.error;
+        if (_types.isErrorUnion(operandType))
+        {
+            auto reason = _types.errorOf(operandType);
+            if (ctx.inferred !is null)
+            {
+                ctx.inferred.errors ~= reason;
+                ctx.inferred.errorSpans ~= span;
+            }
+            else if (checked && _types.isOption(returnType))
+            {
+                _collector.reportError(DiagnosticCode.InvalidPropagation, span,
+                    "`?` would turn this `%s` into `None` and lose it, since this function returns `%s`; write `?? { return None }` to mean that"
+                        .format(_types.describe(reason), _types.describe(returnType)));
+            }
+            else if (checked && !_types.isErrorUnion(returnType))
+            {
+                _collector.reportError(DiagnosticCode.InvalidPropagation, span,
+                    "`?` passes on `%s`, but this function returns `%s`, which can't hold one; it could return `%s ! %s`"
+                        .format(_types.describe(reason), _types.describe(returnType), _types.describe(returnType),
+                            _types.describe(reason)));
+            }
+            else if (checked && !errorFits(reason, _types.errorOf(returnType)))
+            {
+                _collector.reportError(DiagnosticCode.InvalidPropagation, span,
+                    "`?` passes on `%s`, which this function's errors, `%s`, don't include"
+                        .format(_types.describe(reason), _types.describe(_types.errorOf(returnType))));
+            }
+            return _types.successOf(operandType);
+        }
         if (!_types.isOption(operandType))
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, propagate.operand.span,
-                "`?` needs an option, got `%s`".format(_types.describe(operandType)));
+                "`?` needs an option or an error union, got `%s`".format(_types.describe(operandType)));
             return _types.error;
         }
         if (ctx.inferred !is null)
         {
             ctx.inferred.nones ~= span;
         }
-        else if (!ctx.testBody && !_types.isOption(ctx.returnType))
+        else if (checked && _types.isErrorUnion(returnType))
+        {
+            _collector.reportError(DiagnosticCode.InvalidPropagation, span,
+                "`?` would return `None`, but this function returns `%s`, so it needs a reason; write `?? { return Error(...) }`"
+                    .format(_types.describe(returnType)));
+        }
+        else if (checked && !_types.isOption(returnType))
         {
             _collector.reportError(DiagnosticCode.InvalidPropagation, span,
                 "`?` returns `None` when there's no value, but this function returns `%s`"
-                    .format(_types.describe(ctx.returnType)));
+                    .format(_types.describe(returnType)));
         }
         return _types.optionInner(operandType);
+    }
+
+    /// `x!`: the value of an option or error union, which lowering makes a panic when there isn't one.
+    private Type synthesizeAssert(const AssertExpr assertion, BodyContext ctx)
+    {
+        // A construction from literals alone that `!` says can't fail is checked at compile time.
+        auto construction = assertion.operand.kind.match!(
+            (const CallExpr call) => (assertion.operand.id in _resolutions.constructions) !is null
+                && _resolutions.declarations.types[_resolutions.constructions[assertion.operand.id]].invariantFunction.isValid
+                && call.args.all!(a => isLiteral(a)),
+            _ => false,
+        );
+        if (construction) _literalConstructions ~= *assertion.operand;
+        auto operandType = _declarer.requireTyped(synthesize(*assertion.operand, ctx), assertion.operand.span);
+        if (operandType == _types.error) return operandType;
+        if (_types.isOption(operandType)) return _types.optionInner(operandType);
+        if (_types.isErrorUnion(operandType)) return _types.successOf(operandType);
+        _collector.reportError(DiagnosticCode.InvalidOperand, assertion.operand.span,
+            "`!` needs an option or an error union, got `%s`".format(_types.describe(operandType)));
+        return _types.error;
+    }
+
+    /// Whether an error of type `from` fits where `to` is expected: each type it lists is one `to`
+    /// lists, or a member of a declared sum that `to` lists.
+    private bool errorFits(Type from, Type to)
+    {
+        if (from == to || _types.mentionsError(from) || _types.mentionsError(to)) return true;
+        auto targets = _types.listed(to);
+        return _types.listed(from).all!(m => targets.canFind(m) || targets.any!(t => _declarer.membersOf(t).canFind(m)));
     }
 
     /// `a?.b`. A field that's already an option isn't wrapped again, which is what makes
@@ -1303,21 +1558,26 @@ private final class TypeChecker
     {
         auto objectType = _declarer.requireTyped(synthesize(*access.object, ctx), access.object.span);
         if (objectType == _types.error) return objectType;
-        if (!_types.isOption(objectType))
+        auto fallible = _types.isErrorUnion(objectType);
+        if (!_types.isOption(objectType) && !fallible)
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, access.object.span,
-                "`?.` needs an option, got `%s`; a field of any other value is read with `.`"
+                "`?.` needs an option or an error union, got `%s`; a field of any other value is read with `.`"
                     .format(_types.describe(objectType)));
             return _types.error;
         }
 
-        auto fields = _declarer.fieldsOf(_types.optionInner(objectType));
+        auto record = fallible ? _types.successOf(objectType) : _types.optionInner(objectType);
+        auto fields = _declarer.fieldsOf(record);
         foreach (i, field; fields)
         {
             if (field.name == access.member)
             {
                 _typing.fieldIndexes[expr.id] = i;
-                return _types.isOption(field.type) ? field.type : _types.option(field.type);
+                if (!fallible) return _types.isOption(field.type) ? field.type : _types.option(field.type);
+                auto reason = _types.errorOf(objectType);
+                auto flat = _types.isErrorUnion(field.type) && _types.errorOf(field.type) == reason;
+                return flat ? field.type : _types.errorUnion(field.type, reason);
             }
         }
         _collector.reportError(DiagnosticCode.UnknownMember, expr.span,
@@ -1436,6 +1696,9 @@ private final class TypeChecker
         return _types[type].match!(
             (const Primitive primitive) => primitive.kind != Primitive.Kind.Any,
             (const OptionData option) => isComparable(option.inner, visited),
+            (const ErrorUnionData u) => isComparable(u.success, visited) && isComparable(u.error, visited),
+            (const ErrorListData l) => l.members.all!(m => isComparable(m, visited)),
+            (const FailureData f) => isComparable(f.error, visited),
             (const ArrayData array) => isComparable(array.element, visited),
             (const EmptyArrayType _) => true,
             (const FunctionData _) => false,
@@ -1499,11 +1762,23 @@ private final class TypeChecker
         );
     }
 
+    /// `Ok(x)` or `Error(e)`, written out, which takes its type from what it's checked against.
+    private bool isErrorUnionSyntax(const Expr expr)
+    {
+        return expr.kind.match!(
+            (const OkExpr _) => true,
+            (const ErrorExpr _) => true,
+            _ => false,
+        );
+    }
+
     /// `a ?? b`. A `b` that's written as an option, or has `a`'s type, keeps the option, and
     /// anything else has to fit `T`, so the result is `T` and the fallback is never missing.
     private Type synthesizeCoalesce(const BinaryExpr binary, BodyContext ctx)
     {
         auto optionType = synthesize(*binary.left, ctx);
+        // An error union's error is dropped, so the result types are an option's.
+        if (_types.isErrorUnion(optionType)) optionType = _declarer.optionOf(_types.successOf(optionType), binary.left.span);
         if (!_types.isOption(optionType))
         {
             synthesize(*binary.right, ctx);
@@ -1546,9 +1821,9 @@ private final class TypeChecker
     /// checked against the other one, whichever side it's on, so `x == Some(1)` adapts the literal.
     private void synthesizeCompared(const BinaryExpr binary, out Type leftType, out Type rightType, BodyContext ctx)
     {
-        bool takesType(const Expr expr) => isOptionSyntax(expr) || isArraySyntax(expr) || isTupleLiteral(expr)
-            || genericUse(expr).found;
-        bool givesType(Type type) => _types.isOption(type) || _types.isArray(type) || _types.isTuple(type)
+        bool takesType(const Expr expr) => isOptionSyntax(expr) || isErrorUnionSyntax(expr) || isArraySyntax(expr)
+            || isTupleLiteral(expr) || genericUse(expr).found;
+        bool givesType(Type type) => _types.isOption(type) || _types.isErrorUnion(type) || _types.isArray(type) || _types.isTuple(type)
             || declOf(type).isValid;
 
         if (takesType(*binary.left) && !takesType(*binary.right))
@@ -1569,6 +1844,10 @@ private final class TypeChecker
     {
         if (_declarer.isSum(target)) return isAssignable(type, target) || (isIntLiteral(expr) && _declarer.membersOf(target).any!(m => isNumeric(m)));
         if (type == _types.emptyArray && _types.isArray(target)) return true;
+        if (_types.isErrorUnion(target))
+        {
+            return isAssignable(type, target) || (isIntLiteral(expr) && isNumeric(innermost(_types.successOf(target))));
+        }
         if (!_types.isOption(target) || _types.isOption(type) && !isAssignable(type, target)) return false;
         return isAssignable(type, target) || (isIntLiteral(expr) && isNumeric(innermost(target)));
     }
@@ -1736,8 +2015,13 @@ private final class TypeChecker
     {
         if (auto decl = expr.id in _resolutions.constructions)
         {
-            auto invariant_ = _resolutions.declarations.types[*decl].invariantFunction;
-            if (invariant_.isValid && call.args.all!(a => isLiteral(a))) _literalConstructions ~= expr;
+            if (*decl in _pendingInvariants)
+            {
+                _collector.reportError(DiagnosticCode.NotSupportedYet, expr.span,
+                    "An invariant's `else` can't build a value of a type with an invariant yet");
+                foreach (arg; call.args) synthesize(arg, ctx);
+                return _types.error;
+            }
         }
         Type[] typed;
         if (auto candidates = call.callee.id in _resolutions.overloads)
@@ -1947,6 +2231,11 @@ private final class TypeChecker
             (const TypeParamData _) => true,
             (const OptionData o) => (_types.isOption(actual) && couldBe(o.inner, _types.optionInner(actual), params))
                 || couldBe(o.inner, actual, params),
+            (const ErrorUnionData u) => (_types.isErrorUnion(actual) && couldBe(u.success, _types.successOf(actual), params)
+                    && couldBe(u.error, _types.errorOf(actual), params))
+                || (_types.isFailure(actual) && couldBe(u.error, _types.errorOf(actual), params))
+                || couldBe(u.success, actual, params),
+            (const ErrorListData _) => true,
             (const ArrayData a) => actual == _types.emptyArray
                 || _types.isArray(actual) && couldBe(a.element, _types.arrayElement(actual), params),
             (const TupleData t) => data.match!(
@@ -2098,6 +2387,10 @@ private final class TypeChecker
                 if (bare) return Fit.exact;
                 if (_types.isOption(param)) return shapeFit(*some.value, _types.optionInner(param), params);
                 return sumHas(m => _types.isOption(m)) ? Fit.converted : Fit.none;
+            },
+            (const OkExpr ok) {
+                if (bare) return Fit.converted;
+                return _types.isErrorUnion(param) ? Fit.exact : Fit.none;
             },
             _ => literalType(arg) != Type.init ? typedFit(literalType(arg), param, params, false)
                 : assert(0, "only an argument that isShaped is fitted by its shape"),
@@ -2385,6 +2678,8 @@ private final class TypeChecker
                 _ => false,
             ),
             (const OptionData o) => _types.isOption(b) && same(o.inner, _types.optionInner(b)),
+            (const ErrorUnionData u) => _types.isErrorUnion(b) && same(u.success, _types.successOf(b)) && same(u.error, _types.errorOf(b)),
+            (const ErrorListData l) => _types.isErrorList(b) && allSame(l.members, _types.listed(b)),
             (const ArrayData x) => _types.isArray(b) && same(x.element, _types.arrayElement(b)),
             (const TupleData t) => _types.isTuple(b) && allSame(t.elements, _types.tupleElements(b)),
             (const FunctionData f) => other.match!(
@@ -2528,6 +2823,24 @@ private final class TypeChecker
         return wanted(expected);
     }
 
+    /// The member a use of `g` builds on the way to its generic sum, as an error union for a member
+    /// with an invariant.
+    private Type memberBuilt(const Generic g, const Substitution bound)
+    {
+        auto member = _types.substitute(g.member, bound);
+        auto ret = _types[g.type].match!((const FunctionData f) => f.ret, _ => g.type);
+        if (!_types.isErrorUnion(ret)) return member;
+        return _types.errorUnion(member, _types.substitute(_types.errorOf(ret), bound));
+    }
+
+    /// What a use of `g`, a member its generic sum owns, builds: the sum, or for a member with an
+    /// invariant, the sum or its error.
+    private Type ownerResult(const Generic g)
+    {
+        auto ret = _types[g.type].match!((const FunctionData f) => f.ret, _ => g.type);
+        return _types.isErrorUnion(ret) ? _types.errorUnion(g.owner, _types.errorOf(ret)) : g.owner;
+    }
+
     /// `type` with `result` for its result: a function's return type, or a marker itself.
     private Type withResult(Type type, Type result)
     {
@@ -2550,6 +2863,22 @@ private final class TypeChecker
             },
             (const OptionData o) => bindParams(o.inner, _types.isOption(actual) ? _types.optionInner(actual) : actual,
                 params, bound),
+            (const ErrorUnionData u) {
+                if (_types.isErrorUnion(actual))
+                {
+                    bindParams(u.success, _types.successOf(actual), params, bound);
+                    bindParams(u.error, _types.errorOf(actual), params, bound);
+                }
+                else if (_types.isFailure(actual))
+                {
+                    bindParams(u.error, _types.errorOf(actual), params, bound);
+                }
+                else
+                {
+                    bindParams(u.success, actual, params, bound);
+                }
+            },
+            (const ErrorListData l) => bindListed(l.members, actual, params, bound),
             (const ArrayData a) {
                 if (_types.isArray(actual)) bindParams(a.element, _types.arrayElement(actual), params, bound);
             },
@@ -2579,12 +2908,23 @@ private final class TypeChecker
         );
     }
 
+    /// Binds the one type parameter a written error list names to what `actual` lists beyond the
+    /// list's other types, so `Int ! E | Overflow` binds `E` from `Int ! Negative | Overflow`.
+    private void bindListed(const(Type)[] declared, Type actual, const(TypeParam)[] params, ref Substitution bound)
+    {
+        auto open = declared.filter!(m => mentionsAny(m, params)).array;
+        if (open.length != 1 || !_types.isParameter(open[0])) return;
+        auto rest = _types.listed(actual).filter!(m => !declared.canFind(m)).array;
+        if (rest.length > 0) bindParams(open[0], _types.errorList(rest), params, bound);
+    }
+
     /// Binds from where a use's result is expected to land: inside an option the result isn't, and
     /// at the member of a sum that the result names.
     private void bindExpected(Type result, Type expected, const(TypeParam)[] params, ref Substitution bound)
     {
         if (expected == Type.init || expected == _types.error) return;
         if (_types.isOption(expected) && !_types.isOption(result)) expected = _types.optionInner(expected);
+        if (_types.isErrorUnion(expected) && !_types.isErrorUnion(result)) expected = _types.successOf(expected);
         auto decl = declOf(result);
         if (decl.isValid && declOf(expected).isValid && declOf(expected) != decl)
         {
@@ -2627,6 +2967,7 @@ private final class TypeChecker
         if (genericName && genericNamed(expr).found) return true;
         return isIntLiteral(expr) || isLambda(expr) || expr.kind.match!(
             (const NoneLiteral _) => true,
+            (const OkExpr _) => true,
             (const ArrayLiteral literal) => literal.elements.length == 0,
             _ => false,
         );
@@ -2660,7 +3001,7 @@ private final class TypeChecker
         auto args = call.args;
         auto sum = g.owner != Type.init && !buildsMember(g, expected);
         auto params = sum ? g.ownerParams : g.params;
-        auto shape = sum ? withResult(g.type, g.owner) : g.type;
+        auto shape = sum ? withResult(g.type, ownerResult(g)) : g.type;
         auto typed = new Type[args.length];
         auto checked = new bool[args.length];
         foreach (i, type; pretyped) typed[i] = type;
@@ -2787,7 +3128,7 @@ private final class TypeChecker
 
         _typing.exprTypes[g.name] = _types.substitute(shape, bound);
         _typing.typeArguments[g.name] = params.map!(p => bound[p.id]).array;
-        if (sum) _typing.constructedMembers[expr.id] = _types.substitute(g.member, bound);
+        if (sum) _typing.constructedMembers[expr.id] = memberBuilt(g, bound);
         return _types.substitute(signature.ret, bound);
     }
 
@@ -2841,6 +3182,7 @@ private final class TypeChecker
                 auto arg = args[untyped.front];
                 arg.kind.match!(
                     (const NoneLiteral _) { _declarer.reportUntypedNone(arg.span); },
+                    (const OkExpr _) { _declarer.reportUntypedErrorUnion("Ok", arg.span); },
                     (const ArrayLiteral _) { _declarer.reportUntypedEmptyArray(arg.span); },
                     (_) {
                         if (arg.id in _resolutions.overloads) reportOverloadedValue(arg);
@@ -2897,7 +3239,7 @@ private final class TypeChecker
             foreach (param; params) bound.require(param.id, _types.error);
         }
         _typing.typeArguments[g.name] = params.map!(p => bound[p.id]).array;
-        if (sum) _typing.constructedMembers[expr.id] = _types.substitute(g.member, bound);
+        if (sum) _typing.constructedMembers[expr.id] = memberBuilt(g, bound);
         return _types.substitute(shape, bound);
     }
 
@@ -3127,7 +3469,39 @@ private final class TypeChecker
         }
         reportOverlaps(paths, spans, "This overlaps an update before it, and one `with` can't change a place twice");
         _typing.updatePaths[expr.id] = indexes;
-        return objectType;
+
+        // Each value along a path whose invariant names the field updated in it is checked, once.
+        size_t[][] checks;
+        Type[] errors;
+        Type[] checkedTypes;
+        foreach (i, ref update; with_.updates)
+        {
+            if (indexes[i].length < update.path.length) continue;
+            auto type = objectType;
+            foreach (depth, name; update.path)
+            {
+                auto prefix = indexes[i][0 .. depth];
+                if (invariantMentions(type, name) && !checks.canFind(prefix))
+                {
+                    checks ~= prefix.dup;
+                    errors ~= invariantErrorOf(type);
+                    checkedTypes ~= type;
+                }
+                type = _declarer.fieldsOf(type)[indexes[i][depth]].type;
+            }
+        }
+        if (checks.length == 0) return objectType;
+        auto different = errors.countUntil!(e => e != errors[0]);
+        if (different >= 0)
+        {
+            _collector.reportError(DiagnosticCode.NotSupportedYet, expr.span,
+                ("This `with` checks the invariants of `%s` and `%s`, which give different errors, and a `with` with "
+                    ~ "two errors isn't supported yet; update the inner value with a `with` of its own first")
+                    .format(_types.describe(checkedTypes[0]), _types.describe(checkedTypes[different])));
+            return _types.error;
+        }
+        _typing.withChecks[expr.id] = checks.sort!((a, b) => a.length > b.length).release;
+        return errors[0] == _types.error ? _types.error : _types.errorUnion(objectType, errors[0]);
     }
 
     /// The type of the field `update` writes, reached from `object`, with the field index of each
@@ -3514,6 +3888,15 @@ private final class TypeChecker
         {
             payload = _types.optionInner(optionType);
         }
+        else if (_types.isErrorUnion(optionType) && keyword == "while val")
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, initializer.span,
+                "`while val` would end the loop on an error without a word; pass it on first, as in `while val x = f()? { ... }`");
+        }
+        else if (_types.isErrorUnion(optionType))
+        {
+            payload = _types.successOf(optionType);
+        }
         else if (optionType != _types.error)
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, initializer.span,
@@ -3553,6 +3936,10 @@ private final class TypeChecker
         if (isAssignable(b, a)) return a;
         if (a == _types.none) return _declarer.optionOf(b, span);
         if (b == _types.none) return _declarer.optionOf(a, span);
+        // A bare `Error(e)` beside a value that isn't an error union makes one.
+        auto valued = (Type t) => !_types.isFailure(t) && !_types.isErrorUnion(t) && t != _types.emptyArray;
+        if (_types.isFailure(a) && valued(b)) return _types.errorUnion(b, _types.errorOf(a));
+        if (_types.isFailure(b) && valued(a)) return _types.errorUnion(a, _types.errorOf(b));
 
         _collector.reportError(DiagnosticCode.TypeMismatch, span,
             "%s have different types `%s` and `%s`".format(what, _types.describe(a), _types.describe(b)));
@@ -3617,6 +4004,7 @@ private final class TypeChecker
     {
         if (expected == member) return true;
         if (_types.isOption(expected)) return wantsMember(member, owner, _types.optionInner(expected));
+        if (_types.isErrorUnion(expected)) return wantsMember(member, owner, _types.successOf(expected));
         return expected != owner && _declarer.membersOf(expected).canFind(member);
     }
 
@@ -3673,6 +4061,33 @@ private final class TypeChecker
             }
         }
 
+        if (_types.isErrorUnion(expected))
+        {
+            auto written = expr.kind.match!(
+                (const OkExpr ok) {
+                    check(*ok.value, _types.successOf(expected), ctx);
+                    return true;
+                },
+                (const ErrorExpr error) {
+                    check(*error.value, _types.errorOf(expected), ctx);
+                    return true;
+                },
+                _ => false,
+            );
+            if (written)
+            {
+                _typing.exprTypes[expr.id] = expected;
+                return expected;
+            }
+            // Written out as what the success side takes its type from, then promoted.
+            if (isOptionSyntax(expr) || isArraySyntax(expr) || isTupleLiteral(expr) || isLambda(expr))
+            {
+                check(expr, _types.successOf(expected), ctx);
+                _typing.promotions[expr.id] = expected;
+                return expected;
+            }
+        }
+
         // A number, option, array or tuple is passed down, so that a literal adapts, and a value is
         // promoted, in an `if` arm or as a block's value too.
         auto isOption = _types.isOption(expected);
@@ -3686,7 +4101,7 @@ private final class TypeChecker
             return expected;
         }
         if (isNumeric(expected) || isOption || isArray || isTuple || _declarer.isSum(expected) || _declarer.isOwnedMember(expected)
-            || _types.isFunction(expected))
+            || _types.isFunction(expected) || _types.isErrorUnion(expected))
         {
             auto passedDown = expr.kind.match!(
                 (const IfExpr if_) => if_.falseBody !is null,
@@ -3764,6 +4179,20 @@ private final class TypeChecker
             if (isIntLiteral(expr) && isNumeric(innermost(expected)))
             {
                 type = adaptLiteral(expr, innermost(expected));
+            }
+            auto hasValue = type != _types.error && type != _types.never;
+            if (hasValue && type != expected && isAssignable(type, expected))
+            {
+                _typing.promotions[expr.id] = expected;
+                return expected;
+            }
+        }
+        else if (_types.isErrorUnion(expected))
+        {
+            auto success = _types.successOf(expected);
+            if (isIntLiteral(expr) && isNumeric(innermost(success)))
+            {
+                type = adaptLiteral(expr, innermost(success));
             }
             auto hasValue = type != _types.error && type != _types.never;
             if (hasValue && type != expected && isAssignable(type, expected))
@@ -3874,8 +4303,9 @@ private final class TypeChecker
     }
 
     /// Checks `pattern` against a value of `subject`, giving each binding its type.
-    private CoveragePattern checkArmPattern(const Pattern pattern, Type subject, BodyContext ctx)
+    private CoveragePattern checkArmPattern(const Pattern pattern, Type subject, BodyContext ctx, bool throughLists = true)
     {
+        if (throughLists && _types.isErrorList(subject)) return checkListPattern(pattern, subject, ctx);
         _typing.patternSubjects[pattern.id] = subject;
         if (_types.isParameter(subject))
         {
@@ -3912,6 +4342,24 @@ private final class TypeChecker
                 if (isUnknown(subject)) return CoveragePattern.init;
                 return reportPattern(pattern.span, "`None` needs an option, but the value is `%s`".format(_types.describe(subject)));
             },
+            (const OkPattern ok) {
+                if (_types.isErrorUnion(subject))
+                {
+                    return CoveragePattern("ok", [checkArmPattern(*ok.inner, _types.successOf(subject), ctx)]);
+                }
+                checkArmPattern(*ok.inner, _types.error, ctx);
+                if (isUnknown(subject)) return CoveragePattern.init;
+                return reportPattern(pattern.span, "`Ok` needs an error union, but the value is `%s`".format(_types.describe(subject)));
+            },
+            (const ErrorPattern error) {
+                if (_types.isErrorUnion(subject))
+                {
+                    return CoveragePattern("error", [checkArmPattern(*error.inner, _types.errorOf(subject), ctx)]);
+                }
+                checkArmPattern(*error.inner, _types.error, ctx);
+                if (isUnknown(subject)) return CoveragePattern.init;
+                return reportPattern(pattern.span, "`Error` needs an error union, but the value is `%s`".format(_types.describe(subject)));
+            },
             (const LiteralPattern literal) {
                 if (isOrdered(subject) || subject == _types.bool_)
                 {
@@ -3923,6 +4371,54 @@ private final class TypeChecker
                 return reportPattern(pattern.span, "A literal can't match a value of type `%s`".format(_types.describe(subject)));
             },
         );
+    }
+
+    /// A pattern on a value of the error list `subject`. One that names a member of a declared sum
+    /// the list names reaches through it, as widening does, so it tests for that sum first.
+    private CoveragePattern checkListPattern(const Pattern pattern, Type subject, BodyContext ctx)
+    {
+        auto members = _declarer.membersOf(subject);
+        auto through = reachedThrough(pattern, members);
+        if (through >= 0)
+        {
+            _typing.patternsThrough[pattern.id] = through;
+            auto inner = checkArmPattern(pattern, members[through], ctx);
+            _typing.patternListSubjects[pattern.id] = subject;
+            return CoveragePattern("member%s".format(through), [inner]);
+        }
+        _typing.patternsThrough.remove(pattern.id);
+        auto result = checkArmPattern(pattern, subject, ctx, false);
+        // Coverage looks inside a sum the list names, so a pattern for all of it is a wildcard there.
+        if (auto index = pattern.id in _typing.patternMembers)
+        {
+            if (_declarer.isSum(members[*index])) result.args = [CoveragePattern.init];
+        }
+        return result;
+    }
+
+    /// Which of an error list's `members` a pattern reaches through, or -1 when it doesn't: one
+    /// that names a type the list doesn't, which a declared sum the list names has as a member.
+    private ptrdiff_t reachedThrough(const Pattern pattern, const(Type)[] members)
+    {
+        Id!TypeDecl decl;
+        auto written = Type.init;
+        pattern.kind.match!(
+            (const ConstructorPattern c) {
+                if (auto symbol = c.type.id in _resolutions.typeResolutions)
+                {
+                    expandAlias(*symbol, _resolutions.declarations.aliases, _resolutions.typeResolutions)
+                        .match!((const Id!TypeDecl t) { decl = t; }, (_) {});
+                }
+            },
+            (const VarDecl binding) {
+                if (binding.type !is null) written = quietlyResolved(*binding.type);
+            },
+            (_) {},
+        );
+        bool names(Type t) => decl.isValid ? declOf(t) == decl : t == written;
+        if (!decl.isValid && written == Type.init) return -1;
+        if (members.any!(m => names(m))) return -1;
+        return members.countUntil!(m => _declarer.isSum(m) && _declarer.membersOf(m).any!(x => names(x)));
     }
 
     /// Wildcards for what's inside a `member` that a pattern didn't take apart.
@@ -4111,11 +4607,21 @@ private final class TypeChecker
         if (from == to) return true;
         if (from == _types.error || to == _types.error) return true;  // already reported
         if (from == _types.never) return true;                         // no value ever arrives
-        if (from == _types.none) return _types.isOption(to);
+        if (from == _types.none) return _types.isOption(to) || _types.isErrorUnion(to) && _types.isOption(_types.successOf(to));
         if (to == _types.any) return true;                             // print's placeholder
+        if (_types.isFailure(from))
+        {
+            return (_types.isErrorUnion(to) || _types.isFailure(to)) && errorFits(_types.errorOf(from), _types.errorOf(to));
+        }
         return _types[to].match!(
             // T -> T?, but not through a sum, since promotion is one step.
             (const OptionData o) => _declarer.isSum(o.inner) ? from == o.inner : isAssignable(from, o.inner),
+            // Widening, or T -> T ! E as for an option.
+            (const ErrorUnionData u) {
+                if (_types.isErrorUnion(from) && _types.successOf(from) == u.success) return errorFits(_types.errorOf(from), u.error);
+                return _declarer.isSum(u.success) ? from == u.success : isAssignable(from, u.success);
+            },
+            (const ErrorListData _) => errorFits(from, to),
             (const NominalData _) => _declarer.membersOf(to).canFind(from),
             // Both have the layout of an array with no elements, so no conversion hides here.
             (const ArrayData a) => from == _types.emptyArray
