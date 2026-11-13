@@ -51,6 +51,8 @@ def sum(a: Int?, b: Int?): Int? {
 
 A bare `x?` used only to exit early must be written `_ = x?`, like any unused value.
 
+`?`, `??`, `if val` and `?.` are designed to work on an error union, `T ! E`, as well. See [Errors](errors.md).
+
 ### Field access: `?.`
 
 `a?.b` with `a: T?` and a field `b: U` is `U?`. If the field is already `U?`, the result stays `U?`, so `a?.b?.c` is one flat option. `T` must be a declared type, so `?.` doesn't reach through nested options, and a `?.` path can't be assigned through.

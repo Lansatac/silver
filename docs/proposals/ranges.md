@@ -55,7 +55,7 @@ def next(c: Countdown): (Int, Countdown)? =>
     if c.from == 0 => None else (c.from, Countdown(c.from - 1))
 ```
 
-## `for` (decided and implemented, November 2026)
+## `for` (decided and implemented)
 
 `for` is structural for now: it uses the functions a call at the loop would choose, with no interface. The rules are in [control flow](../language/control-flow.md#for). In short, a value is looped over by index when a `length(r): Int` and an `opIndex(r, i: Int): T` take it, and otherwise stepped with `next(r): (T, R)?`, expanded in lowering to:
 
@@ -74,7 +74,7 @@ Because interface conformance in [interfaces.md](interfaces.md) is found by the 
 
 - **Open**: whether `for` should require `Range` by name once interfaces exist. The two differ mostly in the error for something that isn't a range.
 - **Left out on purpose**: a second interface for things that can be turned into a range (Rust's `IntoIterator`). Addable later.
-- **Decided and implemented** (November 2026): a tuple pattern in `for`, as in `for (i, x) in xs.enumerate()`. See [control flow](../language/control-flow.md#for).
+- **Decided and implemented**: a tuple pattern in `for`, as in `for (i, x) in xs.enumerate()`. See [control flow](../language/control-flow.md#for).
 - `a..b` as a value would be a product with `length` and `opIndex`, and the constructor that `a..b` builds would be known by name, the way `Some` is.
 
 ## Adapters
@@ -109,7 +109,7 @@ interface Indexed<T> {
 
 `Map` is a range exactly when its source is, which its `next` says through its own bound. `filter` is the same shape, looping until an element passes.
 
-The library's adapters return their own named types, not an opaque `Range<U>` (decided, November 2026). An opaque result has only what its signature promises, so `[1, 2, 3].map(double)` would lose the array's length and indexing. Named, a `Map` has a `length` and an `opIndex` exactly when its source does, through functions like the two above, and `for` over it loops by index. The cost is that `Map` is public and appears in error messages. Nobody has to write it, since `val` infers it.
+The library's adapters return their own named types, not an opaque `Range<U>` (decided). An opaque result has only what its signature promises, so `[1, 2, 3].map(double)` would lose the array's length and indexing. Named, a `Map` has a `length` and an `opIndex` exactly when its source does, through functions like the two above, and `for` over it loops by index. The cost is that `Map` is public and appears in error messages. Nobody has to write it, since `val` infers it.
 
 - **Considered**: an overload of `map` per capability, returning `Indexed<U>` for an indexed source. It needs a rule for which bound is more specific, and an overload for each combination.
 - **Considered**: keeping the result opaque and letting capability queries (`static if R: Sized`) see the real type. That recovers the fast path inside generic code, but `doubled[1]` still can't be written.
@@ -133,13 +133,13 @@ def toArray<T>(range: Range<T>): [T] {
 
 - **Proposed**: chains are lazy, and `val ys: [Int] = xs.map(f)` is an error that points at `.toArray()`. The alternative, eager array functions beside a lazy family, splits the vocabulary.
 
-## An interface name as a type (decided, November 2026)
+## An interface name as a type (decided)
 
 An interface name in a type position means "some type that satisfies it", decided when the program is compiled.
 
 - **In a parameter** it's shorthand for a bounded type parameter. `source: Range<T>` means `<S: Range<T>>(source: S)`. To say two parameters have the same type, name it. The hidden parameter is never written at a call and doesn't count as one, so `toArray<Int>(xs)` gives only `T`. A lambda or a nested `def` can't have such a parameter, since neither can be generic, and the error says to name the type.
 - **In a return** it's opaque: the function returns one specific type, which the compiler knows and callers can't name. `def evens(xs: [Int]): Range<Int>`.
-- **On a binding** it's a view of the one type the value has (decided, November 2026). After `val thing: Range<Int> = [1, 2, 3]`, `thing` is an array underneath and only what `Range<Int>` provides can be used, so `thing[0]` is an error. It's the only annotation a binding can have when the value came from an opaque return. A `mutable val` annotated this way still has one type, so it can't be given a range of another type.
+- **On a binding** it's a view of the one type the value has (decided). After `val thing: Range<Int> = [1, 2, 3]`, `thing` is an array underneath and only what `Range<Int>` provides can be used, so `thing[0]` is an error. It's the only annotation a binding can have when the value came from an opaque return. A `mutable val` annotated this way still has one type, so it can't be given a range of another type.
 
 What this gives:
 
@@ -212,7 +212,7 @@ Not needed for ranges: capability queries (`static if R: Sized`), an explicit ad
 ## Risks
 
 1. **Stateful sources are untested.** Dealing cards with an `rng`, or reading lines, doesn't fit "a range is an immutable value" neatly: the final `rng` is wanted back after the range is consumed, and stepping a range over input twice gives different answers. `unfold(state, step)` covers generating, not recovering the state. No example has been worked.
-2. **Ranges are the hardest test of interfaces, not the most needed.** After stage 1 the first things missed will be printing and comparing a `T`. `Show` and `Eq` raise questions ranges don't: whether `==` means `equals`, whether derived equality is a conformance, whether a local function can change either. Interfaces should be designed against all three together. (Decided since, November 2026: `==` and printing aren't interfaces and need no bound, so `Show` and `Eq` drop out. See the [interfaces proposal](interfaces.md).)
+2. **Ranges are the hardest test of interfaces, not the most needed.** After stage 1 the first things missed will be printing and comparing a `T`. `Show` and `Eq` raise questions ranges don't: whether `==` means `equals`, whether derived equality is a conformance, whether a local function can change either. Interfaces should be designed against all three together. (Decided since: `==` and printing aren't interfaces and need no bound, so `Show` and `Eq` drop out. See the [interfaces proposal](interfaces.md).)
 3. **A long chain of unbuilt features**, each designed on paper on top of the one before.
 4. **The combination is new.** Structural conformance, lookup at the call site and bodies checked once aren't found together elsewhere. D has structural ranges but checks per instantiation and can't see a caller's functions; Nim and C++ concepts are structural with caller-side lookup but don't check bodies at the definition; Go is structural but only within the type's package; Scala passes witnesses but declares them. Known hazards: accidental matches, two modules disagreeing about a conformance, and interfaces such as `Default` that can't be expressed.
 5. **Chains are slow when compiled** until products go by value.

@@ -1,6 +1,6 @@
 # Proposal: structural interfaces with call-site conformance
 
-**Status: proposed, partly decided.** Nothing here is implemented. Decided in November 2026: `==` and printing aren't interfaces, and belong to the type (see "Operators and printing"), and the conformance rules, which a critic and evaluator review tightened. Still open: capability queries, stored structure, the adapter form, what `opCompare` returns, and hashing. It builds on [generics](../language/generics.md): `<>` type parameters, bodies checked once with each `T` opaque, and monomorphization.
+**Status: proposed, partly decided.** Nothing here is implemented. Decided: `==` and printing aren't interfaces, and belong to the type (see "Operators and printing"), and the conformance rules, which a critic and evaluator review tightened. Still open: capability queries, stored structure, the adapter form, what `opCompare` returns, and hashing. It builds on [generics](../language/generics.md): `<>` type parameters, bodies checked once with each `T` opaque, and monomorphization.
 
 The [ranges proposal](ranges.md) builds on this one and suggests changes to it: an answer to open question 1, interface names as types, and overloading as a prerequisite.
 
@@ -48,19 +48,19 @@ def encode<T: Json>(item: T): String => render(toJson(item))
 
 Inside `encode`, `T` is opaque and `toJson(item)` refers to the function the bound supplies. Several bounds are written `T: Json & Sized`.
 
-In the first version (decided, November 2026):
+In the first version (decided):
 
 - An interface can't require another. It isn't needed for one to cover another: with `R: Indexed<T>`, where `Indexed` declares `length` and `opIndex`, `R` is also a `Sized`, because the bound's `length` is found as any function is.
 - An interface's functions have no bodies and no type parameters of their own.
 - Every function has `Self` in a parameter; see "A type that appears only in the result".
 
-### Inside a generic body (decided, November 2026)
+### Inside a generic body (decided)
 
 - **A bound's functions are ordinary candidates.** With `T: Json`, a `toJson(value: T)` joins the functions of that name as one of the current module's, and isn't generic. So in the body of `toJson<T: Json>(x: T?)`, `toJson(v)` with a `v: T` is the bound's function, which fits exactly, and not the function itself, which would need a promotion. `v.toJson()` chooses the same way, and `toJson(1)` still reaches the other overloads.
 - **Two bounds that declare the same function give one candidate.** With `T: Json & Yaml` both declaring `render(value: Self): String`, the lookup finds the same function for both.
 - **A bound on `T` itself is passed along. A bound on a type built from `T` is searched where the body is written**, with the bound's functions as the only ones for `T`. In `def f<T: Json>(x: T) => encode(Box(x))`, `Box<T>` is a `Json` through what `f`'s module can see. A `toJson` for `Box` in the caller's module doesn't reach it, which is the limit under "Costs".
 
-### Interface parameters (decided, November 2026)
+### Interface parameters (decided)
 
 An interface can take type parameters, and a type that depends on the conforming type, such as a range's element type, is one of them. There are no associated types.
 
@@ -77,11 +77,11 @@ total(["a", "b"])            // error: [String] is a Range<String>, not a Range<
 A bound is solved as a call, with whatever is known at that point:
 
 - **A parameter that appears only in results is determined by the function found.** A call to `next` chooses one function, and functions aren't overloaded on their result, so a type is a range of one element type in a given place.
-- **A parameter that appears in an argument takes part in choosing the function.** With `interface Add<Rhs> { def add(a: Self, b: Rhs): Self }`, a `Vec` that has `add(Vec, Vec)` and `add(Vec, Float)` is both an `Add<Vec>` and an `Add<Float>`. A bound `T: Add<Float>` picks by overloading. With `X` unknown, `T: Add<X>` needs exactly one function to fit the arguments that are known, and that function's parameter types give `X`. A parameter still unknown after that is an error (decided, November 2026).
+- **A parameter that appears in an argument takes part in choosing the function.** With `interface Add<Rhs> { def add(a: Self, b: Rhs): Self }`, a `Vec` that has `add(Vec, Vec)` and `add(Vec, Float)` is both an `Add<Vec>` and an `Add<Float>`. A bound `T: Add<Float>` picks by overloading. With `X` unknown, `T: Add<X>` needs exactly one function to fit the arguments that are known, and that function's parameter types give `X`. A parameter still unknown after that is an error (decided).
 - **Inference solves a bound as soon as its type is known.** In the order in [generics](../language/generics.md#inference), that's after the arguments that have a type of their own and before the expected type, literals and lambdas, so `xs.map(x => x * 2)` knows `x` from `xs`.
-- **A literal doesn't adapt through a bound** (decided, November 2026). With only `toJson(x: UInt8)` in scope, `toJson(1)` works, since the literal takes the parameter's type. `encode(1)` doesn't: `T` has no type from the argument, the literal defaults to `Int`, and `Int` isn't a `Json`. Writing `encode<UInt8>(1)` fixes it.
+- **A literal doesn't adapt through a bound** (decided). With only `toJson(x: UInt8)` in scope, `toJson(1)` works, since the literal takes the parameter's type. `encode(1)` doesn't: `T` has no type from the argument, the literal defaults to `Int`, and `Int` isn't a `Json`. Writing `encode<UInt8>(1)` fixes it.
 
-### A type that appears only in the result (decided, November 2026)
+### A type that appears only in the result (decided)
 
 Some operations produce a value of the conforming type from nothing of that type: `fromJson(json: String): Self?`, `parse`, `default`, `zero`. Functions aren't overloaded on their result, so there'd be nothing to tell one type's function from another's. Such a function takes a parameter whose only job is to carry the type, a marker from the prelude:
 
@@ -115,9 +115,9 @@ A shorter way to write the per-type function is left for later, as syntax for ex
 
 `T` satisfies an interface at a given call if every function in the interface, with `Self` replaced by `T`, is found by looking up the name at the call site, exactly as a call to it would resolve: current module first, then imports. Only module-level functions are candidates, as with method-call syntax.
 
-Nothing outside the caller's scope is searched (decided, November 2026). A type is a `Json` in a module exactly when `toJson(x)` resolves there, so using a type with a bound needs the module holding its function imported, as calling the function does. When a bound fails and the module that declares the type has a function that would fit, the error says to import it.
+Nothing outside the caller's scope is searched (decided). A type is a `Json` in a module exactly when `toJson(x)` resolves there, so using a type with a bound needs the module holding its function imported, as calling the function does. When a bound fails and the module that declares the type has a function that would fit, the error says to import it.
 
-The function is chosen from the argument types alone, as a call chooses, and its result type must then be exactly the interface's (decided, November 2026). If it isn't, the bound fails, and the error names that function. The result never takes part in choosing, so a function in the current module with the wrong result isn't passed over for an imported one with the right result. So an argument can be promoted as in any call, to an option or into a sum, and the best fit is chosen by the overloading rule:
+The function is chosen from the argument types alone, as a call chooses, and its result type must then be exactly the interface's (decided). If it isn't, the bound fails, and the error names that function. The result never takes part in choosing, so a function in the current module with the wrong result isn't passed over for an imported one with the right result. So an argument can be promoted as in any call, to an option or into a sum, and the best fit is chosen by the overloading rule:
 
 ```silver
 type Point = Point2D | Point3D
@@ -133,9 +133,9 @@ encode(p)        // and Point2D is a Json, through the same function
 - `mutable` has to agree, as it does for a call: a `mutable` parameter takes only a `mutable` argument, which is never promoted.
 - A type inside another isn't promoted, as in any call. A `[Point2D]` isn't a `[Point]`, so a function taking `[Self]` fits only with the type itself.
 
-The search itself (decided, November 2026):
+The search itself (decided):
 
-- **Imported modules are ranked by how well they fit, for a plain call as well** (decided and implemented, November 2026; see [functions.md](../language/functions.md#overloading)). A function that fits every argument with no conversion and isn't generic beats functions in other imported modules that need a conversion or are generic. Without this, a type's own `toJson(f: Foo)` and an interface module's `toJson<T: Json>(x: T?)` would be ambiguous in every module importing both, since a `Foo` promotes to a `Foo?`. The price is that a library adding an exact, non-generic function for a type takes calls that went to another import's promoted or generic one. A new function that fits by a conversion or is generic still can't.
+- **Imported modules are ranked by how well they fit, for a plain call as well** (decided and implemented; see [functions.md](../language/functions.md#overloading)). A function that fits every argument with no conversion and isn't generic beats functions in other imported modules that need a conversion or are generic. Without this, a type's own `toJson(f: Foo)` and an interface module's `toJson<T: Json>(x: T?)` would be ambiguous in every module importing both, since a `Foo` promotes to a `Foo?`. The price is that a library adding an exact, non-generic function for a type takes calls that went to another import's promoted or generic one. A new function that fits by a conversion or is generic still can't.
 - **Two imported modules that fit equally well are an error**, as they are for a plain call. A call is fixed by qualifying the name. A bound has nothing to qualify, so the fix is a function in the current module that forwards to one of them, until there's an adapter form (open question 8).
 - **A function whose bound fails doesn't fit**, for a plain call as well, and the choice goes on among the rest. So a function written for one shape, such as `toArray<R: Indexed<T>, T, U>(m: Map<R, T, U>)`, steps aside for a general one when its bound doesn't hold. A "no function fits" error says which bound failed.
 - **A bound that needs itself fails.** With only `toJson<T: Json>(x: T?)` in scope, whether `Foo` is a `Json` asks the same question again, so it isn't. A search that keeps reaching larger types stops at a depth limit, with an error of its own.
@@ -150,7 +150,7 @@ The search is the overloading rule in [functions.md](../language/functions.md): 
 
 There is no separate form to import or export. An extension reaches exactly the modules that can see its function, so `import`, selective imports and `forward import` control it.
 
-### Operators and printing (decided, November 2026)
+### Operators and printing (decided)
 
 `==`, `!=`, printing, `String(x)` and string holes aren't interfaces. Each belongs to the type: it's the structural one, or one the type's own module writes, and no other module can supply or replace it.
 
@@ -202,7 +202,7 @@ Inside the branch `R` gains the bound, so both branches are checked once at the 
 
 This is different from overloading on specificity. An overload is chosen where the call is written, so a caller holding only `R: Range` would get the slow path. `static if` sees the real type.
 
-The direction (November 2026) is that a query is a bound that's allowed to fail. It's answered where `R` becomes a concrete type in source, by the same lookup as any bound, and handed down as a witness that may be absent, through each generic function on the way. Lookup still happens once, in source, and a function in the caller's scope can turn on a fast path inside a library.
+The direction is that a query is a bound that's allowed to fail. It's answered where `R` becomes a concrete type in source, by the same lookup as any bound, and handed down as a witness that may be absent, through each generic function on the way. Lookup still happens once, in source, and a function in the caller's scope can turn on a fast path inside a library.
 
 Not designed yet:
 
@@ -261,7 +261,7 @@ Since ordering, equality and hashing belong to the type, `Set<T: Ord>` and a map
 - **A value of a public generic type doesn't carry the conformance it was built with.** A `Map<lib.Src, Int, Int>` built in a module with its own `next` for `lib.Src` is searched again where it's consumed, and may not be a range there, or may step by another function. One module may loop over it by index and another by stepping. Returning it as an opaque `Range<Int>` carries the conformance.
 - **A library type with no `opCompare` can't be ordered by anyone else,** so it can't be a `Set` element or a map key without a wrapper type. `sortBy` with a key covers sorting.
 - **A bound and a call differ for a literal:** see "Interface parameters".
-- **Instantiations are keyed by witnesses as well as types,** so the worklist gets larger. An instance's name, in an error or in the `.ll`, shows its witnesses only when two instances of the same types differ by them (decided, November 2026), which a program with one conformance per type never has.
+- **Instantiations are keyed by witnesses as well as types,** so the worklist gets larger. An instance's name, in an error or in the `.ll`, shows its witnesses only when two instances of the same types differ by them (decided), which a program with one conformance per type never has.
 
 ## Implementation sketch
 
@@ -278,7 +278,7 @@ Since ordering, equality and hashing belong to the type, `Set<T: Ord>` and a map
 4. **`Float` and `Ord`.** NaN has no place in a three-way total order. Decided: `Float` is `Ord` by a total order with NaN after every other value, so `max(1.5, 2.5)` compiles and a sort is defined for every input. `<` on two `Float`s outside generic code is unchanged, so the two differ only when a NaN is involved.
 5. **Built-in types.** Decided: they conform through functions in scope, as any type does; see "Conformance". Still open is tuples and declared interfaces, which needs type parameter lists of any length or a conformance the compiler builds.
 6. **Derived equality and printing.** Decided: they're the type's own and not conformances, replaced only by its own module.
-7. **Interface values** such as `[Json]`, holding mixed types, need a runtime representation and dynamic dispatch. Decided: not in the first version. An interface name is a type only where one concrete type stands behind it: a parameter, a result or a binding, as described in the [ranges proposal](ranges.md#an-interface-name-as-a-type-decided-november-2026). `[Json]` is an error that says to use a sum type, or to convert the values where they're collected.
+7. **Interface values** such as `[Json]`, holding mixed types, need a runtime representation and dynamic dispatch. Decided: not in the first version. An interface name is a type only where one concrete type stands behind it: a parameter, a result or a binding, as described in the [ranges proposal](ranges.md#an-interface-name-as-a-type-decided). `[Json]` is an error that says to use a sum type, or to convert the values where they're collected.
 8. **An explicit adapter form,** for naming a witness. Deferred, and addable later. The shape discussed is a statement private to a module:
 
    ```silver
