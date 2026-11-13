@@ -234,6 +234,21 @@ private def isUtf8(data: [UInt8]): Bool {
     true
 }
 
+def join(parts: [String], separator: String): String {
+    mutable val result = ""
+    for i in 0..length(parts) {
+        if i > 0 { result ~= separator }
+        result ~= parts[i]
+    }
+    result
+}
+
+test "join joins strings with separator" {
+    expect(join(["a", "b", "c"], ", ") == "a, b, c")
+    expect(join(["a", "b", "c"], "") == "abc")
+    expect(join([], ", ") == "")
+}
+
 test "contains finds a part anywhere" {
     expect(contains("silver", "sil"))
     expect(contains("silver", "lve"))
