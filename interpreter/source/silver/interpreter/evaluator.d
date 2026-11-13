@@ -681,8 +681,6 @@ final class Evaluator
                 try invoke(work.target, [], work.captures, null);
                 catch (RuntimeError error) return Value(Record(1, [Value(error.diagnostic.message)]));
                 return Value(Record(0, null));
-            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect:
-                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, and the others operations on a Cell");
         }
     }
 

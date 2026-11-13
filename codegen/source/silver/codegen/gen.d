@@ -809,8 +809,6 @@ private final class Generator
                 assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, and the others operations on a Cell");
             case Intrinsic.panics:
                 return emitPanics(call.args[0], e.span);
-            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect:
-                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, and the others operations on a Cell");
         }
     }
 
