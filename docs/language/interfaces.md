@@ -48,7 +48,19 @@ def describe<T: Json & Named>(item: T): String => name(item) ~ " " ~ toJson(item
 
 A bound goes on a type parameter of a `def` at module level. A type's parameter can't have one, and neither can an interface's.
 
-Two functions that differ only in their bounds are duplicates, as two that differ only in their result are.
+Two functions with the same parameter types can differ in their bounds when one asks for everything the other does and more. Where both fit a call, the one that asks for more is chosen:
+
+```silver
+def count<R: Range<T>, T>(range: R): Int { ... }                    // steps to the end
+def count<R: Range<T> & Indexed<T>, T>(range: R): Int => length(range)
+
+count([1, 2, 3])        // the second
+count(Countdown(3))     // the first: a Countdown isn't Indexed
+```
+
+- A bound asks for its interface's functions, so `R: Indexed<T>` asks for more than `R: Sized` when `Sized` declares only `length`.
+- When neither asks for everything the other does, as `R: Range<T>` and `R: Indexed<T>`, the two are duplicates. So are two that differ only in their result.
+- The choice is made where the call is written, from what's known there. Inside `def total<R: Range<T>, T>(range: R)`, `count(range)` is the first function whatever `R` turns out to be.
 
 ### Inside the function
 
@@ -161,7 +173,7 @@ A bound is solved as a call, with what's known at that point:
 In [inference](generics.md#inference), a bound is solved as soon as its type is known: after the arguments that have a type of their own, and before the expected type, literals and lambdas. So a lambda's parameter can come from a bound:
 
 ```silver
-def map<R: Range<T>, T, U>(source: R, transform: (T) -> U): Map<R, T, U> => ...
+def map<R: Range<T>, T, U>(source: R, transform: (T) -> U): Mapped<R, T, U> => ...
 
 [1, 2, 3].map(x => x * 2)      // x is an Int, from the array's next
 ```
@@ -192,11 +204,11 @@ val n: Int? = fromText("one")
 A parameter of a module-level `def` can have an interface as its whole type. It stands for some type that satisfies the interface, which is a type parameter that isn't written:
 
 ```silver
-def toArray<T>(range: Range<T>): [T] { ... }      // <S: Range<T>, T>(range: S)
+def array<T>(range: Range<T>): [T] { ... }      // <S: Range<T>, T>(range: S)
 def total(range: Range<Int>): Int { ... }
 
-toArray(Countdown(3))
-toArray<Int>([4, 5])       // only T is a type argument
+array(Countdown(3))
+array<Int>([4, 5])       // only T is a type argument
 total(["a", "b"])          // error: a [String] is a Range<String>
 ```
 
@@ -221,6 +233,7 @@ See the [interfaces proposal](../proposals/interfaces.md) for the reasoning behi
 
 ## Current implementation
 
+- Two functions that differ only in their bounds are always duplicates (`T0035`); choosing the one that asks for more isn't built.
 - When several functions of a name could take a call, a bound whose type parameter only the call's expected type would decide isn't looked into until one is chosen, so it's an error then rather than a reason to choose another.
 - A program that gives one type two conformances compiles a generic function once for each. Such an instance's name, as a function value prints it, doesn't show which it is.
 - Everything else above is implemented.

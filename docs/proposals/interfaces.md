@@ -67,10 +67,10 @@ An interface can take type parameters, and a type that depends on the conforming
 ```silver
 interface Range<T> { def next(range: Self): (T, Self)? }
 
-def toArray<T>(range: Range<T>): [T] => ...
+def array<T>(range: Range<T>): [T] => ...
 def total(range: Range<Int>): Int => ...
 
-Countdown(3).toArray()       // T = Int, read off Countdown's next
+Countdown(3).array()       // T = Int, read off Countdown's next
 total(["a", "b"])            // error: [String] is a Range<String>, not a Range<Int>
 ```
 
@@ -137,9 +137,9 @@ The search itself (decided):
 
 - **Imported modules are ranked by how well they fit, for a plain call as well** (decided and implemented; see [functions.md](../language/functions.md#overloading)). A function that fits every argument with no conversion and isn't generic beats functions in other imported modules that need a conversion or are generic. Without this, a type's own `toJson(f: Foo)` and an interface module's `toJson<T: Json>(x: T?)` would be ambiguous in every module importing both, since a `Foo` promotes to a `Foo?`. The price is that a library adding an exact, non-generic function for a type takes calls that went to another import's promoted or generic one. A new function that fits by a conversion or is generic still can't.
 - **Two imported modules that fit equally well are an error**, as they are for a plain call. A call is fixed by qualifying the name. A bound has nothing to qualify, so the fix is a function in the current module that forwards to one of them, until there's an adapter form (open question 8).
-- **A function whose bound fails doesn't fit**, for a plain call as well, and the choice goes on among the rest. So a function written for one shape, such as `toArray<R: Indexed<T>, T, U>(m: Map<R, T, U>)`, steps aside for a general one when its bound doesn't hold. A "no function fits" error says which bound failed.
+- **A function whose bound fails doesn't fit**, for a plain call as well, and the choice goes on among the rest. So a function written for one shape, such as `array<R: Indexed<T>, T, U>(m: Mapped<R, T, U>)`, steps aside for a general one when its bound doesn't hold. A "no function fits" error says which bound failed.
 - **A bound that needs itself fails.** With only `toJson<T: Json>(x: T?)` in scope, whether `Foo` is a `Json` asks the same question again, so it isn't. A search that keeps reaching larger types stops at a depth limit, with an error of its own.
-- **Two functions that differ only in their bounds are duplicates**, as two that differ only in their result are.
+- **Two functions that differ only in their bounds are allowed when one asks for everything the other does and more**, and it wins where both fit (decided; see [interfaces.md](../language/interfaces.md#bounds)). Otherwise they're duplicates, as two that differ only in their result are.
 - **A bound on the function found is searched from the original call site**, in the same way, wherever that function lives. With a library's `toJson<T: Json>(b: Box<T>)` and a local `toJson(f: Foo)`, `encode(Box(foo))` uses both.
 - **A built-in type conforms through functions in scope like any other.** The prelude is always imported, so what it supplies is always found. A library's `toJson(x: Int)` is found where that library is imported.
 - **Tuples and function types conform through functions like any other type**, one function per length, as `toJson<A: Json, B: Json>(pair: (A, B))`. No one generic function covers every length, so the prelude supplies none. For `Ord` the compiler supplies the order: element by element, when every element is ordered.
@@ -176,7 +176,7 @@ Making it reach would mean every function takes its conformances from its caller
 The function chosen for a bound is its **witness**, together with any promotion of its arguments. Sema records witnesses per call, beside the type arguments. The promotions follow from the types, so a witness is still identified by its function.
 
 - A generic calling another generic passes along the witness it was given for `T`. For a type built from `T` it searches where its body is written; see "Inside a generic body".
-- A function used as a value, or hidden behind an opaque return, is the instance with its witnesses. `encode` taken as a value under two conformances is two different functions.
+- A function used as a value is the instance with its witnesses. `encode` taken as a value under two conformances is two different functions.
 - A witness that is itself generic carries its own type arguments and witnesses.
 - Lookup happens once, where the concrete type is known in source. A generic body never searches by name at instantiation, which avoids D's problem of a free function next to your type being invisible inside `std.algorithm`.
 
@@ -185,10 +185,10 @@ The function chosen for a bound is its **witness**, together with any promotion 
 A function's own bounds express it, so nothing extra is needed:
 
 ```silver
-def length<R: Sized, F>(value: Map<R, F>): Int => length(value.source)
+def length<R: Sized, F>(value: Mapped<R, F>): Int => length(value.source)
 ```
 
-`Map<R, F>` is `Sized` exactly when this function applies, which is how an adapter keeps a capability of what it wraps.
+`Mapped<R, F>` is `Sized` exactly when this function applies, which is how an adapter keeps a capability of what it wraps.
 
 ### Capability queries (a direction, not in the first version)
 
@@ -200,14 +200,14 @@ def count<R: Range>(r: R): Int {
 
 Inside the branch `R` gains the bound, so both branches are checked once at the definition. The branch is chosen at monomorphization.
 
-This is different from overloading on specificity. An overload is chosen where the call is written, so a caller holding only `R: Range` would get the slow path. `static if` sees the real type.
+This is different from an overload that asks for more, which the language has. An overload is chosen where the call is written, so a caller holding only `R: Range` gets the slow path. `static if` sees the real type.
 
 The direction is that a query is a bound that's allowed to fail. It's answered where `R` becomes a concrete type in source, by the same lookup as any bound, and handed down as a witness that may be absent, through each generic function on the way. Lookup still happens once, in source, and a function in the caller's scope can turn on a fast path inside a library.
 
 Not designed yet:
 
 - How a function's optional bounds are worked out from the functions it calls, since every generic caller in between has to carry them.
-- A query on a type built from `R`, such as `Map<R, T, U>`.
+- A query on a type built from `R`, such as `Mapped<R, T, U>`.
 - A lookup that is ambiguous. It should be an error, never a silent "no".
 
 Until then a generic function sees only its bounds. Capabilities still follow a value's type, through functions with bounds of their own: see "Conditional conformance".
@@ -258,7 +258,7 @@ Since ordering, equality and hashing belong to the type, `Set<T: Ord>` and a map
 - **Accidental matches.** A signature can't state laws, so an unrelated `length` satisfies `Sized`. Capability interfaces should be narrow and specifically named.
 - **Conformance varies by module.** Two modules can give `Foo` different `Json`s. That is the feature, but a reader has to know that `encode(foo)` depends on what's in scope.
 - **A local conformance doesn't reach non-generic code.** With a local `toJson(Point)`, `encode(point)` uses it, while a library's `toJson(line: Line)` still calls its own for the points inside. It matters only when a program has two conformances of one type to one interface, which a local function over the type's own always creates.
-- **A value of a public generic type doesn't carry the conformance it was built with.** A `Map<lib.Src, Int, Int>` built in a module with its own `next` for `lib.Src` is searched again where it's consumed, and may not be a range there, or may step by another function. One module may loop over it by index and another by stepping. Returning it as an opaque `Range<Int>` carries the conformance.
+- **A value of a public generic type doesn't carry the conformance it was built with.** A `Mapped<lib.Src, Int, Int>` built in a module with its own `next` for `lib.Src` is searched again where it's consumed, and may not be a range there, or may step by another function. One module may loop over it by index and another by stepping. Erasing it to a `Seq<Int>` carries the conformance.
 - **A library type with no `opCompare` can't be ordered by anyone else,** so it can't be a `Set` element or a map key without a wrapper type. `sortBy` with a key covers sorting.
 - **A bound and a call differ for a literal:** see "Interface parameters".
 - **Instantiations are keyed by witnesses as well as types,** so the worklist gets larger. An instance's name, in an error or in the `.ll`, shows its witnesses only when two instances of the same types differ by them (decided), which a program with one conformance per type never has.

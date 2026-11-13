@@ -131,7 +131,7 @@ describe([true])   // describe<T>([T])
 - Two `def`s of one name in a scope are allowed when their parameter types differ. A different return type doesn't make them differ, and neither does `mutable` alone, an alias of the same type, or other names for the type parameters.
 - A local or parameter holding a function wins outright and isn't overloaded.
 - The type a call is expected to have never chooses, since functions aren't overloaded on their return type.
-- A [bound](interfaces.md#bounds) doesn't make two functions differ either. A function whose bound the arguments' types don't satisfy doesn't fit a call, so the choice goes on among the others; see [Interfaces](interfaces.md#a-failed-bound-doesnt-fit).
+- A [bound](interfaces.md#bounds) makes two functions differ only when one asks for everything the other does and more; the one that asks for more then beats the other where both fit. A function whose bound the arguments' types don't satisfy doesn't fit a call, so the choice goes on among the others; see [Interfaces](interfaces.md#a-failed-bound-doesnt-fit).
 - Inside a function with a bound, the functions the bound supplies are among the current module's.
 
 A call chooses among the functions of its name like this:
@@ -141,7 +141,7 @@ A call chooses among the functions of its name like this:
 3. An argument fits its parameter exactly, or by a conversion: promotion to an option, becoming a member of a sum, or a literal taking a type other than its default. A candidate that fits every argument beats another if it fits each argument at least as well and one of them better. When two fit every argument equally well, a function that isn't generic beats a generic one, and a generic function beats another that takes everything it takes, as `f<T>(x: [T])` beats `f<T>(x: T)`.
 4. If no candidate fits, or more than one fits better than all the others, the call is an error.
 
-The current module's functions come first. Imported functions are only tried when none of the current module's fits, and then the choice is made within one imported module. A module with a function that fits every argument exactly and isn't generic beats the other modules, whose functions would need a conversion or are generic. Otherwise only one imported module's functions may fit: if functions from two modules fit equally well, the call is ambiguous, and qualifying it resolves that.
+The current module's functions come first. Imported functions are only tried when none of the current module's fits, and then the choice is made within one imported module. A module with a function that fits every argument exactly and isn't generic beats the other modules, whose functions would need a conversion or are generic. Otherwise only one imported module's functions may fit: if functions from two modules fit equally well, the call is ambiguous, and qualifying it resolves that. A module here is what one import brings, so the functions a module [forwards](modules.md#forms-of-import) are ranked with its own.
 
 ```silver
 import shapes    // def encode(s: Square): String

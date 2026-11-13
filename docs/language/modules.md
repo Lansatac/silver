@@ -26,6 +26,8 @@ Module-level declarations can appear in any order.
 
 The prelude, which provides names like `print` and `read`, is an ordinary implicit import with no special priority. A conflict with another import is ambiguous, and `prelude.print` disambiguates.
 
+The prelude declares nothing itself. It's a list of `forward import`s of `std` modules, so everything it provides has a module of its own that can be imported by name.
+
 ## Visibility
 
 Declarations are public by default. `private` restricts one to its module:
@@ -61,11 +63,14 @@ These are also part of the design:
 
 ```silver
 forward import a.b : first    // forwards names to importers
+forward import a.b            // forwards every public name
 ```
 
 `forward` is reserved only at the top level, followed by `import`.
 
 Imports can also be renamed. A symbol's identity is its declaring module, so reaching one symbol through two forwarding paths isn't ambiguous.
+
+For choosing among [overloads](functions.md#overloading), everything one import brings counts as one module: the module's own functions and those it forwards. So with `std.array.first<T>(xs: [T])` and `std.range.first<R: Range<T>, T>(range: R)` both forwarded by the prelude, `first([1, 2, 3])` is the array's, as it would be if one module declared both. Importing the two modules separately leaves that call ambiguous. Two imports that lead to the same function agree, so importing `std.range` beside the prelude changes nothing.
 
 ## Open questions
 
@@ -77,3 +82,4 @@ Imports can also be renamed. A symbol's identity is its declaring module, so rea
 ## Current implementation
 
 - `forward import` and renamed imports aren't available.
+- The prelude declares its names itself.
