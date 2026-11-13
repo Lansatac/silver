@@ -23,7 +23,7 @@ private bool isFunction(const SymbolId symbol)
 
 private bool isConversion(Builtin builtin)
 {
-    static immutable Builtin[] notConversions = [Builtin.Never, Builtin.Unit, Builtin.Bool, Builtin.Any];
+    static immutable Builtin[] notConversions = [Builtin.Never, Builtin.Unit, Builtin.Bool, Builtin.Char, Builtin.Any];
     return !notConversions.canFind(builtin);
 }
 
@@ -1356,6 +1356,7 @@ private final class NameResolver
             (const IntLiteral _) {},
             (const FloatLiteral _) {},
             (const StringLiteral _) {},
+            (const CharLiteral _) {},
             (const InterpolatedString interpolated) {
                 foreach (part; interpolated.parts)
                 {

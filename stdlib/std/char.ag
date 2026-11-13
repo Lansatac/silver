@@ -1,0 +1,105 @@
+// Questions about a Char, and the conversions that can fail or change one.
+module std.char
+
+// `n` as a Char, for a caller that has checked it's a scalar value.
+private intrinsic def uncheckedChar(n: Int): Char
+
+// The Char whose value is `n`, if `n` is a Unicode scalar value: at most 10FFFF and not a surrogate.
+def toChar(n: Int): Char? {
+    if n < 0 || n > 0x10FFFF || (n >= 0xD800 && n <= 0xDFFF) {
+        return None
+    }
+    uncheckedChar(n)
+}
+
+// One of the ten digits `0` to `9`.
+def isDigit(c: Char): Bool => c >= '0' && c <= '9'
+
+// One of the 26 unaccented letters, in either case.
+def isAsciiLetter(c: Char): Bool => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+
+// Unicode's White_Space property.
+def isWhitespace(c: Char): Bool {
+    val n = Int(c)
+    (n >= 0x9 && n <= 0xD) || n == 0x20 || n == 0x85 || n == 0xA0 || n == 0x1680
+        || (n >= 0x2000 && n <= 0x200A) || n == 0x2028 || n == 0x2029 || n == 0x202F || n == 0x205F || n == 0x3000
+}
+
+// `c` in upper case if it's one of `a` to `z`, and unchanged otherwise.
+def toAsciiUpper(c: Char): Char => if c >= 'a' && c <= 'z' => uncheckedChar(Int(c) - 32) else c
+
+// `c` in lower case if it's one of `A` to `Z`, and unchanged otherwise.
+def toAsciiLower(c: Char): Char => if c >= 'A' && c <= 'Z' => uncheckedChar(Int(c) + 32) else c
+
+test "toChar takes every scalar value" {
+    expect(toChar(97) == Some('a'))
+    expect(toChar(0) == Some('\0'))
+    expect(toChar(0xE9) == Some('\u{e9}'))
+    expect(toChar(0x1F600) == Some('\u{1f600}'))
+    expect(toChar(0xD7FF) == Some('\u{d7ff}'))
+    expect(toChar(0xE000) == Some('\u{e000}'))
+    expect(toChar(0x10FFFF) == Some('\u{10ffff}'))
+}
+
+test "toChar refuses what isn't a scalar value" {
+    expect(toChar(-1) == None)
+    expect(toChar(0xD800) == None)
+    expect(toChar(0xDFFF) == None)
+    expect(toChar(0x110000) == None)
+    expect(toChar(9223372036854775807) == None)
+}
+
+test "toChar undoes Int" {
+    val smile = '\u{1f600}'
+    expect(toChar(Int(smile)) == Some(smile))
+}
+
+test "isDigit is the ten ASCII digits" {
+    expect(isDigit('0'))
+    expect(isDigit('9'))
+    expect(!isDigit('/'))
+    expect(!isDigit(':'))
+    expect(!isDigit('a'))
+    // An Arabic-Indic digit.
+    expect(!isDigit('\u{661}'))
+}
+
+test "isAsciiLetter is the unaccented letters" {
+    expect(isAsciiLetter('a'))
+    expect(isAsciiLetter('z'))
+    expect(isAsciiLetter('A'))
+    expect(isAsciiLetter('Z'))
+    expect(!isAsciiLetter('@'))
+    expect(!isAsciiLetter('['))
+    expect(!isAsciiLetter('`'))
+    expect(!isAsciiLetter('{'))
+    expect(!isAsciiLetter('\u{e9}'))
+    expect(!isAsciiLetter('5'))
+}
+
+test "isWhitespace covers Unicode's white space" {
+    expect(isWhitespace(' '))
+    expect(isWhitespace('\t'))
+    expect(isWhitespace('\n'))
+    expect(isWhitespace('\r'))
+    expect(isWhitespace('\u{a0}'))
+    expect(isWhitespace('\u{2003}'))
+    expect(isWhitespace('\u{3000}'))
+    expect(!isWhitespace('a'))
+    expect(!isWhitespace('\0'))
+    // A zero-width space isn't white space.
+    expect(!isWhitespace('\u{200b}'))
+}
+
+test "the case functions change only unaccented letters" {
+    expect(toAsciiUpper('a') == 'A')
+    expect(toAsciiUpper('z') == 'Z')
+    expect(toAsciiUpper('A') == 'A')
+    expect(toAsciiUpper('5') == '5')
+    expect(toAsciiUpper('\u{e9}') == '\u{e9}')
+    expect(toAsciiLower('A') == 'a')
+    expect(toAsciiLower('Z') == 'z')
+    expect(toAsciiLower('a') == 'a')
+    expect(toAsciiLower('[') == '[')
+    expect(toAsciiLower('\u{c9}') == '\u{c9}')
+}

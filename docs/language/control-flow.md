@@ -60,7 +60,7 @@ for i in 0..10 {
 }
 ```
 
-`for` takes a block, has value `()`, and drops the body's value. The iterable is an array, a range `a..b` with integer bounds of one type, with literals adapting to the other bound, or a value of another type that functions named `length` and `opIndex`, or `next`, loop over.
+`for` takes a block, has value `()`, and drops the body's value. The iterable is an array, a range `a..b` with integer bounds of one type, with literals adapting to the other bound, or a value of another type that functions named `length` and `opIndex`, or `next`, loop over. A `String` is one of those: the prelude's `next` steps through it a `Char` at a time (see [Strings](strings.md)).
 
 The iterable is evaluated once, before the loop. The loop variable is immutable, fresh on each iteration, and in scope only in the body. `for _ in` works when the value isn't needed.
 

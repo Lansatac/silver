@@ -198,7 +198,7 @@ error: Missing(port)
 
 - How a function names a list of errors it receives, as a helper that describes a `Negative | Overflow` would. A list is written only after `!` today, so the helper takes a declared sum.
 - The exit statuses, 1 and 101, which are placeholders until program arguments and exit codes are designed.
-- What `IoError` is, and `read()` returning `String? ! IoError` so that the end of input and a failure to read are told apart.
+- What `IoError` is, and `read()` returning `String? ! IoError` so that the end of input and a failure to read are told apart. Input that isn't UTF-8 is one of those failures.
 - Whether other maths written for speed counts as arithmetic under the standard library's rule, as `powInt` does.
 - A record of where an error was passed on by `?`, printed when it reaches `main` or a `!`.
 

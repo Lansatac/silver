@@ -192,6 +192,7 @@ Silver:
     Literal              <  BooleanLiteral
                           / NumberLiteral
                           / StringLiteral
+                          / CharLiteral
 
     UnitLiteral          < '(' Nl? ')'
     # One element is grouping and more are a tuple, so the two share a parse
@@ -226,6 +227,10 @@ Silver:
     StringText          <~ (!doublequote !backslash !eol !'{' .)+
     EscapeSequence      <~ backslash (doublequote / backslash / [nrt0{}] / "u{" HexDigit HexDigit? HexDigit? HexDigit? HexDigit? HexDigit? "}")
     HexDigit            <- [0-9a-fA-F]
+    CharLiteral         <- quote CharPart* quote
+    CharPart            <- CharText / CharEscape
+    CharText            <~ (!quote !backslash !eol .)+
+    CharEscape          <~ backslash (quote / backslash / [nrt0] / "u{" HexDigit HexDigit? HexDigit? HexDigit? HexDigit? HexDigit? "}")
     # Not `<`, which would also skip the text's own spaces around the hole. The expression is
     # required, but lowering can say so better than a parse error could; the braces are kept
     # so an empty hole still matches text, as in ListLiteral.

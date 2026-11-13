@@ -10,7 +10,7 @@ import std.typecons : Rebindable, rebindable;
 import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
 import silver.core.nodes;
-import silver.sema : Analysis, FunctionUse, IndexFunctions, LoopFunctions, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
+import silver.sema : Analysis, FunctionUse, IndexFunctions, LoopFunctions, ConstChar, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
     Substitution, SymbolId, Type, TypeTable, Witness;
 
 /// A parameter's local name. Discarded ones get a name no Silver identifier can have, so several
@@ -586,6 +586,7 @@ private final class Lowering
             (const ast.IntLiteral literal) => make(numberLiteral(literal.value, false, type)),
             (const ast.FloatLiteral literal) => make(ExprKind(FloatLit(literal.value))),
             (const ast.StringLiteral literal) => make(ExprKind(StringLit(literal.value))),
+            (const ast.CharLiteral literal) => make(ExprKind(IntLit(literal.value))),
             (const ast.InterpolatedString interpolated) => lowerInterpolated(interpolated, span),
             (const ast.Identifier _) => symbolValue(resolved(e), type, span, e.id),
             (const ast.UnaryExpr unary) => make(lowerUnary(unary, type)),
@@ -804,6 +805,7 @@ private final class Lowering
             (const double v) => ExprKind(FloatLit(v)),
             (const string v) => ExprKind(StringLit(v)),
             (const ConstUnit _) => ExprKind(UnitLit()),
+            (const ConstChar v) => ExprKind(IntLit(v.value)),
         );
         return Expr(type, span, kind);
     }
@@ -1982,10 +1984,14 @@ private final class Lowering
                 return Expr(types.unit, span, ExprKind(Cell(CellOp.Set, args)));
             case Intrinsic.update:
                 return updateCell(args[0], args[1], span);
+            case Intrinsic.uncheckedChar:
+                return Expr(types.char_, span, ExprKind(Convert(boxed(args[0]))));
             case Intrinsic.assert_, Intrinsic.expect:
                 assert(0, "`assert` and `expect` are expanded from what's written, and sema rejects them as values");
             case Intrinsic.exitWithError:
                 assert(0, "only the wrapper lowering makes for `main` calls `exitWithError`");
+            case Intrinsic.print, Intrinsic.printl, Intrinsic.read, Intrinsic.panic:
+            case Intrinsic.bytes, Intrinsic.uncheckedString:
             case Intrinsic.print, Intrinsic.printl, Intrinsic.read, Intrinsic.panic, Intrinsic.panics:
                 break;
         }

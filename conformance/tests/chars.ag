@@ -1,0 +1,59 @@
+val first: Char = 'a'
+val accent: Char = '\u{e9}'
+val label: String = "starts with {first}"
+
+type Token(symbol: Char, count: Int)
+
+def describe(c: Char): String => match c {
+    'a' => "the letter a"
+    '\n' => "a newline"
+    _ => "something else"
+}
+
+def main(): Unit {
+    printl('a')
+    printl('é')
+    printl('€')
+    printl('😀')
+    print('x')
+    print('\'')
+    print('"')
+    print('\\')
+    printl('\t' == '\u{9}')
+
+    printl(first)
+    printl(accent)
+    printl(label)
+    printl("{accent}{'!'}")
+    printl(String('z') ~ String(accent))
+
+    printl('a' == 'a')
+    printl('a' != 'b')
+    printl('a' < 'b')
+    printl('é' > 'z')
+    printl('😀' >= '€')
+    printl('b' <= 'a')
+
+    printl(Int('a'))
+    printl(Int('é'))
+    printl(UInt32('😀'))
+    printl(Int('\0'))
+
+    val letters = ['s', 'i', 'l']
+    printl(letters)
+    printl(letters == ['s', 'i', 'l'])
+    printl(letters ~ ['v'])
+    printl(('a', 1))
+    val maybe: Char? = 'q'
+    printl(maybe)
+    printl(Token('#', 2))
+    printl(Token('#', 2) == Token('#', 2))
+
+    printl(describe('a'))
+    printl(describe('\n'))
+    printl(describe('é'))
+
+    mutable val current = 'a'
+    current = 'b'
+    printl(current)
+}

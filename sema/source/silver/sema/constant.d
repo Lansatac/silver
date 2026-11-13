@@ -22,9 +22,15 @@ struct ConstUnit
 {
 }
 
+/// Wrapped like the integers: a bare `dchar` converts to `double`.
+struct ConstChar
+{
+    dchar value;
+}
+
 /// The integers are wrapped because `long` and `ulong` convert implicitly, so a `match` couldn't
 /// tell them apart. A narrower type's value is held sign- or zero-extended.
-alias ConstValue = SumType!(ConstInt, ConstUInt, bool, double, string, ConstUnit);
+alias ConstValue = SumType!(ConstInt, ConstUInt, bool, double, string, ConstUnit, ConstChar);
 
 /// An operation with no value, like an overflowing `+`. The message says why.
 package final class ConstantFailure : Exception
@@ -47,6 +53,7 @@ package string formatValue(const ConstValue value)
         (const double v) => v != v ? "nan" : v.to!string,
         (const string v) => v,
         (const ConstUnit _) => "()",
+        (const ConstChar v) => [v.value].to!string,
     );
 }
 
@@ -72,6 +79,7 @@ package ConstValue binaryValue(BinaryOp op, const ConstValue lhs, const ConstVal
         (const double l) => floatBinary(op, l, rhs.get!(const double)),
         (const string l) => stringBinary(op, l, rhs.get!(const string)),
         (const ConstUnit _) => equality!bool(op, true, true),
+        (const ConstChar l) => comparison!dchar(op, l.value, rhs.get!(const ConstChar).value),
     );
 }
 

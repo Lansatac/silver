@@ -396,6 +396,7 @@ package final class Declarer
             case Builtin.Int: return _types.int_;
             case Builtin.Float: return _types.float_;
             case Builtin.String: return _types.string_;
+            case Builtin.Char: return _types.char_;
             case Builtin.Any: return _types.any;
             case Builtin.Int8: return _types.int8;
             case Builtin.Int16: return _types.int16;

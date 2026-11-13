@@ -17,7 +17,7 @@ These documents describe the language as designed. Where the implementation does
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
 | [Errors](language/errors.md) | `T ! E`, `?` and `!` on errors, what panics, `main` | Implemented, except `read()` returning an error |
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, maps | Implemented, except maps; element assignment always copies |
-| [Strings](language/strings.md) | Text, interpolation, views | Partial: no byte or character views |
+| [Strings](language/strings.md) | Text, interpolation, characters, cutting, `std.string` | Partial: `read()` doesn't check for UTF-8; no raw or multi-line strings |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, invariants, `match` | Implemented |
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |

@@ -160,10 +160,14 @@ final class Evaluator
                 (const Inject inject) => evaluate(inject, frame),
                 (const IsMember test) => Value(evaluate(*test.subject, frame).as!Record.tag == test.member),
                 (const Payload payload) => evaluate(*payload.subject, frame).as!Record.fields[0],
-                (const ArrayLit literal) => Value(ArrayValue(all(literal.elements, frame))),
+                (const ArrayLit literal) => arrayOf(all(literal.elements, frame), e.type),
                 (const Index index) => evaluate(index, frame),
                 (const Slice slice) => evaluate(slice, frame),
-                (const Length length) => Value(cast(long) evaluate(*length.array, frame).as!ArrayValue.elements.length),
+                (const Length length) => evaluate(*length.array, frame).match!(
+                    (string bytes) => Value(cast(long) bytes.length),
+                    (ArrayValue array) => Value(cast(long) array.elements.length),
+                    (_) => assert(0, "Core's types say this is an array"),
+                ),
                 (const Cell cell) => evaluate(cell, frame),
                 (const TestFailure failure) => fail(evaluate(*failure.message, frame).as!string, failure.ends),
             );
@@ -298,22 +302,49 @@ final class Evaluator
 
     private Value evaluate(const Index index, Frame frame)
     {
-        auto elements = evaluate(*index.array, frame).as!ArrayValue.elements;
+        auto array = evaluate(*index.array, frame);
         auto at = position(evaluate(*index.index, frame));
+        if (array.has!string)
+        {
+            auto bytes = array.as!string;
+            if (at >= bytes.length) throw new CodedException(DiagnosticCode.IndexOutOfRange, "Index is out of range");
+            return Value(long(cast(ubyte) bytes[cast(size_t) at]));
+        }
+        auto elements = array.as!ArrayValue.elements;
         if (at >= elements.length) throw new CodedException(DiagnosticCode.IndexOutOfRange, "Index is out of range");
         return elements[cast(size_t) at];
     }
 
+    /// An array of `type` holding `elements`. A `[UInt8]` is held as a D string, the way a String
+    /// is, so `bytes` and the conversion back share the buffer instead of copying it.
+    private Value arrayOf(Value[] elements, Type type)
+    {
+        import std.algorithm : map;
+        import std.array : array;
+
+        auto types = _program.types;
+        if (!types.isArray(type) || types.arrayElement(type) != types.uint8) return Value(ArrayValue(elements));
+        return Value(cast(string) elements.map!(e => cast(char) e.as!long).array);
+    }
+
+    /// The bytes of a `[UInt8]`, which is an ArrayValue only when it was written `[]`.
+    private static string byteString(Value array)
+    {
+        return array.has!string ? array.as!string : null;
+    }
+
     private Value evaluate(const Slice slice, Frame frame)
     {
-        auto elements = evaluate(*slice.array, frame).as!ArrayValue.elements;
+        auto array = evaluate(*slice.array, frame);
         auto start = position(evaluate(*slice.start, frame));
         auto end = position(evaluate(*slice.end, frame));
-        if (start > end || end > elements.length)
+        auto length = array.has!string ? array.as!string.length : array.as!ArrayValue.elements.length;
+        if (start > end || end > length)
         {
             throw new CodedException(DiagnosticCode.IndexOutOfRange, "Slice is out of range");
         }
-        return Value(ArrayValue(elements[cast(size_t) start .. cast(size_t) end]));
+        if (array.has!string) return Value(array.as!string[cast(size_t) start .. cast(size_t) end]);
+        return Value(ArrayValue(array.as!ArrayValue.elements[cast(size_t) start .. cast(size_t) end]));
     }
 
     private Value evaluate(const Cell cell, Frame frame)
@@ -366,6 +397,7 @@ final class Evaluator
 
         auto types = _program.types;
         auto operandType = prim.args[0].type;
+        if (operandType == types.char_) return compare(prim.op, args[0].as!long, args[1].as!long);
         if (types.isInteger(operandType))
         {
             auto info = types.integerOf(operandType);
@@ -388,7 +420,9 @@ final class Evaluator
         import std.algorithm : map;
         import std.array : join;
 
-        if (parts[0].has!string) return Value(parts.map!(p => p.as!string).join);
+        import std.algorithm : any;
+
+        if (parts.any!(p => p.has!string)) return Value(parts.map!(p => byteString(p)).join);
         return Value(ArrayValue(parts.map!(p => p.as!ArrayValue.elements).join));
     }
 
@@ -396,10 +430,10 @@ final class Evaluator
     /// rule does.
     private static Value append(Value lhs, Value rhs)
     {
-        if (lhs.has!string)
+        if (lhs.has!string || rhs.has!string)
         {
-            auto text = lhs.as!string;
-            text ~= rhs.as!string;
+            auto text = byteString(lhs);
+            text ~= byteString(rhs);
             return Value(text);
         }
         auto elements = lhs.as!ArrayValue.elements;
@@ -638,6 +672,10 @@ final class Evaluator
                 throw new CodedException(DiagnosticCode.ExplicitPanic, args[0].as!string);
             case Intrinsic.exitWithError:
                 throw new ProgramFailed(args[0].as!string);
+            case Intrinsic.bytes, Intrinsic.uncheckedString:
+                return Value(byteString(args[0]));
+            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect, Intrinsic.uncheckedChar:
+                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, and the others operations on a Cell");
             case Intrinsic.panics:
                 auto work = args[0].as!Closure;
                 try invoke(work.target, [], work.captures, null);
@@ -668,6 +706,7 @@ final class Evaluator
         import std.conv : to;
 
         auto types = _program.types;
+        if (type == types.char_) return [cast(dchar) value.as!long].to!string;
         if (types.isInteger(type))
         {
             auto bits = value.as!long;
@@ -701,6 +740,18 @@ final class Evaluator
             (const AssignElement assign) {
                 auto at = position(evaluate(assign.index, frame));
                 auto value = evaluate(assign.value, frame);
+                if (frame.values[assign.local].has!string)
+                {
+                    auto bytes = frame.values[assign.local].as!string;
+                    if (at >= bytes.length)
+                    {
+                        throw new RuntimeError(Diagnostic(DiagnosticCode.IndexOutOfRange, s.span, "Index is out of range"));
+                    }
+                    auto changed = bytes.dup;
+                    changed[cast(size_t) at] = cast(char) value.as!long;
+                    frame.values[assign.local] = Value(cast(string) changed);
+                    return;
+                }
                 auto elements = frame.values[assign.local].as!ArrayValue.elements;
                 if (at >= elements.length)
                 {

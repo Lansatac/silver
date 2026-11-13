@@ -303,6 +303,7 @@ private final class TypeChecker
             (const IntLiteral _) => true,
             (const FloatLiteral _) => true,
             (const StringLiteral _) => true,
+            (const CharLiteral _) => true,
             (const InterpolatedString interpolated) => interpolated.parts.all!(p => requireConstantExpr(p)),
             (const UnitLiteral _) => true,
             (const UnaryExpr unary) => requireConstantExpr(*unary.operand),
@@ -1214,6 +1215,7 @@ private final class TypeChecker
             },
             (const FloatLiteral _) => _types.float_,
             (const StringLiteral _) => _types.string_,
+            (const CharLiteral _) => _types.char_,
             (const InterpolatedString interpolated) => synthesizeInterpolated(interpolated, ctx),
             (const UnaryExpr unary) => synthesizeUnary(unary, expr.span, ctx),
             (const BinaryExpr binary) => binary.op == BinaryOp.Concat || binary.op == BinaryOp.Append
@@ -1702,7 +1704,7 @@ private final class TypeChecker
 
     private bool isOrdered(Type t)
     {
-        return isNumeric(t) || t == _types.string_;
+        return isNumeric(t) || t == _types.string_ || t == _types.char_;
     }
 
     /// What `~` joins.
@@ -1746,7 +1748,7 @@ private final class TypeChecker
         {
             reportOpaque(arg.span, argType, "it can't be converted to `%s`".format(_types.describe(target)), null);
         }
-        else if (argType != _types.error && !isNumeric(argType))
+        else if (argType != _types.error && !isNumeric(argType) && !(argType == _types.char_ && _types.isInteger(target)))
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, arg.span,
                 "`%s` can only convert a number, got `%s`".format(_types.describe(target), _types.describe(argType)));
@@ -2037,12 +2039,12 @@ private final class TypeChecker
                 }
                 if (!isOrdered(leftType))  {
                     _collector.reportError(DiagnosticCode.InvalidOperand, binary.left.span,
-                        "`%s` needs a number or a String, got `%s`".format(cast(string) binary.op, _types.describe(leftType)));
+                        "`%s` needs a number, a String or a Char, got `%s`".format(cast(string) binary.op, _types.describe(leftType)));
                     return _types.error;
                 }
                 if (!isOrdered(rightType)) {
                     _collector.reportError(DiagnosticCode.InvalidOperand, binary.right.span,
-                        "`%s` needs a number or a String, got `%s`".format(cast(string) binary.op, _types.describe(rightType)));
+                        "`%s` needs a number, a String or a Char, got `%s`".format(cast(string) binary.op, _types.describe(rightType)));
                     return _types.error;
                 }
                 if (leftType != rightType)
@@ -2371,6 +2373,7 @@ private final class TypeChecker
             (const IntLiteral _) => true,
             (const FloatLiteral _) => true,
             (const StringLiteral _) => true,
+            (const CharLiteral _) => true,
             (const UnitLiteral _) => true,
             (const UnaryExpr unary) => unary.op == UnaryOp.Minus && unary.operand.kind.match!(
                 (const IntLiteral _) => true,
@@ -2391,6 +2394,7 @@ private final class TypeChecker
             (const BoolLiteral _) => true,
             (const FloatLiteral _) => true,
             (const StringLiteral _) => true,
+            (const CharLiteral _) => true,
             (const UnitLiteral _) => true,
             (const ArrayLiteral literal) => literal.elements.all!(e => isShaped(e)),
             (const TupleLiteral literal) => literal.elements.all!(e => isShaped(e)),
@@ -2508,6 +2512,7 @@ private final class TypeChecker
             (const BoolLiteral _) => _types.bool_,
             (const FloatLiteral _) => _types.float_,
             (const StringLiteral _) => _types.string_,
+            (const CharLiteral _) => _types.char_,
             (const UnitLiteral _) => _types.unit,
             _ => Type.init,
         );

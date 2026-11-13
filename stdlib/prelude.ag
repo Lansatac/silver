@@ -18,6 +18,31 @@ def opIndexAssign<T>(values: [T], index: Int, value: T): [T] {
     changed
 }
 def opSlice<T>(values: [T], from: Int, to: Int): [T] => values[from..to]
+// The bytes of `text`, which the array shares with it.
+intrinsic def bytes(text: String): [UInt8]
+// `data` as a String, for a caller that knows it's UTF-8.
+private intrinsic def uncheckedString(data: [UInt8]): String
+private intrinsic def uncheckedChar(n: Int): Char
+// The first character of `text` and the rest of it, or `None` when it's empty. This is what makes
+// a String something `for` steps through.
+def next(text: String): (Char, String)? {
+    val data = bytes(text)
+    if length(data) == 0 {
+        return None
+    }
+    val first = Int(data[0])
+    if first < 0x80 {
+        return (uncheckedChar(first), uncheckedString(data[1..]))
+    }
+    val size = if first < 0xE0 => 2 else if first < 0xF0 => 3 else 4
+    mutable val value = if size == 2 => first & 0x1F else if size == 3 => first & 0x0F else first & 0x07
+    mutable val i = 1
+    while i < size {
+        value = (value << 6) | (Int(data[i]) & 0x3F)
+        i += 1
+    }
+    (uncheckedChar(value), uncheckedString(data[size..]))
+}
 // Stops the program with `message`, for what can't happen.
 intrinsic def panic(message: String): Never
 // Panics when `condition` is false, showing it and, for a comparison, both sides' values.

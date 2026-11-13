@@ -6,7 +6,7 @@ Silver is statically typed. Types trail what they describe (`name: Type`), and t
 | --- | --- |
 | `Bool` | `true`, `false` |
 | `Int8` to `Int64`, `UInt8` to `UInt64`, `Float` | see [Numbers](numbers.md) |
-| `String` | see [Strings](strings.md) |
+| `String`, `Char` | see [Strings](strings.md) |
 | `Unit` | `()`, the only value |
 | `Never` | none; the type of an expression that doesn't finish |
 | `T?` | see [Options](options.md) |

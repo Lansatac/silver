@@ -16,7 +16,7 @@ final class TypeTable
 {
     private int nextIndex = 1;
 
-    Type error, never, unit, bool_, int_, float_, string_, any;
+    Type error, never, unit, bool_, int_, float_, string_, char_, any;
     Type int8, int16, int32, uint8, uint16, uint32, uint_;
     /// The type of a bare `None`, assignable to every option. No value keeps it: each one is
     /// promoted to the option it lands in.
@@ -41,6 +41,7 @@ final class TypeTable
         int_ = registerTypeData(TypeData(Primitive(Primitive.Kind.Int)));
         float_ = registerTypeData(TypeData(Primitive(Primitive.Kind.Float)));
         string_ = registerTypeData(TypeData(Primitive(Primitive.Kind.String)));
+        char_ = registerTypeData(TypeData(Primitive(Primitive.Kind.Char)));
         any = registerTypeData(TypeData(Primitive(Primitive.Kind.Any)));
         none = registerTypeData(TypeData(NoneType()));
         emptyArray = registerTypeData(TypeData(EmptyArrayType()));
@@ -333,12 +334,12 @@ final class TypeTable
     bool isInteger(Type t) const
     {
         return _types[t.index].match!(
-            (const Primitive p) => integerInfo(p.kind).bits != 0,
+            (const Primitive p) => p.kind != Primitive.Kind.Char && integerInfo(p.kind).bits != 0,
             _ => false,
         );
     }
 
-    /// The size and signedness of the integer type `t`.
+    /// The size and signedness of the integer type `t`, or of the integer a `Char` is held as.
     IntegerInfo integerOf(Type t) const
     {
         return _types[t.index].match!(
@@ -416,6 +417,7 @@ struct Primitive
         UInt16,
         UInt32,
         UInt,
+        Char,
     }
     Kind kind;
 }
@@ -437,7 +439,7 @@ struct IntegerInfo
     }
 }
 
-/// `bits` is 0 for a kind that isn't an integer.
+/// `bits` is 0 for a kind that isn't held as an integer. A `Char` is, without being one.
 private IntegerInfo integerInfo(Primitive.Kind kind)
 {
     switch (kind)
@@ -448,7 +450,7 @@ private IntegerInfo integerInfo(Primitive.Kind kind)
         case Primitive.Kind.Int: return IntegerInfo(64, true);
         case Primitive.Kind.UInt8: return IntegerInfo(8, false);
         case Primitive.Kind.UInt16: return IntegerInfo(16, false);
-        case Primitive.Kind.UInt32: return IntegerInfo(32, false);
+        case Primitive.Kind.UInt32, Primitive.Kind.Char: return IntegerInfo(32, false);
         case Primitive.Kind.UInt: return IntegerInfo(64, false);
         default: return IntegerInfo(0, false);
     }

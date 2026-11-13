@@ -14,7 +14,8 @@
 				"fluent-asserts": "~>2.1",
 				"silver:loader": "*"
 			},
-			"libs-windows": ["psapi"]
+			"libs-windows": ["psapi"],
+			"lflags-windows": ["/STACK:67108864"]
 		}
 	]
 }

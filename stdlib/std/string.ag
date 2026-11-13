@@ -1,0 +1,460 @@
+// Asking about a String's contents and cutting one apart. A String is cut by value, never by
+// position: every piece handed back begins and ends between characters.
+//
+// The questions compare bytes, which for UTF-8 gives the same answer as comparing characters. The
+// empty string is found in every string, at both ends.
+module std.string
+
+import std.char
+
+// `data` as a String, for a caller that knows it's UTF-8. Every use below cuts a String where
+// another String matched or where a character ended, so the pieces are UTF-8 too.
+private intrinsic def uncheckedString(data: [UInt8]): String
+
+def isEmpty(text: String): Bool => length(bytes(text)) == 0
+
+// Whether `part` appears somewhere in `text`.
+def contains(text: String, part: String): Bool => find(bytes(text), bytes(part)) != None
+
+// Whether `text` begins with `prefix`.
+def startsWith(text: String, prefix: String): Bool {
+    val data = bytes(text)
+    val part = bytes(prefix)
+    length(part) <= length(data) && matchesAt(data, part, 0)
+}
+
+// Whether `text` finishes with `suffix`.
+def endsWith(text: String, suffix: String): Bool {
+    val data = bytes(text)
+    val part = bytes(suffix)
+    length(part) <= length(data) && matchesAt(data, part, length(data) - length(part))
+}
+
+// `text` without `prefix` at its beginning, or `None` if it doesn't begin with it.
+def stripPrefix(text: String, prefix: String): String? {
+    if !startsWith(text, prefix) {
+        return None
+    }
+    uncheckedString(bytes(text)[length(bytes(prefix))..])
+}
+
+// `text` without `suffix` at its end, or `None` if it doesn't end with it.
+def stripSuffix(text: String, suffix: String): String? {
+    if !endsWith(text, suffix) {
+        return None
+    }
+    val data = bytes(text)
+    uncheckedString(data[..length(data) - length(bytes(suffix))])
+}
+
+// What comes before and after the first `separator` in `text`, or `None` if it isn't there.
+def splitOnce(text: String, separator: String): (String, String)? {
+    val data = bytes(text)
+    val at = find(data, bytes(separator))?
+    (uncheckedString(data[..at]), uncheckedString(data[at + length(bytes(separator))..]))
+}
+
+// The characters at the beginning of `text` that `keep` accepts, and everything after them.
+def splitWhile(text: String, keep: (Char) -> Bool): (String, String) {
+    mutable val rest = text
+    while val step = next(rest) {
+        val (c, after) = step
+        if !keep(c) {
+            break
+        }
+        rest = after
+    }
+    val data = bytes(text)
+    (uncheckedString(data[..length(data) - length(bytes(rest))]), rest)
+}
+
+// `text` without the white space at its beginning.
+def trimStart(text: String): String {
+    val (_, rest) = splitWhile(text, isWhitespace)
+    rest
+}
+
+// `text` without the white space at its end.
+def trimEnd(text: String): String {
+    val data = bytes(text)
+    mutable val end = length(data)
+    while end > 0 {
+        // A character's first byte is the only one that isn't `10xxxxxx`.
+        mutable val start = end - 1
+        while start > 0 && (data[start] & 0xC0) == 0x80 {
+            start -= 1
+        }
+        if !isBlank(uncheckedString(data[start..end])) {
+            break
+        }
+        end = start
+    }
+    uncheckedString(data[..end])
+}
+
+// `text` without the white space at either end.
+def trim(text: String): String => trimEnd(trimStart(text))
+
+// The pieces of `text` between each `separator`, so there's one more piece than there are
+// separators, and some may be empty. An empty separator gives each character as its own piece.
+def split(text: String, separator: String): [String] {
+    mutable val pieces: [String] = []
+    if isEmpty(separator) {
+        for c in text {
+            pieces ~= [String(c)]
+        }
+        return pieces
+    }
+    mutable val rest = text
+    while val cut = splitOnce(rest, separator) {
+        val (before, after) = cut
+        pieces ~= [before]
+        rest = after
+    }
+    pieces ~ [rest]
+}
+
+// The lines of `text`, without the `\n` or `\r\n` that ends each. A final line needs no ending,
+// and one after the last ending isn't a line: `"a\n"` is one line.
+def lines(text: String): [String] {
+    mutable val found: [String] = []
+    mutable val rest = text
+    while !isEmpty(rest) {
+        val (line, after) = splitOnce(rest, "\n") ?? (rest, "")
+        found ~= [stripSuffix(line, "\r") ?? line]
+        rest = after
+    }
+    found
+}
+
+// `data` as a String, or `None` if it isn't UTF-8.
+def decode(data: [UInt8]): String? {
+    if !isUtf8(data) {
+        return None
+    }
+    uncheckedString(data)
+}
+
+// The Int that `text` writes in decimal: digits `0` to `9`, with `-` before them for a negative
+// number. `None` for anything else, an empty string and a number too large for an Int included.
+def parseInt(text: String): Int? {
+    val data = bytes(text)
+    val negative = length(data) > 0 && data[0] == 45
+    mutable val i = if negative => 1 else 0
+    if i == length(data) {
+        return None
+    }
+    // Counted downwards, since the most negative Int has no positive twin.
+    val lowest = -9223372036854775808
+    mutable val value = 0
+    while i < length(data) {
+        val digit = Int(data[i]) - 48
+        if digit < 0 || digit > 9 || value < (lowest + digit) / 10 {
+            return None
+        }
+        value = value * 10 - digit
+        i += 1
+    }
+    if negative {
+        return value
+    }
+    if value == lowest {
+        return None
+    }
+    -value
+}
+
+// Where `part` first appears in `data`, as a count of bytes before it.
+private def find(data: [UInt8], part: [UInt8]): Int? {
+    mutable val start = 0
+    while start + length(part) <= length(data) {
+        if matchesAt(data, part, start) {
+            return start
+        }
+        start += 1
+    }
+    None
+}
+
+// Whether `part` is in `data` at `start`, which leaves room for it.
+private def matchesAt(data: [UInt8], part: [UInt8], start: Int): Bool {
+    mutable val i = 0
+    while i < length(part) {
+        if data[start + i] != part[i] {
+            return false
+        }
+        i += 1
+    }
+    true
+}
+
+// Whether `text`, which is one character, is white space.
+private def isBlank(text: String): Bool {
+    if val step = next(text) {
+        val (c, _) = step
+        return isWhitespace(c)
+    }
+    false
+}
+
+// Whether `data` is well-formed UTF-8: no stray or missing continuation bytes, no encoding longer
+// than it needs to be, no surrogates and nothing above 10FFFF.
+private def isUtf8(data: [UInt8]): Bool {
+    val size = length(data)
+    mutable val i = 0
+    while i < size {
+        val first = Int(data[i])
+        if first < 0x80 {
+            i += 1
+            continue
+        }
+        val count = if first >= 0xC2 && first <= 0xDF => 2
+            else if first >= 0xE0 && first <= 0xEF => 3
+            else if first >= 0xF0 && first <= 0xF4 => 4
+            else 0
+        if count == 0 || i + count > size {
+            return false
+        }
+        // The second byte's range rules out the overlong forms, surrogates and values past 10FFFF.
+        val lowest = if first == 0xE0 => 0xA0 else if first == 0xF0 => 0x90 else 0x80
+        val highest = if first == 0xED => 0x9F else if first == 0xF4 => 0x8F else 0xBF
+        val second = Int(data[i + 1])
+        if second < lowest || second > highest {
+            return false
+        }
+        mutable val k = 2
+        while k < count {
+            if (data[i + k] & 0xC0) != 0x80 {
+                return false
+            }
+            k += 1
+        }
+        i += count
+    }
+    true
+}
+
+test "contains finds a part anywhere" {
+    expect(contains("silver", "sil"))
+    expect(contains("silver", "lve"))
+    expect(contains("silver", "ver"))
+    expect(contains("silver", "silver"))
+    expect("silver".contains("r"))
+}
+
+test "contains rejects what isn't there" {
+    expect(!contains("silver", "gold"))
+    expect(!contains("silver", "silvers"))
+    expect(!contains("silver", "sv"))
+    expect(!contains("silver", "Silver"))
+    expect(!contains("", "a"))
+}
+
+test "contains matches after a partial match" {
+    expect(contains("aaab", "aab"))
+    expect(contains("abababc", "ababc"))
+    expect(!contains("ababab", "ababc"))
+}
+
+test "startsWith looks only at the beginning" {
+    expect(startsWith("silver", "sil"))
+    expect(startsWith("silver", "silver"))
+    expect("silver".startsWith("s"))
+    expect(!startsWith("silver", "ilv"))
+    expect(!startsWith("silver", "ver"))
+    expect(!startsWith("sil", "silver"))
+    expect(!startsWith("", "a"))
+}
+
+test "endsWith looks only at the end" {
+    expect(endsWith("silver", "ver"))
+    expect(endsWith("silver", "silver"))
+    expect("silver".endsWith("r"))
+    expect(!endsWith("silver", "lve"))
+    expect(!endsWith("silver", "sil"))
+    expect(!endsWith("ver", "silver"))
+    expect(!endsWith("", "a"))
+}
+
+test "the empty string is in every string" {
+    expect(contains("silver", ""))
+    expect(startsWith("silver", ""))
+    expect(endsWith("silver", ""))
+    expect(contains("", ""))
+    expect(startsWith("", ""))
+    expect(endsWith("", ""))
+}
+
+test "text beyond ASCII matches by whole characters" {
+    val text = "caf\u{e9} cr\u{e8}me \u{1f600}"
+    expect(contains(text, "\u{e9} cr"))
+    expect(startsWith(text, "caf\u{e9}"))
+    expect(endsWith(text, "\u{1f600}"))
+    expect(!contains(text, "\u{ea}"))
+    expect(!endsWith(text, "\u{1f601}"))
+}
+
+test "a NUL byte doesn't end a string" {
+    val text = "left\0right"
+    expect(contains(text, "\0r"))
+    expect(endsWith(text, "right"))
+    expect(!endsWith("left\0", "left"))
+    expect(startsWith(text, "left\0"))
+}
+
+test "strings built at runtime are searched like literals" {
+    val name = "report"
+    val path = "docs/" ~ name ~ ".txt"
+    expect(path.startsWith("docs/"))
+    expect(path.endsWith(".txt"))
+    expect(path.contains("/{name}."))
+}
+
+test "each question works as a function value" {
+    val checks = [contains, startsWith, endsWith]
+    mutable val passed = 0
+    for check in checks {
+        if check("aba", "a") {
+            passed += 1
+        }
+    }
+    expect(passed == 3)
+}
+
+test "isEmpty is true only of the empty string" {
+    expect(isEmpty(""))
+    expect(!isEmpty(" "))
+    expect(!isEmpty("\0"))
+}
+
+test "stripPrefix and stripSuffix take a matching end off" {
+    expect(stripPrefix("v1.2", "v") == Some("1.2"))
+    expect(stripPrefix("v1.2", "x") == None)
+    expect(stripPrefix("v1.2", "") == Some("v1.2"))
+    expect(stripPrefix("v", "v") == Some(""))
+    expect(stripPrefix("\u{e9}t\u{e9}", "\u{e9}") == Some("t\u{e9}"))
+    expect(stripSuffix("notes.txt", ".txt") == Some("notes"))
+    expect(stripSuffix("notes.txt", ".md") == None)
+    expect(stripSuffix("notes.txt", "") == Some("notes.txt"))
+    expect(stripSuffix("\u{e9}t\u{e9}", "\u{e9}") == Some("\u{e9}t"))
+}
+
+test "splitOnce cuts at the first separator" {
+    expect(splitOnce("key=value", "=") == Some(("key", "value")))
+    expect(splitOnce("a=b=c", "=") == Some(("a", "b=c")))
+    expect(splitOnce("=x", "=") == Some(("", "x")))
+    expect(splitOnce("x=", "=") == Some(("x", "")))
+    expect(splitOnce("a -> b", " -> ") == Some(("a", "b")))
+    expect(splitOnce("na\u{ef}ve", "\u{ef}") == Some(("na", "ve")))
+    expect(splitOnce("plain", "=") == None)
+    expect(splitOnce("", "=") == None)
+    expect(splitOnce("abc", "") == Some(("", "abc")))
+}
+
+test "splitWhile keeps the characters accepted at the beginning" {
+    expect(splitWhile("42abc", isDigit) == ("42", "abc"))
+    expect(splitWhile("abc", isDigit) == ("", "abc"))
+    expect(splitWhile("123", isDigit) == ("123", ""))
+    expect(splitWhile("", isDigit) == ("", ""))
+    expect(splitWhile("12a34", isDigit) == ("12", "a34"))
+    expect(splitWhile("\u{e9}\u{e9}x\u{e9}", c => c == '\u{e9}') == ("\u{e9}\u{e9}", "x\u{e9}"))
+}
+
+test "trimming removes white space at the ends only" {
+    expect(trim("  hi  ") == "hi")
+    expect(trim("\t\n hi there \r\n") == "hi there")
+    expect(trim("hi") == "hi")
+    expect(trim("") == "")
+    expect(trim("   ") == "")
+    expect(trimStart("  hi  ") == "hi  ")
+    expect(trimEnd("  hi  ") == "  hi")
+    expect(trimEnd("   ") == "")
+}
+
+test "trimming knows white space beyond ASCII" {
+    expect(trim("\u{a0}\u{3000}caf\u{e9}\u{2003}\u{a0}") == "caf\u{e9}")
+    expect(trimEnd("caf\u{e9}") == "caf\u{e9}")
+    expect(trimEnd("\u{1f600} ") == "\u{1f600}")
+    // A zero-width space isn't white space.
+    expect(trim("\u{200b}a\u{200b}") == "\u{200b}a\u{200b}")
+}
+
+test "split gives the pieces between separators" {
+    expect(split("a,b,c", ",") == ["a", "b", "c"])
+    expect(split("a,,c", ",") == ["a", "", "c"])
+    expect(split(",a,", ",") == ["", "a", ""])
+    expect(split("abc", ",") == ["abc"])
+    expect(split("", ",") == [""])
+    expect(split("a, b, c", ", ") == ["a", "b", "c"])
+    expect(split("aXXbXXXc", "XX") == ["a", "b", "Xc"])
+}
+
+test "split on an empty separator gives each character" {
+    expect(split("a\u{e9}\u{1f600}", "") == ["a", "\u{e9}", "\u{1f600}"])
+    expect(length(split("", "")) == 0)
+}
+
+test "lines ends each line at a newline" {
+    expect(lines("one\ntwo\nthree") == ["one", "two", "three"])
+    expect(lines("one\ntwo\n") == ["one", "two"])
+    expect(lines("one\r\ntwo\r\n") == ["one", "two"])
+    expect(lines("one\n\ntwo") == ["one", "", "two"])
+    expect(lines("\n") == [""])
+    expect(lines("one") == ["one"])
+    expect(length(lines("")) == 0)
+    expect(lines("a\rb\n") == ["a\rb"])
+}
+
+test "decode takes well-formed UTF-8" {
+    expect(decode(bytes("caf\u{e9} \u{20ac} \u{1f600}")) == Some("caf\u{e9} \u{20ac} \u{1f600}"))
+    expect(decode([104, 105]) == Some("hi"))
+    expect(decode([]) == Some(""))
+    expect(decode([0xC3, 0xA9]) == Some("\u{e9}"))
+    expect(decode([0xED, 0x9F, 0xBF]) == Some("\u{d7ff}"))
+    expect(decode([0xF4, 0x8F, 0xBF, 0xBF]) == Some("\u{10ffff}"))
+    expect(decode([0]) == Some("\0"))
+}
+
+test "decode refuses bytes that aren't UTF-8" {
+    // A continuation byte with nothing before it, and a first byte with nothing after.
+    expect(decode([0x80]) == None)
+    expect(decode([0xC3]) == None)
+    expect(decode([0xE2, 0x82]) == None)
+    expect(decode([0xC3, 0x41]) == None)
+    // Encodings longer than they need to be.
+    expect(decode([0xC0, 0xAF]) == None)
+    expect(decode([0xE0, 0x80, 0xAF]) == None)
+    expect(decode([0xF0, 0x80, 0x80, 0xAF]) == None)
+    // A surrogate, and a value past 10FFFF.
+    expect(decode([0xED, 0xA0, 0x80]) == None)
+    expect(decode([0xF4, 0x90, 0x80, 0x80]) == None)
+    expect(decode([0xF5, 0x80, 0x80, 0x80]) == None)
+    expect(decode([0xFF]) == None)
+    expect(decode([104, 0xFF, 105]) == None)
+}
+
+test "parseInt reads decimal digits with an optional minus" {
+    expect(parseInt("0") == Some(0))
+    expect(parseInt("42") == Some(42))
+    expect(parseInt("-42") == Some(-42))
+    expect(parseInt("007") == Some(7))
+    expect(parseInt("-0") == Some(0))
+    expect(parseInt("9223372036854775807") == Some(9223372036854775807))
+    expect(parseInt("-9223372036854775808") == Some(-9223372036854775808))
+}
+
+test "parseInt refuses anything else" {
+    expect(parseInt("") == None)
+    expect(parseInt("-") == None)
+    expect(parseInt("+1") == None)
+    expect(parseInt(" 1") == None)
+    expect(parseInt("1 ") == None)
+    expect(parseInt("1_000") == None)
+    expect(parseInt("1.5") == None)
+    expect(parseInt("12a") == None)
+    expect(parseInt("--1") == None)
+    expect(parseInt("\u{661}") == None)
+    expect(parseInt("9223372036854775808") == None)
+    expect(parseInt("-9223372036854775809") == None)
+    expect(parseInt("99999999999999999999999") == None)
+}

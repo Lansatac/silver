@@ -222,7 +222,7 @@ Not needed for ranges: capability queries (`static if R: Sized`), an explicit ad
 - Whether `for` requires `Range` by name once interfaces exist.
 - Whether the element type as an interface parameter reads well in practice.
 - `a..b` over integer types other than `Int`, which needs a numeric bound.
-- Strings: not ranges by default, with `.bytes` and `.chars`.
+- Strings (decided): a string is a forward range of `Char`, with `bytes(s)` as the other view. See [Strings](../language/strings.md).
 - Capabilities beyond stepping forward and indexing (which `for` now uses), such as stepping from the end. An adapter keeps its source's indexing by being a named type with a conditional `opIndex`.
 - How a stateful source hands its state back.
 - How a function that returns a pipeline keeps its source's capabilities without naming the adapter types; see "Adapters".

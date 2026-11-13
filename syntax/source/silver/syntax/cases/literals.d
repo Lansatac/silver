@@ -11,6 +11,19 @@ immutable Case[] literals = [
     parsesAs("a = 1E-5", "(assign a 1e-05)"),
     parsesAs("a = ()", "(assign a ())"),
     parsesAs("f(())", "(call f ())"),
+    parsesAs(`a = 'x'`, `(assign a 'x')`),
+    parsesAs(`a = 'é'`, `(assign a 'é')`),
+    parsesAs(`a = '\u{1F600}'`, `(assign a '😀')`),
+    parsesAs(`a = '\n'`, `(assign a '\n')`),
+    parsesAs(`a = '\''`, `(assign a '\'')`),
+    parsesAs(`a = '"'`, `(assign a '"')`),
+    parsesAs(`a = '{'`, `(assign a '{')`),
+    parsesAs(`a = 'x' == 'y'`, `(assign a (Equal 'x' 'y'))`),
+    parsesAs(`f('a', "b")`, `(call f 'a' "b")`),
+    rejects(`a = 'unterminated`),
+    rejects(`a = '\q'`),
+    rejects(`a = '\{'`),
+    rejects("a = '\n'"),
 ];
 
 immutable Case[] stringLiterals = [

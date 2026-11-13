@@ -20,6 +20,7 @@ void silver_print_float(double value) { output(floatText(value), false); }
 void silver_print_bool(bool value) { output(value.to!string, false); }
 void silver_print_string(const(char)* data, size_t length) { output(data[0 .. length], false); }
 void silver_print_unit() { output("()", false); }
+void silver_print_char(uint value) { output([cast(dchar) value].to!string, false); }
 
 void silver_printl_int(long value) { output(value.to!string, true); }
 void silver_printl_uint(ulong value) { output(value.to!string, true); }
@@ -27,6 +28,7 @@ void silver_printl_float(double value) { output(floatText(value), true); }
 void silver_printl_bool(bool value) { output(value.to!string, true); }
 void silver_printl_string(const(char)* data, size_t length) { output(data[0 .. length], true); }
 void silver_printl_unit() { output("()", true); }
+void silver_printl_char(uint value) { output([cast(dchar) value].to!string, true); }
 
 /// A line from stdin including its newline, or false at end of input. The line is copied into a
 /// buffer (see `silver.runtime.buffer`), since every String on the heap must be in one.

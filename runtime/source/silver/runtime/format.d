@@ -20,6 +20,7 @@ void silver_format_int(long value, const(char)** data, size_t* length) { format(
 void silver_format_uint(ulong value, const(char)** data, size_t* length) { format(value, data, length); }
 void silver_format_float(double value, const(char)** data, size_t* length) { format(value, data, length); }
 void silver_format_bool(bool value, const(char)** data, size_t* length) { format(value, data, length); }
+void silver_format_char(uint value, const(char)** data, size_t* length) { format(cast(dchar) value, data, length); }
 
 /// One String per element, already formatted, as `[a, b]`.
 void silver_array_format(const(Formatted)* parts, size_t count, const(char)** data, size_t* length)

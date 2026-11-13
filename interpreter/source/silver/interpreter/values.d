@@ -8,6 +8,8 @@ import std.sumtype;
 /// - Every integer type is a `long` holding the value's 64-bit two's complement, as `IntLit`
 ///   stores it. The `Expr`'s type says which width and signedness the bits mean.
 /// - Tuples, user types and sums, options among them, are all a `Record`.
+/// - A `[UInt8]` is a `string`, as a String is, so that one can be viewed as the other without
+///   copying. Written `[]` it can still arrive as an empty `ArrayValue`.
 /// - A `Ref` is a `CellValue`, the one value that changes after it's built.
 alias Value = SumType!(Unit, bool, long, double, string, ArrayValue, Record, Closure, CellValue);
 

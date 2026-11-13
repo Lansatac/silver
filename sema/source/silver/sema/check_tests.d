@@ -10,7 +10,7 @@ import std.sumtype : get, has, match;
 
 import silver.ast;
 import silver.sema.typing : FieldInfo;
-import silver.sema.constant : ConstInt, ConstUInt, ConstUnit;
+import silver.sema.constant : ConstChar, ConstInt, ConstUInt, ConstUnit;
 import silver.sema.resolution_tests;
 import silver.sema.target : Target;
 
@@ -335,7 +335,7 @@ unittest
 {
     static string messageOf(const Analyzed a) => a.collector.diagnostics[0].message;
     assert(messageOf(analyzedMain(`printl(1 ~ 2)`)) == "`~` needs a String or an array, got `Int`");
-    assert(messageOf(analyzedMain(`printl("a" <= true)`)) == "`<=` needs a number or a String, got `Bool`");
+    assert(messageOf(analyzedMain(`printl("a" <= true)`)) == "`<=` needs a number, a String or a Char, got `Bool`");
     assert(messageOf(analyzedMain(`printl("a" < 1.5)`)) == "`<` can't compare `String` and `Float`");
 }
 
@@ -1270,6 +1270,33 @@ unittest
     analyzedMain("val a: UInt8 = 1\nprintl(-a)").shouldReport(DiagnosticCode.InvalidOperand, At("a", 2));
 }
 
+@("a Char is compared, ordered and converted to an integer, and isn't a number")
+unittest
+{
+    auto a = analyzedMain(`val c = 'a'
+    val n = Int(c)
+    val u = UInt32(c)
+    val s = String(c)
+    printl(c < 'b')
+    printl(c == 'a')
+    printl("{c}{n}{u}{s}")`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("'a'", "Char");
+
+    analyzedMain(`printl('a' + 1)`).shouldReport(DiagnosticCode.InvalidOperand, At("'a'", 1));
+    analyzedMain(`printl(-'a')`).shouldReport(DiagnosticCode.InvalidOperand, At("'a'", 1));
+    analyzedMain(`printl(Float('a'))`).shouldReport(DiagnosticCode.InvalidOperand, At("'a'", 1));
+    analyzedMain(`val c: Char = 97`).shouldReport(DiagnosticCode.TypeMismatch, At("97", 1));
+}
+
+@("a constant can be a Char")
+unittest
+{
+    auto a = analyzed("val mark: Char = 'x'\ndef main(): Unit {\n    printl(mark)\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldEvaluateTo("mark", ConstChar('x'), "Char");
+}
+
 @("a conversion names any numeric type, and takes one number")
 unittest
 {
@@ -2051,7 +2078,7 @@ unittest
     a.shouldHaveType("u", 2, "Unit");
 
     analyzedMain(`for x in 1 { }`).shouldReport(DiagnosticCode.InvalidOperand, At("1", 1));
-    analyzedMain(`for c in "abc" { }`).shouldReport(DiagnosticCode.InvalidOperand, At(`"abc"`, 1));
+    analyzedMain(`for c in "abc" { val d: Char = c }`).shouldHaveNoDiagnostics();
     analyzedMain(`val o: [Int]? = None
     for x in o { }`).shouldReport(DiagnosticCode.InvalidOperand, At("o", 2));
     analyzedMain(`for x in [] { }`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
@@ -2684,7 +2711,7 @@ unittest
 @("x.f() can't hide a write to x")
 unittest
 {
-    analyzed("def next(mutable n: Int): Int => n\ndef main(): Unit {\n    mutable val qq = 1\n    val r = qq.next()\n}")
+    analyzed("def bump(mutable n: Int): Int => n\ndef main(): Unit {\n    mutable val qq = 1\n    val r = qq.bump()\n}")
         .shouldReport(DiagnosticCode.MutabilityMismatch, At("qq", 2));
 }
 

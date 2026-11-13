@@ -14,7 +14,7 @@ alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, 
 /// The types every module can name, which no declaration can take the name of.
 enum Builtin
 {
-    Never, Unit, Bool, Int, Float, String, Any,
+    Never, Unit, Bool, Int, Float, String, Char, Any,
     Int8, Int16, Int32, Int64,
     UInt, UInt8, UInt16, UInt32, UInt64,
 }
@@ -175,7 +175,7 @@ struct Expr
     ExprKind kind;
 }
 
-alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, InterpolatedString, Identifier,
+alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, CharLiteral, InterpolatedString, Identifier,
     UnaryExpr, BinaryExpr, CallExpr, MemberAccess, WhileExpr, ForExpr, IfExpr, BlockExpr, UnitLiteral,
     SomeExpr, NoneLiteral, PropagateExpr, SafeMemberAccess, ArrayLiteral, MapLiteral, IndexExpr, RangeExpr,
     TupleLiteral, WithExpr, MatchExpr, Lambda, OkExpr, ErrorExpr, AssertExpr);
@@ -220,6 +220,12 @@ struct FloatLiteral
 struct StringLiteral
 {
     string value;
+}
+
+/// `'a'`, with an escape already decoded.
+struct CharLiteral
+{
+    dchar value;
 }
 
 /// `"a{x}b"`: each part is the StringLiteral for a run of text or a hole's expression, and the
@@ -483,6 +489,7 @@ string printExpr(const Expr e)
         (const FloatLiteral f) => f.value.to!string,
         // %(%s%) writes a one-element array's string quoted and escaped.
         (const StringLiteral s) => format("%(%s%)", [s.value]),
+        (const CharLiteral c) => format("%(%s%)", [c.value]),
         (const InterpolatedString s) => format("(interpolate%s)", s.parts.map!(p => " " ~ printExpr(p)).join),
         (const Identifier i) => i.name ~ printTypeArgs(i.typeArgs),
         (const BinaryExpr b) => format("(%s %s %s)", b.op, printExpr(*b.left), printExpr(*b.right)),

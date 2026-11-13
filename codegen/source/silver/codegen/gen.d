@@ -802,6 +802,11 @@ private final class Generator
                 return emitExplicitPanic(call.args[0], e.span);
             case Intrinsic.exitWithError:
                 return emitExitWithError(call.args[0]);
+            case Intrinsic.bytes, Intrinsic.uncheckedString:
+                // A String and a `[UInt8]` have one layout, so the value is already the other.
+                return emitExpr(call.args[0]);
+            case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect, Intrinsic.uncheckedChar:
+                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, and the others operations on a Cell");
             case Intrinsic.panics:
                 return emitPanics(call.args[0], e.span);
             case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect:
@@ -848,6 +853,7 @@ private final class Generator
         if (type == types.bool_) return "bool";
         if (type == types.unit) return "unit";
         if (type == types.string_) return "string";
+        if (type == types.char_) return "char";
         assert(0, "lowering only passes primitives to an intrinsic's Any");
     }
 
@@ -1095,6 +1101,7 @@ private final class Generator
         }
         if (type == types.float_) return callRuntimeForString("silver_format_float", [value]);
         if (type == types.bool_) return callRuntimeForString("silver_format_bool", [value]);
+        if (type == types.char_) return callRuntimeForString("silver_format_char", [value]);
         assert(types.isFunction(type), "lowering formats anything but a primitive or a function itself");
         auto descriptor = _function.extract(closureLayout, value, 0);
         auto printed = fieldPointer(descriptorLayout, descriptor.value, 1);
@@ -1859,7 +1866,7 @@ private final class Generator
         if (type == types.unit || type == types.never || type == types.none) return "void";
         if (type == types.bool_) return "i1";
         if (type == types.float_) return "double";
-        if (types.isInteger(type)) return "i%s".format(types.integerOf(type).bits);
+        if (types.isInteger(type) || type == types.char_) return "i%s".format(types.integerOf(type).bits);
         if (type == types.string_ || type == types.emptyArray || types.isArray(type)) return sliceLayout;
         if (types.isFunction(type)) return closureLayout;
         if (types.isOption(type)) return optionLayout(llvmType(types.optionInner(type), span));

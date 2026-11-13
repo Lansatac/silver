@@ -597,6 +597,8 @@ private final class Lowering
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(Identifier(cst.matches[0])));
         case "Silver.StringLiteral":
             return convertStringLiteral(cst);
+        case "Silver.CharLiteral":
+            return convertCharLiteral(cst);
         case "Silver.ScientificLiteral":
             return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(FloatLiteral(parseFloat(cst.matches[0]))));
         case "Silver.HexaLiteral":
@@ -662,6 +664,26 @@ private final class Lowering
         return Expr(ids.next!Expr, spanOf(cst, file), ExprKind(InterpolatedString(parts)));
     }
 
+    private Expr convertCharLiteral(ParseTree cst)
+    {
+        import std.range : walkLength;
+        import std.utf : decodeFront;
+
+        auto span = spanOf(cst, file);
+        string text;
+        foreach (part; cst.children)
+        {
+            auto piece = part[0];
+            text ~= piece.name == "Silver.CharEscape" ? decodeEscape(piece.matches[0], spanOf(piece, file)) : piece.matches[0];
+        }
+        if (text.walkLength != 1)
+        {
+            throw new ParseException(Diagnostic(DiagnosticCode.ParseError, span,
+                "A character literal holds exactly one character; a String is written with `\"`", Severity.Error));
+        }
+        return Expr(ids.next!Expr, span, ExprKind(CharLiteral(text.decodeFront)));
+    }
+
     private string decodeEscape(string escape, Span span)
     {
         switch (escape[1])
@@ -687,7 +709,7 @@ private final class Lowering
         case '0':
             return "\0";
         default:
-            // `\"` and `\\` stand for the character itself.
+            // A quote or a backslash stands for itself.
             return escape[1 .. 2];
         }
     }
@@ -1517,6 +1539,23 @@ unittest
     rejected("test \"\" {}");
     rejected("test \"a{1}\" {}");
     assert(collectException!ParseException(parse("native library \"a\"\nnative(\"b\") def f(): Int", "test", new NodeIds)) is null);
+}
+
+@("a character literal holds one character")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.exception : collectException;
+    import silver.syntax.parse : parse;
+
+    ParseException error(string literal) =>
+        collectException!ParseException(parse("val a: Char = " ~ literal, "test", new NodeIds));
+
+    assert(error(`'a'`) is null);
+    assert(error(`'\u{1F600}'`) is null);
+    assert(error(`''`).diagnostic.message.canFind("exactly one character"));
+    assert(error(`'ab'`).diagnostic.message.canFind("exactly one character"));
+    assert(error(`'\u{D800}'`).diagnostic.message.canFind("scalar value"));
 }
 
 @("a \\u{...} escape names a Unicode scalar value")

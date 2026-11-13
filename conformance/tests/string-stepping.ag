@@ -1,0 +1,58 @@
+def count(text: String): Int {
+    mutable val total = 0
+    for _ in text {
+        total += 1
+    }
+    total
+}
+
+def main(): Unit {
+    printl(next("café"))
+    printl(next("é"))
+    printl(next(""))
+    printl(next("😀!"))
+
+    for c in "a€😀" {
+        printl(c)
+    }
+    for c in "" {
+        printl(c)
+    }
+    printl(count("café"))
+    printl(count("naïve 😀"))
+
+    val data = bytes("café")
+    printl(data)
+    printl(length(data))
+    printl(data[3])
+    printl(data[1..3])
+    printl(bytes(""))
+    printl(length(bytes("")))
+    printl(bytes("a") == [97])
+    printl(bytes("ab") ~ [33] ~ bytes("c"))
+
+    mutable val grown = bytes("ab")
+    grown ~= [99]
+    grown ~= bytes("d")
+    printl(grown)
+    grown[0] = 65
+    printl(grown)
+
+    val text = "keep"
+    mutable val copy = bytes(text)
+    copy[0] = 0
+    copy ~= [1]
+    printl(text)
+
+    mutable val sum = 0
+    for b in bytes("abc") {
+        sum += Int(b)
+    }
+    printl(sum)
+
+    val literal: [UInt8] = [104, 105]
+    printl(literal ~ bytes("!"))
+    val none: [UInt8] = []
+    printl(none ~ bytes("x"))
+    printl(length(none ~ none))
+}
