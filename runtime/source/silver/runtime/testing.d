@@ -23,6 +23,12 @@ private alias Jump = extern (C) void function() nothrow @nogc;
 private __gshared Jump escape;
 private __gshared size_t firstTest;
 
+version (Windows)
+{
+    private enum _O_BINARY = 0x8000;
+    private extern (C) int _setmode(int descriptor, int mode) nothrow @nogc;
+}
+
 extern (C) nothrow:
 
 /// Starts running tests. `jump` returns to the guard of the running test.
@@ -30,6 +36,8 @@ void silver_test_start(Jump jump)
 {
     testing = true;
     escape = jump;
+    // Text mode would write each newline as two bytes, which the records' lengths don't count.
+    version (Windows) _setmode(1, _O_BINARY);
     if (auto from = getenv("SILVER_TEST_FROM")) firstTest = cast(size_t) strtoull(from, null, 10);
 }
 
