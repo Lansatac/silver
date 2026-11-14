@@ -106,6 +106,8 @@ enum DiagnosticCode : string
     BoundSearchTooDeep = "T0044",
     /// A result type that's worked out from a body which needs it already.
     RecursiveResultType = "T0045",
+    /// A question a generic function asks of its type arguments that more than one function answers.
+    AmbiguousQuery = "T0046",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

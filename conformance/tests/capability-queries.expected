@@ -1,0 +1,27 @@
+sized 3
+sized 3
+stepped
+outer sized 2
+outer stepped
+sized 1
+stepped
+any
+h frees h
+nothing to do
+g frees other
+a box of row
+a box
+sized 4
+stepped
+width 3
+unknown width
+width 3
+noisy:
+  step
+  step
+  step
+3
+listed:
+  index 0
+  index 1
+9

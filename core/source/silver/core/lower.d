@@ -1,6 +1,6 @@
 module silver.core.lower;
 
-import std.algorithm : any, canFind, countUntil, filter, map, sort;
+import std.algorithm : any, canFind, countUntil, filter, map, min, sort;
 import std.array : array;
 import std.range : iota;
 import std.format : format;
@@ -76,6 +76,9 @@ private struct InstanceKey
     immutable(uint)[] witnesses;
 }
 
+/// Among an `InstanceKey`'s witnesses, the answer to a query that isn't there.
+private enum uint absent = uint.max;
+
 /// The Analysis as one instance of a generic function reads it: every type it answers with has
 /// the instance's type arguments filled in, so the rest of lowering only sees concrete types. What
 /// it doesn't override, it answers as the Analysis does.
@@ -139,7 +142,8 @@ private struct Instance
         auto loop = analysis.loopOf(for_);
         if (loop is null) return null;
         auto instance = new LoopFunctions;
-        *instance = LoopFunctions(concrete(loop.length), concrete(loop.index), concrete(loop.next));
+        *instance = LoopFunctions(concrete(loop.length), concrete(loop.index), concrete(loop.next),
+            cast(Witness[]) loop.indexedIf);
         return instance;
     }
 
@@ -156,7 +160,8 @@ private struct Instance
 
     private FunctionUse concrete(const FunctionUse f) const
     {
-        return FunctionUse(f.func, f.typeArgs.map!(t => concrete(t)).array, cast(Witness[]) f.witnesses);
+        return FunctionUse(f.func, f.typeArgs.map!(t => concrete(t)).array, cast(Witness[]) f.witnesses,
+            cast(Witness[]) f.alternatives);
     }
 
     /// What the type parameters of the generic `name` uses stand for in this instance.
@@ -345,18 +350,34 @@ private final class Lowering
     /// `json.toJson<Int>`, with the witnesses it was given in turn.
     private string witnessName(uint id)
     {
+        if (id == absent) return "none";
         auto key = _witnesses[id];
         auto own = "%s.%s".format(_analysis.moduleOf(key.decl), instanceName(key));
         return key.witnesses.length == 0 ? own : "%s [%-(%s, %)]".format(own, key.witnesses.map!(w => witnessName(w)));
     }
 
     /// The number of the instance that `witness`, found in the function being lowered, stands for
-    /// in the instance of it being lowered.
+    /// in the instance of it being lowered: the first of its alternatives that holds there, or
+    /// itself. `absent` when none does, which only the answer to a query can be.
     private uint witnessId(const Witness witness)
     {
+        foreach (alternative; witness.alternatives)
+        {
+            auto id = optionId(alternative);
+            if (id != absent) return id;
+        }
+        return optionId(witness);
+    }
+
+    /// `witnessId` for `witness` alone, leaving out its alternatives.
+    private uint optionId(const Witness witness)
+    {
+        if (witness.isSlot) return _current.witnesses[witness.slot];
+        if (!witness.func.isValid) return absent;
         if (auto index = _analysis.witnessIndexOf(witness.func)) return _current.witnesses[*index];
-        auto key = InstanceKey(witness.func, witness.typeArgs.map!(t => _analysis.concrete(t)).array.idup,
-            witness.witnesses.map!(w => witnessId(w)).array.idup);
+        auto ids = witness.witnesses.map!(w => witnessId(w)).array;
+        if (ids[0 .. min(_analysis.boundWitnessCount(witness.func), ids.length)].canFind(absent)) return absent;
+        auto key = InstanceKey(witness.func, witness.typeArgs.map!(t => _analysis.concrete(t)).array.idup, ids.idup);
         if (auto existing = key in _witnessIds) return *existing;
         auto id = cast(uint) _witnesses.length;
         _witnesses ~= key;
@@ -364,11 +385,18 @@ private final class Lowering
         return id;
     }
 
-    /// The instance a use of `func` means, given the type arguments and witnesses sema recorded for
-    /// the use. A function a bound supplies is whichever one this instance was given for it.
-    private InstanceKey instanceOf(Id!(ast.FunctionDecl) func, immutable(Type)[] typeArgs, const(Witness)[] witnesses)
+    /// The instance a use of `func` means, given the type arguments, witnesses and alternatives
+    /// sema recorded for the use. A function a bound supplies is whichever one this instance was
+    /// given for it, and an alternative is taken when the answers it depends on are there.
+    private InstanceKey instanceOf(Id!(ast.FunctionDecl) func, immutable(Type)[] typeArgs, const(Witness)[] witnesses,
+        const(Witness)[] alternatives = null)
     {
         if (auto index = _analysis.witnessIndexOf(func)) return _witnesses[_current.witnesses[*index]];
+        foreach (alternative; alternatives)
+        {
+            auto id = optionId(alternative);
+            if (id != absent) return _witnesses[id];
+        }
         return InstanceKey(func, typeArgs, witnesses.map!(w => witnessId(w)).array.idup);
     }
 
@@ -637,7 +665,7 @@ private final class Lowering
         }
         return symbol.match!(
             (const Id!(ast.FunctionDecl) func) => functionValue(
-                instanceOf(func, _analysis.typeArgumentsOf(name), _analysis.witnessesOf(name)), type, span),
+                instanceOf(func, _analysis.typeArgumentsOf(name), _analysis.witnessesOf(name), _analysis.alternativesOf(name)), type, span),
             (const Id!(ast.ConstDecl) constant) => constantValue(constant, span),
             (const Id!(ast.TypeDecl) decl) => typeValue(decl, type, span),
             (_) => notLowered!Expr("a reference to that kind of name"),
@@ -1562,7 +1590,21 @@ private final class Lowering
         if (range is null)
         {
             auto functions = _analysis.loopOf(e.id);
-            if (functions is null || functions.indexed) return lowerForIndexed(for_, functions, span);
+            if (functions is null) return lowerForIndexed(for_, null, span);
+            if (functions.indexed)
+            {
+                const InstanceKey[2] keys = [callKey(functions.length), callKey(functions.index)];
+                return lowerForIndexed(for_, keys[], span);
+            }
+            if (functions.indexedIf.length == 2)
+            {
+                auto length = witnessId(functions.indexedIf[0]), index = witnessId(functions.indexedIf[1]);
+                if (length != absent && index != absent)
+                {
+                    const InstanceKey[2] keys = [_witnesses[length], _witnesses[index]];
+                    return lowerForIndexed(for_, keys[], span);
+                }
+            }
             return lowerForStepped(for_, functions.next, span);
         }
         auto start = lowerExpr(*range.start);
@@ -1588,10 +1630,10 @@ private final class Lowering
         ]);
     }
 
-    /// `for x in xs` over an array, or a value with `length` and `at` (`functions`), evaluates `xs`
+    /// `for x in xs` over an array, or a value with `length` and `at` (the instances `functions`), evaluates `xs`
     /// and its length once, and steps an index before the body, so `continue` can't skip it. An
     /// array's element isn't read for `_`, since that can't be seen, but `at` is called.
-    private Expr lowerForIndexed(const ast.ForExpr for_, const(LoopFunctions)* functions, Span span)
+    private Expr lowerForIndexed(const ast.ForExpr for_, const(InstanceKey)[] functions, Span span)
     {
         auto source = lowerExpr(for_.binding.value);
         auto held = temp(functions is null ? "array" : "source", source.type);
@@ -1607,8 +1649,8 @@ private final class Lowering
         }
         else
         {
-            length = callUse(functions.length, [use(held, span)], span);
-            value = callUse(functions.index, [use(held, span), use(next, span)], span);
+            length = callInstance(functions[0], [use(held, span)], span);
+            value = callInstance(functions[1], [use(held, span), use(next, span)], span);
         }
         auto binds = functions is null && for_.binding.name == discardName ? null : bindOrDrop(*for_.binding, value);
         auto label = newLabel();
@@ -1836,7 +1878,8 @@ private final class Lowering
                 (Expr[] args, Expr* callee) => Expr(type, span, ExprKind(CallClosure(callee, args))));
         }
 
-        auto callee = instanceOf(*calleeId, _analysis.typeArgumentsOf(call.callee.id), _analysis.witnessesOf(call.callee.id));
+        auto callee = instanceOf(*calleeId, _analysis.typeArgumentsOf(call.callee.id), _analysis.witnessesOf(call.callee.id),
+            _analysis.alternativesOf(call.callee.id));
         auto signature = _analysis.signatureOf(callee.decl, callee.args);
         // What a bound supplies is called as its witness, which the arguments are promoted to fit.
         if (_analysis.witnessIndexOf(*calleeId) !is null)
@@ -1862,10 +1905,16 @@ private final class Lowering
         }
     }
 
+    /// The instance a function that syntax uses means here.
+    private InstanceKey callKey(const FunctionUse f)
+    {
+        return instanceOf(f.func, f.typeArgs.idup, f.witnesses, f.alternatives);
+    }
+
     /// A call of a function that syntax uses, given its arguments as values.
     private Expr callUse(const FunctionUse f, Expr[] args, Span span)
     {
-        return callInstance(instanceOf(f.func, f.typeArgs.idup, f.witnesses), args, span);
+        return callInstance(instanceOf(f.func, f.typeArgs.idup, f.witnesses, f.alternatives), args, span);
     }
 
     /// A call of the instance `callee`, given its arguments as values, each of which is its

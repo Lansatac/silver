@@ -240,7 +240,7 @@ private string describeDiagnostics(const Analyzed a)
         .join("\n");
 }
 
-private size_t offsetIn(const At at, const Analyzed a)
+size_t offsetIn(const At at, const Analyzed a)
 {
     return occurrence(a.sources[at.moduleName], at.word, at.nth);
 }

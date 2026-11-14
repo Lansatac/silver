@@ -47,7 +47,7 @@ def last<R: Steps<Int>>(range: R): String {
     "stepped to {found}"
 }
 
-// Only `Steps` is known here, so this is the first `count` whatever `R` turns out to be.
+// Only `Steps` is known here, but the `count` chosen follows the real type of `R`.
 def total<R: Steps<T>, T>(range: R): String => count(range)
 // Both bounds are known and passed along.
 def totalIndexed<R: Steps<T> & Indexed<T>, T>(range: R): String => count(range)

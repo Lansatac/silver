@@ -185,9 +185,9 @@ The library's adapters return their own named types, not an opaque `Range<U>` (d
 - **Considered**: an overload of `map` per capability, returning `Indexed<U>` for an indexed source. It needs an overload for each combination.
 - **Considered**: keeping the result opaque and letting capability queries (`static if R: Sized`) see the real type. That recovers the fast path inside generic code, but `doubled[1]` still can't be written.
 
-So a result keeps what its source can do, as D's ranges do, wherever its type is known: where the chain is written, where it's passed to a function that asks for the capability (`binarySearch<R: Indexed<T>, T>` takes `xs.map(f)`), and where a function returns it. One thing D has is missing:
+So a result keeps what its source can do, as D's ranges do, wherever its type is known: where the chain is written, where it's passed to a function that asks for the capability (`binarySearch<R: Indexed<T>, T>` takes `xs.map(f)`), and where a function returns it. Inside a generic consumer too:
 
-- **A generic consumer sees only its bounds, until capability queries are built.** `array` below steps even over an indexed chain, and can't size its result first. An overload that also asks for `Indexed<T>` fixes it: of two functions differing only in their bounds, the one asking for the most the real type satisfies is chosen (decided), and that holds inside another generic function too. See [capability queries](interfaces.md#capability-queries-designed-not-built).
+- **A generic consumer follows the real type.** `array` below loops by index over an indexed chain, since `for` does. To size its result first it needs an overload that also asks for `Indexed<T>`: of two functions differing only in their bounds, the one asking for the most the real type satisfies is chosen (decided), and that holds inside another generic function too. See [capability queries](interfaces.md#capability-queries).
 One pull on `[1, 2, 3].map(double).filter(big)`: the filter asks the map, the map asks the array and gets `1`, returns `2`, the filter rejects it and asks again, gets `4`, and returns `4` with a new filter over the rest.
 
 A consumer turns a chain back into data:

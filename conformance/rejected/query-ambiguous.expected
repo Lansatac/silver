@@ -1,0 +1,1 @@
+T0046: `busy` asks whether `Thing` is a `Sized`, and a `size` in more than one imported module (queries_support.one, queries_support.two) takes `Thing`; declare one in this module that calls the one you mean

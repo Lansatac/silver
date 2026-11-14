@@ -243,7 +243,7 @@ Not designed yet:
 
 - A capability a type has when either of two others does. Two functions with bounds on different parameters are duplicates today, even with a third that asks for both.
 
-Until this is built a call inside a generic function sees only its bounds. Capabilities still follow a value's type, through functions with bounds of their own: see "Conditional conformance".
+`for` asks the same way: over a value whose type is a type parameter, it loops by index where the real type has a `length` and an `opIndex`, and steps otherwise.
 
 ### Stored structure
 

@@ -1,0 +1,15 @@
+// A question a generic function asks that two imported modules answer equally well is an error,
+// not a "no".
+import queries_support.things : Thing
+import queries_support.one
+import queries_support.two
+
+interface Sized { def size(x: Self): Int }
+
+def count<T>(x: T): String => "stepped"
+def count<T: Sized>(x: T): String => "sized"
+def busy<T>(x: T): String => count(x)
+
+def main(): Unit {
+    printl(busy(Thing(1)))
+}

@@ -10,6 +10,8 @@ import silver.ast : DiagnosticCode;
 import silver.sema.check_tests : shouldDeclareType, shouldHaveType;
 import silver.sema.resolution_tests;
 import silver.sema.target : Target;
+import silver.sema.typing : Query;
+import silver.ast : FunctionDecl, Id;
 
 private enum declarations = `
 interface Json { def toJson(value: Self): String }
@@ -886,4 +888,48 @@ unittest
         .shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
     analyzedModule(ranges ~ "def f(): Unit {\n    val g = (n: Int): Range<Int> => n\n}")
         .shouldReport(DiagnosticCode.UnsatisfiedBound, At("Range", 2));
+}
+
+// Capability queries
+
+/// What the function declared at `declaration` asks of its callers.
+private const(Query)[] queriesAt(const Analyzed a, At declaration)
+{
+    import std.sumtype : match;
+    auto symbol = declaration.offsetIn(a) in a.names[declaration.moduleName].declarations;
+    assert(symbol !is null, declaration.toString ~ " isn't a declaration");
+    return (*symbol).match!((const Id!FunctionDecl f) => a.analysis.queriesOf(f), _ => (const(Query)[]).init);
+}
+
+@("a generic function asks what a more demanding overload it calls needs, and its callers ask it in turn")
+unittest
+{
+    auto a = analyzed("interface Sized { def size(x: Self): Int }
+def count<T>(x: T): String => \"any\"
+def count<T: Sized>(x: T): String => \"sized\"
+def busy<T>(x: T): String => count(x)
+def outer<U>(x: U): String => busy(x)
+def known<V: Sized>(x: V): String => count(x)
+def boxed<W>(x: W): String => count([x])
+def main(): Unit => ()");
+    a.shouldHaveNoDiagnostics();
+    a.queriesAt(At("busy", 1)).length.should.equal(1);
+    a.queriesAt(At("outer", 1)).length.should.equal(1);
+    // Its bound answers the question where the call is written.
+    a.queriesAt(At("known", 1)).length.should.equal(0);
+    // Whether a `[W]` is `Sized` is settled where the call is written: nothing says it is.
+    a.queriesAt(At("boxed", 1)).length.should.equal(0);
+    a.queriesAt(At("count", 1)).length.should.equal(0);
+}
+
+@("a function asking more that returns another type isn't asked about inside a generic function")
+unittest
+{
+    auto a = analyzed("interface Sized { def size(x: Self): Int }
+def count<T>(x: T): String => \"any\"
+def count<T: Sized>(x: T): Int => 1
+def busy<T>(x: T): String => count(x)
+def main(): Unit => ()");
+    a.shouldHaveNoDiagnostics();
+    a.queriesAt(At("busy", 1)).length.should.equal(0);
 }

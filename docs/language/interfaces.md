@@ -63,7 +63,7 @@ count(Countdown(3))     // the first: a Countdown isn't Indexed
 - When neither asks for everything the other does, as `R: Range<T>` and `R: Indexed<T>`, the two are duplicates. So are two that differ only in their result.
 - A bound with a type written for its interface's parameter doesn't ask for the same function as one with a type parameter there, so `R: Range<Int> & Indexed<Int>` against `R: Range<T>` is a duplicate too.
 - A literal argument is taken as the type the call would give it, from the type the call is expected to have first and its default otherwise. With `twice<T: A>(x: T): T` and `twice<T: A & B>(x: T): T`, `twice(1)` is the first when an `Int` is an `A` and not a `B`, and `val f: Float = twice(1)` is the second when a `Float` is both.
-- The choice follows the real type, wherever the call is written. Inside `def total<R: Range<T>, T>(range: R)`, `count(range)` is the second function when `total` is called with an array and the first when it's called with a `Countdown`. See [capability queries](../proposals/interfaces.md#capability-queries-designed-not-built). When the two return different types, the choice is made from what's known where the call is written.
+- The choice follows the real type, wherever the call is written. Inside `def total<R: Range<T>, T>(range: R)`, `count(range)` is the second function when `total` is called with an array and the first when it's called with a `Countdown`. See [capability queries](../proposals/interfaces.md#capability-queries). When the two return different types, the choice is made from what's known where the call is written.
 
 ### Inside the function
 
@@ -316,7 +316,9 @@ See the [interfaces proposal](../proposals/interfaces.md) for the reasoning behi
 
 ## Current implementation
 
-- Of two functions that differ only in their bounds, the choice is made from what's known where the call is written, so a call inside a generic function takes the one asking for less whatever the real type is.
+- Inside a type's invariant and its `else`, a call of a function that others differ from only in their bounds is chosen from what's known where it's written, and so is how a `for` there loops: the question isn't carried to where the type is built.
+- An answer that two imported modules give equally well is an error where the type becomes concrete, and it names the function that asked first, which can be one the call reaches rather than the one called.
+- A program that gives one type different answers in two places compiles a generic function once for each. An answer that isn't there shows as `none` in such an instance's name.
 - When several functions of a name could take a call, a bound whose type parameter only a lambda argument's result would decide isn't looked into until one is chosen, so it's an error then rather than a reason to choose another. Of two functions that differ in their bounds, the one that asks for more is then chosen even where only the other's bounds hold: with `ap<T>(x: Int, g: (Int) -> T)` and `ap<T: A>(x: Int, g: (Int) -> T)`, `ap(1, n => "s")` is an error when a `String` isn't an `A`. Annotating the lambda's result doesn't help; a named function in its place does.
 - A program that gives one type two conformances compiles a generic function once for each. Such an instance's name, as a function value prints it, doesn't show which it is.
 - Beside an interface name in a result type or an annotation, a literal has its default type, since nothing but the interface is there to say otherwise. `def f(xs: [Int]): (Float, Range<Int>) => (1, xs)` is a mismatch and `val a: Range<Float> = [1, 2]` is an `[Int]` that isn't a `Range<Float>`; `(1.0, xs)` and `[1.0, 2.0]` are how to write them, and the error says so. The errors of an error union aren't beside it in this sense: they're written out, and a literal in an `Error` adapts to them.

@@ -23,6 +23,13 @@ package struct Typing
     /// For each use of a function with bounds, by the expression naming it, the function found for
     /// each function its bounds declare, in the order of `Resolution.boundFunctions`.
     Witness[][Id!Expr] witnesses;
+    /// For a use inside a generic function of a function that others ask more than, the ones
+    /// that could stand in for it there, most demanding first. Each holds only where the
+    /// instance's answers to the queries it depends on are there.
+    Witness[][Id!Expr] alternatives;
+    /// What each generic function asks of its type parameters beyond its bounds, worked out from
+    /// its body. Each query's witnesses follow its bounds' among those of each use of it.
+    Query[][Id!FunctionDecl] queries;
     /// What each bound of a type parameter names, in the order written. One that couldn't be
     /// resolved is there too, and isn't `valid`.
     Bound[][Id!TypeParam] bounds;
@@ -70,6 +77,8 @@ struct FunctionUse
     Id!FunctionDecl func;
     Type[] typeArgs;
     Witness[] witnesses;
+    /// As `Typing.alternatives` for a use by name.
+    Witness[] alternatives;
 
     bool found() const => func.isValid;
 }
@@ -87,11 +96,41 @@ struct Bound
 /// stand for, and the witnesses its own bounds need, all in terms of the function the search was
 /// made in. When `func` is one a bound of that function supplies, it stands for whichever function
 /// the instance being compiled was given for it.
+///
+/// A witness can depend on the answers to a function's queries. One with a `slot` stands for the
+/// instance's witness there, which may be absent. Otherwise it holds when its bounds' witnesses
+/// do, and `alternatives`, tried first, are more demanding functions that fit where the answers
+/// they depend on are there. One with neither a function nor a slot never holds by itself.
 struct Witness
 {
     Id!FunctionDecl func;
     Type[] typeArgs;
+    /// The witnesses its bounds need, then the answers to its queries.
     Witness[] witnesses;
+    size_t slot = size_t.max;
+    Witness[] alternatives;
+
+    bool isSlot() const => slot != size_t.max;
+}
+
+/// A question a generic function asks about a type made from its type parameters: whether the
+/// functions in `requests` can be called on it. It has a witness for each, all there or none.
+struct Query
+{
+    /// The interface asked about, or none for what `for` needs to loop by index.
+    Id!InterfaceDecl decl;
+    Type self;
+    Type[] args;
+    Request[] requests;
+    /// The function whose body asks it first, which an error about the answer names.
+    Id!FunctionDecl asker;
+}
+
+/// A function a query asks for: its name, and its type as a call would need it.
+struct Request
+{
+    string name;
+    Type wanted;
 }
 
 /// How a `for` loops over a value: by index with `length` and `opIndex` when `index` is set, and
@@ -101,6 +140,9 @@ struct LoopFunctions
     FunctionUse length;
     FunctionUse index;
     FunctionUse next;
+    /// For one that steps, `length` and `opIndex` where they hold for the instance's types, so it
+    /// loops by index there instead. Empty, or both.
+    Witness[] indexedIf;
 
     bool indexed() const => index.found;
 }
