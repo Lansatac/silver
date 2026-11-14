@@ -33,6 +33,8 @@ private final class Lowering
     private NodeIds ids;
     /// How many `for` loops so far take their element apart, for naming the element's local.
     private size_t _forPatterns;
+    /// The type of each bare sum member, which declares a marker.
+    private bool[Id!TypeExpr] _markerMembers;
 
     public this(NodeIds ids, string file)
     {
@@ -87,23 +89,10 @@ private final class Lowering
         return cst.matches.filter!(m => m != ".").array;
     }
 
-
-    /// A TypeDecl for each bare name in a sum that nothing in the module declares, and which
-    /// isn't built in. Its members are marked as owned here, once every declaration is known.
+    /// A TypeDecl for each bare name in a sum. They come last, so a clash with a declaration
+    /// elsewhere in the module is reported on the member, where the `:` would go.
     private Decl[] implicitMarkers(Decl[] declarations)
     {
-        import std.traits : EnumMembers;
-
-        bool[string] declared;
-        foreach (ref declaration; declarations)
-        {
-            declaration.kind.match!(
-                (ref TypeDecl type) { declared[type.name] = true; },
-                (ref AliasDecl alias_) { declared[alias_.name] = true; },
-                (ref _) {},
-            );
-        }
-
         Decl[] markers;
         foreach (ref declaration; declarations)
         {
@@ -112,14 +101,8 @@ private final class Lowering
                     bool[string] inThisSum;
                     foreach (ref member; sum.members)
                     {
-                        auto name = member.type.kind.match!(
-                            (ref NamedType named) => named.path.length == 1 && named.args.length == 0 ? named.path[0] : null,
-                            (ref _) => cast(string) null,
-                        );
-                        if (name is null || name in declared || [__traits(allMembers, Builtin)].canFind(name)) continue;
-                        if (sum.typeParams.canFind!(p => p.name == name)) continue;
-
-                        member.owned = true;
+                        if (member.type.id !in _markerMembers) continue;
+                        auto name = member.type.kind.match!((ref NamedType named) => named.path[0], (ref _) => "");
                         // Named twice in one sum is reported as a repeated member, not a redeclaration.
                         if (name in inThisSum) continue;
                         inThisSum[name] = true;
@@ -131,6 +114,24 @@ private final class Lowering
             );
         }
         return markers;
+    }
+
+    /// An unmarked sum member, which declares a marker, so it must be a plain new name.
+    private TypeExpr markerMember(ParseTree cst, const TypeParam[] typeParams)
+    {
+        auto type = convertTypeExpression(cst);
+        auto name = type.kind.match!(
+            (ref NamedType named) => named.path.length == 1 && named.args.length == 0 ? named.path[0] : null,
+            (ref _) => cast(string) null,
+        );
+        string problem;
+        if (name is null) problem = "only a new name declares a member; write `:%s` to use an existing type";
+        else if ([__traits(allMembers, Builtin)].canFind(name)) problem = "`%s` is a built-in type; write `:%s` to make it a member";
+        else if (typeParams.canFind!(p => p.name == name)) problem = "`%s` is a type parameter; write `:%s` to make it a member";
+        if (problem is null) return type;
+        auto text = printTypeExpr(type);
+        throw new ParseException(Diagnostic(DiagnosticCode.ParseError, type.span,
+            name is null ? problem.format(text) : problem.format(text, text)));
     }
 
     /// One declaration, except that a sum comes with a declaration for each member it defines inline.
@@ -1097,9 +1098,15 @@ private final class Lowering
             foreach (member; rest[0].children)
             {
                 member.validateNodeIs("Silver.SumMember");
-                if (member[0].name != "Silver.InlineMember")
+                if (member[0].name == "Silver.ReferencedMember")
                 {
-                    members ~= SumMember(convertTypeExpression(member[0]), false);
+                    members ~= SumMember(convertTypeExpression(member[0][0]), false);
+                    continue;
+                }
+                if (member[0].name == "Silver.SumMemberType")
+                {
+                    members ~= SumMember(markerMember(member[0], typeParams), true);
+                    _markerMembers[members[$ - 1].type.id] = true;
                     continue;
                 }
                 auto inline = convertProduct(member[0][0], member[0][1]);

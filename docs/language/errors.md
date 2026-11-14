@@ -46,7 +46,7 @@ An error fits where another error type is expected when each of its types is the
 
 ```silver
 type Missing(key: String)
-type ConfigError = Missing | ParseError
+type ConfigError = :Missing | :ParseError
 
 Int ! Negative                      // fits Int ! Negative | Overflow
 Int ! Negative | Overflow           // fits Int ! Negative | Overflow | Missing

@@ -14,7 +14,7 @@ type Overflow
 type Empty
 type ParseError = Blank | BadDigit(at: Int)
 type Missing(key: String)
-type ConfigError = ParseError | Missing
+type ConfigError = :ParseError | :Missing
 def parse(text: String): Int ! ParseError => 1
 def factorial(n: Int): Int ! Negative | Overflow => 1
 def lookup(key: String): String? => None

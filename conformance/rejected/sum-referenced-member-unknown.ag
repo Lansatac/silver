@@ -1,0 +1,4 @@
+type SomeType
+type Composite = :SomeTyep | OtherType
+
+def main(): Unit {}

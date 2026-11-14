@@ -98,7 +98,8 @@ Silver:
     InterfaceFunction    < :DEF Nl? Identifier (Nl? TypeParameters)? Nl? :'(' Nl? Params Nl? :')' TypeAnnotation (Nl? :'=>' Nl? Expression / Block)?
     AliasDeclaration     < :ALIAS Nl? TypeName (Nl? TypeParameters)? Nl? :'=' !'=' Nl? Type
     SumMembers           < SumMember (LeadingNl? :BitOrOperator Nl? SumMember)*
-    SumMember            < InlineMember / SumMemberType
+    SumMember            < ReferencedMember / InlineMember / SumMemberType
+    ReferencedMember     < :':' SumMemberType
     InlineMember         < TypeName Fields InlineInvariant?
     InlineInvariant      < Nl? :INVARIANT Nl? :'(' Nl? Expression Nl? :')' (Nl? :ELSE Nl? :'(' Nl? Expression Nl? :')')?
     # The parens are kept so `type M()` still has a node, which sema rejects in favor of `type M`

@@ -90,7 +90,7 @@ def toJson<T: Json>(x: T?): String => match x {
 - An argument is promoted as in any call, so a function taking a sum makes each member conform:
 
   ```silver
-  type Shape = Circle | Square
+  type Shape = :Circle | :Square
   def area(s: Shape): Int => ...
 
   def measure<T: HasArea>(shape: T): Int => area(shape)

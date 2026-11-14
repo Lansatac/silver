@@ -1,0 +1,4 @@
+type SomeType
+type Composite = SomeType | OtherType
+
+def main(): Unit {}

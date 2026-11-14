@@ -121,7 +121,7 @@ A generic function that calls itself with an ever larger type, such as `def grow
 ## Open questions
 
 - Ordering a type parameter's values, which waits on `Ord`. See [Interfaces](interfaces.md#open-questions).
-- A type parameter as a sum member by itself, as in `type Maybe<T> = T | Nothing`.
+- A type parameter as a sum member by itself, as in `type Maybe<T> = :T | Nothing`.
 - Generic aliases, as in `alias Pair<T> = (T, T)`.
 - Type parameters on a nested `def`.
 - Leaving some type arguments to inference, as in `convert<_, Int>(x)`.

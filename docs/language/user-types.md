@@ -97,23 +97,28 @@ type Shape = Circle(radius: Float) invariant (radius > 0.0) else (NotPositive(ra
 Every member of a sum is a type.
 
 - `Name(fields)` declares a product right there.
-- A bare name refers to the type of that name in this module, or declares a marker if the module has none.
-- An imported type is written qualified, as in `geometry.Point`. A bare name that an import also provides is an error.
+- A bare `Name` declares a marker.
+- `:Type` refers to a type that already exists: one declared elsewhere in this module, an imported one such as `:geometry.Point`, or any other type, such as `:Int?` or `:[String]`.
 
 ```silver
 type Color = Red | Green | Blue
-type Point = Point2D | Point3D      // over existing types
+type Point = :Point2D | :Point3D                 // over existing types
+type Reading = :Int | :geometry.Point | Missing  // Missing is declared here
 ```
+
+So a sum's declaration says on its own which members it owns. Declaring or removing a type elsewhere in the module, or adding one to an imported module, never changes what a member means.
+
+A bare name declares, so it's an error if the module already declares that name, and a member that isn't a plain name, such as `Int` or `geometry.Point` without the `:`, is an error too. A marker a sum declares is the module's own, so like any declaration it takes precedence over an import of the same name.
 
 A sum is nominal. Two sums with the same members are different types.
 
-A member can't be `Never` or the sum itself, and can't be listed twice. A bare name can only declare a marker in one sum of a module. To share a marker between sums, declare it on its own with `type Name`.
+A member can't be `Never` or the sum itself, and can't be listed twice. A bare name can only declare a marker in one sum of a module. To share a marker between sums, declare it on its own with `type Name` and write `:Name` in each.
 
 A sum's name isn't a value, so only its members can be constructed.
 
 ### Owned and referenced members
 
-A member is *owned* if the sum declares it (inline fields or an auto-declared marker), and *referenced* if it already existed.
+A member is *owned* if the sum declares it (inline fields or a bare marker name), and *referenced* if it is written with `:`.
 
 A constructor of an owned member has the sum's type, and a constructor of a referenced member has its own type:
 
@@ -181,7 +186,7 @@ val r = if val Circle(radius) = shape => radius else 0.0
 - Guards on match arms
 - Named constants as patterns, as in `match p { origin => ... }`, and whether one compares with `==`, since it's a whole value rather than a structure
 - Named patterns, alongside named arguments
-- A one-member sum over an existing type, such as `type Id = Int`, is a nominal wrapper with implicit injection. It may be rejected if it proves a footgun.
+- A one-member sum over an existing type, such as `type Id = :Int`, is a nominal wrapper with implicit injection. It may be rejected if it proves a footgun.
 - A `with` through a path that reaches two types with invariants, such as `line with (start.x = 2)`, where the two errors differ. A list of errors is never invented, so for now the inner value is built first.
 - Whether an invariant can name a field whose type contains a `Ref`, whose cell changes without going through the type.
 - An invariant that's costly to check, or that a module maintains step by step, such as a sorted array. Checking it at every construction is too slow. This is what `opaque type` is for; see [Modules](modules.md).

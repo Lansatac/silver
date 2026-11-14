@@ -1,6 +1,6 @@
 // A NaN's sign bit never shows, however the NaN was made or printed
 type Holder(value: Float)
-type Number = Float | Int
+type Number = :Float | :Int
 
 val constant: Float = 0.0 / 0.0
 val hole: String = "{constant}"
