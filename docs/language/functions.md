@@ -11,7 +11,7 @@ def describe(value: Int): String {
 }
 ```
 
-`=>` introduces one expression, and a block's last expression is its value. A named function always declares its parameter types and return type. A named function's return type is required even when it's `Unit`.
+`=>` introduces one expression, and a block's last expression is its value. A named function always declares its parameter types and return type. A named function's return type is required even when it's `Unit`. It can be an [interface](interfaces.md#an-interface-name-as-a-result-type), and then the type returned is the body's, which has to satisfy it.
 
 When a `Unit` function's body produces a value of another type, the value is dropped.
 
@@ -138,7 +138,7 @@ A call chooses among the functions of its name like this:
 
 1. Only those taking as many arguments are candidates, and as many type arguments when some are written. If that leaves one, it's called as a function with no overloads would be.
 2. Each argument that has a type of its own is typed, once. Some arguments' types depend on where they go, and those are compared with each candidate's parameter by their shape instead: literals, `None`, `[]`, lambdas, names of generic or overloaded functions, arrays, tuples and `Some`s made only of these, and `if`s, `match`es and blocks whose values are all of these. An arm that can't finish, because it ends in `return`, `break`, `continue` or `tail`, has no value to count, and a block's earlier statements don't count. Such an `if` fits a parameter as well as its worst-fitting value does. They're checked against the chosen function's parameters afterwards. A lambda fits a function parameter that takes as many parameters as it does, with the types it annotates.
-3. An argument fits its parameter exactly, or by a conversion: promotion to an option, becoming a member of a sum, or a literal taking a type other than its default. A candidate that fits every argument beats another if it fits each argument at least as well and one of them better. When two fit every argument equally well, a function that isn't generic beats a generic one, and a generic function beats another that takes everything it takes, as `f<T>(x: [T])` beats `f<T>(x: T)`.
+3. An argument fits its parameter exactly, or by a conversion: promotion to an option, becoming a member of a sum, or a literal taking a type other than its default. A candidate that fits every argument beats another if it fits each argument at least as well and one of them better. When two fit every argument equally well, a function that isn't generic beats a generic one, and a generic function beats another that takes everything it takes, as `f<T>(x: [T])` beats `f<T>(x: T)`. Last, of two generic functions with the same parameter types, the one whose [bounds](interfaces.md#bounds) ask for more beats the other.
 4. If no candidate fits, or more than one fits better than all the others, the call is an error.
 
 The current module's functions come first. Imported functions are only tried when none of the current module's fits, and then the choice is made within one imported module. A module with a function that fits every argument exactly and isn't generic beats the other modules, whose functions would need a conversion or are generic. Otherwise only one imported module's functions may fit: if functions from two modules fit equally well, the call is ambiguous, and qualifying it resolves that. A module here is what one import brings, so the functions a module [forwards](modules.md#forms-of-import) are ranked with its own.
@@ -153,7 +153,7 @@ encode(Circle(1))  // encoding.encode, the only one that fits
 
 So a new overload in a library can silently change a call only by fitting it exactly, without being generic, where another import's function needed a conversion or was generic. Anything else it adds can at worst cause an ambiguity error. It also means a module can declare its own `printl(p: Point)` and still call the prelude's `printl` with anything else.
 
-An overloaded function used as a value is the one whose type is exactly the expected type, so it needs one:
+An overloaded function used as a value is the one whose type is exactly the expected type, so it needs one. When two that differ in their bounds both are, it's the one that asks for more:
 
 ```silver
 val show: (String) -> String = describe

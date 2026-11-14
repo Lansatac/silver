@@ -1,0 +1,4 @@
+T0043: `bad` returns `Int`, which isn't a `Range<Int>`: no `next` in scope takes `Int`
+    next<T>([T]) takes `[T]` there, not `Int`
+    next<R: Range<T>, T>(Filtered<R, T>) takes `Filtered<R, T>` there, not `Int`
+    prelude.next(String) takes `String` there, not `Int`

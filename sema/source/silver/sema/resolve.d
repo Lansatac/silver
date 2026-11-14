@@ -103,8 +103,16 @@ package struct Resolution
     /// The type parameters a function has beyond those it declares: one for each parameter whose
     /// type is an interface name, in parameter order. They come after the declared ones.
     const(TypeParam)[][Id!FunctionDecl] hiddenParams;
-    /// For a parameter type that's an interface name, the hidden type parameter it stands for.
+    /// For a parameter type that's an interface name, the hidden type parameter it stands for,
+    /// and for an interface name or `A & B` in a result type or a `val`'s annotation, its floor.
     Id!TypeParam[Id!TypeExpr] sugarParams;
+    /// The floors in a function's result type: one for each interface name or `A & B` in it, an
+    /// outer one before those in its type arguments. Each stands for the type the body gives
+    /// there, which its bounds check, and none is a type parameter of the function.
+    const(TypeParam)[][Id!FunctionDecl] resultFloors;
+    /// The same for a lambda's or nested `def`'s result type, and for a `val`'s annotation.
+    const(TypeParam)[][Id!Expr] lambdaFloors;
+    const(TypeParam)[][Id!VarDecl] bindingFloors;
     /// The functions a generic function's bounds supply inside it, in the order its witnesses are
     /// kept: by type parameter, then bound, then the interface's function.
     Id!FunctionDecl[][Id!FunctionDecl] boundFunctions;
@@ -390,6 +398,9 @@ private final class NameResolver
     private string[string] _nativeLibraries;
     private const(TypeParam)[][Id!FunctionDecl] _hiddenParams;
     private Id!TypeParam[Id!TypeExpr] _sugarParams;
+    private const(TypeParam)[][Id!FunctionDecl] _resultFloors;
+    private const(TypeParam)[][Id!Expr] _lambdaFloors;
+    private const(TypeParam)[][Id!VarDecl] _bindingFloors;
     private Id!FunctionDecl[][Id!FunctionDecl] _boundFunctions;
     private Requirement[Id!FunctionDecl] _requirements;
     /// Where the nodes resolution makes up get their IDs.
@@ -426,7 +437,8 @@ private final class NameResolver
             resolveModule(mod.name, mod);
         }
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
-            _operatorLookups, _declarations, _nativeLibraries, cast(const(Scope)[string]) _moduleScopes, _hiddenParams, _sugarParams, _boundFunctions, _requirements);
+            _operatorLookups, _declarations, _nativeLibraries, cast(const(Scope)[string]) _moduleScopes, _hiddenParams, _sugarParams,
+            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements);
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
@@ -688,6 +700,7 @@ private final class NameResolver
             (const FunctionType func) => through(func.params) || reaches(*func.returnType, target, seen),
             (const UnitType _) => false,
             (const TupleType tuple) => through(tuple.elements),
+            (const JoinedType joined) => through(joined.parts),
         );
     }
 
@@ -714,7 +727,12 @@ private final class NameResolver
                         _declarations.params[param.id] = &param;
                         resolveTypeExpr(param.type, declScope, sugared ? InterfaceUse.parameter : InterfaceUse.none);
                     }
-                    resolveTypeExpr(func.returnType, declScope);
+                    auto floored = sugared && func.body !is null;
+                    resolveTypeExpr(func.returnType, declScope, floored ? InterfaceUse.floor : InterfaceUse.none);
+                    if (floored)
+                    {
+                        if (auto floors = floorsIn(func.returnType)) _resultFloors[func.id] = floors;
+                    }
                     if (!func.isPrivate)
                     {
                         foreach (ref typeParam; func.typeParams)
@@ -773,7 +791,7 @@ private final class NameResolver
                             resolveTypeExpr(param.type, declScope);
                             if (!interface_.isPrivate) reportPrivateType(param.type, "a public interface");
                         }
-                        resolveTypeExpr(func.returnType, declScope);
+                        resolveTypeExpr(func.returnType, declScope, InterfaceUse.interfaceResult);
                         if (!interface_.isPrivate) reportPrivateType(func.returnType, "a public interface");
                     }
                 },
@@ -991,6 +1009,9 @@ private final class NameResolver
             (const TupleType tuple) {
                 foreach (element; tuple.elements) reportPrivateType(element, where);
             },
+            (const JoinedType joined) {
+                foreach (part; joined.parts) reportPrivateType(part, where);
+            },
         );
     }
 
@@ -1043,14 +1064,16 @@ private final class NameResolver
         );
     }
 
-    /// `use` says what the type as a whole is for; the types inside it are never an interface's place.
+    /// `use` says what the type as a whole is for. The types inside it are an interface's place
+    /// only where the whole is a floor.
     private void resolveTypeExpr(const TypeExpr type, const Scope current, InterfaceUse use = InterfaceUse.none)
     {
+        auto inside = within(use);
         type.kind.match!(
             (const NamedType named) {
                 foreach (arg; named.args)
                 {
-                    resolveTypeExpr(arg, current);
+                    resolveTypeExpr(arg, current, inside);
                 }
                 auto name = named.path.back;
                 const(TypeSymbol)* resolvedType;
@@ -1094,56 +1117,154 @@ private final class NameResolver
                     return;
                 }
                 auto isInterface = (*resolvedType).match!((const Id!InterfaceDecl _) => true, _ => false);
-                auto allowed = isInterface ? use == InterfaceUse.bound || use == InterfaceUse.parameter : use != InterfaceUse.bound;
+                auto allowed = isInterface
+                    ? use == InterfaceUse.bound || use == InterfaceUse.joined || use == InterfaceUse.parameter || use == InterfaceUse.floor
+                    : use != InterfaceUse.bound && use != InterfaceUse.joined;
                 if (!allowed)
                 {
-                    reportInterfaceUse(named.path.join("."), type.span, use);
+                    reportInterfaceUse(printTypeExpr(type), type.span, use);
                     return;
                 }
                 _typeResolutions[type.id] = *resolvedType;
             },
-            (const OptionType option) => resolveTypeExpr(*option.inner, current),
+            (const OptionType option) => resolveTypeExpr(*option.inner, current, inside),
             (const ErrorUnionType u) {
-                resolveTypeExpr(*u.success, current);
-                foreach (error; u.errors) resolveTypeExpr(error, current);
+                auto part = inside == InterfaceUse.floor ? InterfaceUse.floorInErrorUnion : inside;
+                resolveTypeExpr(*u.success, current, part);
+                foreach (error; u.errors) resolveTypeExpr(error, current, part);
             },
-            (const ArrayType array) => resolveTypeExpr(*array.element, current),
+            (const ArrayType array) => resolveTypeExpr(*array.element, current, inside),
             (const FunctionType func) {
+                auto part = inside == InterfaceUse.floor ? InterfaceUse.floorInFunction : inside;
                 foreach (param; func.params)
                 {
-                    resolveTypeExpr(param, current);
+                    resolveTypeExpr(param, current, part);
                 }
-                resolveTypeExpr(*func.returnType, current);
+                resolveTypeExpr(*func.returnType, current, part);
             },
             (const UnitType _) {},
             (const TupleType tuple) {
                 foreach (element; tuple.elements)
                 {
-                    resolveTypeExpr(element, current);
+                    resolveTypeExpr(element, current, inside);
                 }
+            },
+            (const JoinedType joined) {
+                foreach (part; joined.parts)
+                {
+                    auto named = part.kind.match!((const NamedType _) => true, _ => false);
+                    if (named) resolveTypeExpr(part, current, InterfaceUse.joined);
+                    else reportInterfaceUse(printTypeExpr(part), part.span, InterfaceUse.joined);
+                }
+                if (use != InterfaceUse.floor) reportInterfaceUse(printTypeExpr(type), type.span, use, true);
             },
         );
     }
 
-    /// Reports the interface `name` where a type is wanted, or a type where a bound wants an interface.
-    private void reportInterfaceUse(string name, Span span, InterfaceUse use)
+    /// What `use` makes of the types inside the type it describes.
+    private static InterfaceUse within(InterfaceUse use)
     {
+        final switch (use)
+        {
+            case InterfaceUse.floor:
+            case InterfaceUse.floorInFunction:
+            case InterfaceUse.floorInErrorUnion:
+            case InterfaceUse.interfaceResult:
+                return use;
+            case InterfaceUse.none:
+            case InterfaceUse.bound:
+            case InterfaceUse.joined:
+            case InterfaceUse.parameter:
+            case InterfaceUse.lambdaParameter:
+                return InterfaceUse.none;
+        }
+    }
+
+    /// A floor for each interface name or `A & B` that `type`, resolved as one that can have
+    /// them, has where one is allowed. Null when it has none.
+    private const(TypeParam)[] floorsIn(const TypeExpr type)
+    {
+        TypeParam[] floors;
+        void visit(const TypeExpr t)
+        {
+            void add(const(TypeExpr)[] bounds)
+            {
+                floors ~= TypeParam(_ids.next!TypeParam, printTypeExpr(t), t.span, cast(TypeExpr[]) bounds);
+                _sugarParams[t.id] = floors[$ - 1].id;
+            }
+            t.kind.match!(
+                (const NamedType named) {
+                    if (interfaceNamed(t) !is null) add([cast() t]);
+                    foreach (arg; named.args) visit(arg);
+                },
+                (const JoinedType joined) {
+                    add(joined.parts);
+                    foreach (part; joined.parts)
+                    {
+                        part.kind.match!(
+                            (const NamedType named) {
+                                foreach (arg; named.args) visit(arg);
+                            },
+                            (_) {},
+                        );
+                    }
+                },
+                (const OptionType option) => visit(*option.inner),
+                (const ArrayType array) => visit(*array.element),
+                (const TupleType tuple) {
+                    foreach (element; tuple.elements) visit(element);
+                },
+                (_) {},
+            );
+        }
+        visit(type);
+        foreach (ref floor; floors) _declarations.typeParams[floor.id] = &floor;
+        return floors;
+    }
+
+    /// Reports the interface `name` where a type is wanted, or a type where a bound wants an interface.
+    /// `joined` says `name` is several interfaces joined with `&`.
+    private void reportInterfaceUse(string name, Span span, InterfaceUse use, bool joined = false)
+    {
+        auto what = joined ? "joins interfaces" : "is an interface";
         final switch (use)
         {
             case InterfaceUse.bound:
                 _collector.reportError(DiagnosticCode.NotAnInterface, span,
                     "`%s` is a type, and a bound names an interface".format(name));
                 return;
+            case InterfaceUse.joined:
+                _collector.reportError(DiagnosticCode.NotAnInterface, span,
+                    "`%s` is a type, and `&` joins interfaces".format(name));
+                return;
             case InterfaceUse.lambdaParameter:
                 _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
-                    ("`%s` is an interface, and only a module-level `def` can take any type that satisfies one; "
-                        ~ "name the type this parameter takes").format(name));
+                    ("`%s` %s, and only a module-level `def` can take any type that satisfies one; "
+                        ~ "name the type this parameter takes").format(name, what));
+                return;
+            case InterfaceUse.floorInFunction:
+                _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
+                    ("`%s` %s, which can't stand for a type inside a function type; name the type with a type "
+                        ~ "parameter that has the bound, as in `<T: %s>`").format(name, what, name));
+                return;
+            case InterfaceUse.floorInErrorUnion:
+                _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
+                    "`%s` %s, which can't stand for a type inside an error union; write the type out".format(name, what));
+                return;
+            case InterfaceUse.interfaceResult:
+                _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
+                    ("`%s` %s, and a function of an interface can't return one, since each function that conforms "
+                        ~ "would return a different type; make the type a parameter of the interface").format(name, what));
                 return;
             case InterfaceUse.none:
             case InterfaceUse.parameter:
-                _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
-                    ("`%s` is an interface, which is only a type as the whole type of a module-level `def`'s parameter; "
-                        ~ "use a type parameter with a bound, as in `<T: %s>`, or a sum type of the types it holds").format(name, name));
+            case InterfaceUse.floor:
+                _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span, joined
+                    ? ("`%s` joins interfaces, which only a `def`'s result type or a `val`'s annotation can; "
+                        ~ "use a type parameter with the bounds, as in `<T: %s>`").format(name, name)
+                    : ("`%s` is an interface, which stands for a type only as a `def`'s result type, a `val`'s annotation "
+                        ~ "or the whole type of a module-level `def`'s parameter; use a type parameter with a bound, as in "
+                        ~ "`<T: %s>`, or a sum type of the types it holds").format(name, name));
                 return;
         }
     }
@@ -1214,7 +1335,11 @@ private final class NameResolver
         stmt.kind.match!(
             (ref const VarDecl varDecl) {
                 _declarations.locals[varDecl.id] = &varDecl;
-                if (varDecl.type !is null) resolveTypeExpr(*varDecl.type, scopeTable);
+                if (varDecl.type !is null)
+                {
+                    resolveTypeExpr(*varDecl.type, scopeTable, InterfaceUse.floor);
+                    if (auto floors = floorsIn(*varDecl.type)) _bindingFloors[varDecl.id] = floors;
+                }
                 auto recursive = varDecl.value.kind.match!((const Lambda l) => l.self == varDecl.id, _ => false);
                 if (recursive)
                 {
@@ -1309,7 +1434,11 @@ private final class NameResolver
                     _declarations.params[param.id] = &param;
                     if (param.annotated) resolveTypeExpr(param.type, scopeTable, InterfaceUse.lambdaParameter);
                 }
-                if (lambda.returnType !is null) resolveTypeExpr(*lambda.returnType, scopeTable);
+                if (lambda.returnType !is null)
+                {
+                    resolveTypeExpr(*lambda.returnType, scopeTable, InterfaceUse.floor);
+                    if (auto floors = floorsIn(*lambda.returnType)) _lambdaFloors[expr.id] = floors;
+                }
                 resolveBody(lambda.params, *lambda.body, scopeTable, expr.id, lambda.self);
             },
             (const UnaryExpr unary) {
@@ -1767,6 +1896,16 @@ private enum InterfaceUse
     parameter,
     /// The whole type of a lambda's or nested `def`'s parameter, which can't be generic.
     lambdaParameter,
+    /// A part of `A & B`, which has to be an interface.
+    joined,
+    /// A result type or a `val`'s annotation, where an interface name or `A & B` is a floor: as
+    /// the whole type, or inside a tuple, an option, an array or a type argument.
+    floor,
+    /// Inside a function type or an error union in one of those, where there's no floor.
+    floorInFunction,
+    floorInErrorUnion,
+    /// The result type of an interface's function.
+    interfaceResult,
 }
 
 /// The names the language gives meaning to, which no declaration can take.

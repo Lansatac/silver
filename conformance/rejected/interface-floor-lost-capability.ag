@@ -1,0 +1,21 @@
+// Each interface joined with `&` is promised, so a body that loses one is an error there, not in a caller.
+interface Range<T> {
+    def next(range: Self): (T, Self)?
+}
+
+interface Indexed<T> {
+    def length(value: Self): Int
+    def opIndex(value: Self, index: Int): T
+}
+
+def next<T>(xs: [T]): (T, [T])? => if length(xs) == 0 => None else (xs[0], xs[1..])
+
+type Filtered<R, T>(source: R, keep: (T) -> Bool)
+def filter<R: Range<T>, T>(source: R, keep: (T) -> Bool): Filtered<R, T> => Filtered(source, keep)
+def next<R: Range<T>, T>(f: Filtered<R, T>): (T, Filtered<R, T>)? => None
+
+def evens(xs: [Int]): Range<Int> & Indexed<Int> => xs.filter(x => x % 2 == 0)
+
+def main(): Unit {
+    printl(evens([1, 2])[0])
+}

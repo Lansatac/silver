@@ -1,0 +1,10 @@
+module interfaces_support.named
+
+interface Named {
+    def name(value: Self): String
+}
+
+def name(n: Int): String => "number {n}"
+
+// Checked after the module that calls it, which needs its result first.
+def numbered(n: Int): Named => n + 1

@@ -333,6 +333,9 @@ private final class IdCheck
                     visit(element);
                 }
             },
+            (const JoinedType j) {
+                foreach (part; j.parts) visit(part);
+            },
         );
     }
 }

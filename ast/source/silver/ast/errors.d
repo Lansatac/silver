@@ -99,10 +99,13 @@ enum DiagnosticCode : string
     PanicsOutsideTest = "T0041",
     /// A bound where there can't be one, or an interface declared in a way the language doesn't allow.
     InvalidBound = "T0042",
-    /// A type argument that doesn't satisfy a bound.
+    /// A type argument that doesn't satisfy a bound, or a result or value whose type doesn't
+    /// satisfy the interface written for it.
     UnsatisfiedBound = "T0043",
     /// A search for a conformance that keeps needing a larger one.
     BoundSearchTooDeep = "T0044",
+    /// A result type that's worked out from a body which needs it already.
+    RecursiveResultType = "T0045",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

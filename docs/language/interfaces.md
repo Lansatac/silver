@@ -58,9 +58,12 @@ count([1, 2, 3])        // the second
 count(Countdown(3))     // the first: a Countdown isn't Indexed
 ```
 
-- A bound asks for its interface's functions, so `R: Indexed<T>` asks for more than `R: Sized` when `Sized` declares only `length`.
+- A bound asks for its interface's functions, so `R: Indexed<T>` asks for more than `R: Sized` when `Sized` declares only `length`. A function with no bound asks for nothing.
+- Several can form a chain, each asking for more than the one before, and the one chosen is the one that asks for most of those that fit.
 - When neither asks for everything the other does, as `R: Range<T>` and `R: Indexed<T>`, the two are duplicates. So are two that differ only in their result.
-- The choice is made where the call is written, from what's known there. Inside `def total<R: Range<T>, T>(range: R)`, `count(range)` is the first function whatever `R` turns out to be.
+- A bound with a type written for its interface's parameter doesn't ask for the same function as one with a type parameter there, so `R: Range<Int> & Indexed<Int>` against `R: Range<T>` is a duplicate too.
+- A literal argument is taken as the type the call would give it, from the type the call is expected to have first and its default otherwise. With `twice<T: A>(x: T): T` and `twice<T: A & B>(x: T): T`, `twice(1)` is the first when an `Int` is an `A` and not a `B`, and `val f: Float = twice(1)` is the second when a `Float` is both.
+- The choice follows the real type, wherever the call is written. Inside `def total<R: Range<T>, T>(range: R)`, `count(range)` is the second function when `total` is called with an array and the first when it's called with a `Countdown`. See [capability queries](../proposals/interfaces.md#capability-queries-designed-not-built). When the two return different types, the choice is made from what's known where the call is written.
 
 ### Inside the function
 
@@ -215,12 +218,66 @@ total(["a", "b"])          // error: a [String] is a Range<String>
 - The hidden parameter is never written at a call and doesn't count toward "all type arguments or none".
 - Each such parameter has a type of its own. To say two parameters have the same type, name it with a type parameter.
 - The argument needs a type of its own, so `total([])` is an error.
-- Anywhere else an interface name isn't a type: inside another type (`[Json]`, `Json?`), as a field, a result, a binding's annotation, or the parameter of a lambda or nested `def`, neither of which can be generic. Mixed values go in a sum type.
+- Inside a parameter's type an interface name isn't a type, as in `items: [Json]` or `item: Json?`, and neither is the parameter of a lambda or nested `def`, which can't be generic. A type parameter with a bound says it.
+
+## An interface name as a result type
+
+A function's result type can be an interface. The result's type is then the body's, the compiler checks that it satisfies the interface, and callers get that type with everything it can do:
+
+```silver
+def squares<R: Range<Int>>(r: R): Range<Int> => r.map(x => x * x)
+
+squares([1, 2, 3])[1]           // 4: the result is a Mapped<[Int], Int, Int>
+squares(Countdown(3)).array()   // [9, 4, 1]
+squares(Countdown(3))[1]        // error: nothing indexes a Mapped<Countdown, Int, Int>
+
+def bad(xs: [Int]): Range<Int> => length(xs)    // error in bad: an Int isn't a Range<Int>
+```
+
+- The result's type is worked out from the body, once, in terms of the function's type parameters. Here it's `Mapped<R, Int, Int>`. It's the type callers see: they can name it, index it when it's indexed, and use the function as a value of that type.
+- The interface is what the author promises. A body whose type doesn't satisfy it is an error in that function, found as a [bound](#conformance) is, from where the function is written.
+- Several are joined with `&`, as in a bound: `def squares(xs: [Int]): Range<Int> & Indexed<Int>`. Adding a `filter` to that body is then an error there, and not in a caller that indexed the result.
+- A caller can use more than was promised. If it does, a change to the body can break it, and the error is at the caller.
+- Everything the body returns has one type, as in any function. `if c => xs else xs.filter(f)` is a mismatch.
+- An interface name can sit inside a tuple, an option, an array or a type argument of the result, each checked in its place:
+
+  ```silver
+  def split(xs: [Int]): (Int, Range<Int>) => (xs[0], xs[1..])
+  def nonEmpty(xs: [Int]): Range<Int>? => if length(xs) == 0 => None else xs
+  def rows(xs: [Int]): Range<Range<Int>> => [xs, xs]
+  ```
+
+  The type around it is the body's too, after the promotion any result gets: a body that gives an `[Int]` fits `Range<Int>?`, and one that gives an `[Int]` doesn't fit `(Int, Range<Int>)`.
+- It can't sit inside a function type or an error union. A function returning a function names the type: `<R: Range<Int>>(make: () -> R)`.
+- A function of an interface can't return an interface type, since each function that conforms would return a different one. A parameter of the interface says it.
+- A function that needs its own result, by calling itself or a function that calls it, writes the type out. Another function of the same name isn't the function itself.
+- A lambda's and a nested `def`'s result type can be written this way too.
+- Every other result type is still written in full.
+
+### On a binding
+
+A `val`'s annotation works the same way: the binding has the value's type, checked against the interface.
+
+```silver
+val xs: Range<Int> = [1, 2, 3]
+xs[0]                                             // 1: xs is an [Int]
+
+val ys: Range<Int> & Indexed<Int> = squares(xs)
+val strings: Range<String> = [1, 2]               // error: an [Int] is a Range<Int>
+
+mutable val current: Range<Int> = [1]
+current = [2, 3]
+current = current.filter(x => x > 2)              // error: current is an [Int]
+```
+
+- A `mutable val` still has one type, the first value's.
+- It nests as in a result type: `val pair: (String, Range<Int>)? = ...`.
+- Only a `val` with a name takes one. A binding in a pattern, as in `val (a: Range<Int>, b) = ...`, a field, an element and an alias don't: each of those has one type, which has to be written. Mixed values go in a sum type.
 
 ## Open questions
 
-- Returning an interface type, as in `def evens(xs: [Int]): Range<Int>`, and annotating a binding with one. See the [ranges proposal](../proposals/ranges.md#an-interface-name-as-a-type-decided).
 - A value whose type is only an interface, as in `[Json]`, which needs a runtime representation.
+- An interface name in the success side of an error union, as in `def load(path: String): Range<String> ! IoError`.
 - Asking whether a type satisfies an interface inside a generic function, as in `static if R: Sized`.
 - A bound on a type's own parameter, as in `type Set<T: Ord>`, which makes the conformance part of the type.
 - A way to name which function conforms, for a type two imports conform differently.
@@ -229,11 +286,14 @@ total(["a", "b"])          // error: a [String] is a Range<String>
 - A shorter way to write a function for a type only in the result, such as `def Point.fromText(text: String): Point?`.
 - Whether `Of` is the right name.
 
-See the [interfaces proposal](../proposals/interfaces.md) for the reasoning behind these rules and the alternatives considered.
+See the [interfaces proposal](../proposals/interfaces.md) for the reasoning behind these rules and the alternatives considered, and the [ranges proposal](../proposals/ranges.md#an-interface-name-as-a-type-decided) for an interface name as a result type.
 
 ## Current implementation
 
-- Two functions that differ only in their bounds are always duplicates (`T0035`); choosing the one that asks for more isn't built.
-- When several functions of a name could take a call, a bound whose type parameter only the call's expected type would decide isn't looked into until one is chosen, so it's an error then rather than a reason to choose another.
+- Of two functions that differ only in their bounds, the choice is made from what's known where the call is written, so a call inside a generic function takes the one asking for less whatever the real type is.
+- When several functions of a name could take a call, a bound whose type parameter only a lambda argument's result would decide isn't looked into until one is chosen, so it's an error then rather than a reason to choose another. Of two functions that differ in their bounds, the one that asks for more is then chosen even where only the other's bounds hold: with `ap<T>(x: Int, g: (Int) -> T)` and `ap<T: A>(x: Int, g: (Int) -> T)`, `ap(1, n => "s")` is an error when a `String` isn't an `A`. Annotating the lambda's result doesn't help; a named function in its place does.
 - A program that gives one type two conformances compiles a generic function once for each. Such an instance's name, as a function value prints it, doesn't show which it is.
+- Beside an interface name in a result type or an annotation, a literal has its default type: `def f(xs: [Int]): (Float, Range<Int>) => (1, xs)` is a mismatch, and `(1.0, xs)` is how to write it.
+- A public function whose result type is an interface can return a private type, which its callers can use and can't name. Nothing reports it.
+- When two functions need each other's result, the error is at the result type of the one reached first, and doesn't name the other.
 - Everything else above is implemented.

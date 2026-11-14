@@ -125,17 +125,17 @@ unittest
         .shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("Json", 2));
 }
 
-@("an interface is a type only as the whole type of a module-level def's parameter")
+@("an interface stands for a type only as a def's parameter or result type, or a val's annotation")
 unittest
 {
     enum json = "interface Json { def toJson(value: Self): String }\n";
     analyzedModule(json ~ "def f(x: Json): String => toJson(x)").shouldHaveNoDiagnostics();
     analyzedModule(json ~ "def f(xs: [Json]): Int => 1").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Json", 2));
     analyzedModule(json ~ "def f(x: Json?): Int => 1").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Json", 2));
-    analyzedModule(json ~ "def f(x: Int): Json => x").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Json", 2));
+    analyzedModule(json ~ "def f(pair: (Int, Json)): Int => 1").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Json", 2));
     analyzedModule(json ~ "type Holder(item: Json)").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Json", 2));
     analyzedModule(json ~ "alias J = Json").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Json", 2));
-    analyzedModule(json ~ "def f(): Unit {\n    val x: Json = 1\n}").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Json", 2));
+    analyzedModule(json ~ "def f(): Unit {\n    val (x: Json, y) = (1, 2)\n}").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Json", 2));
     analyzedModule(json ~ "def f(): Unit {\n    val g = (x: Json) => 1\n}").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Json", 2));
     analyzedModule(json ~ "def f(): Unit {\n    def g(x: Json): Int => 1\n}").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Json", 2));
     analyzedModule(json ~ "interface Other { def other(x: Self, y: Json): Int }").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Json", 2));
@@ -150,7 +150,67 @@ unittest
         .shouldHaveNoDiagnostics();
 }
 
-@("two functions that differ only in their bounds are duplicates")
+@("two functions differing in bounds are overloads when one's ask for every function the other's do and more")
+unittest
+{
+    enum interfaces = `
+interface A { def a(x: Self): Int }
+interface B { def b(x: Self): Int }
+interface C { def c(x: Self): Int }
+interface AB { def a(x: Self): Int
+    def b(x: Self): Int }
+interface Other { def a(x: Self): String }
+interface Range<T> { def next(range: Self): (T, Self)? }
+`;
+    analyzedModule(interfaces ~ "def f<T: A>(x: T): Int => 1\ndef f<U: A & B>(x: U): Int => 2\ndef f<T: C & B & A>(x: T): Int => 3\ndef f<T>(x: T): Int => 0")
+        .shouldHaveNoDiagnostics();
+    // By the functions asked for, whatever the interfaces are named.
+    analyzedModule(interfaces ~ "def f<T: A>(x: T): Int => 1\ndef f<T: AB>(x: T): Int => 2").shouldHaveNoDiagnostics();
+    analyzedModule(interfaces ~ "def f(x: A): Int => 1\ndef f<T: A & B>(x: T): Int => 2").shouldHaveNoDiagnostics();
+    analyzedModule(interfaces ~ "def f<R: Range<T>, T>(x: R): Int => 1\ndef f<S: Range<E> & A, E>(x: S): Int => 2").shouldHaveNoDiagnostics();
+
+    analyzedModule(interfaces ~ "def f<T: A & B>(x: T): Int => 1\ndef f<T: AB>(x: T): Int => 2").shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    analyzedModule(interfaces ~ "def f<T: A & B>(x: T): Int => 1\ndef f<T: B & A>(x: T): Int => 2").shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    analyzedModule(interfaces ~ "def f<T: A & B>(x: T): Int => 1\ndef f<T: A & C>(x: T): Int => 2").shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    // A function of the same name with another result isn't the same function.
+    analyzedModule(interfaces ~ "def f<T: A>(x: T): Int => 1\ndef f<T: Other & B>(x: T): Int => 2").shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    analyzedModule(interfaces ~ "def f<R: Range<Int>>(x: R): Int => 1\ndef f<R: Range<String> & A>(x: R): Int => 2")
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    // The bounds have to be on the same parameters.
+    analyzedModule(interfaces ~ "def f<T: A, U>(x: T, y: U): Int => 1\ndef f<T: B, U: A>(x: T, y: U): Int => 2")
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    analyzedModule(interfaces ~ "def f<T: A>(x: T): Int => 1\ndef f<T: A & B>(x: T): Int => 2\ndef f<T: A & C>(x: T): Int => 3")
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 3));
+    analyzedModule(interfaces ~ "def f<T: A>(mutable x: T): Int => 1\ndef f<T: A & B>(x: T): Int => 2")
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    // A concrete interface argument isn't counted as the generic one.
+    analyzedModule(interfaces ~ "def f<R: Range<T>, T>(x: R): Int => 1\ndef f<R: Range<Int> & A>(x: R): Int => 2")
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+}
+
+@("where both fit, the function whose bounds ask for more is chosen")
+unittest
+{
+    enum declared = `
+interface A { def a(x: Self): Int }
+interface B { def b(x: Self): Int }
+type Both(n: Int)
+type OnlyA(n: Int)
+def a(x: Both): Int => 1
+def b(x: Both): Int => 1
+def a(x: OnlyA): Int => 1
+def f<T: A>(x: T): Int => 1
+def f<T: A & B>(x: T): String => "more"
+def weak<T: A>(x: T): Int => f(x)
+def strong<T: B & A>(x: T): String => f(x)
+`;
+    auto a = analyzed(declared ~ "def main(): Unit {\n val p = f(Both(1))\n val q = f(OnlyA(1))\n val g: (Both) -> String = f\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("f(Both(1))", "String");
+    a.shouldHaveType("f(OnlyA(1))", "Int");
+}
+
+@("two functions whose bounds ask for different things are duplicates")
 unittest
 {
     analyzedModule(`
@@ -491,4 +551,112 @@ unittest
     analyzedWith("val a = total([])").onlyMessage(DiagnosticCode.UntypedEmptyArray).should.startWith("This `[]` has no type to take here");
     analyzedWith("val f = toArray").onlyMessage(DiagnosticCode.CannotInferTypeArgument)
         .should.startWith("`toArray` takes any `Range<T>`, so as a value it needs a function type to say which");
+}
+
+private enum ranges = "interface Range<T> { def next(range: Self): (T, Self)? }
+interface Sized { def length(value: Self): Int }
+def next<T>(items: [T]): (T, [T])? => None
+type Box<T>(value: T)
+";
+
+@("an interface as a result type is the body's type, which has to satisfy it")
+unittest
+{
+    auto generic = analyzedModule(ranges ~ "def f<R: Range<Int>>(r: R): Range<Int> => r");
+    generic.shouldHaveNoDiagnostics();
+    generic.shouldDeclareType(At("f", 1), "(R) -> R");
+    auto joined = analyzedModule(ranges ~ "def f(xs: [Int]): Range<Int> & Sized => xs");
+    joined.shouldHaveNoDiagnostics();
+    joined.shouldDeclareType(At("f", 1), "([Int]) -> [Int]");
+    auto sugared = analyzedModule(ranges ~ "def f<T>(xs: Range<T>): Range<T> => xs");
+    sugared.shouldHaveNoDiagnostics();
+    sugared.shouldDeclareType(At("f", 1), "(Range<T>) -> Range<T>");
+
+    analyzedModule(ranges ~ "def f(xs: [Int]): Range<Int> => 1").shouldReport(DiagnosticCode.UnsatisfiedBound, At("Range", 2));
+    analyzedModule(ranges ~ "def f(xs: [String]): Range<Int> => xs").shouldReport(DiagnosticCode.UnsatisfiedBound, At("Range", 2));
+    analyzedModule(ranges ~ "def f(xs: [Int]): Range<Int> & Sized => Box(xs)")
+        .shouldReport(DiagnosticCode.UnsatisfiedBound, At("Range", 2));
+    analyzedModule(ranges ~ "def f(c: Bool, xs: [Int]): Range<Int> => if c => xs else Box(xs)")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("if", 1));
+    analyzedModule(ranges ~ "def f(): Range<Int> => panic(\"no\")").shouldReport(DiagnosticCode.TypeMismatch, At("panic", 1));
+}
+
+@("a caller sees the type a floor stands for, whichever of the two is checked first")
+unittest
+{
+    auto a = analyzedModule(ranges ~ "def early(): Int => length(late([1]))
+def late(xs: [Int]): Range<Int> => xs
+def value(): ([Int]) -> [Int] => late
+def chosen(): ([Int]) -> [Int] => over
+def over(xs: [Int]): Range<Int> => xs
+def over(n: Int): Int => n");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("late([1])", "[Int]");
+}
+
+@("a floor can be inside a tuple, an option, an array or a type argument, and nowhere else")
+unittest
+{
+    auto a = analyzedModule(ranges ~ "def pair(xs: [Int]): (Int, Range<Int>)? => (1, xs)
+def boxed(xs: [Int]): Box<Range<Int>> => Box(xs)
+def each(xs: [Int]): [Range<Int>] => [xs]
+def rows(xs: [Int]): Range<Range<Int>> => [xs]
+def maybe(xs: [Int]): Range<Int>? => xs");
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("pair", 1), "([Int]) -> (Int, [Int])?");
+    a.shouldDeclareType(At("boxed", 1), "([Int]) -> Box<[Int]>");
+    a.shouldDeclareType(At("each", 1), "([Int]) -> [[Int]]");
+    a.shouldDeclareType(At("rows", 1), "([Int]) -> [[Int]]");
+    a.shouldDeclareType(At("maybe", 1), "([Int]) -> [Int]?");
+
+    analyzedModule(ranges ~ "def f(xs: [Int]): Range<Range<String>> => [xs]")
+        .shouldReport(DiagnosticCode.UnsatisfiedBound, At("Range", 3));
+    analyzedModule(ranges ~ "def f(xs: [Int]): (Int, Range<Int>) => xs").shouldReport(DiagnosticCode.TypeMismatch, At("xs", 2));
+    analyzedModule(ranges ~ "def f(): () -> Range<Int> => () => [1]").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+    analyzedModule(ranges ~ "def f(): Range<Int> ! String => [1]").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+    analyzedModule(ranges ~ "interface Source { def items(s: Self): Range<Int> }")
+        .shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+    analyzedModule(ranges ~ "def f(xs: [Int]): Range<Int> & Int => xs").shouldReport(DiagnosticCode.NotAnInterface, At("Int", 4));
+    analyzedModule(ranges ~ "def f(xs: Range<Int> & Sized): Int => 1").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+    analyzedModule(ranges ~ "type Holder(items: Range<Int> & Sized)").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+}
+
+@("a function whose result type is a floor can't need its own result")
+unittest
+{
+    analyzedModule(ranges ~ "def f(n: Int): Range<Int> => if n == 0 => [0] else f(n - 1)")
+        .shouldReport(DiagnosticCode.RecursiveResultType, At("Range", 2));
+    analyzedModule(ranges ~ "def f(n: Int): Range<Int> => g(n)\ndef g(n: Int): Range<Int> => f(n)")
+        .shouldReport(DiagnosticCode.RecursiveResultType, At("Range", 2));
+    analyzedModule(ranges ~ "def f(): Unit {\n    def g(n: Int): Range<Int> => if n == 0 => [0] else g(n - 1)\n}")
+        .shouldReport(DiagnosticCode.RecursiveResultType, At("Range", 2));
+    // Another function of the same name isn't the function itself.
+    analyzedModule(ranges ~ "def first(b: Box<[Int]>): Range<Int> => first(b.value)\ndef first(xs: [Int]): [Int] => xs")
+        .shouldHaveNoDiagnostics();
+}
+
+@("an interface on a val, or as a lambda's or nested def's result, is a floor too")
+unittest
+{
+    auto a = analyzedModule(ranges ~ "def f(): Unit {
+    val whole: Range<Int> = [1]
+    val inside: (Int, Range<Int> & Sized)? = (1, [2])
+    mutable val changed: Range<Int> = [3]
+    changed = [4]
+    def nested(xs: [Int]): Range<Int> => xs
+    val lambda = (xs: [Int]): Range<Int> => xs
+    val n = whole[0] + nested([5])[0] + lambda([6])[0]
+}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("whole", 1), "[Int]");
+    a.shouldDeclareType(At("inside", 1), "(Int, [Int])?");
+    a.shouldDeclareType(At("nested", 1), "([Int]) -> [Int]");
+
+    analyzedModule(ranges ~ "def f(): Unit {\n    val x: Range<Int> = 1\n}").shouldReport(DiagnosticCode.UnsatisfiedBound, At("Range", 2));
+    analyzedModule(ranges ~ "def f(): Unit {\n    mutable val x: Range<Int> = [1]\n    x = Box([2])\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("Box", 2));
+    analyzedModule(ranges ~ "def f(): Unit {\n    val g: (Int) -> Range<Int> = (n: Int) => [n]\n}")
+        .shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+    analyzedModule(ranges ~ "def f(): Unit {\n    val g = (n: Int): Range<Int> => n\n}")
+        .shouldReport(DiagnosticCode.UnsatisfiedBound, At("Range", 2));
 }

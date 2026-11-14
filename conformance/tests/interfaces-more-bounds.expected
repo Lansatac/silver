@@ -1,0 +1,43 @@
+length 3
+stepped 4
+length 2
+length 3
+indexed 7
+stepped to 1
+stepped 3
+stepped 2
+length 3
+stepped 1
+nothing
+sized
+indexed
+named and indexed
+steps and indexed
+steps
+a row
+sized
+length 2
+stepped 5
+indexed 3
+echo: named
+1
+echo: nothing
+true
+twice: named
+1
+twice: named
+1
+twice: named
+Some(1)
+twice: named and sized
+1
+twice: named and sized
+2.5
+twice: named
+1
+take: steps
+1
+take: steps and indexed
+2
+take: steps
+3

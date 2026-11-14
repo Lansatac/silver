@@ -436,6 +436,11 @@ private final class Lowering
             // `OptionalType`, then `ErrorTypes` or a single `OptionalType` after `!`.
             auto success = convertTypeExpression(cst[0]);
             if (cst.children.length == 1) return success;
+            if (cst[1].name == "Silver.JoinedTypes")
+            {
+                auto parts = success ~ cst[1].children.map!(p => convertTypeExpression(p)).array;
+                return TypeExpr(ids.next!TypeExpr, spanOf(cst, file), TypeExprKind(JoinedType(parts)));
+            }
             auto listed = cst[1].name == "Silver.ErrorTypes" ? cst[1].children : cst.children[1 .. $];
             auto errors = listed.map!(e => convertTypeExpression(e)).array;
             return TypeExpr(ids.next!TypeExpr, spanOf(cst, file), TypeExprKind(ErrorUnionType(boxed(success), errors)));
@@ -1205,6 +1210,9 @@ private final class Lowering
                 (const UnitType _) {},
                 (const TupleType t) {
                     foreach (e; t.elements) visit(e);
+                },
+                (const JoinedType j) {
+                    foreach (part; j.parts) visit(part);
                 },
             );
         }

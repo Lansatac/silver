@@ -156,6 +156,14 @@ Indexed<T>
     A &
     B>(x: T): T => x", "(def f<T: A & B> (x: T): T x)"),
     declaresAs("def total(range: Range<Int>): Int => 0", "(def total (range: Range<Int>): Int 0)"),
+    declaresAs("def f(xs: [Int]): Range<Int> & Indexed<Int> => xs", "(def f (xs: [Int]): Range<Int> & Indexed<Int> xs)"),
+    declaresAs("def f(xs: [Int]): (Int, (A & B)?) => xs", "(def f (xs: [Int]): (Int, (A & B)?) xs)"),
+    declaresAs("def f(xs: [Int]): A
+    & B
+    & C => xs", "(def f (xs: [Int]): A & B & C xs)"),
+    parsesAs("val xs: A & B = ys", "(val xs: A & B ys)"),
+    rejectsDeclaration("def f(xs: [Int]): A & => xs"),
+    rejectsDeclaration("def f(xs: [Int]): A & B ! E => xs"),
     rejectsDeclaration("interface json { }"),
     rejectsDeclaration("interface Json"),
     rejectsDeclaration("interface Json { def toJson(value: Self): String => \"\" }"),

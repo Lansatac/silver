@@ -49,6 +49,7 @@ package final class Declarer
                 func.params.map!(p => resolveType(p)).array, resolveType(*func.returnType), func.mutableParams),
             (const UnitType _) => _types.unit,
             (const TupleType tuple) => tupleOf(tuple.elements.map!(e => resolveType(e)).array, tuple.elements),
+            (const JoinedType _) => floorType(type),
         );
     }
 
@@ -160,6 +161,14 @@ package final class Declarer
         return type;
     }
 
+    /// The floor that `A & B` written as `typeExpr` stands for, or `error` where name resolution
+    /// reported that it can't be one.
+    private Type floorType(const TypeExpr typeExpr)
+    {
+        auto floor = typeExpr.id in _resolutions.sugarParams;
+        return floor is null ? _types.error : parameterType(*_resolutions.declarations.typeParams[*floor]);
+    }
+
     package Type resolveNamedType(const TypeExpr typeExpr)
     {
         if (auto hidden = typeExpr.id in _resolutions.sugarParams)
@@ -184,7 +193,8 @@ package final class Declarer
             (const Id!TypeDecl decl) => instanceType(decl, named, typeExpr.span),
             (const Id!AliasDecl decl) => withoutArguments(aliasType(decl)),
             (const Id!TypeParam param) => withoutArguments(parameterType(*_resolutions.declarations.typeParams[param])),
-            // Name resolution only lets an interface through as a bound, which isn't resolved as a type.
+            // Name resolution only lets an interface through as a bound, which isn't resolved as a
+            // type, or where it stands for a hidden type parameter or a floor, which is found above.
             (const Id!InterfaceDecl _) => _types.error,
         );
     }

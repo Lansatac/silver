@@ -112,7 +112,13 @@ struct ErrorUnionType
     TypeExpr[] errors;
 }
 
-alias TypeExprKind = SumType!(OptionType, ArrayType, NamedType, FunctionType, UnitType, TupleType, ErrorUnionType);
+/// `Range<Int> & Indexed<Int>`: interfaces joined, each a NamedType.
+struct JoinedType
+{
+    TypeExpr[] parts;
+}
+
+alias TypeExprKind = SumType!(OptionType, ArrayType, NamedType, FunctionType, UnitType, TupleType, ErrorUnionType, JoinedType);
 
 /// Prints a type the way it's written in source.
 string printTypeExpr(const TypeExpr t)
@@ -130,6 +136,7 @@ string printTypeExpr(const TypeExpr t)
         (const UnitType u) => "()",
         (const TupleType t) => "(" ~ t.elements.map!printTypeExpr.join(", ") ~ ")",
         (const ErrorUnionType u) => printErrorPart(*u.success) ~ " ! " ~ u.errors.map!printErrorPart.join(" | "),
+        (const JoinedType j) => j.parts.map!printTypeExpr.join(" & "),
     );
 }
 
@@ -150,6 +157,7 @@ private string printOptionInner(const TypeExpr inner)
         (const FunctionType _) => true,
         (const OptionType _) => true,
         (const ErrorUnionType _) => true,
+        (const JoinedType _) => true,
         _ => false,
     );
     return needsParens ? "(" ~ printTypeExpr(inner) ~ ")" : printTypeExpr(inner);

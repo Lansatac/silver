@@ -21,7 +21,7 @@ These documents describe the language as designed. Where the implementation does
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, invariants, `match` | Implemented |
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
-| [Interfaces](language/interfaces.md) | Interfaces, bounds, conformance, interface names as parameter types | Partial: no interface types as results or values, no `Ord`, no bounds on a type's parameters |
+| [Interfaces](language/interfaces.md) | Interfaces, bounds, conformance, interface names as parameter and result types and on bindings | Partial: no interface types as values, no `Ord`, no bounds on a type's parameters |
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
 | [Modules](language/modules.md) | Files, imports, visibility | Partial: no `forward import` or renamed imports |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the standard library's natives |

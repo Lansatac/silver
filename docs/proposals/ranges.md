@@ -1,6 +1,6 @@
 # Proposal: ranges
 
-**Status: designed, mostly not built.** The protocol, sources with state, `for`, `a..b` as a value, laziness, interface names as types and the library's shape are decided. `for` and interface names as parameter types are implemented. What's left open is listed at the end and marked where it comes up. It builds on [generics](../language/generics.md) and on the [interfaces proposal](interfaces.md), and it changes parts of that proposal; see "What this changes in the interfaces proposal".
+**Status: designed, mostly not built.** The protocol, sources with state, `for`, `a..b` as a value, laziness, interface names as types and the library's shape are decided. `for` and interface names as types, in a parameter, a result and a binding, are implemented. What's left open is listed at the end and marked where it comes up. It builds on [generics](../language/generics.md) and on the [interfaces proposal](interfaces.md), and it changes parts of that proposal; see "What this changes in the interfaces proposal".
 
 Each point below is marked:
 
@@ -187,7 +187,7 @@ The library's adapters return their own named types, not an opaque `Range<U>` (d
 
 So a result keeps what its source can do, as D's ranges do, wherever its type is known: where the chain is written, where it's passed to a function that asks for the capability (`binarySearch<R: Indexed<T>, T>` takes `xs.map(f)`), and where a function returns it. One thing D has is missing:
 
-- **A generic consumer sees only its bounds.** `array` below steps even over an indexed chain, and can't size its result first. An overload that also asks for `Indexed<T>` fixes it where the chain's type is known at the call (decided: of two functions differing only in their bounds, the one asking for more wins). It doesn't inside another generic function, since an overload is chosen where the call is written. That waits for [capability queries](interfaces.md#capability-queries-a-direction-not-in-the-first-version).
+- **A generic consumer sees only its bounds, until capability queries are built.** `array` below steps even over an indexed chain, and can't size its result first. An overload that also asks for `Indexed<T>` fixes it: of two functions differing only in their bounds, the one asking for the most the real type satisfies is chosen (decided), and that holds inside another generic function too. See [capability queries](interfaces.md#capability-queries-designed-not-built).
 One pull on `[1, 2, 3].map(double).filter(big)`: the filter asks the map, the map asks the array and gets `1`, returns `2`, the filter rejects it and asks again, gets `4`, and returns `4` with a new filter over the rest.
 
 A consumer turns a chain back into data:
@@ -224,8 +224,8 @@ val ys: [Int] = xs.map(x => x * 2)      // error, which says to add .array()
 An interface name in a type position means "some type that satisfies it", decided when the program is compiled.
 
 - **In a parameter** (implemented; see [Interfaces](../language/interfaces.md#an-interface-name-as-a-parameter-type)) it's shorthand for a bounded type parameter. `source: Range<T>` means `<S: Range<T>>(source: S)`. To say two parameters have the same type, name it. The hidden parameter is never written at a call and doesn't count as one, so `array<Int>(xs)` gives only `T`. A lambda or a nested `def` can't have such a parameter, since neither can be generic, and the error says to name the type.
-- **In a return** it's a floor (decided): the result's type is the body's, the compiler checks that it satisfies the interface, and callers get the real type. See "An interface name as a return type".
-- **On a binding** it's a floor too (decided). `val thing: Range<Int> = [1, 2, 3]` checks that the value is a `Range<Int>`, and `thing` is an array, so `thing[0]` works. A `mutable val` annotated this way still has one type, so it can't be given a range of another type.
+- **In a return** it's a floor (implemented; see [Interfaces](../language/interfaces.md#an-interface-name-as-a-result-type)): the result's type is the body's, the compiler checks that it satisfies the interface, and callers get the real type. See "An interface name as a return type".
+- **On a binding** it's a floor too (implemented; see [Interfaces](../language/interfaces.md#on-a-binding)). `val thing: Range<Int> = [1, 2, 3]` checks that the value is a `Range<Int>`, and `thing` is an array, so `thing[0]` works. A `mutable val` annotated this way still has one type, so it can't be given a range of another type.
   - **Considered**: a view that narrows the binding to what the interface provides. This was the earlier decision, made so that a binding could annotate an opaque result. The same annotation would then keep the real type on a return and hide it on a binding.
 
 ### An interface name as a return type (decided)
@@ -277,7 +277,7 @@ It costs an indirect call and an allocation per step, and it's a real type that 
 
 - What one import brings is ranked as one module (decided; see [modules](../language/modules.md#forms-of-import)), so an array's own `first` in `std.array` beats the general one in `std.range` when both come through the prelude.
 
-**Interfaces.** Three, and no more in the first version:
+**Interfaces.** Four in the first version, each a capability of its own that composes with the others through `&`:
 
 ```silver
 interface Range<T> {
@@ -292,9 +292,39 @@ interface Indexed<T> {
     def length(value: Self): Int
     def opIndex(value: Self, index: Int): T
 }
+
+interface Backward<T> {
+    def nextBack(range: Self): (T, Self)?
+}
 ```
 
-Stepping from the end waits, so `reversed()` asks for `Indexed<T>`.
+`nextBack` returns the last element and the range without it (decided). Arrays, strings, intervals and `Iterator` have one. An adapter has one when it can give it from its source's: `map` and `filter` do, and so does `reversed`, whose `next` is its source's `nextBack`. `take`, `drop`, `enumerate` and `zip` need a length as well. `takeWhile` and `dropWhile` don't have one.
+
+- `reversed()` asks for `Backward<T>`, so it takes a filtered array or a string. The result keeps `length` and indexing when its source has them.
+- `last` has a second function that asks for `Backward<T>`.
+- A string steps back by `Char`, as it steps forward: the bytes of a character inside a string are marked, so the start of the last one is found in at most three steps. A `Char` isn't always what a reader sees as one character, so reversing a string with combining marks moves them to the wrong letter. Grapheme clusters are left to libraries.
+- **Considered**: leaving it out, with `reversed()` asking for `Indexed<T>`. A string and a filtered array can't be indexed, so neither could be reversed or asked for its last element without a full walk.
+
+**Capabilities the first version leaves room for** (designed on paper, not built). Each is an interface of its own that composes with the three above, and the library's names are chosen so adding one changes no existing function.
+
+- **A range that never ends** has a step with no option:
+
+  ```silver
+  interface Endless<T> {
+      def advance(range: Self): (T, Self)
+  }
+  ```
+
+  `repeat`, `unfold` without an end, and an interval with no upper limit have one, beside their `next`. `first` over one returns `T`, `take(n)` of one has a length, and `zip` with one keeps the other side's length. Nothing can refuse `array()` on one, since a bound can't say "not".
+- **Slicing to the same type** is what a function that halves its range needs, such as a binary search. `drop` and `take` keep indexing but wrap the type at each call, so a generic function can't call itself with the result:
+
+  ```silver
+  interface Sliced {
+      def slice(range: Self, from: Int, to: Int): Self
+  }
+  ```
+
+  Arrays, intervals and `Iterator` have one.
 
 **Adapter types** are named for what they hold: `Mapped`, `Filtered`, `Taken`, `Dropped`, `Zipped`, `Enumerated`, `Reversed`. The functions are `map`, `filter`, `take` and so on. `Map` is left for a dictionary.
 
@@ -356,11 +386,11 @@ The search is cheap: one lookup per bound, proportional to the functions of that
 1. Stage 1 generics (implemented).
 2. Overloading (implemented): `next` for arrays, `Countdown`, `Mapped` and `Filtered` are all named `next`.
 3. Interfaces: structural conformance, parameters that conformance determines, witnesses (implemented).
-4. Interface names as types (implemented for parameters), with interface return types and the erased form.
+4. Interface names as types (implemented), with the erased form.
 5. The range library.
 6. Small products by value, for chains to be fast when compiled.
 
-Not needed for ranges: capability queries (`static if R: Sized`), an explicit adapter form, interfaces where `Self` is only in the return, operators mapped to interfaces, bounds on a type's own parameters.
+Not needed for ranges: a query written as a test in a body (`static if R: Sized`), an explicit adapter form, interfaces where `Self` is only in the return, operators mapped to interfaces, bounds on a type's own parameters.
 
 ## What this changes in the interfaces proposal
 

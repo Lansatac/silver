@@ -53,6 +53,18 @@ private struct InferredReturn
     Span[] errorSpans;
 }
 
+/// Where working out a result type from its function's body has got to.
+private enum ResultState { waiting, working, settled }
+
+/// A type written with floors, each an interface name standing for the type a value has there.
+private struct Floored
+{
+    Type written;
+    const(TypeParam)[] floors;
+    /// What has the type, to start a message with: "`f` returns", "`xs` is".
+    string subject;
+}
+
 
 private final class TypeChecker
 {
@@ -89,6 +101,14 @@ private final class TypeChecker
     private bool _inTest;
     /// The types with an invariant whose `else` hasn't been typed yet, so nothing can build one.
     private bool[Id!TypeDecl] _pendingInvariants;
+    /// Each function whose result type is worked out from its body that has been started on.
+    private ResultState[Id!FunctionDecl] _resultStates;
+    /// Those found to need their own result type while it was being worked out.
+    private bool[Id!FunctionDecl] _recursiveResults;
+    /// The nested `def`s whose result type is being worked out, by the result type as written,
+    /// and whether each has been reported for using itself.
+    private Span[Id!VarDecl] _unsettledLocals;
+    private bool[Id!VarDecl] _recursiveLocals;
 
     Typing checkProgram(const Program program)
     {
@@ -251,6 +271,7 @@ private final class TypeChecker
             return;
         }
         _declarer.declareBounds(_resolutions.typeParamsOf(func.id));
+        _declarer.declareBounds(_resolutions.resultFloors.get(func.id, null));
         _declarer.declareBoundFunctions(func.id);
         // Two bounds that declare the same function supply one function.
         Id!FunctionDecl[] distinct;
@@ -367,6 +388,7 @@ private final class TypeChecker
 
     private void checkFunction(const FunctionDecl func)
     {
+        if (func.id in _resolutions.resultFloors) return settleResult(func.id);
         auto returnType = _types[_typing.symbolTypes[SymbolId(func.id)]].match!(
             (const FunctionData fd)=>fd.ret,
             (_)=>_types.error
@@ -376,6 +398,89 @@ private final class TypeChecker
         _inTest = func.testName !is null;
         scope (exit) _inTest = false;
         checkBody(*func.body, returnType, siteOf(func.id), _inTest);
+    }
+
+    /// Works out the result type of `f` from its body, checking the body, when it's written with
+    /// floors and that hasn't been done. Whatever needs the result of a function it has chosen asks
+    /// for this first, so the order functions are checked in doesn't matter. A function reached
+    /// again while it's being worked out depends on itself: it's reported and its result is an
+    /// error from then on. Without `required`, one being worked out is left as it is, for a
+    /// candidate that may not be the one used.
+    private void settleResult(Id!FunctionDecl f, bool required = true)
+    {
+        auto floors = f in _resolutions.resultFloors;
+        if (floors is null) return;
+        auto func = _resolutions.declarations.functions[f];
+        auto signature = signatureOf(f);
+        final switch (_resultStates.get(f, ResultState.waiting))
+        {
+            case ResultState.settled:
+                return;
+            case ResultState.working:
+                if (!required || f in _recursiveResults) return;
+                _recursiveResults[f] = true;
+                _collector.reportError(DiagnosticCode.RecursiveResultType, func.returnType.span,
+                    ("The type `%s` returns is worked out from its body, which uses `%s` before that's known; "
+                        ~ "write the type it returns in place of `%s`").format(func.name, func.name, printTypeExpr(func.returnType)));
+                _typing.symbolTypes[SymbolId(f)] = _types.function_(signature.params, _types.error, signature.mutables);
+                return;
+            case ResultState.waiting:
+                break;
+        }
+        _resultStates[f] = ResultState.working;
+        auto inTest = _inTest;
+        _inTest = false;
+        scope (exit) _inTest = inTest;
+        auto result = inferReturn(*func.body, siteOf(f), false,
+            Floored(signature.ret, *floors, "`%s` returns".format(func.name)));
+        if (f in _recursiveResults) result = _types.error;
+        _typing.symbolTypes[SymbolId(f)] = _types.function_(signature.params, result, signature.mutables);
+        _resultStates[f] = ResultState.settled;
+    }
+
+    /// The type `floored.written` stands for once each of its floors is the type that `actual`,
+    /// the type of the value at `span`, has there, or `error` after reporting a floor that
+    /// `actual` doesn't give a type or gives one that doesn't satisfy its interfaces. A floor
+    /// before another may say what the other is, as `Range<Range<Int>>` does.
+    private Type settleFloors(const Floored floored, Type actual, Site site, Span span)
+    {
+        if (actual == _types.error || _types.mentionsError(floored.written)) return _types.error;
+        Substitution found;
+        bindParams(floored.written, actual, floored.floors, found);
+        foreach (floor; floored.floors)
+        {
+            auto type = floor.id in found;
+            if (type is null)
+            {
+                _collector.reportError(DiagnosticCode.TypeMismatch, span, actual == _types.never
+                    ? "%s nothing, so nothing says what type `%s` stands for; write the type out".format(floored.subject, floor.name)
+                    : "%s `%s`, which doesn't say what type `%s` stands for in `%s`".format(floored.subject,
+                        _types.describe(actual), floor.name, _types.describe(floored.written)));
+                return _types.error;
+            }
+            foreach (declared; _typing.bounds.get(floor.id, null))
+            {
+                if (!declared.valid) continue;
+                auto goal = Goal(declared.decl, *type, declared.args.map!(a => _types.substitute(a, found)).array);
+                if (_types.mentionsError(goal.self) || goal.args.any!(a => _types.mentionsError(a))) continue;
+                auto conformance = satisfy(goal, floored.floors, found, site, null);
+                if (conformance.holds) continue;
+                auto wanted = Bound(goal.decl, goal.args.map!(a => _types.substitute(a, found)).array);
+                auto whole = *type == actual ? "" : " in `%s`".format(_types.describe(actual));
+                _collector.reportError(conformance.tooDeep ? DiagnosticCode.BoundSearchTooDeep : DiagnosticCode.UnsatisfiedBound,
+                    floor.span, "%s `%s`%s, which isn't a `%s`: %s".format(floored.subject, _types.describe(*type), whole,
+                        _declarer.describe(wanted), conformance.failure is null
+                            ? "more than one function could say what its type arguments are" : conformance.failure));
+                return _types.error;
+            }
+        }
+        return _types.substitute(floored.written, found);
+    }
+
+    /// Declares what the bounds of `floors` name, once.
+    private void declareFloors(const(TypeParam)[] floors)
+    {
+        if (floors.length > 0 && floors[0].id !in _typing.bounds) _declarer.declareBounds(floors);
     }
 
     /// Where the body of the module-level function `func` looks for conformances.
@@ -484,7 +589,18 @@ private final class TypeChecker
 
         Type ret = lambda.returnType !is null ? _declarer.resolveType(*lambda.returnType)
             : expected !is null ? expected.ret : Type.init;
-        if (ret == Type.init)
+        if (auto floors = expr.id in _resolutions.lambdaFloors)
+        {
+            declareFloors(*floors);
+            if (lambda.self.isValid) _unsettledLocals[lambda.self] = lambda.returnType.span;
+            ret = inferReturn(*lambda.body, site, false, Floored(ret, *floors, "This function returns"));
+            if (lambda.self.isValid)
+            {
+                _unsettledLocals.remove(lambda.self);
+                if (lambda.self in _recursiveLocals) ret = _types.error;
+            }
+        }
+        else if (ret == Type.init)
         {
             ret = inferReturn(*lambda.body, site, optional);
         }
@@ -502,7 +618,8 @@ private final class TypeChecker
 
     /// The common type of everything `body` can return, each promoted to it as needed. With
     /// `optional`, that type is an option, so a body that returns `(a, b)` returns `(a, b)?`.
-    private Type inferReturn(const Expr body, Site site, bool optional = false)
+    /// With `floored`, it's the type written there, with its floors as what the body returns.
+    private Type inferReturn(const Expr body, Site site, bool optional = false, const Floored floored = Floored.init)
     {
         InferredReturn inferred;
         auto bodyType = synthesize(body, BodyContext(site, _types.error, false, &inferred));
@@ -518,10 +635,20 @@ private final class TypeChecker
         {
             joined = join(joined, _types.none, span, "Return values");
         }
-        if (inferred.errors.length > 0 && joined != _types.error) joined = withPassedErrors(joined, inferred, body.span);
+        if (inferred.errors.length > 0 && joined != _types.error)
+        {
+            if (floored.floors.length > 0)
+            {
+                _collector.reportError(DiagnosticCode.InvalidPropagation, inferred.errorSpans[0],
+                    "This `?` passes on an error, so the function returns an error union, which has to be written out");
+                return _types.error;
+            }
+            joined = withPassedErrors(joined, inferred, body.span);
+        }
         joined = _declarer.requireTyped(joined, body.span);
         if (joined == _types.error) return joined;
-        if (optional && joined != _types.never && !_types.isOption(joined)) joined = _declarer.optionOf(joined, body.span);
+        if (floored.floors.length > 0) joined = settleFloors(floored, joined, site, body.span);
+        else if (optional && joined != _types.never && !_types.isOption(joined)) joined = _declarer.optionOf(joined, body.span);
         if (joined == _types.error) return joined;
 
         foreach (i, type; inferred.types)
@@ -676,7 +803,16 @@ private final class TypeChecker
     /// `val binding = value`, or a binding in a pattern given its part of a tuple literal.
     private void checkBinding(const VarDecl binding, const Expr value, BodyContext ctx)
     {
-        if (binding.type is null)
+        if (auto floors = binding.id in _resolutions.bindingFloors)
+        {
+            declareFloors(*floors);
+            auto written = _declarer.resolveType(*binding.type);
+            auto type = _declarer.requireTyped(synthesize(value, ctx), value.span);
+            auto settled = settleFloors(Floored(written, *floors, "`%s` is".format(binding.name)), type, ctx.site, value.span);
+            if (settled != _types.error && settled != type) coerce(value, type, settled);
+            _typing.symbolTypes[SymbolId(binding.id)] = settled;
+        }
+        else if (binding.type is null)
         {
             // A discard keeps no value, so a `None` or `[]` needs no type to be dropped.
             auto type = synthesize(value, ctx);
@@ -2116,7 +2252,7 @@ private final class TypeChecker
         {
             typed = new Type[call.args.length];
             auto chosen = chooseFunction(*call.callee, spelling(*call.callee), typeArgsOf(*call.callee), distinct(*candidates),
-                call, typed, false, ctx);
+                call, typed, false, ctx, expected);
             if (!chosen.isValid)
             {
                 _typing.exprTypes[call.callee.id] = _types.error;
@@ -2176,7 +2312,8 @@ private final class TypeChecker
     /// do. Each argument with a type of its own is synthesized first, once, and its type is left
     /// in `typed`; the rest only have to have the right shape, and are checked once one is chosen.
     private Id!FunctionDecl chooseFunction(const Expr name, string spelled, const(TypeExpr)[] written,
-        const Candidates candidates, const CallExpr call, Type[] typed, bool hasReceiver, BodyContext ctx)
+        const Candidates candidates, const CallExpr call, Type[] typed, bool hasReceiver, BodyContext ctx,
+        Type expected = Type.init)
     {
         auto args = call.args;
         Trial[][] groups;
@@ -2202,7 +2339,7 @@ private final class TypeChecker
         {
             foreach (ref trial; group)
             {
-                if (trial.fitsAll) fitTrial(trial, call, typed, writtenTypes, hasReceiver, ctx.site);
+                if (trial.fitsAll) fitTrial(trial, call, typed, writtenTypes, hasReceiver, ctx.site, expected);
             }
         }
         // An argument whose type is already an error fits anything, so it would only add to it.
@@ -2256,9 +2393,10 @@ private final class TypeChecker
     }
 
     /// Fills in how well each argument fits `trial`'s function, or why one doesn't. A function
-    /// whose bounds the arguments' types don't satisfy doesn't fit.
+    /// whose bounds don't hold for the types a call of it alone would infer doesn't fit; `expected`
+    /// is the type the call's result is expected to have, if any.
     private void fitTrial(ref Trial trial, const CallExpr call, const(Type)[] typed, const(Type)[] written, bool hasReceiver,
-        Site site)
+        Site site, Type expected)
     {
         auto params = _resolutions.typeParamsOf(trial.func);
         auto signature = signatureOf(trial.func);
@@ -2296,19 +2434,25 @@ private final class TypeChecker
         }
 
         if (_resolutions.boundFunctions.get(trial.func, null).length == 0) return;
-        // A literal has its default type, as it will if this function is chosen, unless the result
-        // mentions the parameter, which the type the call is expected to have then decides first.
+        // The order `applyGeneric` infers in: arguments with a type of their own, then the expected
+        // type, then integer literals. A lambda's result is still unknown here.
         foreach (i, arg; call.args)
         {
-            auto own = isIntLiteral(arg) ? _types.int_ : literalType(arg);
-            if (own == Type.init) continue;
-            auto open = params.filter!(p => p.id !in bound && !_types.mentionsParameter(signature.ret, p.id)).array;
-            bindParams(signature.params[i], own, open, bound);
+            auto own = typed[i] != Type.init ? typed[i] : isUntyped(arg) ? Type.init : defaultType(arg);
+            if (own != Type.init) bindParams(signature.params[i], own, params, bound);
         }
         auto conformance = conformanceOf(trial.func, bound, site);
-        if (conformance.failure !is null) trial.problem = conformance.failure.replace("
-", "
-    ");
+        if (conformance.failure is null && params.any!(p => p.id !in bound))
+        {
+            settleResult(trial.func, false);
+            bindExpected(signatureOf(trial.func).ret, expected, params, bound);
+            foreach (i, arg; call.args)
+            {
+                if (typed[i] == Type.init && isIntLiteral(arg)) bindParams(signature.params[i], _types.int_, params, bound);
+            }
+            conformance = conformanceOf(trial.func, bound, site);
+        }
+        if (conformance.failure !is null) trial.problem = conformance.failure.replace("\n", "\n    ");
     }
 
     /// How well an argument of type `actual` fits `param`, which may still mention some of the
@@ -2518,6 +2662,30 @@ private final class TypeChecker
         );
     }
 
+    /// The type an argument made only of literals has when nothing else says, or `Type.init` when
+    /// part of it has none of its own.
+    private Type defaultType(const Expr arg)
+    {
+        if (isIntLiteral(arg)) return _types.int_;
+        Type[] each(const(Expr)[] elements) => elements.map!(e => defaultType(e)).array;
+        return arg.kind.match!(
+            (const ArrayLiteral literal) {
+                auto elements = each(literal.elements);
+                auto alike = elements.length > 0 && elements[0] != Type.init && elements.all!(e => e == elements[0]);
+                return alike ? _types.array(elements[0]) : Type.init;
+            },
+            (const TupleLiteral literal) {
+                auto elements = each(literal.elements);
+                return elements.canFind(Type.init) ? Type.init : _types.tuple(elements);
+            },
+            (const SomeExpr some) {
+                auto inner = defaultType(*some.value);
+                return inner == Type.init ? Type.init : _types.option(inner);
+            },
+            _ => literalType(arg),
+        );
+    }
+
     /// The one of `trials` that beats each of the others, reporting it when there isn't one.
     private Id!FunctionDecl bestTrial(const(Trial)[] trials, Span span, string spelled, bool reportable)
     {
@@ -2544,7 +2712,45 @@ private final class TypeChecker
         if (better || worse) return better && !worse;
         auto aGeneric = isGenericFunction(a.func), bGeneric = isGenericFunction(b.func);
         if (aGeneric != bGeneric) return bGeneric;
-        return aGeneric && accepts(b.func, a.func) && !accepts(a.func, b.func);
+        if (!aGeneric) return false;
+        auto aTakes = accepts(a.func, b.func), bTakes = accepts(b.func, a.func);
+        if (aTakes != bTakes) return bTakes;
+        return asksForMore(a.func, b.func);
+    }
+
+    /// Whether `a` and `b` take the same parameters and `a`'s bounds require every function `b`'s
+    /// do, and one more at least.
+    private bool asksForMore(Id!FunctionDecl a, Id!FunctionDecl b)
+    {
+        return signatureOf(a).mutables == signatureOf(b).mutables && requiresAll(a, b) && !requiresAll(b, a);
+    }
+
+    /// Whether `a` and `b` take the same parameters and each function `b`'s bounds require is one
+    /// `a`'s do: of the same name and, with `a`'s type parameters read as `b`'s, the same signature.
+    private bool requiresAll(Id!FunctionDecl a, Id!FunctionDecl b)
+    {
+        Id!TypeParam[Id!TypeParam] renamed;
+        if (!sameParameters(a, b, renamed)) return false;
+        auto aTypeParams = _resolutions.typeParamsOf(a);
+        auto bTypeParams = _resolutions.typeParamsOf(b);
+        auto supplied = _resolutions.boundFunctions.get(a, null);
+
+        // A type parameter only the bounds mention is paired by the functions that are, so an
+        // earlier pairing that a later function can't keep is tried again.
+        bool found(const(Id!FunctionDecl)[] needed, Id!TypeParam[Id!TypeParam] pairs)
+        {
+            if (needed.length == 0) return true;
+            auto wanted = _resolutions.declarations.functions[needed[0]].name;
+            foreach (s; supplied)
+            {
+                if (_resolutions.declarations.functions[s].name != wanted) continue;
+                auto attempt = pairs.dup;
+                if (sameUpToRenaming(_typing.symbolTypes[SymbolId(s)], _typing.symbolTypes[SymbolId(needed[0])],
+                    aTypeParams, bTypeParams, attempt) && found(needed[1 .. $], attempt)) return true;
+            }
+            return false;
+        }
+        return found(_resolutions.boundFunctions.get(b, null), renamed);
     }
 
     private bool isGenericFunction(Id!FunctionDecl f)
@@ -2662,6 +2868,7 @@ private final class TypeChecker
         }
         // A function that isn't generic is more specific than one that is.
         if (fits.length > 1 && fits.any!(f => !isGenericFunction(f))) fits = fits.filter!(f => !isGenericFunction(f)).array;
+        if (fits.length > 1) fits = fits.filter!(f => !fits.any!(g => asksForMore(g, f))).array;
         if (fits.length != 1)
         {
             auto all = candidates.groups.joiner.map!(f => "`" ~ overloadLabel(f) ~ "`").array;
@@ -2678,6 +2885,7 @@ private final class TypeChecker
     private bool valueFits(Id!FunctionDecl f, const(TypeExpr)[] written, Type expected, Site site)
     {
         auto params = _resolutions.typeParamsOf(f);
+        settleResult(f, false);
         auto type = _typing.symbolTypes[SymbolId(f)];
         if (written.length > 0 && written.length != _resolutions.declarations.functions[f].typeParams.length) return false;
         Substitution bound;
@@ -2744,13 +2952,13 @@ private final class TypeChecker
         {
             problem = "`%s` already binds the C symbol `" ~ later.symbol ~ "`; give this one another with `native(\"...\")`";
         }
-        else if (sameParameters(earlier, later.id))
+        else if (sameParameters(earlier, later.id) && !asksForMore(earlier, later.id) && !asksForMore(later.id, earlier))
         {
             auto a = signatureOf(earlier), b = signatureOf(later.id);
             problem = "`%s` already takes `" ~ overloadLabel(earlier)[first.name.length .. $] ~ "`; overloads need different parameter types"
                 ~ (a.mutables == b.mutables ? "" : ", and `mutable` alone doesn't make one")
                 ~ (_resolutions.boundFunctions.get(earlier, null).length + _resolutions.boundFunctions.get(later.id, null).length == 0
-                    ? "" : ", and a bound alone doesn't make one");
+                    ? "" : ", and bounds only tell two functions apart when one asks for everything the other does, and more");
         }
         if (problem is null) return false;
         _collector.reportError(DiagnosticCode.DuplicateOverload, later.nameSpan, problem.format(later.name));
@@ -2761,12 +2969,18 @@ private final class TypeChecker
     /// parameters and which parameters are `mutable`.
     private bool sameParameters(Id!FunctionDecl a, Id!FunctionDecl b)
     {
+        Id!TypeParam[Id!TypeParam] renamed;
+        return sameParameters(a, b, renamed);
+    }
+
+    /// Leaves in `renamed` which of `b`'s type parameters each of `a`'s is.
+    private bool sameParameters(Id!FunctionDecl a, Id!FunctionDecl b, ref Id!TypeParam[Id!TypeParam] renamed)
+    {
         auto aParams = signatureOf(a).params;
         auto bParams = signatureOf(b).params;
         if (aParams.length != bParams.length) return false;
         auto aTypeParams = _resolutions.typeParamsOf(a);
         auto bTypeParams = _resolutions.typeParamsOf(b);
-        Id!TypeParam[Id!TypeParam] renamed;
         return aParams.length.iota.all!(i => sameUpToRenaming(aParams[i], bParams[i], aTypeParams, bTypeParams, renamed));
     }
 
@@ -3045,6 +3259,7 @@ private final class TypeChecker
 
         auto best = winners[0];
         auto label = overloadLabel(best.trial.func, _resolutions.declarations.functionModules[best.trial.func] != site.module_);
+        settleResult(best.trial.func);
         auto signature = signatureOf(best.trial.func);
         auto params = _resolutions.typeParamsOf(best.trial.func);
         auto missing = params.filter!(p => p.id !in best.binding);
@@ -3186,6 +3401,7 @@ private final class TypeChecker
                 if (g.params.length == 0) return false;
                 g.writable = _resolutions.declarations.functions[f].typeParams.length;
                 g.func = f;
+                settleResult(f);
                 g.type = _typing.symbolTypes[SymbolId(f)];
                 return true;
             },
@@ -3827,7 +4043,7 @@ private final class TypeChecker
         }
         else if (receiver != _types.error)
         {
-            function_ = chooseFunction(*call.callee, access.member, access.typeArgs, lookup, *rewritten, typed, true, ctx);
+            function_ = chooseFunction(*call.callee, access.member, access.typeArgs, lookup, *rewritten, typed, true, ctx, expected);
         }
         if (!function_.isValid)
         {
@@ -3835,6 +4051,7 @@ private final class TypeChecker
             typeUnchosen(*rewritten, typed, ctx);
             return _types.error;
         }
+        settleResult(function_);
         auto functionType = _typing.symbolTypes[SymbolId(function_)];
         _typing.exprTypes[call.callee.id] = functionType;
         _typing.methodCallees[expr.id] = function_;
@@ -4046,6 +4263,27 @@ private final class TypeChecker
 
     private Type symbolType(SymbolId symbol)
     {
+        auto unsettled = symbol.match!(
+            (const Id!FunctionDecl f) {
+                settleResult(f);
+                return false;
+            },
+            (const Id!VarDecl local) {
+                auto written = local in _unsettledLocals;
+                if (written is null) return false;
+                if (local !in _recursiveLocals)
+                {
+                    auto name = _resolutions.declarations.locals[local].name;
+                    _collector.reportError(DiagnosticCode.RecursiveResultType, *written,
+                        ("The type `%s` returns is worked out from its body, which uses `%s` before that's known; "
+                            ~ "write the type it returns out").format(name, name));
+                }
+                _recursiveLocals[local] = true;
+                return true;
+            },
+            _ => false,
+        );
+        if (unsettled) return _types.error;
         if (auto type = symbol in _typing.symbolTypes) return *type;
         // A module used as a value; name resolution has already reported it.
         if (symbol.match!((const Id!Module _) => true, _ => false)) return _types.error;
@@ -4207,7 +4445,7 @@ private final class TypeChecker
             foreach (f; group)
             {
                 auto trial = arityTrial(f, args.length, 0);
-                if (trial.fitsAll) fitTrial(trial, call, typed, null, false, ctx.site);
+                if (trial.fitsAll) fitTrial(trial, call, typed, null, false, ctx.site, Type.init);
                 all ~= trial;
                 if (trial.fitsAll) fits ~= trial;
             }

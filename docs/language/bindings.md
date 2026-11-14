@@ -9,6 +9,8 @@ mutable val count = 0         // can be rebound
 mutable val total: Int = 0
 ```
 
+An annotation that names an [interface](interfaces.md#on-a-binding), as in `val xs: Range<Int> = [1, 2, 3]`, checks the value's type against it, and the binding has the value's type.
+
 Mutability belongs to the binding, never to the type. A `mutable val` can be rebound and can have its fields assigned, including through a path. A `val` can do neither.
 
 ```silver

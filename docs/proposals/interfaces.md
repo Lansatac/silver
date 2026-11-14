@@ -1,6 +1,6 @@
 # Proposal: structural interfaces with call-site conformance
 
-**Status: the first version is implemented**, and described in [Interfaces](../language/interfaces.md): interfaces with parameters, bounds on module-level functions, conformance by the call's own lookup, and an interface name as a parameter type. This document keeps the reasoning and what was rejected. Decided and not implemented: `==` and printing aren't interfaces, and belong to the type (see "Operators and printing"). Still open: capability queries, stored structure, the adapter form, what `opCompare` returns, and hashing. It builds on [generics](../language/generics.md): `<>` type parameters, bodies checked once with each `T` opaque, and monomorphization.
+**Status: the first version is implemented**, and described in [Interfaces](../language/interfaces.md): interfaces with parameters, bounds on module-level functions, conformance by the call's own lookup, and an interface name as a parameter type, a result type and a binding's annotation. This document keeps the reasoning and what was rejected. Decided and not implemented: `==` and printing aren't interfaces, and belong to the type (see "Operators and printing"). Still open: capability queries, stored structure, the adapter form, what `opCompare` returns, and hashing. It builds on [generics](../language/generics.md): `<>` type parameters, bodies checked once with each `T` opaque, and monomorphization.
 
 The [ranges proposal](ranges.md) builds on this one and suggests changes to it: an answer to open question 1, interface names as types, and overloading as a prerequisite.
 
@@ -190,27 +190,60 @@ def length<R: Sized, F>(value: Mapped<R, F>): Int => length(value.source)
 
 `Mapped<R, F>` is `Sized` exactly when this function applies, which is how an adapter keeps a capability of what it wraps.
 
-### Capability queries (a direction, not in the first version)
+### Capability queries (designed, not built)
+
+A query asks whether a type has a capability the function doesn't require, and takes a faster path when it does.
+
+**The form is overloading (decided).** Of functions that differ only in their bounds, the one chosen is the one asking for the most that the real type satisfies, wherever the call is written:
 
 ```silver
-def count<R: Range>(r: R): Int {
-    static if R: Sized { length(r) } else { walk(r) }
-}
+def count<R: Range<T>, T>(r: R): Int => fold(r, 0, (n, item) => n + 1)
+def count<R: Range<T> & Sized, T>(r: R): Int => length(r)
+
+def total<R: Range<Int>>(r: R): Int => count(r)
+
+total([1, 2, 3])        // the second count
+total(Countdown(3))     // the first
 ```
 
-Inside the branch `R` gains the bound, so both branches are checked once at the definition. The branch is chosen at monomorphization.
+- A call inside a generic function is checked against the function that fits what's known there. The ones asking for more stand behind it, and each instance takes the one its types reach.
+- There is never a tie. Two such functions where neither asks for everything the other does are duplicates, so the functions form one ladder.
+- When the function asking for more returns a different type, it's chosen only where the call is written, since a body's types are fixed when it's checked.
+- The functions are expected to differ in speed and not in what they compute. Nothing checks that.
+- A step a type may not have is a pair with a default:
 
-This is different from an overload that asks for more, which the language has. An overload is chosen where the call is written, so a caller holding only `R: Range` gets the slow path. `static if` sees the real type.
+  ```silver
+  def freeIfCan<A>(a: A, block: Block): Unit { }
+  def freeIfCan<A: Frees>(a: A, block: Block): Unit => free(a, block)
+  ```
 
-The direction is that a query is a bound that's allowed to fail. It's answered where `R` becomes a concrete type in source, by the same lookup as any bound, and handed down as a witness that may be absent, through each generic function on the way. Lookup still happens once, in source, and a function in the caller's scope can turn on a fast path inside a library.
+  A function that asks several independent questions calls one such pair for each, so it doesn't need a function per combination.
+- **Considered**: a test in a body, `static if R: Sized { ... } else { ... }`, with `R` gaining the bound inside the branch. It shares the surrounding code where a pair of functions can't, and can be added later on the same mechanism. Alone, it would leave overloads chosen where the call is written, so the same call would mean two things.
+
+A query is a bound that's allowed to fail. It's answered where `R` becomes a concrete type in source, by the same lookup as any bound, and handed down as a witness that may be absent, through each generic function on the way. Lookup still happens once, in source, and a function in the caller's scope can turn on a fast path inside a library.
+
+**A function's queries are worked out from its body and carried automatically (decided).** A generic function that calls one with a query asks the same question of its own caller, and nothing is written in its signature:
+
+```silver
+def busy<R: Range<Int>>(r: R): Int => r.map(double).count()
+
+busy([1, 2, 3])        // count reads the length
+busy(Countdown(3))     // count steps
+```
+
+- A query on a type built from `R` is settled where the body is written, as a bound on such a type is. Whether `Mapped<R, Int, Int>` is `Sized` is answered there by `length<R: Sized, T, U>(m: Mapped<R, T, U>)`, which leaves "is `R` a `Sized`?" for the caller.
+- One function at the same types, asked from two places that answer differently, is two instances.
+- A function value, and a `Seq<T>`, keep the answers from where they were made.
+- A query can't change a type: every branch gives the same one.
+- A query whose lookup is ambiguous is an error (decided), where the type became concrete, naming the function that asked and the two found. It's never taken as a "no".
+- **Considered**: writing the query in the signature, as `<R: Range<Int> & ?Sized>`. The signature would then say everything the function depends on, but every generic function between a caller and the query has to repeat it, and one that doesn't loses the fast path below it without an error.
+- **Considered**: checking the body again for each real type, as D does. It gives up checking a generic function where it's written, and looking a name up once in source.
 
 Not designed yet:
 
-- How a function's optional bounds are worked out from the functions it calls, since every generic caller in between has to carry them.
-- A query on a type built from `R`, such as `Mapped<R, T, U>`.
-- A lookup that is ambiguous. It should be an error, never a silent "no".
+- A capability a type has when either of two others does. Two functions with bounds on different parameters are duplicates today, even with a third that asks for both.
 
-Until then a generic function sees only its bounds. Capabilities still follow a value's type, through functions with bounds of their own: see "Conditional conformance".
+Until this is built a call inside a generic function sees only its bounds. Capabilities still follow a value's type, through functions with bounds of their own: see "Conditional conformance".
 
 ### Stored structure
 

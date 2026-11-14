@@ -1,0 +1,134 @@
+// Two functions with the same parameter types whose bounds differ: the one that asks for more wins.
+
+interface Steps<T> { def next(range: Self): (T, Self)? }
+interface Indexed<T> {
+    def length(value: Self): Int
+    def opIndex(value: Self, index: Int): T
+}
+interface Sized { def length(value: Self): Int }
+interface Named { def name(value: Self): String }
+
+type Countdown(from: Int)
+def next(c: Countdown): (Int, Countdown)? => if c.from == 0 => None else (c.from, Countdown(c.from - 1))
+
+def next<T>(xs: [T]): (T, [T])? => if length(xs) == 0 => None else (xs[0], xs[1..])
+
+type Row(items: [Int])
+def next(r: Row): (Int, Row)? => if length(r.items) == 0 => None else (r.items[0], Row(r.items[1..]))
+def length(r: Row): Int => length(r.items)
+def opIndex(r: Row, index: Int): Int => r.items[index]
+def name(r: Row): String => "row"
+
+type Tally(n: Int)
+def length(t: Tally): Int => t.n
+
+// The one that asks for less is declared first here, and second for `last`.
+def count<R: Steps<T>, T>(range: R): String {
+    mutable val steps = 0
+    mutable val rest = range
+    while val step = next(rest) {
+        val (_, after) = step
+        steps += 1
+        rest = after
+    }
+    "stepped {steps}"
+}
+def count<R: Steps<T> & Indexed<T>, T>(range: R): String => "length {length(range)}"
+
+def last<R: Steps<Int> & Indexed<Int>>(range: R): String => "indexed {range[length(range) - 1]}"
+def last<R: Steps<Int>>(range: R): String {
+    mutable val found = 0
+    mutable val rest = range
+    while val step = next(rest) {
+        val (item, after) = step
+        found = item
+        rest = after
+    }
+    "stepped to {found}"
+}
+
+// Only `Steps` is known here, so this is the first `count` whatever `R` turns out to be.
+def total<R: Steps<T>, T>(range: R): String => count(range)
+// Both bounds are known and passed along.
+def totalIndexed<R: Steps<T> & Indexed<T>, T>(range: R): String => count(range)
+// An interface as the parameter's type is a bound too.
+def viaSugar(range: Steps<Int>): String => range.count()
+
+// Three levels, and by the functions asked for: `Indexed` asks for `Sized`'s `length` and more.
+def level<T>(x: T): String => "nothing"
+def level<T: Sized>(x: T): String => "sized"
+def level<T: Indexed<Int>>(x: T): String => "indexed"
+def level<T: Named & Indexed<Int>>(x: T): String => "named and indexed"
+
+// Each name written its own way, and a parameter only the bounds mention.
+def describe<A: Steps<E>, E>(x: A, y: E): String => "steps"
+def describe<Source: Indexed<Item> & Steps<Item>, Item>(x: Source, y: Item): String => "steps and indexed"
+
+// The parameter types still come first: a function that isn't generic beats both.
+def pick<T: Sized>(x: T): String => "sized"
+def pick<T: Sized & Named>(x: T): String => "sized and named"
+def pick(x: Row): String => "a row"
+
+def apply<R: Steps<Int>>(range: R, f: (R) -> String): String => f(range)
+
+// A literal whose type parameter the result mentions: the bounds are checked for the type the
+// call would give it, from the expected type first and its default otherwise.
+def next(s: String): (Char, String)? => None
+def name(n: Int): String => "int"
+def name(f: Float): String => "float"
+def length(f: Float): Int => 0
+
+def echo<T>(x: T): T { printl("echo: nothing"); x }
+def echo<T: Named>(x: T): T { printl("echo: named"); x }
+def twice<T: Named>(x: T): T { printl("twice: named"); x }
+def twice<T: Named & Sized>(x: T): T { printl("twice: named and sized"); x }
+
+type Taken<R>(source: R, n: Int)
+def take<R: Steps<T>, T>(range: R, n: Int): Taken<R> { printl("take: steps"); Taken(range, n) }
+def take<R: Steps<T> & Indexed<T>, T>(range: R, n: Int): Taken<R> { printl("take: steps and indexed"); Taken(range, n) }
+
+def main(): Unit {
+    printl(count([1, 2, 3]))
+    printl(count(Countdown(4)))
+    printl(count(Row([1, 2])))
+    printl([1, 2, 3].count())
+    printl(last([5, 6, 7]))
+    printl(last(Countdown(3)))
+
+    printl(total([1, 2, 3]))
+    printl(total(Countdown(2)))
+    printl(totalIndexed([1, 2, 3]))
+    printl(viaSugar(Row([1])))
+
+    printl(level(1))
+    printl(level(Tally(2)))
+    printl(level([1, 2]))
+    printl(level(Row([1])))
+
+    printl(describe([1], 2))
+    printl(describe(Countdown(1), 2))
+
+    printl(pick(Row([1])))
+    printl(pick([1]))
+
+    val counter: ([Int]) -> String = count
+    printl(counter([1, 2]))
+    val stepper: (Countdown) -> String = count
+    printl(stepper(Countdown(5)))
+    printl(apply([1, 2, 3], last))
+
+    printl(echo(1))
+    printl(echo(true))
+    printl(twice(1))
+    val whole: Int = twice(1)
+    printl(whole)
+    val maybe: Int? = twice(1)
+    printl(maybe)
+    val real: Float = twice(1)
+    printl(real)
+    printl(twice(2.5))
+    printl(1.twice())
+    printl(take("abc", 1).n)
+    printl(take([1, 2, 3], 2).n)
+    printl("abc".take(3).n)
+}

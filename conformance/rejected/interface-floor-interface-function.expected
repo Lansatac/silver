@@ -1,0 +1,1 @@
+S0026: `Range<Int>` is an interface, and a function of an interface can't return one, since each function that conforms would return a different type; make the type a parameter of the interface
