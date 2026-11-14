@@ -1,8 +1,8 @@
 type Point2D(x: Int, y: Int)
 type Point3D(x: Int, y: Int, z: Int)
-type Point = Point2D | Point3D
+type Point = :Point2D | :Point3D
 
-type Value = Int8 | String | Float | [Int] | (Int, Bool) | Int? | Unit | Point
+type Value = :Int8 | :String | :Float | :[Int] | :(Int, Bool) | :Int? | :Unit | :Point
 
 def show(v: Value): String => match v {
     n: Int8 => "byte {n}"

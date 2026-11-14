@@ -723,12 +723,29 @@ private final class NameResolver
                     _declarations.types[type.id] = &type;
                     _declarations.typeModules[type.id] = name;
                     if (type.intrinsic) checkIntrinsic(name, type.nameSpan, "intrinsic type", isIntrinsicType(type.name));
-                    if (moduleScope.resolveLocalType(type.name) !is null || moduleScope.resolveLocal(type.name) !is null)
+                    auto existing = moduleScope.resolveLocalType(type.name);
+                    if (existing !is null || moduleScope.resolveLocal(type.name) !is null)
                     {
-                        _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan, type.implicitMarker
-                            ? "`%s` is already a member of another sum in this module; declare `type %s` on its own to share it"
-                                .format(type.name, type.name)
-                            : "'%s' is already declared in this module".format(type.name));
+                        auto existingMarker = existing !is null && (*existing).match!(
+                            (const Id!TypeDecl t) => _declarations.types[t].implicitMarker,
+                            _ => false,
+                        );
+                        string message;
+                        if (type.implicitMarker && existingMarker)
+                        {
+                            message = "`%s` is already a member of another sum in this module; declare `type %s` on its own and write `:%s` in each sum"
+                                .format(type.name, type.name, type.name);
+                        }
+                        else if (type.implicitMarker || existingMarker)
+                        {
+                            message = "'%s' is already declared in this module; a sum refers to it as `:%s`"
+                                .format(type.name, type.name);
+                        }
+                        else
+                        {
+                            message = "'%s' is already declared in this module".format(type.name);
+                        }
+                        _collector.reportError(DiagnosticCode.DuplicateDeclaration, type.nameSpan, message);
                     }
                     else if (universal.resolveLocalType(type.name) !is null || isReserved(type.name) || type.name == selfName)
                     {
@@ -957,7 +974,6 @@ private final class NameResolver
                         resolveTypeExpr(member.type, declScope);
                         if (!type.isPrivate) reportPrivateType(member.type, "a public sum's members");
                     }
-                    if (type.implicitMarker) reportImportedMember(type, _moduleScopes[name]);
                     bool[string] seen;
                     foreach (field; type.fields)
                     {
@@ -1230,16 +1246,6 @@ private final class NameResolver
                 foreach (part; joined.parts) reportPrivateType(part, where);
             },
         );
-    }
-
-    /// A bare name in a sum declares a marker, so one an import also provides would quietly be a new type.
-    private void reportImportedMember(const TypeDecl marker, const Scope current)
-    {
-        auto owners = current.modulesProviding(marker.name).filter!(m => visibleType(m, marker.name) !is null).array;
-        if (owners.length == 0) return;
-        _collector.reportError(DiagnosticCode.AmbiguousName, marker.nameSpan,
-            "`%s` is also a type in `%s`; write `%s.%s` to use that one, or rename this member"
-                .format(marker.name, owners[0], owners[0], marker.name));
     }
 
     /// Reports a constant with no type or one that sema can't evaluate a value of.

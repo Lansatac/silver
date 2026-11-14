@@ -13,7 +13,7 @@ type Point(x: Int, y: Int)
 type Box<T>(value: T)
 type Circle(r: Int)
 type Square(side: Int)
-type Shape = Circle | Square
+type Shape = :Circle | :Square
 
 def toJson(value: Int): String => "{value}"
 def toJson(value: Bool): String => if value => "true" else "false"

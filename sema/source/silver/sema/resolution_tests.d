@@ -1471,7 +1471,7 @@ unittest
     rejected("def f(g: ([Detail]) -> Int): Int => 1");
     rejected("def f(p: (Int, Detail)): Int => 1");
     rejected("type Holder(d: Detail)");
-    rejected("type Sum = Detail | Other");
+    rejected("type Sum = :Detail | Other");
     rejected("type Sum = Inline(d: Detail) | Other");
 }
 
@@ -1481,7 +1481,7 @@ unittest
     analyzed("private type Detail(value: Int)
 private def f(d: Detail): Detail => d
 private type Inner(d: Detail)
-private type Sum = Detail | Other
+private type Sum = :Detail | Other
 def main(): Unit => ()").shouldHaveNoDiagnostics();
 }
 

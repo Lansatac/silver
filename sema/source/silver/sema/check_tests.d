@@ -2779,7 +2779,7 @@ unittest
 
 private enum sums = "type Peg = Literal(text: String) | Sequence(parts: [Peg]) | Empty\n"
     ~ "type Color = Red | Green | Blue\n"
-    ~ "type P2(x: Int)\ntype P3(x: Int, z: Int)\ntype Point = P2 | P3\n";
+    ~ "type P2(x: Int)\ntype P3(x: Int, z: Int)\ntype Point = :P2 | :P3\n";
 
 private Analyzed sumMain(string body)
 {
@@ -2811,23 +2811,23 @@ unittest
 {
     sumMain("    val l: Literal = Literal(\"a\")\n    val q = if true => l else Empty").shouldHaveNoDiagnostics();
     sumMain("    val q = if true => P2(1) else P3(1, 2)").shouldReport(DiagnosticCode.TypeMismatch, At("if true => P2(1) else P3(1, 2)", 1));
-    analyzed("type P2\ntype P3\ntype A = P2 | P3\ndef f(): A => if true => P2 else P3\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
+    analyzed("type P2\ntype P3\ntype A = :P2 | :P3\ndef f(): A => if true => P2 else P3\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
 }
 
 @("a literal adapts to the sum's only integer member")
 unittest
 {
-    analyzed("type V = Int8 | String\ndef main(): Unit {\n    val v: V = 1\n}").shouldHaveNoDiagnostics();
-    analyzed("type V = Int8 | Int\ndef main(): Unit {\n    val v: V = 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
-    analyzed("type V = Int? | String\ndef main(): Unit {\n    val v: V = 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
-    analyzed("type V = Int8 | String\ndef main(): Unit {\n    val v: V = 300\n}").shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
+    analyzed("type V = :Int8 | :String\ndef main(): Unit {\n    val v: V = 1\n}").shouldHaveNoDiagnostics();
+    analyzed("type V = :Int8 | :Int\ndef main(): Unit {\n    val v: V = 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+    analyzed("type V = :Int? | :String\ndef main(): Unit {\n    val v: V = 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+    analyzed("type V = :Int8 | :String\ndef main(): Unit {\n    val v: V = 300\n}").shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
 }
 
 @("promotion into a sum is one step")
 unittest
 {
-    analyzed("type V = Int? | String\ndef f(x: Int): V => x\ndef main(): Unit => ()").shouldReport(DiagnosticCode.TypeMismatch, At("x", 2));
-    analyzed("type A\ntype B = A | Int\ndef f(a: A): B? => a\ndef main(): Unit => ()").shouldReport(DiagnosticCode.TypeMismatch, At("a", 2));
+    analyzed("type V = :Int? | :String\ndef f(x: Int): V => x\ndef main(): Unit => ()").shouldReport(DiagnosticCode.TypeMismatch, At("x", 2));
+    analyzed("type A\ntype B = :A | :Int\ndef f(a: A): B? => a\ndef main(): Unit => ()").shouldReport(DiagnosticCode.TypeMismatch, At("a", 2));
 }
 
 @("a sum's name isn't a value, and it has no fields")
@@ -2841,7 +2841,7 @@ unittest
 @("sums are comparable when every member is, and aren't ordered")
 unittest
 {
-    analyzed("type F(f: () -> Int)\ntype S = F | Int\ndef main(): Unit {\n    val a: S = 1\n    val q = a == a\n}")
+    analyzed("type F(f: () -> Int)\ntype S = :F | :Int\ndef main(): Unit {\n    val a: S = 1\n    val q = a == a\n}")
         .shouldReport(DiagnosticCode.InvalidOperand, At("a == a", 1));
     sumMain("    val q = Red < Green").shouldReport(DiagnosticCode.InvalidOperand, At("Red", 2));
 }
@@ -2849,10 +2849,10 @@ unittest
 @("sum members have to make sense")
 unittest
 {
-    analyzed("type A = Int | Any\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("Any", 1));
-    analyzed("type A = Int | Never\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("Never", 1));
-    analyzed("type A = A | Int\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("A", 2));
-    analyzed("type A = Int | Int64\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("Int64", 1));
+    analyzed("type A = :Int | :Any\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("Any", 1));
+    analyzed("type A = :Int | :Never\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("Never", 1));
+    analyzed("type A = :A | :Int\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("A", 2));
+    analyzed("type A = :Int | :Int64\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("Int64", 1));
     analyzed("type A = B | B\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("B", 2));
 }
 
@@ -2860,7 +2860,7 @@ unittest
 unittest
 {
     analyzed("type A = X | Y\ntype B = X | Z\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("X", 2));
-    analyzed("type X\ntype A = X | Y\ntype B = X | Z\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
+    analyzed("type X\ntype A = :X | Y\ntype B = :X | Z\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
     analyzed("type A = None | Y\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("None", 1));
     analyzed("type A = Some(x: Int) | Y\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("Some", 1));
 }

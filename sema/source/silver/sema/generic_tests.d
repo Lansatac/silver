@@ -119,9 +119,9 @@ unittest
 @("a type parameter can't be a sum member by itself, and members can't become one type in an instance")
 unittest
 {
-    analyzedModule("type Maybe<T> = T | Nothing").shouldReport(DiagnosticCode.InvalidSumMember, At("T", 2));
-    analyzedModule("type Box<T>(value: T)\ntype S<A, B> = Box<A> | Box<B>").shouldReport(DiagnosticCode.InvalidSumMember, At("Box", 3));
-    analyzedModule("type Box<T>(value: T)\ntype S<T> = Box<T> | Box<[T]>").shouldHaveNoDiagnostics();
+    analyzedModule("type Maybe<T> = :T | Nothing").shouldReport(DiagnosticCode.InvalidSumMember, At("T", 2));
+    analyzedModule("type Box<T>(value: T)\ntype S<A, B> = :Box<A> | :Box<B>").shouldReport(DiagnosticCode.InvalidSumMember, At("Box", 3));
+    analyzedModule("type Box<T>(value: T)\ntype S<T> = :Box<T> | :Box<[T]>").shouldHaveNoDiagnostics();
 }
 
 @("a generic type is buildable when it would be with every type parameter buildable")

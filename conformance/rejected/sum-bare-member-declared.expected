@@ -1,0 +1,1 @@
+S0001: 'SomeType' is already declared in this module; a sum refers to it as `:SomeType`

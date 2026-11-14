@@ -21,7 +21,7 @@ type Shape = Circle(radius: Int) | Square(side: Int) | Blank
 alias Figure = Shape
 alias Round = Circle
 
-type Other = P | Label | U
+type Other = :P | :Label | :U
 type Label(text: Name)
 
 type Node(value: Int, next: Link)

@@ -1,6 +1,6 @@
 import sums_support.shapes
 
-type Local = sums_support.shapes.Square | Other
+type Local = :sums_support.shapes.Square | Other
 
 def describe(s: Shape): Int => match s {
     sums_support.shapes.Circle(r) => r

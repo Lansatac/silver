@@ -1,7 +1,7 @@
 type Empty
 type ParseError = Blank | BadDigit(at: Int) | TooLarge
 type Missing(key: String)
-type ConfigError = ParseError | Missing
+type ConfigError = :ParseError | :Missing
 
 def main(): Unit {
     // A value promotes, `Ok` and `Error` are written out, and a literal adapts to the success type.

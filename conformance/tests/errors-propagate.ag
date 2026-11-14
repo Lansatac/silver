@@ -2,7 +2,7 @@ type Negative
 type Overflow
 type ParseError = Blank | BadDigit(at: Int)
 type Missing(key: String)
-type ConfigError = ParseError | Missing
+type ConfigError = :ParseError | :Missing
 
 def parse(text: String): Int ! ParseError => match text {
     "" => Error(Blank)

@@ -1,0 +1,14 @@
+import sums_support.shapes
+
+type Mine = Dot | Plain
+
+def main(): Unit {
+    val xs = [Dot, Plain]
+    val ys: [Mine] = xs
+    printl(ys)
+    val theirs: Shape = sums_support.shapes.Dot
+    printl(match theirs {
+        sums_support.shapes.Circle(r) => r
+        sums_support.shapes.Dot => 0
+    })
+}

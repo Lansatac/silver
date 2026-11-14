@@ -366,7 +366,7 @@ unittest
 interface HasArea { def area(shape: Self): Int }
 type Circle(r: Int)
 type Square(side: Int)
-type Shape = Circle | Square
+type Shape = :Circle | :Square
 def area(s: Shape): Int => 1
 def measure<T: HasArea>(shape: T): Int => area(shape)
 `).shouldHaveNoDiagnostics();
