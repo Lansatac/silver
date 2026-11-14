@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Runs every package's tests, then the root's. Extra arguments go to each `dub test`.
+# Conformance runs each compiled program optimized as well; SILVER_CONFORMANCE_UNOPTIMIZED=1 skips that.
 cd "$(dirname "$0")" || exit 1
 
 packages=(silver:ast silver:syntax silver:loader silver:sema silver:core silver:interpreter silver:codegen silver:testing silver:conformance silver)

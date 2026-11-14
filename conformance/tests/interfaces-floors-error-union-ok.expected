@@ -1,0 +1,4 @@
+Ok([1])
+Error(NotFound(1))
+[2, 3]
+Ok([7])

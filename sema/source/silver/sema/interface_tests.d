@@ -9,6 +9,7 @@ import fluent.asserts;
 import silver.ast : DiagnosticCode;
 import silver.sema.check_tests : shouldDeclareType, shouldHaveType;
 import silver.sema.resolution_tests;
+import silver.sema.target : Target;
 
 private enum declarations = `
 interface Json { def toJson(value: Self): String }
@@ -497,7 +498,7 @@ unittest
     val b = plus(Vec(1.0), 2.0)`);
     a.shouldHaveNoDiagnostics();
     analyzedWith(`val a = plus(Vec(1.0), "a")`).onlyMessage(DiagnosticCode.UnsatisfiedBound)
-        .should.startWith("`plus` needs `T` to be a `Add<String>`, and `Vec` isn't one: no `add` in scope takes `(Vec, String)`");
+        .should.startWith("`plus` needs `T` to be an `Add<String>`, and `Vec` isn't one: no `add` in scope takes `(Vec, String)`");
 }
 
 @("an unknown parameter is bound by the one function that fits what's known")
@@ -613,12 +614,238 @@ def maybe(xs: [Int]): Range<Int>? => xs");
         .shouldReport(DiagnosticCode.UnsatisfiedBound, At("Range", 3));
     analyzedModule(ranges ~ "def f(xs: [Int]): (Int, Range<Int>) => xs").shouldReport(DiagnosticCode.TypeMismatch, At("xs", 2));
     analyzedModule(ranges ~ "def f(): () -> Range<Int> => () => [1]").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
-    analyzedModule(ranges ~ "def f(): Range<Int> ! String => [1]").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+    analyzedModule(ranges ~ "def f(): (Int, Range<Int> ! String) => (1, [1])")
+        .shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+    analyzedModule(ranges ~ "def f(): [Int] ! Range<Int> => [1]").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+    analyzedModule(ranges ~ "native def f(): Range<Int>").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+    analyzedModule(ranges ~ "val top: Range<Int> = 1").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+    analyzedModule(ranges ~ "val top: Range<Int> & Sized = 1").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+    analyzedModule(ranges ~ "def f(): Unit {\n    val (a: Range<Int>, b) = ([1], 2)\n}")
+        .shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
     analyzedModule(ranges ~ "interface Source { def items(s: Self): Range<Int> }")
         .shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
     analyzedModule(ranges ~ "def f(xs: [Int]): Range<Int> & Int => xs").shouldReport(DiagnosticCode.NotAnInterface, At("Int", 4));
-    analyzedModule(ranges ~ "def f(xs: Range<Int> & Sized): Int => 1").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+    analyzedModule(ranges ~ "def f(xs: [Range<Int> & Sized]): Int => 1").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
     analyzedModule(ranges ~ "type Holder(items: Range<Int> & Sized)").shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+    analyzedModule(ranges ~ "def f(xs: [Int]): Range<Int> & Range<Int> => xs").shouldReport(DiagnosticCode.InvalidBound, At("Range", 3));
+}
+
+@("a type argument of a part of A & B is a floor's place too")
+unittest
+{
+    auto a = analyzedModule(ranges ~ "def rows(xs: [Int]): Range<Range<Int>> & Sized => [xs]
+def f(): Unit {
+    val grid: Range<Range<Int>> & Sized = [[1]]
+}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("rows", 1), "([Int]) -> [[Int]]");
+    a.shouldDeclareType(At("grid", 1), "[[Int]]");
+}
+
+@("A & B as a parameter's whole type is a hidden type parameter with both bounds")
+unittest
+{
+    auto a = analyzedModule(ranges ~ "def size(xs: Range<Int> & Sized): Int => length(xs)
+def use(): Int => size([1])");
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("size", 1), "(Range<Int> & Sized) -> Int");
+    analyzedModule(ranges ~ "def size(xs: Range<Int> & Sized): Int => 1\ndef use(): Int => size(Box([1]))")
+        .shouldReport(DiagnosticCode.UnsatisfiedBound, At("size", 2));
+    analyzedModule(ranges ~ "def f(): Unit {\n    val g = (xs: Range<Int> & Sized) => 1\n}")
+        .shouldReport(DiagnosticCode.InterfaceIsNotAType, At("Range", 2));
+}
+
+private enum failing = ranges ~ "type Missing\ntype Other\ndef find(xs: [Int]): [Int] ! Missing => xs\n";
+
+@("a floor can be the success side of an error union that's the whole type")
+unittest
+{
+    auto a = analyzedModule(failing ~ "def passed(xs: [Int]): Range<Int> ! Missing {
+    val found = find(xs)?
+    found
+}
+def direct(xs: [Int]): Range<Int> ! Missing | Other => find(xs)
+def either(xs: [Int]): Range<Int> & Sized ! Other {
+    if length(xs) == 0 { return Error(Other) }
+    xs
+}
+def option(xs: [Int]): Range<Int>? ! Missing {
+    if length(xs) == 0 { return None }
+    find(xs)?
+}
+def f(): Unit {
+    val kept: Range<Int> ! Missing = find([1])
+    val plain: Range<Int> ! Missing = [1]
+    val lambda = (xs: [Int]): Range<Int> ! Missing => find(xs)?
+}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("passed", 1), "([Int]) -> [Int] ! Missing");
+    a.shouldDeclareType(At("direct", 1), "([Int]) -> [Int] ! Missing | Other");
+    a.shouldDeclareType(At("either", 1), "([Int]) -> [Int] ! Other");
+    a.shouldDeclareType(At("option", 1), "([Int]) -> [Int]? ! Missing");
+    a.shouldDeclareType(At("kept", 1), "[Int] ! Missing");
+    a.shouldDeclareType(At("plain", 1), "[Int] ! Missing");
+
+    // With no errors written, the error says where they go.
+    analyzedModule(failing ~ "def f(xs: [Int]): Range<Int> => find(xs)?").onlyMessage(DiagnosticCode.InvalidPropagation)
+        .should.equal("This `?` passes on `Missing`, so the function returns an error union; write the errors after the "
+            ~ "result type, as in `Range<Int> ! Missing`");
+    analyzedModule(failing ~ "def f(xs: [Int]): Range<Int> ! Other => find(xs)?")
+        .shouldReport(DiagnosticCode.InvalidPropagation, At("find(xs)?", 1));
+    analyzedModule(failing ~ "def f(xs: [Int]): Range<Int> ! Other => find(xs)").shouldReport(DiagnosticCode.TypeMismatch, At("find(xs)", 1));
+    analyzedModule(failing ~ "def f(xs: [Int]): Range<Int> ! Other => Error(Missing)")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("Missing", 3));
+    analyzedModule(failing ~ "def f(xs: [Int]): Range<Int> ! Other => Error(Other)").onlyMessage(DiagnosticCode.TypeMismatch)
+        .should.equal("`f` returns only errors, so nothing gives the type `Range<Int>` stands for; write the type out");
+    analyzedModule(failing ~ "def f(): Unit {
+    val x: Range<Int> ! Other = Error(Other)
+}").onlyMessage(DiagnosticCode.TypeMismatch)
+        .should.startWith("`x` is only an error, so nothing gives the type `Range<Int>` stands for");
+    analyzedModule(failing ~ "def f(xs: [Int]?): Range<Int> ! Other => xs?").shouldReport(DiagnosticCode.InvalidPropagation, At("xs?", 1));
+    analyzedModule(failing ~ "def f(xs: [Int]): Range<Int> ! Other => 1").shouldReport(DiagnosticCode.UnsatisfiedBound, At("Range", 2));
+}
+
+@("what's beside a floor in an error union is checked against the errors as written")
+unittest
+{
+    auto a = analyzedModule(failing ~ "def whole(xs: [Int]): Range<Int> ! Missing => Ok(xs)
+def arms(xs: [Int]): Range<Int> ! Missing | Other => match length(xs) {
+    0 => Error(Missing)
+    1 => Error(Other)
+    _ => xs
+}
+def either(xs: [Int], first: Bool): Range<Int> ! Missing | Other => if first => find(xs) else Error(Other)
+def adapted(xs: [Int]): Range<Int> ! Float {
+    if length(xs) == 0 { return Error(23) }
+    Ok(xs)
+}
+def f(): Unit {
+    val kept: Range<Int> ! Float = if length([1]) == 0 => Error(2) else Ok([7])
+}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("whole", 1), "([Int]) -> [Int] ! Missing");
+    a.shouldDeclareType(At("arms", 1), "([Int]) -> [Int] ! Missing | Other");
+    a.shouldDeclareType(At("either", 1), "([Int], Bool) -> [Int] ! Missing | Other");
+    a.shouldDeclareType(At("adapted", 1), "([Int]) -> [Int] ! Float");
+    a.shouldDeclareType(At("kept", 1), "[Int] ! Float");
+
+    analyzedModule(failing ~ "def f(xs: [Int], c: Bool): Range<Int> ! Other => if c => find(xs) else xs")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("find(xs)", 1));
+}
+
+@("a floor's place that isn't one says why where it's written, once")
+unittest
+{
+    analyzedModule(ranges ~ "native def f(xs: Range<Int> & Sized): Int").onlyMessage(DiagnosticCode.InterfaceIsNotAType)
+        .should.startWith("`Range<Int> & Sized` joins interfaces, and only a module-level `def` with a body can take");
+    analyzedModule(ranges ~ "native def f(xs: Sized): Int").onlyMessage(DiagnosticCode.InterfaceIsNotAType)
+        .should.startWith("`Sized` is an interface, and only a module-level `def` with a body can take");
+    analyzedModule(ranges ~ "interface Zip { def zip(a: Self, b: Range<Int> & Sized): Int }").onlyMessage(DiagnosticCode.InterfaceIsNotAType)
+        .should.startWith("`Range<Int> & Sized` joins interfaces, and a function of an interface can't take");
+    analyzedModule(ranges ~ "def f(xs: [Int]): Range<Int> & Sized? => xs").onlyMessage(DiagnosticCode.NotAnInterface)
+        .should.endWith("write `(Range<Int> & Sized)?`");
+
+    // A private type that's written is reported where it's written, and not again for the result.
+    analyzedModule(ranges ~ "private type Inner(n: Int)
+def f(n: Int): Range<Box<Inner>> => [Box(Inner(n))]")
+        .onlyMessage(DiagnosticCode.PrivateTypeExposed).should.equal("`Inner` is private, so it can't appear in a public function's signature");
+}
+
+@("a public function can't return a private type through a floor")
+unittest
+{
+    enum steps = ranges ~ "private type Steps(n: Int)\nprivate def next(s: Steps): (Int, Steps)? => None\n";
+    analyzedModule(steps ~ "def f(): Range<Int> => Steps(1)").onlyMessage(DiagnosticCode.PrivateTypeExposed)
+        .should.equal("`Steps` is private, so it can't appear in a public function's signature, and `f` returns `Steps`; "
+            ~ "make `f` private or `Steps` public");
+    analyzedModule(steps ~ "def f(): (Int, Range<Int>)? => (1, Steps(1))").onlyMessage(DiagnosticCode.PrivateTypeExposed)
+        .should.startWith("`Steps` is private, so it can't appear in a public function's signature, and `f` returns `(Int, Steps)?`");
+    analyzedModule(steps ~ "def f(): Box<Range<Int>> => Box(Steps(1))").shouldReport(DiagnosticCode.PrivateTypeExposed, At("Box", 2));
+    analyzedModule(steps ~ "private def f(): Range<Int> => Steps(1)\ndef g(): Unit {\n    val s: Range<Int> = f()\n}")
+        .shouldHaveNoDiagnostics();
+}
+
+@("an error about a floor is the only one, and says something that can be done")
+unittest
+{
+    // The function a bound finds is the one being worked out.
+    analyzedModule(ranges ~ "interface Source<R> { def contents(s: Self): R }
+def pull<S: Source<R>, R>(s: S): R => contents(s)
+def contents(b: Box<Int>): Range<Int> => pull(b)").shouldReport(DiagnosticCode.RecursiveResultType, At("Range", 2));
+
+    // Its own type isn't known inside its body, so the example is another's.
+    analyzedModule(ranges ~ "def over(b: Box<Int>): Range<Int> {
+    val f = over
+    [1]
+}
+def over(xs: [Int]): Range<Int> => xs").onlyMessage(DiagnosticCode.AmbiguousOverload)
+        .should.equal("`over` is overloaded, so as a value it needs a function type to choose by, as in `val f: ([Int]) -> [Int] = over`");
+
+    analyzedModule(ranges ~ "def f(): Unit {\n    mutable val x: (Int, Range<Int>)?\n}").onlyMessage(DiagnosticCode.TypeMismatch)
+        .should.equal("`x` is `None`, which doesn't say what type `Range<Int>` stands for in `(Int, Range<Int>)?`; write the type out");
+    analyzedModule(ranges ~ "def f(): Range<Int> => []").onlyMessage(DiagnosticCode.TypeMismatch)
+        .should.equal("`f` returns `[]`, which doesn't say what type `Range<Int>` stands for; write the type out");
+
+    // A literal beside a floor has its default type.
+    analyzedModule(ranges ~ "def f(): Unit {\n    val a: Range<Float> = [1, 2]\n}").onlyMessage(DiagnosticCode.UnsatisfiedBound)
+        .should.endWith("write it as the type that's meant, as in `1.0` or `Float(1)`");
+    analyzedModule(ranges ~ "def f(xs: [Int]): (Float, Range<Int>) => (1, xs)").onlyMessage(DiagnosticCode.TypeMismatch)
+        .should.startWith("`f` returns `(Int, [Int])`, where `(Float, Range<Int>)` is written");
+}
+
+@("a floored function's body is checked as a body whatever needed its result first")
+unittest
+{
+    // An invariant's `else` reaches `pick`, whose body builds a type whose `else` comes later.
+    enum pick = "\ndef pick(xs: [Int]): Range<Int> {\n    val built = Even(2)\n    val maker = Even\n    xs\n}";
+    enum small = "type Small(n: Int) invariant n < 10 else Bad(pick([n])[0])\n";
+    enum even = "type Even(n: Int) invariant n % 2 == 0 else Bad(n)\n";
+    foreach (order; [small ~ even, even ~ small])
+    {
+        auto a = analyzedModule(ranges ~ "type Bad(n: Int)\n" ~ order ~ pick);
+        a.shouldHaveNoDiagnostics();
+        a.shouldDeclareType(At("built", 1), "Even ! Bad");
+        a.shouldDeclareType(At("maker", 1), "(Int) -> Even ! Bad");
+    }
+    // One that leads back to its own type has nothing to go on.
+    analyzedModule(ranges ~ "type Bad(n: Int)\n" ~ small ~ "def pick(xs: [Int]): Range<Int> {\n    val s = Small(1)\n    xs\n}")
+        .shouldReport(DiagnosticCode.NotSupportedYet, At("Small(1)", 1));
+    analyzedModule(ranges ~ "type Bad(n: Int)
+" ~ small ~ "def pick(xs: [Int]): Range<Int> {
+    val build = Small
+    xs
+}")
+        .onlyMessage(DiagnosticCode.NotSupportedYet).should.endWith("that `else` leads to `pick`, whose result type is worked out "
+            ~ "from this body; write the type `pick` returns in place of `Range<Int>`, so the `else` doesn't need its body");
+    analyzedModule(ranges ~ "type Bad(n: Int)
+" ~ small ~ "def pick(xs: [Int]): [Int] {
+    val s = Small(1)
+    xs
+}")
+        .shouldHaveNoDiagnostics();
+
+    // A test's body allows `expect`, and a function it needs the result of still doesn't.
+    analyzed(ranges ~ "test \"t\" {\n    val r = helper([1])\n}\ndef helper(xs: [Int]): Range<Int> {\n    expect(true)\n    xs\n}",
+        null, Target.host, true).shouldReport(DiagnosticCode.ExpectOutsideTest, At("expect(true)", 1));
+}
+
+@("a nested def that needs its own result is reported once, from a lambda inside it too")
+unittest
+{
+    analyzedModule(ranges ~ "def f(): Unit {
+    def walk(n: Int): Range<Int> {
+        val again = () => walk(n - 1)
+        val more = walk(n - 2)
+        [n]
+    }
+}").shouldReport(DiagnosticCode.RecursiveResultType, At("Range", 2));
+    // An enclosing one that's still being worked out, used from the one inside it.
+    analyzedModule(ranges ~ "def f(): Unit {
+    def outer(n: Int): Range<Int> {
+        def inner(m: Int): Range<Int> => outer(m)
+        [n]
+    }
+}").shouldReport(DiagnosticCode.RecursiveResultType, At("Range", 2));
 }
 
 @("a function whose result type is a floor can't need its own result")

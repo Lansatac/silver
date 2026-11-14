@@ -1,0 +1,1 @@
+S0026: `Range<Int>` is an interface, which a binding in a pattern can't have as its type; write the type out, or bind the value with a `val` of its own

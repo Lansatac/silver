@@ -5,7 +5,7 @@ module silver.codegen.gen_tests;
 version (unittest):
 
 import core.exception : AssertError;
-import std.algorithm : map;
+import std.algorithm : canFind, count, endsWith, filter, map, startsWith;
 import std.array : join;
 import std.file : mkdirRecurse, rmdirRecurse, tempDir, write;
 import std.path : buildPath;
@@ -18,7 +18,7 @@ import fluent.asserts;
 
 import silver.ast;
 import silver.codegen.gen : generate;
-import silver.codegen.toolchain : executablePath, findToolchain, linkExecutable, Toolchain;
+import silver.codegen.toolchain : executablePath, findToolchain, linkExecutable, Optimization, Toolchain;
 import silver.core : lowerProgram;
 import silver.loader : load, standardLibraryPath;
 import silver.sema : analyze;
@@ -60,7 +60,8 @@ struct Run
 /// Generates IR for `source` and, if clang and dmd are available, links and runs it. Returns
 /// false without running when a tool is missing, so the caller can skip its checks on the
 /// result. A link failure fails the test and keeps the IR on disk for inspection.
-bool compileAndRun(string source, out Run run, string file = __FILE__, size_t line = __LINE__)
+bool compileAndRun(string source, out Run run, Optimization optimization = Optimization.none, string file = __FILE__,
+    size_t line = __LINE__)
 {
     string[] libraries;
     auto ir = generateSource(source, libraries, file, line);
@@ -78,7 +79,7 @@ bool compileAndRun(string source, out Run run, string file = __FILE__, size_t li
     auto exePath = executablePath(buildPath(directory, "main"));
     write(irPath, ir);
 
-    auto linked = linkExecutable(toolchain, irPath, exePath, libraries);
+    auto linked = linkExecutable(toolchain, irPath, exePath, libraries, optimization);
     if (!linked.succeeded)
     {
         throw new AssertError("Linking failed (IR kept at " ~ irPath ~ "):\n" ~ linked.output
@@ -89,6 +90,32 @@ bool compileAndRun(string source, out Run run, string file = __FILE__, size_t li
     run = Run(result.status, result.output.replace("\r\n", "\n"));
     rmdirRecurse(directory);
     return true;
+}
+
+/// The name of the struct type defined as `fields` in `ir`, which fails the test if there is none.
+string structNamed(string ir, string fields, string file = __FILE__, size_t line = __LINE__)
+{
+    import std.string : lineSplitter;
+
+    auto definition = " = type " ~ fields;
+    foreach (text; ir.lineSplitter)
+    {
+        if (text.endsWith(definition)) return text[0 .. $ - definition.length];
+    }
+    throw new AssertError("No struct type is defined as " ~ fields ~ " in:\n" ~ ir, file, line);
+}
+
+/// The lines of `ir` between the one that starts with `first` and the next `}`.
+string[] functionLines(string ir, string first, string file = __FILE__, size_t line = __LINE__)
+{
+    import std.algorithm : countUntil;
+    import std.array : array;
+    import std.string : lineSplitter;
+
+    auto lines = ir.lineSplitter.array;
+    auto start = lines.countUntil!(text => text.startsWith(first));
+    if (start < 0) throw new AssertError("No line starts with " ~ first ~ " in:\n" ~ ir, file, line);
+    return lines[start .. start + lines[start .. $].countUntil("}")];
 }
 
 @("codegen compiles an empty main into a program that exits cleanly and prints nothing")
@@ -203,7 +230,7 @@ unittest
         ~ "    printl(now > 1600000000000000000)\n}";
     auto ir = generateSource(source);
 
-    ir.should.contain("declare ccc double @sqrt(double)");
+    ir.should.contain("declare ccc double @sqrt(double) nobuiltin");
     ir.should.contain("call ccc double @sqrt(double 0x4030000000000000)");
     ir.should.contain("declare ccc i64 @silver_nowNanos()");
     ir.should.not.contain("silver_sqrt");
@@ -235,9 +262,9 @@ unittest
         ~ "def main(): Unit {\n    srand(7)\n    printl(1)\n    exit(3)\n    printl(2)\n}";
     auto ir = generateSource(source);
 
-    ir.should.contain("declare ccc void @srand(i32)\n");
+    ir.should.contain("declare ccc void @srand(i32) nobuiltin\n");
     ir.should.contain("call ccc void @srand(i32 7)");
-    ir.should.contain("declare ccc void @exit(i32) noreturn");
+    ir.should.contain("declare ccc void @exit(i32) nobuiltin noreturn");
     ir.should.contain("call ccc void @exit(i32 3)\n  unreachable");
 
     Run run;
@@ -253,7 +280,7 @@ unittest
         ~ "def main(): Unit {\n    printl(add(3, 4))\n    printl(answer())\n}";
     auto ir = generateSource(source);
 
-    ir.should.contain("define i64 @\"main.add\"(i64 %a, i64 %b)");
+    ir.should.contain("define internal i64 @\"main.add\"(i64 %a, i64 %b)");
     ir.should.contain("call i64 @\"main.add\"(i64 3, i64 4)");
     ir.should.contain("call i64 @\"main.answer\"()");
 
@@ -270,7 +297,7 @@ unittest
         ~ "def main(): Unit {\n    printl(second(printl(1), 2))\n}";
     auto ir = generateSource(source);
 
-    ir.should.contain("define i64 @\"main.second\"(i64 %x)");
+    ir.should.contain("define internal i64 @\"main.second\"(i64 %x)");
     ir.should.contain("call i64 @\"main.second\"(i64 2)");
 
     Run run;
@@ -286,7 +313,7 @@ unittest
         ~ "def main(): Unit {\n    mutable val count = 5\n    forward(mutable count)\n}";
     auto ir = generateSource(source);
 
-    ir.should.contain("define void @\"main.show\"(ptr %n)");
+    ir.should.contain("define internal void @\"main.show\"(ptr %n)");
     ir.should.contain("load i64, ptr %n");
     ir.should.not.contain("%n.addr");
     ir.should.contain("call void @\"main.forward\"(ptr %count.addr)");
@@ -364,9 +391,9 @@ unittest
         ~ "    printl(o)\n    printl(c)\n    printl(s)\n}";
     auto ir = generateSource(source);
 
-    ir.should.contain("%o.addr = alloca { i1, i64 }");
+    ir.should.contain("%o.addr = alloca " ~ structNamed(ir, "{ i8, i64 }"));
     ir.should.contain("%c.addr = alloca i32");
-    ir.should.contain("%s.addr = alloca { i32, ptr }");
+    ir.should.contain("%s.addr = alloca " ~ structNamed(ir, "{ i32, ptr }"));
 
     Run run;
     if (!compileAndRun(source, run)) return;
@@ -396,9 +423,10 @@ unittest
         ~ "def main(): Unit {\n    printl(identity(1))\n    printl(identity(\"s\"))\n    printl(identity(Box([1.5])))\n}";
     auto ir = generateSource(source);
 
-    ir.should.contain("define i64 @\"main.identity<Int>.");
-    ir.should.contain("define { ptr, i64 } @\"main.identity<String>.");
-    ir.should.contain("define ptr @\"main.identity<Box<[Float]>>.");
+    ir.should.contain("define internal i64 @\"main.identity<Int>.");
+    auto slice = structNamed(ir, "{ ptr, i64 }");
+    ir.should.contain("define internal " ~ slice ~ " @\"main.identity<String>.");
+    ir.should.contain("define internal " ~ slice ~ " @\"main.identity<Box<[Float]>>.");
 
     Run run;
     if (!compileAndRun(source, run)) return;
@@ -413,12 +441,229 @@ unittest
         ~ "    val t = Tag<Int>\n    printl(p)\n    printl(q)\n    printl(r)\n    printl(t)\n}";
     auto ir = generateSource(source);
 
-    ir.should.contain("%p.addr = alloca ptr");
-    ir.should.contain("getelementptr { i64, double }");
-    ir.should.contain("getelementptr { i1 }");
-    ir.should.contain("%r.addr = alloca { i32, ptr }");
+    ir.should.contain("%p.addr = alloca " ~ structNamed(ir, "{ i64, double }"));
+    ir.should.contain("%q.addr = alloca i1");
+    ir.should.contain("%r.addr = alloca " ~ structNamed(ir, "{ i32, ptr }"));
+    ir.should.not.contain("%t.addr");
 
     Run run;
     if (!compileAndRun(source, run)) return;
     run.output.should.equal("Pair(1, 2.5)\nPair((), true)\nGood(1)\nTag\n");
+}
+
+@("codegen passes and returns a declared type as its fields' scalars, and boxes only one that holds itself")
+unittest
+{
+    auto source = "type Point(x: Int, y: Int)
+type Line(from: Point, to: Point?)
+type Node(value: Int, next: Node?)
+"
+        ~ "def shift(line: Line): Line => if line.from.x > 0 => line with (from = Point(0, 0)) else line
+"
+        ~ "def main(): Unit {
+    val line = shift(Line(Point(1, 2), Point(3, 4)))
+    val node = Node(1, Node(2, None))
+"
+        ~ "    printl(line)
+    printl(node)
+}";
+    auto ir = generateSource(source);
+
+    // A `Bool` is a byte in a struct, and a bit everywhere else.
+    auto line = structNamed(ir, "{ i64, i64, i8, i64, i64 }");
+    ir.should.contain("define internal " ~ line ~ " @\"main.shift\"(i64 %line.0, i64 %line.1, i1 %line.2, i64 %line.3, i64 %line.4)");
+    ir.should.contain("%line.addr = alloca " ~ line);
+    ir.should.contain("%node.addr = alloca ptr");
+    ir.should.contain("getelementptr " ~ structNamed(ir, "{ i64, i8, ptr }"));
+
+    // A struct is laid out in memory, built to be returned and taken apart after a call, and is
+    // never another instruction's operand or result: every line naming one is one of these.
+    import std.string : lineSplitter;
+
+    auto allowed = [" = type ", " = alloca ", " = getelementptr ", " = insertvalue ", " = extractvalue ", "  ret ",
+        " = call ", "define ", "call void @llvm.memcpy.", "@silver_alloc(", "@silver_array_append(", " constant ", "attributes #"];
+    auto others = ir.lineSplitter.filter!(text => (text.canFind("%T.") || text.canFind("{"))
+        && !text.startsWith("define ") && !allowed.canFind!(use => text.canFind(use)));
+    others.should.equal(cast(string[])[]);
+    ir.lineSplitter.filter!(text => text.canFind(" = call ") && text.canFind("%T.") && !text.canFind(" = call %T.")
+        && !text.canFind("ptrtoint")).should.equal(cast(string[])[]);
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("Line(Point(0, 0), Some(Point(3, 4)))
+Node(1, Some(Node(2, None)))
+");
+}
+
+@("codegen names each struct type once, so reaching into a wide product doesn't spell it out")
+unittest
+{
+    import std.algorithm : maxElement;
+    import std.string : lineSplitter;
+
+    auto source = "type Wide(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int, j: Int, k: Int, l: Int)\n"
+        ~ "def sum(w: Wide): Int => w.a + w.l\n"
+        ~ "def main(): Unit {\n    val w = Wide(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)\n    printl(sum(w with (l = 30)))\n}";
+    auto ir = generateSource(source);
+
+    auto wide = structNamed(ir, "{ i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 }");
+    ir.count(" = type { i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 }").should.equal(1);
+    ir.should.contain("getelementptr " ~ wide ~ ", ptr %w.addr, i32 0, i32 11");
+    ir.lineSplitter.filter!(text => text.canFind(" = getelementptr ")).map!(text => text.length).maxElement.should.be.lessThan(80);
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("31\n");
+}
+
+@("codegen loads only the field read from an array's element, a sum's payload and an option in a local")
+unittest
+{
+    auto source = "type Wide(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int, j: Int, k: Int, l: Int)\n"
+        ~ "type Shape = Box(wide: Wide, tag: Int) | Nothing\n"
+        ~ "def third(ws: [Wide]): Int => ws[0].c\n"
+        ~ "def tagOf(shape: Shape): Int => match shape {\n    Box(_, tag) => tag\n    Nothing => 0\n}\n"
+        ~ "def last(maybe: Wide?): Int => if val w = maybe => w.l else 0\n"
+        ~ "def main(): Unit {\n    val w = Wide(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)\n"
+        ~ "    printl(third([w]))\n    printl(tagOf(Box(w, 13)))\n    printl(last(w))\n    printl(last(None))\n}";
+    auto ir = generateSource(source);
+
+    size_t loads(string name) => functionLines(ir, "define internal i64 @\"main." ~ name ~ "\"").count!(text => text.canFind(" = load "));
+    // The stack limit, the array's two scalars and the field.
+    loads("third").should.equal(4);
+    // Neither reads the twelve fields of the `Wide` beside the one wanted.
+    loads("tagOf").should.be.lessThan(12);
+    loads("last").should.be.lessThan(24);
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("3\n13\n12\n0\n");
+}
+
+@("codegen copies a wide value that is already in memory whole, and writes only the field an assignment replaces")
+unittest
+{
+    auto source = "type Wide(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int, j: Int, k: Int, l: Int)\n"
+        ~ "type Shape = Box(wide: Wide) | Nothing\n"
+        ~ "def swap(w: Wide): Wide {\n    mutable val out = w\n    out = out with (a = out.l, l = out.a)\n    out\n}\n"
+        ~ "def keep(ws: [Wide], w: Wide): [Wide] {\n    mutable val all = ws\n    all ~= [w]\n    all[0] = w\n    all\n}\n"
+        ~ "def main(): Unit {\n    val w = Wide(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)\n    val copy = w\n    val box = Box(copy)\n"
+        ~ "    val late = () => copy.l\n    val kept = keep([swap(w)], copy)\n"
+        ~ "    printl(swap(w))\n    printl(box)\n    printl(late())\n    printl(kept[1].a + kept[0].l + kept.length())\n}";
+    auto ir = generateSource(source);
+
+    size_t stores(string[] lines) => lines.count!(text => text.canFind("  store i64"));
+    size_t copies(string[] lines) => lines.count!(text => text.canFind("@llvm.memcpy"));
+    // Its parameter's twelve scalars arriving, the two fields swapped, and nothing else.
+    auto swap = functionLines(ir, "define internal " ~ structNamed(ir, "{ i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 }") ~ " @\"main.swap\"");
+    stores(swap).should.equal(14);
+    copies(swap).should.equal(4);
+    // The appended element and the assigned one, besides the array that assigning copies. Neither
+    // is stored a scalar at a time, as the parameter is.
+    auto keep = functionLines(ir, "define internal " ~ structNamed(ir, "{ ptr, i64 }") ~ " @\"main.keep\"");
+    stores(keep).should.be.lessThan(24);
+    copies(keep).should.equal(3);
+    keep.count!(text => text.canFind("@silver_array_append")).should.equal(2);
+    // `copy`, the sum's payload and the lambda's capture.
+    copies(functionLines(ir, "define internal void @\"main.main\"")).should.equal(3);
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("Wide(12, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 1)\nBox(Wide(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))\n12\n"
+        ~ "15\n");
+}
+
+@("codegen reads a local's value before the code that assigns the local, in an array, an append and a record")
+unittest
+{
+    auto source = "type Wide(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int, j: Int, k: Int, l: Int)\n"
+        ~ "def wide(n: Int): Wide => Wide(n, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)\n"
+        ~ "def bump(mutable w: Wide): Int {\n    w = wide(w.a + 100)\n    w.a\n}\n"
+        ~ "def main(): Unit {\n    mutable val w = wide(1)\n    val both = [w, {\n        w = wide(2)\n        w\n    }]\n    printl(both[0].a * 10 + both[1].a)\n"
+        ~ "    mutable val all = [wide(0)]\n    all ~= [w, {\n        w = wide(3)\n        w\n    }]\n    printl(all[1].a * 10 + all[2].a)\n"
+        ~ "    w = w with (a = bump(mutable w), b = w.a)\n    printl(w.a * 1000 + w.b)\n"
+        ~ "    w = w with (a = w.c, c = w.a)\n    printl(w.a * 1000 + w.c)\n"
+        ~ "    all[0] = w\n    w = wide(9)\n    printl(all[0].a)\n}";
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("12\n23\n103103\n3103\n3\n");
+}
+
+@("codegen marks what lets clang optimize, and an optimized program prints and panics as an unoptimized one does")
+unittest
+{
+    auto source = "type Node(value: Int, next: Node?)\n"
+        ~ "def pick(xs: [Int], node: Node): Int => xs[node.value]\n"
+        ~ "def main(): Unit {\n    printl(pick([10, 20, 30], Node(1, None)))\n    printl(pick([10, 20, 30], Node(3, None)))\n}";
+    auto ir = generateSource(source);
+    ir.should.contain("define internal void @\"main.main\"() #0 {");
+    ir.should.contain("attributes #0 = { nounwind uwtable }");
+    ir.should.contain("declare noalias ptr @silver_alloc(i64) nounwind allockind(\"alloc,uninitialized\") allocsize(0)");
+    ir.should.contain("declare void @silver_panic(ptr, ptr) nounwind noreturn cold");
+
+    Run plain, optimized;
+    if (!compileAndRun(source, plain) || !compileAndRun(source, optimized, Optimization.full)) return;
+    plain.status.should.equal(101);
+    plain.output.startsWith("20\npanic: ").should.equal(true);
+    optimized.should.equal(plain);
+}
+// LLVM knows the C library's functions by name, and would work out `pow(2.0, 10.0)` itself or call
+// `exp2` for `pow(2.0, x)`, neither of which rounds as the library's `pow` does.
+@("a native is an opaque call when optimized, whatever C library function it's named like")
+unittest
+{
+    auto source = "import std.math\nnative def exp2(x: Float): Float\n"
+        ~ "def main(): Unit {\n    val hidden = [2.0, 0.3]\n    mutable val differs = 0\n"
+        ~ "    for i in 0..2000 {\n        val x = Float(i) * 0.149 - 150.0\n"
+        ~ "        if pow(2.0, x) != pow(hidden[0], x) { differs += 1 }\n    }\n"
+        ~ "    printl(differs)\n    printl(sin(1.0) == sin(hidden[1] + 0.7))\n    printl(exp2(3.0))\n}";
+    auto ir = generateSource(source);
+    ir.should.contain("declare ccc double @pow(double, double) nobuiltin");
+    ir.should.contain("declare ccc double @exp2(double) nobuiltin");
+
+    Run plain, optimized;
+    if (!compileAndRun(source, plain) || !compileAndRun(source, optimized, Optimization.full)) return;
+    plain.output.should.equal("0\ntrue\n8\n");
+    optimized.should.equal(plain);
+}
+
+// Room claimed at the frontier and then not filled is lost, and the next append copies the array.
+@("appending a literal asks for room only after any element that can leave has been evaluated")
+unittest
+{
+    auto source = "def parse(i: Int): Int? => if i % 2 == 0 => Some(i) else None\n"
+        ~ "def keepEven(mutable xs: [Int], i: Int): Int? {\n    xs ~= [parse(i)?]\n    Some(i)\n}\n"
+        ~ "def keepAll(mutable xs: [Int?], i: Int): Unit {\n    xs ~= [parse(i)]\n}\n"
+        ~ "def evens(n: Int): [Int] {\n    mutable val xs: [Int] = []\n"
+        ~ "    for i in 0..n { xs ~= [if i % 2 == 1 { continue } else { i }, i] }\n    xs\n}\n"
+        ~ "def main(): Unit {\n    mutable val xs: [Int] = []\n    mutable val all: [Int?] = []\n"
+        ~ "    for i in 0..5 {\n        _ = keepEven(mutable xs, i)\n        keepAll(mutable all, i)\n    }\n"
+        ~ "    printl(xs)\n    printl(all)\n    printl(evens(5))\n}";
+    auto ir = generateSource(source);
+
+    /// Whether `first` comes before `second` in the function `name`.
+    bool ordered(string name, string first, string second)
+    {
+        import std.array : split;
+
+        foreach (chunk; ir.split("\n}\n"))
+        {
+            auto at = chunk.indexOf("define internal ");
+            if (at < 0 || !chunk[at .. $][0 .. chunk[at .. $].indexOf("\n")].canFind("@\"main." ~ name ~ "\"(")) continue;
+            auto a = chunk.indexOf(first, at);
+            auto b = chunk.indexOf(second, at);
+            assert(a >= 0 && b >= 0, chunk);
+            return a < b;
+        }
+        assert(0, "no function " ~ name);
+    }
+
+    ordered("keepEven", "@\"main.parse\"", "@silver_array_append").should.equal(true);
+    ordered("keepAll", "@silver_array_append", "@\"main.parse\"").should.equal(true);
+    ordered("evens", ".after.jump", "@silver_array_append").should.equal(true);
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("[0, 2, 4]\n[Some(0), None, Some(2), None, Some(4)]\n[0, 0, 2, 2, 4, 4]\n");
 }

@@ -1,0 +1,182 @@
+// Declared types in every place a value can be: nothing here depends on how one is stored.
+import std.ref
+
+type Point(x: Int, y: Int)
+type Line(from: Point, to: Point)
+type Meters(value: Float)
+type Named(name: String, at: Point?, tags: [String])
+type Padded(before: Unit, value: Int, after: Unit)
+type Nothing(a: Unit, b: Unit)
+type Marker
+type Pair<A, B>(left: A, right: B)
+type Shape = Dot(at: Point) | Segment(line: Line) | Blank
+type Counter(count: Int, step: (Int) -> Int)
+type Wide(a: Int, b: Float, c: String, d: Bool, e: Int8, f: UInt16, g: Char, h: Int?, i: Point, j: [Int], k: (Int, String), l: Line)
+
+def midpoint(line: Line): Point => Point((line.from.x + line.to.x) / 2, (line.from.y + line.to.y) / 2)
+
+def longer(a: Line, b: Line): Line => if span(a) >= span(b) => a else b
+
+def span(line: Line): Int => (line.to.x - line.from.x) + (line.to.y - line.from.y)
+
+def firstBeyond(points: [Point], limit: Int): Point? {
+    for point in points {
+        if point.x > limit { return point }
+    }
+    None
+}
+
+def find(points: [Point], x: Int): Point ! String {
+    for point in points {
+        if point.x == x { return point }
+    }
+    Error("no point at {x}")
+}
+
+def swap<A, B>(pair: Pair<A, B>): Pair<B, A> => Pair(pair.right, pair.left)
+
+def advance(mutable line: Line, by: Int): Point {
+    line = line with (to = Point(line.to.x + by, line.to.y + by))
+    line.to
+}
+
+def describe(shape: Shape): String => match shape {
+    Dot(at) => "dot at {at}"
+    Segment(line) => "segment to {line.to}"
+    Blank => "blank"
+}
+
+def tick(counter: Counter): Counter => counter with (count = counter.step(counter.count))
+
+def flip(p: Point): Point => Point(p.y, p.x)
+
+def nudge(mutable p: Point, by: (Int, Int)): Point? {
+    val (dx, dy) = by
+    if dx == 0 { return None }
+    p = Point(p.x + dx, p.y + dy)
+    p
+}
+
+def apply(change: (Point) -> Point, p: Point): Point => change(p)
+
+def build(make: (Point, Point) -> Line): Line => make(Point(1, 2), Point(3, 4))
+
+def wide(n: Int): Wide =>
+    Wide(n, 1.5, "c", true, Int8(-3), UInt16(40000), 'g', n, Point(n, n), [n, n], (n, "k"), Line(Point(0, 0), Point(n, n)))
+
+def main(): Unit {
+    val origin = Point(0, 0)
+    val line = Line(origin, Point(4, 6))
+    printl(line)
+    printl(midpoint(line))
+    printl(line.to.y)
+    printl(line == Line(Point(0, 0), Point(4, 6)))
+    printl(line == Line(Point(0, 0), Point(4, 7)))
+    printl(line != line with (from = Point(1, 1)))
+    printl(longer(line, Line(origin, Point(9, 9))))
+    printl(longer(line, Line(origin, Point(1, 1))))
+
+    val moved = line with (to = line.to with (x = 10))
+    printl(moved)
+    printl(line)
+
+    printl(Meters(2.5))
+    printl(Meters(2.5).value + 1.0)
+    printl(Meters(2.5) == Meters(2.5))
+    printl(Padded((), 7, ()))
+    printl(Padded((), 7, ()) == Padded((), 8, ()))
+    printl(Nothing((), ()))
+    printl(Nothing((), ()) == Nothing((), ()))
+    printl(Marker)
+    printl([Marker, Marker])
+    printl([Nothing((), ())].length())
+
+    val named = Named("home", origin, ["a", "b"])
+    printl(named)
+    printl(named with (at = None))
+    printl(named.at?.x)
+    printl(named == Named("home", Point(0, 0), ["a", "b"]))
+
+    val points = [Point(1, 2), Point(3, 4), Point(5, 6)]
+    printl(points)
+    printl(points[1])
+    printl(points[2].y)
+    printl(firstBeyond(points, 2))
+    printl(firstBeyond(points, 9))
+    printl(points ~ [origin])
+    printl(points[1..])
+    printl(points == [Point(1, 2), Point(3, 4), Point(5, 6)])
+    mutable val growing = points
+    growing ~= [Point(7, 8)]
+    growing[0] = Point(-1, -2)
+    printl(growing)
+    printl(points)
+    mutable val lines: [Line] = []
+    for point in points { lines ~= [Line(origin, point)] }
+    printl(lines.length())
+    printl(lines[2])
+
+    val found = find(points, 3)
+    printl(found)
+    printl(find(points, 4))
+
+    val pair = (line, Some(origin))
+    printl(pair)
+    val (first, second) = pair
+    printl(first.to)
+    printl(second)
+    val nested = Some(Some(Point(1, 1)))
+    printl(nested)
+    val absent: Line? = None
+    printl(absent)
+    printl(absent == None)
+
+    printl(swap(Pair(origin, "text")))
+    printl(swap(swap(Pair(Meters(1.0), line))).right.to)
+    printl(Pair(Pair(1, 2), Pair(Marker, ())))
+
+    mutable val changing = line
+    printl(advance(mutable changing, 2))
+    printl(changing)
+    printl(line)
+
+    val shapes = [Dot(Point(1, 1)), Segment(line), Blank]
+    for shape in shapes { printl(describe(shape)) }
+    printl(shapes)
+    printl(shapes[1] == Segment(Line(Point(0, 0), Point(4, 6))))
+
+    val offset = Point(100, 200)
+    val shifted = (p: Point) => Point(p.x + offset.x, p.y + offset.y)
+    printl(shifted(Point(1, 2)))
+    val makeLine = (to: Point) => Line(offset, to)
+    printl(makeLine(origin))
+    val constructor = Point
+    printl(constructor(8, 9))
+
+    val flipped = flip
+    printl(apply(flipped, Point(1, 2)))
+    printl(build(Line))
+    val changes = [flip, (p: Point) => p with (x = 0)]
+    for change in changes { printl(change(Point(5, 6))) }
+    val nudged: (mutable Point, (Int, Int)) -> Point? = nudge
+    mutable val place = origin
+    printl(nudged(mutable place, (1, 2)))
+    printl(nudged(mutable place, (0, 2)))
+    printl(place)
+
+    mutable val counter = Counter(1, n => n * 2)
+    for _ in 0..5 { counter = tick(counter) }
+    printl(counter.count)
+
+    val cell = Ref(line)
+    cell.set(cell.get() with (from = Point(-1, -1)))
+    printl(cell.get())
+    printl(line)
+
+    val big = wide(3)
+    printl(big)
+    printl(big == wide(3))
+    printl(big == wide(4))
+    printl((big with (l = line)).l.to)
+    printl([wide(1), wide(2)][1].k)
+}

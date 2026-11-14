@@ -1,0 +1,3 @@
+module forward_support.some
+
+forward import forward_support.one : same

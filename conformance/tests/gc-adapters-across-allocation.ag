@@ -1,0 +1,34 @@
+// The shape a range adapter has: an array beside a function value, whose environment is on the
+// heap. A pair of them is loaded from an array nothing else holds, kept while a great deal is
+// allocated, and then stored and stepped.
+type Mapped(source: [Int], step: (Int) -> Int)
+type Zipped(left: Mapped, right: Mapped)
+
+def noise(seed: Int, count: Int): Int {
+    mutable val keep: [(Int) -> Int] = []
+    for i in 0..count { keep = [x => x + seed + i, x => x - i] }
+    keep[0](1) - seed - count
+}
+
+def pick(zs: [Zipped], seed: Int, count: Int): [Zipped] {
+    val z = zs[0]
+    val zero = noise(seed, count)
+    [z]
+}
+
+def one(i: Int, j: Int): [Zipped] => [Zipped(Mapped([i, j], x => x + i), Mapped([j, i, i], x => x * j + i))]
+
+def total(m: Mapped): Int {
+    mutable val sum = 0
+    for x in m.source { sum += m.step(x) }
+    sum
+}
+
+def main(): Unit {
+    mutable val wrong = 0
+    for i in 0..8 {
+        val got = pick(one(i, 3), i, 30000)
+        if total(got[0].left) != 3 * i + 3 || total(got[0].right) != 9 + 9 * i { wrong += 1 }
+    }
+    printl(wrong)
+}

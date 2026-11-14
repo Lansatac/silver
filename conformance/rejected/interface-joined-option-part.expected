@@ -1,0 +1,1 @@
+S0027: `?` here is on `Indexed<Int>` alone, and `&` joins interfaces; for an option of the two together, write `(Range<Int> & Indexed<Int>)?`

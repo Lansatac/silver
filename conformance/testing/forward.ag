@@ -1,0 +1,15 @@
+// A test sees what a module forwards as the module's importers do.
+import imports_support.facade
+
+type Pace(by: Int)
+
+def step(p: Pace): Int => p.by
+
+test "a forwarded function is called unqualified and through the facade" {
+    expect(next(1) == 2)
+    expect(imports_support.facade.next(2) == 3)
+}
+
+test "what a module forwards is ranked with its own" => expect(next(Pace(5)) == 105)
+
+test "a failure shows a forwarded call as written" => expect(next(1) == next(Pace(1)))

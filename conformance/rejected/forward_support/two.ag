@@ -1,0 +1,10 @@
+module forward_support.two
+
+def same(y: Int): Int => 2
+val limit: Int = 2
+
+interface Named {
+    def name(self: Self): String
+}
+
+def measure<T: Named>(x: T): Int => 0

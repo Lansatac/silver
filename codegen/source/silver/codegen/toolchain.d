@@ -72,11 +72,31 @@ struct LinkResult
     string output;
 }
 
+/// How far clang optimizes the generated module. The IR is the same either way, and so is what
+/// the program does: every check is in the IR, and no flag here lets clang assume one away.
+enum Optimization
+{
+    none,
+    full,
+}
+
+private string[] optimizationFlags(Optimization optimization)
+{
+    return optimization == Optimization.full ? ["-O2"] : [];
+}
+
+/// Writes the IR at `irPath` to `outputPath` as clang optimizes it.
+LinkResult optimizeIr(const Toolchain toolchain, string irPath, string outputPath)
+{
+    auto optimized = execute([toolchain.clang, "-S", "-emit-llvm", "-Wno-override-module"]
+        ~ optimizationFlags(Optimization.full) ~ ["-o", outputPath, irPath]);
+    return LinkResult(optimized.status == 0, optimized.output);
+}
+
 /// Compiles the IR at `irPath` and links it with the runtime and `libraries`, which are named as
-/// `native library` names them, into the executable `outputPath`. `extraFlags` go to clang's
-/// compile step, e.g. `-O2`.
+/// `native library` names them, into the executable `outputPath`.
 LinkResult linkExecutable(const Toolchain toolchain, string irPath, string outputPath, const string[] libraries = [],
-    string[] extraFlags = [])
+    Optimization optimization = Optimization.none)
 {
     BuiltRuntime runtime;
     if (auto failure = buildRuntime(toolchain, runtime))
@@ -87,7 +107,7 @@ LinkResult linkExecutable(const Toolchain toolchain, string irPath, string outpu
     auto objPath = objectPath(outputPath);
     scope (exit) if (exists(objPath)) remove(objPath);
     // The IR has no target triple, so clang uses the host's; it warns about that otherwise.
-    auto compiled = execute([toolchain.clang, "-c", "-Wno-override-module"] ~ extraFlags
+    auto compiled = execute([toolchain.clang, "-c", "-Wno-override-module"] ~ optimizationFlags(optimization)
         ~ ["-o", objPath, irPath]);
     if (compiled.status != 0)
     {

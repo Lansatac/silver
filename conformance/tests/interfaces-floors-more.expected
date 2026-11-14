@@ -1,0 +1,21 @@
+Ok(Mapped([1, 2], lambda))
+Error(NotFound(404))
+4
+Error(TooLong)
+Error(NotFound(404))
+Ok(None)
+Ok(Some([1, 2]))
+Error(NotFound(404))
+Ok([5])
+Ok([7])
+Ok([8])
+Ok(Filtered([1, 2], lambda))
+Error(NotFound(404))
+8
+2
+5
+6
+(a, [2, 1])
+1
+Ok(Small(3))
+Error(Bad(30))

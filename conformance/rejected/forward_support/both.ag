@@ -1,0 +1,4 @@
+module forward_support.both
+
+forward import forward_support.one : limit
+forward import forward_support.two : limit

@@ -1,0 +1,5 @@
+module forward_support.own
+
+forward import forward_support.one
+
+val limit: Int = 9

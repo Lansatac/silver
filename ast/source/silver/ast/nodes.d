@@ -689,6 +689,8 @@ struct ImportStmt
     string[] path;
     /// What a selective import lists, empty for any other import.
     ImportedName[] names;
+    /// `forward import`, which also gives the names to this module's importers.
+    bool forward;
 }
 
 /// One name a selective import lists.
@@ -955,9 +957,10 @@ private string printImport(const ImportStmt i)
 
     import std.algorithm : map;
 
+    auto form = i.forward ? "forward import" : "import";
     auto path = i.path.join(".");
-    if (i.names.length > 0) return format("(import %s : %s)", path, i.names.map!(n => n.name).join(" "));
-    return format("(import %s)", path);
+    if (i.names.length > 0) return format("(%s %s : %s)", form, path, i.names.map!(n => n.name).join(" "));
+    return format("(%s %s)", form, path);
 }
 
 private string printFunctionDecl(const FunctionDecl f)

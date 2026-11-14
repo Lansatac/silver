@@ -218,7 +218,9 @@ total(["a", "b"])          // error: a [String] is a Range<String>
 - The hidden parameter is never written at a call and doesn't count toward "all type arguments or none".
 - Each such parameter has a type of its own. To say two parameters have the same type, name it with a type parameter.
 - The argument needs a type of its own, so `total([])` is an error.
-- Inside a parameter's type an interface name isn't a type, as in `items: [Json]` or `item: Json?`, and neither is the parameter of a lambda or nested `def`, which can't be generic. A type parameter with a bound says it.
+- Several interfaces are joined with `&`, as in a bound, and the hidden parameter has every one: `def middle(items: Range<Int> & Indexed<Int>): Int` is `<S: Range<Int> & Indexed<Int>>(items: S)`.
+- Inside a parameter's type an interface name or `A & B` isn't a type, as in `items: [Json]` or `item: Json?`, and neither is the parameter of a lambda or nested `def`, which can't be generic. A type parameter with a bound says it.
+- A `native def`'s parameter and a parameter of an interface's function name their types too.
 
 ## An interface name as a result type
 
@@ -236,7 +238,7 @@ def bad(xs: [Int]): Range<Int> => length(xs)    // error in bad: an Int isn't a 
 
 - The result's type is worked out from the body, once, in terms of the function's type parameters. Here it's `Mapped<R, Int, Int>`. It's the type callers see: they can name it, index it when it's indexed, and use the function as a value of that type.
 - The interface is what the author promises. A body whose type doesn't satisfy it is an error in that function, found as a [bound](#conformance) is, from where the function is written.
-- Several are joined with `&`, as in a bound: `def squares(xs: [Int]): Range<Int> & Indexed<Int>`. Adding a `filter` to that body is then an error there, and not in a caller that indexed the result.
+- Several are joined with `&`, as in a bound: `def squares(xs: [Int]): Range<Int> & Indexed<Int>`. Adding a `filter` to that body is then an error there, and not in a caller that indexed the result. `?` binds tighter than `&`, so an option of the two is `(Range<Int> & Indexed<Int>)?`.
 - A caller can use more than was promised. If it does, a change to the body can break it, and the error is at the caller.
 - Everything the body returns has one type, as in any function. `if c => xs else xs.filter(f)` is a mismatch.
 - An interface name can sit inside a tuple, an option, an array or a type argument of the result, each checked in its place:
@@ -248,9 +250,33 @@ def bad(xs: [Int]): Range<Int> => length(xs)    // error in bad: an Int isn't a 
   ```
 
   The type around it is the body's too, after the promotion any result gets: a body that gives an `[Int]` fits `Range<Int>?`, and one that gives an `[Int]` doesn't fit `(Int, Range<Int>)`.
-- It can't sit inside a function type or an error union. A function returning a function names the type: `<R: Range<Int>>(make: () -> R)`.
+- It can be the success side of an error union that's the whole result type, with `&` binding tighter than `!`. The errors are written as usual, and the body is any function's that returns an error union: `?` passes on an error the list includes, `Error(e)` returns one, `Ok(x)` returns a value, and branches can give different errors of the list. What goes to the errors is checked against them as written, so a literal adapts: `Error(1)` is a `Float` in a function returning `Range<Int> ! Float`.
+
+  ```silver
+  def lines(path: String): Range<String> ! IoError {
+      val text = read(path)?
+      text.split("\n")
+  }
+
+  def checked(xs: [Int]): Range<Int> & Indexed<Int> ! Empty | TooLong => ...
+  ```
+
+  Something the body returns has to be a value, since that's what says what the type is: a body that only returns `Error(e)` writes its result type out.
+
+  An interface name can't be one of the errors, or sit in an error union inside the result, as in `(Int, Range<Int> ! E)`.
+- It can't sit inside a function type. A function returning a function names the type: `<R: Range<Int>>(make: () -> R)`.
+- A public function can't return a [private type](modules.md#visibility) this way, any more than it can name one in its signature. The error is at the result type, and says what the body returns:
+
+  ```silver
+  private type Steps(from: Int)
+  private def next(s: Steps): (Int, Steps)? => ...
+
+  def countdown(from: Int): Range<Int> => Steps(from)             // error: `Steps` is private
+  def doubled(from: Int): Range<Int> => Steps(from).map(x => x * 2)   // error: a Mapped<Steps, Int, Int> holds one
+  ```
 - A function of an interface can't return an interface type, since each function that conforms would return a different one. A parameter of the interface says it.
 - A function that needs its own result, by calling itself or a function that calls it, writes the type out. Another function of the same name isn't the function itself.
+- Only a function with a body has a type to take: a `native def` writes its result type out.
 - A lambda's and a nested `def`'s result type can be written this way too.
 - Every other result type is still written in full.
 
@@ -271,13 +297,13 @@ current = current.filter(x => x > 2)              // error: current is an [Int]
 ```
 
 - A `mutable val` still has one type, the first value's.
-- It nests as in a result type: `val pair: (String, Range<Int>)? = ...`.
-- Only a `val` with a name takes one. A binding in a pattern, as in `val (a: Range<Int>, b) = ...`, a field, an element and an alias don't: each of those has one type, which has to be written. Mixed values go in a sum type.
+- It nests as in a result type: `val pair: (String, Range<Int>)? = ...`, and `val loaded: Range<String> ! IoError = lines(path)`.
+- The value has to say what the type is. `val xs: Range<Int> = []` and `mutable val xs: Range<Int>?` with no value are errors.
+- Only a `val` with a name inside a function takes one. A binding in a pattern, as in `val (a: Range<Int>, b) = ...`, a top-level constant, a field, an element and an alias don't: each of those has one type, which has to be written. Mixed values go in a sum type.
 
 ## Open questions
 
 - A value whose type is only an interface, as in `[Json]`, which needs a runtime representation.
-- An interface name in the success side of an error union, as in `def load(path: String): Range<String> ! IoError`.
 - Asking whether a type satisfies an interface inside a generic function, as in `static if R: Sized`.
 - A bound on a type's own parameter, as in `type Set<T: Ord>`, which makes the conformance part of the type.
 - A way to name which function conforms, for a type two imports conform differently.
@@ -293,7 +319,8 @@ See the [interfaces proposal](../proposals/interfaces.md) for the reasoning behi
 - Of two functions that differ only in their bounds, the choice is made from what's known where the call is written, so a call inside a generic function takes the one asking for less whatever the real type is.
 - When several functions of a name could take a call, a bound whose type parameter only a lambda argument's result would decide isn't looked into until one is chosen, so it's an error then rather than a reason to choose another. Of two functions that differ in their bounds, the one that asks for more is then chosen even where only the other's bounds hold: with `ap<T>(x: Int, g: (Int) -> T)` and `ap<T: A>(x: Int, g: (Int) -> T)`, `ap(1, n => "s")` is an error when a `String` isn't an `A`. Annotating the lambda's result doesn't help; a named function in its place does.
 - A program that gives one type two conformances compiles a generic function once for each. Such an instance's name, as a function value prints it, doesn't show which it is.
-- Beside an interface name in a result type or an annotation, a literal has its default type: `def f(xs: [Int]): (Float, Range<Int>) => (1, xs)` is a mismatch, and `(1.0, xs)` is how to write it.
-- A public function whose result type is an interface can return a private type, which its callers can use and can't name. Nothing reports it.
+- Beside an interface name in a result type or an annotation, a literal has its default type, since nothing but the interface is there to say otherwise. `def f(xs: [Int]): (Float, Range<Int>) => (1, xs)` is a mismatch and `val a: Range<Float> = [1, 2]` is an `[Int]` that isn't a `Range<Float>`; `(1.0, xs)` and `[1.0, 2.0]` are how to write them, and the error says so. The errors of an error union aren't beside it in this sense: they're written out, and a literal in an `Error` adapts to them.
+- `Ok(None)` and `Ok([])` under an interface name are errors even where another branch says what the type is, since the `Ok` has to have a type of its own.
+- A private alias for a public type doesn't count as private in what a public function returns through an interface name, since the result's type is the type the alias names.
 - When two functions need each other's result, the error is at the result type of the one reached first, and doesn't name the other.
 - Everything else above is implemented.

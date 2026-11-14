@@ -1,0 +1,5 @@
+module forward_support.things
+
+type Thing(n: Int)
+
+def toJson(thing: Thing): String => "thing {thing.n}"

@@ -1,0 +1,91 @@
+// Declared types that hold themselves, directly or through each other.
+type Node(value: Int, next: Node?)
+type Wrapped(node: Node, label: String)
+type Even(n: Int, odd: Odd?)
+type Odd(n: Int, even: Even?)
+type Chain(link: (Int, Chain?))
+type Step(result: Step ! String, depth: Int)
+type Tree<T>(value: T, children: [Tree<T>])
+type Expr = Number(value: Int) | Sum(left: Expr, right: Expr)
+type Both(left: Node, right: Node?)
+
+def build(count: Int): Node? {
+    mutable val list: Node? = None
+    mutable val at = count
+    while at > 0 {
+        list = Node(at, list)
+        at -= 1
+    }
+    list
+}
+
+def total(list: Node?): Int {
+    mutable val sum = 0
+    mutable val rest = list
+    while val node = rest {
+        sum += node.value
+        rest = node.next
+    }
+    sum
+}
+
+def depth(node: Node): Int => if val next = node.next => 1 + depth(next) else 1
+
+def size<T>(tree: Tree<T>): Int {
+    mutable val count = 1
+    for child in tree.children { count += size(child) }
+    count
+}
+
+def eval(e: Expr): Int => match e {
+    Number(value) => value
+    Sum(left, right) => eval(left) + eval(right)
+}
+
+def main(): Unit {
+    val list = Node(1, Node(2, Node(3, None)))
+    printl(list)
+    printl(list.next?.next?.value)
+    printl(depth(list))
+    printl(list == Node(1, Node(2, Node(3, None))))
+    printl(list == Node(1, Node(2, None)))
+    val relinked = list with (next = Node(9, None))
+    printl(relinked)
+    printl(list)
+    printl(total(build(1000)))
+    printl(depth(build(5000) ?? list))
+
+    val wrapped = Wrapped(list, "list")
+    printl(wrapped)
+    printl(wrapped == Wrapped(Node(1, Node(2, Node(3, None))), "list"))
+    printl((wrapped with (label = "same")).node.value)
+    printl([list, relinked][1].next)
+    printl((list, 1) == (list, 1))
+    val both = Both(list, None)
+    printl(both with (right = both.left))
+
+    val even = Even(0, Odd(1, Even(2, None)))
+    printl(even)
+    printl(even.odd?.even?.n)
+    printl(even == Even(0, Odd(1, Even(2, None))))
+
+    val chain = Chain((1, Chain((2, None))))
+    printl(chain)
+    val (head, tail) = chain.link
+    printl(head)
+    printl(tail)
+
+    val step = Step(Step(Error("end"), 1), 0)
+    printl(step)
+    printl(step.depth)
+
+    val tree = Tree("root", [Tree("a", []), Tree("b", [Tree("c", [])])])
+    printl(tree)
+    printl(size(tree))
+    printl(tree.children[1].children[0].value)
+    printl(tree == Tree("root", [Tree("a", []), Tree("b", [Tree("c", [])])]))
+
+    val sum = Sum(Number(1), Sum(Number(2), Number(3)))
+    printl(sum)
+    printl(eval(sum))
+}

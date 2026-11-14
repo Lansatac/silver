@@ -46,7 +46,8 @@ Silver:
     QualifiedName        <- ValueName ('.' ValueName)*
 
     ModuleDeclaration    < :MODULE Nl? QualifiedName
-    ImportStatement      < :IMPORT Nl? QualifiedName (Nl? :':' Nl? ImportedName (Nl? :',' Nl? ImportedName)*)?
+    # `forward` is kept, so lowering can tell whether it was there
+    ImportStatement      < (FORWARD Nl?)? :IMPORT Nl? QualifiedName (Nl? :':' Nl? ImportedName (Nl? :',' Nl? ImportedName)*)?
     ImportedName         <- Identifier / TypeName
 
     # The annotation is required, but sema can say so better than a parse error could
@@ -109,7 +110,7 @@ Silver:
 
     TypeAnnotation       < Nl? :':' Nl? Type
 
-    Type                 < OptionalType (JoinedTypes / :'!' !'=' Nl? ErrorTypes)?
+    Type                 < OptionalType JoinedTypes? (:'!' !'=' Nl? ErrorTypes)?
     JoinedTypes          < (LeadingNl? :BitAndOperator Nl? OptionalType)+
     # A list would run into the sum's own `|`, so a member's error side is one type
     SumMemberType        < OptionalType (:'!' !'=' Nl? OptionalType)?
@@ -280,6 +281,7 @@ Silver:
     INTERFACE           <- Kword("interface")
     INVARIANT           <- Kword("invariant")
     TEST                <- Kword("test")
+    FORWARD             <- Kword("forward")
     UNDERSCORE          <- Kword("_")
 
     Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / INTRINSIC / PRIVATE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / INTERFACE / WITH / INVARIANT / UNDERSCORE

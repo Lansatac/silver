@@ -133,6 +133,16 @@ immutable Case[] imports = [
     declaresAs("import a.b :\n    first,\n    second", "(import a.b : first second)"),
     rejectsDeclaration("import a.b :"),
     rejectsDeclaration("import a.b : val"),
+
+    declaresAs("forward import a.b", "(forward import a.b)"),
+    declaresAs("forward import a.b : first, Second", "(forward import a.b : first Second)"),
+    declaresAs("forward\nimport a", "(forward import a)"),
+    declaresAs("def forward(forward: Int): Int => forward\nval x: Int = forward(1)", [
+        "(def forward (forward: Int): Int forward)", "(val x: Int (call forward 1))",
+    ]),
+    rejectsDeclaration("forward def f(): Int => 1"),
+    rejectsDeclaration("private forward import a"),
+    rejects("forward import a"),
 ];
 
 immutable Case[] destructuring = [

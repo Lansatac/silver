@@ -163,7 +163,13 @@ Indexed<T>
     & C => xs", "(def f (xs: [Int]): A & B & C xs)"),
     parsesAs("val xs: A & B = ys", "(val xs: A & B ys)"),
     rejectsDeclaration("def f(xs: [Int]): A & => xs"),
-    rejectsDeclaration("def f(xs: [Int]): A & B ! E => xs"),
+    declaresAs("def f(xs: [Int]): A & B ! E | F => xs", "(def f (xs: [Int]): A & B ! E | F xs)"),
+    declaresAs("def f(xs: [Int]): A !
+    E => xs", "(def f (xs: [Int]): A ! E xs)"),
+    rejectsDeclaration("def f(xs: [Int]): A
+    ! E => xs"),
+    declaresAs("def f(xs: A & B): Int => 1", "(def f (xs: A & B): Int 1)"),
+    rejectsDeclaration("def f(xs: [Int]): A ! E & F => xs"),
     rejectsDeclaration("interface json { }"),
     rejectsDeclaration("interface Json"),
     rejectsDeclaration("interface Json { def toJson(value: Self): String => \"\" }"),

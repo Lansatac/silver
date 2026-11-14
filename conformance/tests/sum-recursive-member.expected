@@ -1,0 +1,21 @@
+Succ(Succ(Succ(Zero)))
+3
+true
+Node(Node(Leaf, 1, Leaf), 2, Node(Leaf, 3, Leaf))
+6
+Cons(Cons(Nil, b), a)
+2
+Wrapped(Marker, Wrapped(Marker, Plain))
+Link(Some(Link(None)))
+PingMore(PongMore(PingEnd))
+Both((Single, Both((Single, Single))))
+S(Wrap(S(Wrap(Z))))
+Held(Red, Held(Green, Bare))
+Tried(Ok(Safe))
+Tried(Error(Green))
+Bush([Twig, Bush([Twig])])
+Item(1, Some(Item(2, None, Simple)), Linked(Item(3, None, Simple)))
+Up((Marker, (Some(Up((Marker, (None, Marker)))), Marker)))
+1
+false
+Just(U1, Just(U2(Marker, (Marker, Marker)), Done))

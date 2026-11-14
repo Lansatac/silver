@@ -1,0 +1,11 @@
+module forward_support.one
+
+def same(x: Int): Int => 1
+val limit: Int = 1
+private def hidden(): Int => 0
+
+interface Sized {
+    def size(self: Self): Int
+}
+
+def measure<T: Sized>(x: T): Int => size(x)

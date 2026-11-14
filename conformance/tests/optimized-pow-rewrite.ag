@@ -1,0 +1,13 @@
+// `pow` with a base the compiler can see must give what it gives with one it can't.
+import std.math
+
+def main(): Unit {
+    val hidden = [2.0]
+    mutable val differs = 0
+    mutable val x = -300.0
+    for i in 0..30000 {
+        x = x + 0.00149
+        if pow(2.0, x) != pow(hidden[i % 1], x) { differs += 1 }
+    }
+    printl(differs)
+}

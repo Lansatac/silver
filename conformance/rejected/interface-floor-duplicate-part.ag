@@ -1,0 +1,17 @@
+// Each interface is joined once.
+interface Range<T> {
+    def next(range: Self): (T, Self)?
+}
+
+interface Indexed<T> {
+    def length(value: Self): Int
+    def opIndex(value: Self, index: Int): T
+}
+
+def next<T>(xs: [T]): (T, [T])? => if length(xs) == 0 => None else (xs[0], xs[1..])
+
+def twice(xs: [Int]): Range<Int> & Range<Int> => xs
+
+def main(): Unit {
+    printl(twice([1]))
+}

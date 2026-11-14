@@ -1,0 +1,23 @@
+// An invariant's `else` needs a result whose body builds the type the invariant is on.
+interface Range<T> {
+    def next(range: Self): (T, Self)?
+}
+
+interface Indexed<T> {
+    def length(value: Self): Int
+    def opIndex(value: Self, index: Int): T
+}
+
+def next<T>(xs: [T]): (T, [T])? => if length(xs) == 0 => None else (xs[0], xs[1..])
+
+type Bad(n: Int)
+type Small(n: Int) invariant n < 10 else Bad(pick([n])[0])
+
+def pick(xs: [Int]): Range<Int> & Indexed<Int> {
+    val small = Small(1)
+    xs
+}
+
+def main(): Unit {
+    printl(pick([1]))
+}

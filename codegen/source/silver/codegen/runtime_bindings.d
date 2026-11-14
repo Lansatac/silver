@@ -1,6 +1,6 @@
 module silver.codegen.runtime_bindings;
 
-struct RuntimeFunction { string returnType; string[] params; string attributes; }
+struct RuntimeFunction { string returnType; string[] params; string attributes; string returnAttributes; }
 static immutable RuntimeFunction[string] runtime = [
     "silver_print_int":  RuntimeFunction("void", ["i64"]),
     "silver_print_uint": RuntimeFunction("void", ["i64"]),
@@ -25,14 +25,16 @@ static immutable RuntimeFunction[string] runtime = [
     "silver_format_char": RuntimeFunction("void", ["i32", "ptr", "ptr"]),
 
     "silver_read":        RuntimeFunction("i1", ["ptr", "ptr"]),
-    "silver_alloc":       RuntimeFunction("ptr",  ["i64"]),
+    // What lets LLVM drop an allocation nothing reads, and know a new object aliases nothing.
+    "silver_alloc":       RuntimeFunction("ptr",  ["i64"],
+        `allockind("alloc,uninitialized") allocsize(0) "alloc-family"="silver"`, "noalias "),
     "silver_array_append": RuntimeFunction("void", ["ptr", "i64", "ptr", "i64", "i64", "i1 zeroext", "ptr", "ptr"]),
     "silver_array_format": RuntimeFunction("void", ["ptr", "i64", "ptr", "ptr"]),
 
     "silver_string_compare": RuntimeFunction("i32", ["ptr", "i64", "ptr", "i64"]),
-    "silver_panic":       RuntimeFunction("void", ["ptr", "ptr"], "noreturn"),
-    "silver_panic_message": RuntimeFunction("void", ["ptr", "ptr", "i64"], "noreturn"),
-    "silver_exit_error":  RuntimeFunction("void", ["ptr", "i64"], "noreturn"),
+    "silver_panic":       RuntimeFunction("void", ["ptr", "ptr"], "noreturn cold"),
+    "silver_panic_message": RuntimeFunction("void", ["ptr", "ptr", "i64"], "noreturn cold"),
+    "silver_exit_error":  RuntimeFunction("void", ["ptr", "i64"], "noreturn cold"),
 
     "silver_test_start":   RuntimeFunction("void", ["ptr"]),
     "silver_test_begin":   RuntimeFunction("i1", ["i64"]),

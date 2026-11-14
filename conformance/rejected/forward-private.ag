@@ -1,0 +1,6 @@
+// A private member can't be forwarded.
+import forward_support.hides
+
+def main(): Unit {
+    printl(same(1))
+}

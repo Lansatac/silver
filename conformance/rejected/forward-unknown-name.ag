@@ -1,0 +1,6 @@
+// A forward can only list what its module has.
+import forward_support.missing
+
+def main(): Unit {
+    printl(same(1))
+}

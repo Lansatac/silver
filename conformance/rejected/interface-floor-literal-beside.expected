@@ -1,0 +1,2 @@
+T0001: `weighted` returns `(Int, [Int])`, where `(Float, Range<Int>)` is written
+    a literal beside an interface name has its default type, so an integer literal is an `Int` here; write it as the type that's meant, as in `1.0` or `Float(1)`

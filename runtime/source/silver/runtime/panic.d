@@ -6,6 +6,7 @@ import core.stdc.stdio : fflush, fprintf, stderr, stdout;
 import core.stdc.stdlib : exit;
 import core.stdc.string : strlen;
 
+import silver.runtime.memory : SavedRegisters, silver_save_registers;
 import silver.runtime.testing : panicInTest;
 
 /// Prints `message` to stderr after `location`, which says where in the Silver source the failure
@@ -42,5 +43,8 @@ noreturn panic(string message) nothrow
 {
     import std.string : toStringz;
 
+    // In a test, the program carries on from the test's guard.
+    SavedRegisters saved = void;
+    silver_save_registers(&saved);
     silver_panic(null, message.toStringz);
 }

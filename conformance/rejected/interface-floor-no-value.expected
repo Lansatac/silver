@@ -1,0 +1,1 @@
+T0001: `held` is `None`, which doesn't say what type `Range<Int> & Indexed<Int>` stands for in `(Int, Range<Int> & Indexed<Int>)?`; write the type out

@@ -1,0 +1,57 @@
+import forward_support.facade
+
+type Tally(n: Int)
+
+def count(t: Tally): Int => t.n
+
+// A forwarded interface is a bound and a parameter's type.
+def twice<R: Counted>(range: R): Int => total(range) * 2
+def counted(range: Counted): Int => count(range)
+
+def area(shape: Shape): Size => match shape {
+    Circle(r) => 3 * r * r
+    Square(s) => s * s
+}
+
+def main(): Unit {
+    // The array's `first` and the bounded one are ranked as one module's, with the facade's own.
+    printl(first([1, 2, 3]))
+    printl(first(Tally(4)))
+    printl(first("text"))
+    val empty: [Int] = []
+    printl(first(empty))
+
+    // Through the facade, as if it declared them.
+    printl(forward_support.facade.first([7]))
+    printl(forward_support.facade.first(Pile(2)))
+    printl(forward_support.facade.limit + limit)
+    val pile: forward_support.facade.Pile = Pile(5)
+    printl(total(pile))
+    printl(tallest())
+
+    // Types, a sum's members, an alias and a constant.
+    val shapes: [Shape] = [Circle(1), forward_support.facade.Square(2)]
+    for shape in shapes {
+        printl("{describe(shape)} has area {area(shape)}")
+    }
+    val size: Size = limit
+    printl(size)
+
+    // The functions that give a forwarded type its syntax, and a method call.
+    val stack = Stack([1, 2])
+    for item in stack {
+        printl(item)
+    }
+    printl(stack[1])
+    printl(stack.length())
+
+    printl(twice(Tally(3)))
+    printl(counted(Pile(6)))
+
+    val pick: ([Int]) -> Int? = first
+    printl(pick([9]))
+
+    // `forward` is a name like any other here.
+    val forward = 1
+    printl(forward)
+}

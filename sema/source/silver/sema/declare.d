@@ -205,7 +205,16 @@ package final class Declarer
         foreach (param; params)
         {
             Bound[] bounds;
-            foreach (written; param.bounds) bounds ~= resolveBound(written);
+            foreach (written; param.bounds)
+            {
+                auto bound = resolveBound(written);
+                if (bound.valid && bounds.canFind!(b => b.valid && b.decl == bound.decl && b.args == bound.args))
+                {
+                    _collector.reportError(DiagnosticCode.InvalidBound, written.span,
+                        "`%s` is joined to itself here; name each interface once".format(describe(bound)));
+                }
+                bounds ~= bound;
+            }
             if (bounds.length > 0) _typing.bounds[param.id] = bounds;
         }
     }

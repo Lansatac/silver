@@ -1,0 +1,49 @@
+// An element that leaves through `?`, `continue`, `break` or `return` appends nothing, not even
+// the elements before it, and the appends after it carry on from where the array was.
+def push(mutable xs: [Int], v: Int?): Int? {
+    xs ~= [v?]
+    Some(1)
+}
+
+def fill(n: Int): [Int] {
+    mutable val xs: [Int] = []
+    for i in 0..n { _ = push(mutable xs, if i % 2 == 0 => Some(i) else None) }
+    xs
+}
+
+def fillContinue(n: Int): [Int] {
+    mutable val xs: [Int] = []
+    for i in 0..n { xs ~= [i, if i % 2 == 1 { continue } else { i + 1 }] }
+    xs
+}
+
+def fillBreak(n: Int): [Int] {
+    mutable val xs: [Int] = []
+    for i in 0..n { xs ~= [if i == n - 1 { break } else { i }] }
+    xs
+}
+
+def fillReturn(n: Int): [Int] {
+    mutable val xs: [Int] = []
+    for i in 0..n { xs ~= [if i == n - 1 { return xs } else { i }] }
+    xs
+}
+
+def sum(xs: [Int]): Int {
+    mutable val total = 0
+    for x in xs { total += x }
+    total
+}
+
+def main(): Unit {
+    val n = 2000
+    val a = fill(n)
+    printl("{length(a)} {sum(a)}")
+    val b = fillContinue(n)
+    printl("{length(b)} {sum(b)}")
+    val c = fillBreak(n)
+    printl("{length(c)} {sum(c)}")
+    val d = fillReturn(n)
+    printl("{length(d)} {sum(d)}")
+    printl(fillContinue(5))
+}

@@ -1,6 +1,6 @@
 module silver.codegen.gen;
 
-import std.algorithm : all, canFind, filter, fold, map;
+import std.algorithm : all, canFind, count, filter, fold, map;
 import std.array : array, join;
 import std.format : format;
 import std.sumtype : match;
@@ -17,7 +17,7 @@ string generate(const Program program, const SourceMap sources)
     return new Generator(program, sources).emitProgram();
 }
 
-/// The code for one expression and the operand holding its value. Fragments are values: an
+/// The code for one expression and the operands holding its value. Fragments are values: an
 /// expression's fragment is built from its children's, and the parent decides where each one
 /// goes. Evaluation order is the order they're sequenced with `then`. A fragment starts in
 /// whatever block the parent places it in and ends in `endBlock`.
@@ -25,22 +25,30 @@ private struct Fragment
 {
     /// Instructions and labels in order, instructions already indented.
     string[] code;
-    /// A temp (`%.t3`), a constant (`42`) or a global (`@.str.0`). Null for a value with no
-    /// operand, like `()`, and for a statement.
-    string value;
+    /// An operand for each scalar the value is made of, in the order `scalarsOf` gives its type's:
+    /// each a temp (`%.t3`), a constant (`42`) or a global (`@.str.0`). A struct is never one
+    /// operand. None for a value made of nothing, like `()`, and for a statement.
+    const(string)[] operands;
     /// The block control is in after `code` runs, or null when the code opened no block and so
     /// ends in the one it started in.
     string endBlock;
 
+    /// The operand of a value that is one scalar, or null for one made of nothing.
+    string value() const
+    {
+        assert(operands.length <= 1, "a value of several scalars has an operand for each");
+        return operands.length == 0 ? null : operands[0];
+    }
+
     /// A value that needs no code.
     static Fragment constant(string operand)
     {
-        return Fragment(null, operand);
+        return Fragment(null, [operand]);
     }
 
     static Fragment instruction(string text, string value = null)
     {
-        return Fragment(["  " ~ text], value);
+        return Fragment(["  " ~ text], value is null ? null : [value]);
     }
 
     static Fragment store(string type, string value, string pointer)
@@ -78,22 +86,32 @@ private struct Fragment
         return instruction(type == "void" ? "ret void" : "ret %s %s".format(type, value));
     }
 
-    /// This fragment followed by `next`, with `next`'s value.
+    /// This fragment followed by `next`, with `next`'s value. Appending extends the array in place
+    /// when this fragment is the only one that ends there, so building code a step at a time
+    /// doesn't copy what's there at every step. Lines are never changed once written.
     Fragment then(Fragment next) const
     {
-        return Fragment(code ~ next.code, next.value,
-            next.endBlock !is null ? next.endBlock : endBlock);
+        auto joined = cast(string[]) code;
+        if (joined.length == 0) joined = next.code;
+        else joined ~= next.code;
+        return Fragment(joined, next.operands, next.endBlock !is null ? next.endBlock : endBlock);
     }
 
-    /// The same code, with another value, or none for a statement.
+    /// The same code, with another value of one scalar, or none for a statement.
     Fragment withValue(string newValue) const
     {
-        return Fragment(code.dup, newValue, endBlock);
+        return Fragment(cast(string[]) code, newValue is null ? null : [newValue], endBlock);
+    }
+
+    /// The same code, with another value.
+    Fragment withOperands(const string[] newOperands) const
+    {
+        return Fragment(cast(string[]) code, newOperands, endBlock);
     }
 }
 
-/// Where each local of one function lives: a pointer for every local with an operand, which is
-/// its own stack slot, or for a mutable param, its caller's.
+/// Where each local of one function lives: a pointer for every local that is made of something,
+/// which is its own stack slot, or for a mutable param, its caller's.
 private struct Slots
 {
     string[const Local] pointers;
@@ -118,7 +136,7 @@ private struct Slots
         pointers[local] = pointer;
     }
 
-    /// Where `local` lives, or null for one with no operand.
+    /// Where `local` lives, or null for one made of nothing.
     string opIndex(const Local local) const
     {
         auto pointer = local in pointers;
@@ -139,8 +157,8 @@ private final class FunctionState
 {
     /// Where every local lives, fixed before any of the function's code is generated.
     const Slots slots;
-    /// The function's LLVM return type, which `Return` needs.
-    string returnType;
+    /// The scalars of the function's return type, which `Return` needs.
+    const(string)[] returnScalars;
     /// The blocks of each loop being generated, by its label.
     LoopTargets[size_t] loops;
     /// Whether the function has the runtime hand back a String or buffer, which comes through
@@ -151,11 +169,14 @@ private final class FunctionState
 
     enum outData = "%.out.data";
     enum outLength = "%.out.length";
+    /// Where a function returning several scalars keeps its result, and the block that returns it.
+    enum resultSlot = "%.result";
+    enum returnBlock = ".return";
 
-    this(Slots slots, string returnType)
+    this(Slots slots, const string[] returnScalars)
     {
         this.slots = slots;
-        this.returnType = returnType;
+        this.returnScalars = returnScalars;
     }
 
     /// A fresh SSA name. Silver identifiers can't contain `.`, so names that start with one
@@ -196,12 +217,6 @@ private final class FunctionState
         return result("extractvalue %s %s, %s".format(type, aggregate, index));
     }
 
-    /// `aggregate`, of the struct type `type`, with element `index` set to `value` of `elementType`.
-    Fragment insert(string type, string aggregate, string elementType, string value, size_t index)
-    {
-        return result("insertvalue %s %s, %s %s, %s".format(type, aggregate, elementType, value, index));
-    }
-
     /// Calls `callee` with `arguments`, each already written with its type (`i64 %x`). The value
     /// is the result's temp, or null for a `void` function. `convention` is written before the
     /// return type when given.
@@ -213,14 +228,14 @@ private final class FunctionState
     }
 }
 
-/// The LLVM type of every String and array: where element zero is, and how many elements.
-private enum sliceLayout = "{ ptr, i64 }";
-/// The LLVM type of every function value: its function's descriptor, then the environment the
-/// code takes after its params.
-private enum closureLayout = "{ ptr, ptr }";
+/// The scalars of every String and array: where element zero is, and how many elements.
+private immutable sliceScalars = ["ptr", "i64"];
+/// The scalars of every function value: its function's descriptor, then the environment the code
+/// takes after its params.
+private immutable closureScalars = ["ptr", "ptr"];
 /// A constant for each function used as a value: the code a closure calls, then the String a
 /// function value prints as.
-private enum descriptorLayout = "{ ptr, " ~ sliceLayout ~ " }";
+private immutable descriptorScalars = ["ptr", "ptr", "i64"];
 
 private final class Generator
 {
@@ -235,6 +250,7 @@ private final class Generator
     private string[string] _foreign;
     private string[] _globals;
     private string[string] _stringGlobals;
+    private const(string)[][Type] _scalars;
     /// The thunk letting a function that isn't a lambda be called through a closure, by the
     /// function's index, once one has been asked for.
     private string[size_t] _thunks;
@@ -243,6 +259,11 @@ private final class Generator
     private string[string] _panicsGuards;
     /// The descriptor of each function used as a value, by the function's index.
     private string[size_t] _descriptors;
+    private bool[Type] _boxed;
+    /// The name of each struct type, by what it's made of, and their definitions.
+    private string[immutable(string)[]] _structs;
+    private string[] _structDefinitions;
+    private bool[Type] _scalarsPending;
 
     this(const ref Program program, const SourceMap sources)
     {
@@ -259,9 +280,16 @@ private final class Generator
         }
         auto entry = emitEntry();
         // After the functions and the entry, so every runtime call and string literal has been seen.
-        return emitDeclares() ~ _globals.map!(s => s ~ "\n").join ~ "\n" ~ functions.join("\n") ~ "\n"
+        return _structDefinitions.map!(s => s ~ "\n").join ~ emitDeclares() ~ functionAttributes
+            ~ _globals.map!(s => s ~ "\n").join ~ "\n"
+            ~ functions.join("\n") ~ "\n"
             ~ _thunkDefinitions.join("\n") ~ "\n" ~ entry;
     }
+
+    /// On every Silver function. Nothing unwinds through one: a panic exits, or in a test jumps,
+    /// and the runtime's functions are `nothrow`. The unwind tables stay, for a debugger and for
+    /// a D `Error` leaving the runtime, which `nothrow` doesn't rule out.
+    private enum functionAttributes = "attributes #0 = { nounwind uwtable }\n";
 
     /// `silver_main`, which the runtime calls once druntime has started.
     private string emitEntry()
@@ -312,7 +340,8 @@ private final class Generator
         foreach (name; _usedRuntime.byKey)
         {
             auto f = runtime[name];
-            text ~= "declare %s @%s(%s) %s\n".format(f.returnType, name, f.params.join(", "), f.attributes);
+            text ~= "declare %s%s @%s(%s) nounwind %s\n".format(f.returnAttributes, f.returnType, name, f.params.join(", "),
+                f.attributes);
         }
         foreach (line; _foreign.byValue)
         {
@@ -327,19 +356,20 @@ private final class Generator
 
     private string emitFunction(size_t index, const Function func)
     {
-        auto returnType = llvmType(func.returnType, func.body.span);
-        _function = new FunctionState(planSlots(func), returnType);
-        auto stackCheck = emitStackCheck(func.body.span);
+        auto span = func.body.span;
+        auto returnType = llvmType(func.returnType, span);
+        _function = new FunctionState(planSlots(func), scalarsOf(func.returnType, span));
+        auto stackCheck = emitStackCheck(span);
 
         string[] params;
         Fragment receive;
         foreach (param; func.params)
         {
-            auto type = paramType(param, func.body.span);
-            if (type is null) continue;
-            params ~= type ~ " " ~ incoming(param);
+            auto passed = paramTypes(param, span);
+            auto names = incoming(param, passed.length);
+            foreach (i, type; passed) params ~= type ~ " " ~ names[i];
             // A mutable param's slot is its caller's, which it was passed.
-            if (!param.mutable) receive = receive.then(Fragment.store(type, incoming(param), _function.slots[param]));
+            if (!param.mutable) receive = receive.then(storeScalars(passed, _function.slots[param], 0, names));
         }
         if (func.origin == FunctionOrigin.lambda)
         {
@@ -347,53 +377,320 @@ private final class Generator
             receive = receive.then(receiveCaptures(func));
         }
 
-        auto body = emitExpr(func.body);
-        auto ending = func.body.type == _program.types.never ? Fragment.unreachable() : Fragment.ret(returnType, body.value);
+        auto body = isStruct(returnType)
+            ? emitInto(func.body, _function.returnScalars, FunctionState.resultSlot)
+            : emitExpr(func.body);
         auto whole = Fragment.label(".entry")
             .then(stackCheck)
             .then(receive)
             .then(body)
-            .then(ending);
+            .then(emitEnding(body.operands, func.body.type == _program.types.never));
 
         // The allocas go right after the entry label.
         auto allocas = _function.slots.allocas.dup;
+        if (isStruct(returnType)) allocas ~= "  %s = alloca %s".format(FunctionState.resultSlot, returnType);
         if (_function.usesOutSlots)
         {
             allocas ~= ["  %s = alloca ptr".format(FunctionState.outData), "  %s = alloca i64".format(FunctionState.outLength)];
         }
         auto lines = whole.code[0 .. 1] ~ allocas ~ whole.code[1 .. $];
-        auto linkage = func.origin == FunctionOrigin.declared ? "" : "private ";
-        return "define %s%s %s(%s) {\n%s\n}\n".format(linkage, returnType, mangled(index), params.join(", "), lines.join("\n"));
+        // Only `silver_main` is called from outside the module.
+        auto linkage = func.origin == FunctionOrigin.declared ? "internal " : "private ";
+        return "define %s%s %s(%s) #0 {\n%s\n}\n".format(linkage, returnType, mangled(index), params.join(", "), lines.join("\n"));
     }
 
-    /// The LLVM parameter that receives `param`.
-    private static string incoming(const Local param)
+    /// How the function ends, `operands` being its body's value. LLVM returns one value, so several
+    /// scalars go back as a struct, which the caller takes apart at once. The body and every
+    /// `Return` have written them to the result slot, and the struct is built from it in one block,
+    /// so that a caller the function is inlined into gets each scalar and not a phi of structs.
+    private Fragment emitEnding(const string[] operands, bool neverEnds)
     {
-        return "%" ~ param.name;
+        auto scalars = _function.returnScalars;
+        auto returnType = structOf(scalars);
+        if (!isStruct(returnType))
+        {
+            return neverEnds ? Fragment.unreachable() : Fragment.ret(returnType, operands.length == 0 ? null : operands[0]);
+        }
+        auto last = neverEnds ? Fragment.unreachable() : Fragment.jump(FunctionState.returnBlock);
+        auto built = Fragment.constant("undef");
+        foreach (i, scalar; scalars)
+        {
+            auto field = fieldPointer(returnType, FunctionState.resultSlot, i);
+            auto held = _function.load(stored(scalar), field.value);
+            built = built.then(field).then(held)
+                .then(_function.result("insertvalue %s %s, %s %s, %s".format(returnType, built.value, stored(scalar), held.value, i)));
+        }
+        return last.then(Fragment.label(FunctionState.returnBlock)).then(built).then(Fragment.ret(returnType, built.value));
     }
 
-    /// The struct a closure's environment points to: each capture with an operand, in order.
-    private string environmentLayout(const Function func)
+    /// The LLVM type holding `scalars`: nothing, the one scalar, or a struct of them in order. A
+    /// struct is how a value is laid out in memory and returned, and nothing else: LLVM's passes
+    /// don't see through a struct that is an operand, so every other value is its scalars. Each
+    /// struct is defined once and used by name, or every instruction that reaches into a wide one
+    /// would spell out all of it. An `i1` is an `i8` in one: copying a struct moves bytes, and LLVM
+    /// keeps a slot in memory when it's written as a bit and copied as a byte.
+    private string structOf(const string[] scalars)
     {
-        auto stored = func.captures.map!(c => llvmType(c.type, func.body.span)).filter!(t => t != "void");
-        return "{ %-(%s, %) }".format(stored);
+        if (scalars.length == 0) return "void";
+        if (scalars.length == 1) return scalars[0];
+        if (auto known = cast(immutable(string)[]) scalars in _structs) return *known;
+        auto name = "%%T.%s".format(_structs.length);
+        _structs[scalars.idup] = name;
+        _structDefinitions ~= "%s = type { %-(%s, %) }".format(name, scalars.map!(s => stored(s)));
+        return name;
     }
 
-    /// A lambda's captures, loaded from its environment into their slots.
+    /// The type a scalar has as a struct's field.
+    private static string stored(string scalar)
+    {
+        return scalar == "i1" ? "i8" : scalar;
+    }
+
+    /// The scalar `field` holds, a struct's field of the type `scalar` is stored as.
+    private Fragment fromStored(string scalar, string field)
+    {
+        return scalar == "i1" ? _function.convert("trunc", "i8", field, "i1") : Fragment.constant(field);
+    }
+
+    /// `operand`, a `scalar`, as a struct's field holds it.
+    private Fragment toStored(string scalar, string operand)
+    {
+        if (scalar != "i1") return Fragment.constant(operand);
+        if (operand == "true") return Fragment.constant("1");
+        if (operand == "false") return Fragment.constant("0");
+        if (operand == "undef") return Fragment.constant("undef");
+        return _function.convert("zext", "i1", operand, "i8");
+    }
+
+    private static bool isStruct(string type)
+    {
+        import std.algorithm : startsWith;
+
+        return type.startsWith("%T.");
+    }
+
+    /// The `count` scalars from `offset` on of the value `pointer` points to, which is made of
+    /// `layout`.
+    private Fragment loadScalars(const string[] layout, string pointer, size_t offset, size_t count)
+    {
+        if (count == 0) return Fragment.init;
+        if (layout.length == 1) return _function.load(layout[0], pointer);
+        auto type = structOf(layout);
+        Fragment code;
+        string[] operands;
+        foreach (at; offset .. offset + count)
+        {
+            auto field = fieldPointer(type, pointer, at);
+            auto held = _function.load(stored(layout[at]), field.value);
+            auto value = fromStored(layout[at], held.value);
+            code = code.then(field).then(held).then(value);
+            operands ~= value.value;
+        }
+        return code.withOperands(operands);
+    }
+
+    /// Writes `operands` from `offset` on of the value `pointer` points to, which is made of `layout`.
+    private Fragment storeScalars(const string[] layout, string pointer, size_t offset, const string[] operands)
+    {
+        if (operands.length == 0) return Fragment.init;
+        if (layout.length == 1) return Fragment.store(layout[0], operands[0], pointer);
+        auto type = structOf(layout);
+        Fragment code;
+        foreach (i, operand; operands)
+        {
+            auto field = fieldPointer(type, pointer, offset + i);
+            auto held = toStored(layout[offset + i], operand);
+            code = code.then(field).then(held).then(Fragment.store(stored(layout[offset + i]), held.value, field.value));
+        }
+        return code.withValue(null);
+    }
+
+    /// Copies a whole value made of `layout` from `source` to `target`, both in memory. A wide one
+    /// never becomes operands, so it costs one instruction. A narrow one is moved a scalar at a
+    /// time: unoptimized, `memcpy` is a call, since its size isn't a literal here.
+    private Fragment move(const string[] layout, string target, string source)
+    {
+        if (layout.length <= narrowest)
+        {
+            auto value = loadScalars(layout, source, 0, layout.length);
+            return value.then(storeScalars(layout, target, 0, value.operands));
+        }
+        useIntrinsic(memcpyDeclaration);
+        return Fragment.instruction("call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)".format(
+            target, source, elementSizeOf(structOf(layout))));
+    }
+
+    private enum memcpyDeclaration = "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)";
+    /// The most scalars a value is made of for `move` to load and store each.
+    private enum narrowest = 8;
+
+    /// A value on its way to memory, once `code` has run: still where it was, at `pointer`, or in
+    /// `operands`.
+    private struct Source
+    {
+        Fragment code;
+        string pointer;
+        const(string)[] operands;
+    }
+
+    /// Evaluates `e`, whose value is made of `layout`, for `write` to put somewhere. A value that is
+    /// already in memory stays there until then, so nothing that assigns a local may run in between.
+    private Source sourceOf(const Expr e, const string[] layout)
+    {
+        return e.kind.match!(
+            (const Block block) {
+                if (block.result is null) return sourceOfValue(e, layout);
+                Fragment statements;
+                foreach (statement; block.statements) statements = statements.then(emitStmt(statement));
+                auto result = sourceOf(*block.result, layout);
+                return Source(statements.then(result.code), result.pointer, result.operands);
+            },
+            _ => sourceOfValue(e, layout),
+        );
+    }
+
+    private Source sourceOfValue(const Expr e, const string[] layout)
+    {
+        auto place = placeOf(e);
+        if (place.pointer is null)
+        {
+            auto value = emitExpr(e);
+            return Source(value, null, value.operands);
+        }
+        if (layout.length > narrowest && place.count == layout.length && place.layout == layout)
+        {
+            return Source(place.code, place.pointer);
+        }
+        auto value = read(place);
+        return Source(value, null, value.operands);
+    }
+
+    private Fragment write(Source source, const string[] layout, string pointer)
+    {
+        if (source.pointer !is null) return move(layout, pointer, source.pointer);
+        // A `Never` has no operands, and what follows it is never reached.
+        if (source.operands.length == 0) return Fragment.init;
+        return storeScalars(layout, pointer, 0, source.operands);
+    }
+
+    /// Evaluates `e` and writes its value, which is made of `layout`, to `pointer`, which nothing
+    /// `e` runs can read: a new local's slot, or memory that has just been allocated. So a record
+    /// with a field replaced is copied there whole and the field written over it, and each arm of
+    /// an `If` writes its own value there.
+    private Fragment emitInto(const Expr e, const string[] layout, string pointer)
+    {
+        Fragment whole()
+        {
+            auto source = sourceOf(e, layout);
+            return source.code.then(write(source, layout, pointer));
+        }
+
+        return e.kind.match!(
+            (const Update update) {
+                if (!isInline(e.type) || layout.length == 1) return whole();
+                auto object = emitInto(*update.object, layout, pointer);
+                auto at = storedAt(e.type, update.index, e.span);
+                auto value = emitExpr(*update.value);
+                auto replacement = at.count == 0 ? null : operandsOf(*update.value, value.operands, at.count);
+                return object.then(value).then(storeScalars(layout, pointer, at.offset, replacement));
+            },
+            (const Construct construct) {
+                // A record around one value is laid out as that value is.
+                auto fields = fieldTypes(e.type);
+                if (!isInline(e.type) || fields.count!(f => !isEmpty(f)) != 1) return whole();
+                Fragment code;
+                foreach (i, ref field; construct.fields)
+                {
+                    code = code.then(isEmpty(fields[i]) ? emitExpr(field).withValue(null) : emitInto(field, layout, pointer));
+                }
+                return code;
+            },
+            (const Block block) {
+                if (block.result is null) return whole();
+                Fragment statements;
+                foreach (statement; block.statements) statements = statements.then(emitStmt(statement));
+                return statements.then(emitInto(*block.result, layout, pointer));
+            },
+            (const If if_) {
+                auto condition = emitExpr(*if_.condition);
+                auto thenLabel = _function.newLabel("then");
+                auto elseLabel = _function.newLabel("else");
+                auto mergeLabel = _function.newLabel("merge");
+                return condition
+                    .then(Fragment.branch(condition.value, thenLabel, elseLabel))
+                    .then(Fragment.label(thenLabel)).then(emitInto(*if_.trueBody, layout, pointer)).then(Fragment.jump(mergeLabel))
+                    .then(Fragment.label(elseLabel)).then(emitInto(*if_.falseBody, layout, pointer)).then(Fragment.jump(mergeLabel))
+                    .then(Fragment.label(mergeLabel));
+            },
+            _ => whole(),
+        );
+    }
+
+    /// A value of `scalars` that is `first` when control comes from the block `firstBlock`, and
+    /// `second` from `secondBlock`.
+    private Fragment merge(const string[] scalars, const string[] first, string firstBlock, const string[] second,
+        string secondBlock)
+    {
+        Fragment code;
+        string[] operands;
+        foreach (i, scalar; scalars)
+        {
+            auto phi = _function.result("phi %s [ %s, %%%s ], [ %s, %%%s ]".format(scalar, first[i], firstBlock,
+                second[i], secondBlock));
+            code = code.then(phi);
+            operands ~= phi.value;
+        }
+        return code.withOperands(operands);
+    }
+
+    /// A zero for each of `scalars`.
+    private static string[] zeros(const string[] scalars)
+    {
+        return scalars.map!(s => s == "ptr" ? "null" : s == "double" ? "0.0" : s == "i1" ? "false" : "0").array;
+    }
+
+    /// The LLVM parameters that receive `param`, which is passed as `count` arguments.
+    private static string[] incoming(const Local param, size_t count)
+    {
+        import std.range : iota;
+
+        if (count == 1) return ["%" ~ param.name];
+        return iota(count).map!(i => "%%%s.%s".format(param.name, i)).array;
+    }
+
+    /// What a closure's environment points to: each capture that is made of something, in order,
+    /// laid out as it is in a slot, so that one is copied to the other whole.
+    private const(string)[] environmentFields(const Function func)
+    {
+        const(string)[] fields;
+        foreach (capture; func.captures)
+        {
+            auto type = llvmType(capture.type, func.body.span);
+            if (type != "void") fields ~= type;
+        }
+        return fields;
+    }
+
+    /// Where field `index` is in the environment `pointer` points to, which holds `fields`.
+    private Fragment environmentField(const string[] fields, string pointer, size_t index)
+    {
+        return fields.length == 1 ? Fragment.constant(pointer) : fieldPointer(structOf(fields), pointer, index);
+    }
+
+    /// A lambda's captures, copied from its environment into their slots.
     private Fragment receiveCaptures(const Function func)
     {
-        auto layout = environmentLayout(func);
+        auto fields = environmentFields(func);
         Fragment code;
         size_t at = 0;
         foreach (capture; func.captures)
         {
-            auto type = llvmType(capture.type, func.body.span);
-            if (type == "void") continue;
-            auto pointer = fieldPointer(layout, "%.env", at++);
-            auto value = _function.load(type, pointer.value);
-            code = code.then(pointer).then(value).then(Fragment.store(type, value.value, _function.slots[capture]));
+            auto scalars = scalarsOf(capture.type, func.body.span);
+            if (scalars.length == 0) continue;
+            auto held = environmentField(fields, "%.env", at++);
+            code = code.then(held).then(move(scalars, _function.slots[capture], held.value));
         }
-        return code;
+        return code.withValue(null);
     }
 
     /// Where every local of `func` lives. Slots are allocated in the order their code will be
@@ -403,10 +700,10 @@ private final class Generator
         Slots slots;
         foreach (param; func.params)
         {
-            auto type = paramType(param, func.body.span);
-            if (type is null) continue;
-            if (param.mutable) slots.bind(param, incoming(param));
-            else slots.allocate(param, type);
+            auto passed = paramTypes(param, func.body.span);
+            if (passed.length == 0) continue;
+            if (param.mutable) slots.bind(param, incoming(param, 1)[0]);
+            else slots.allocate(param, structOf(passed));
         }
         foreach (capture; func.captures)
         {
@@ -504,25 +801,34 @@ private final class Generator
         return e.kind.match!(kind => emit(e, kind));
     }
 
-    /// Each of `exprs` in order, with the operand of each, null for one with none.
-    private Fragment emitAll(const Expr[] exprs, out string[] operands)
+    /// Each of `exprs` in order, with the operands of each.
+    private Fragment emitAll(const Expr[] exprs, out const(string)[][] operands)
     {
         Fragment code;
         foreach (ref expr; exprs)
         {
             auto value = emitExpr(expr);
             code = code.then(value);
-            operands ~= operandOf(expr, value);
+            operands ~= value.operands;
         }
         return code.withValue(null);
     }
 
-    /// `value`'s operand, as the parent uses it. A `Never` has none, and the code after it is never
-    /// reached, so `undef` stands in for whatever type the parent wants.
+    /// The operands of `e`'s value, as a parent that wants `count` scalars uses them. A `Never` has
+    /// none, and the code after it is never reached, so `undef` stands in for each.
+    private const(string)[] operandsOf(const Expr e, const string[] operands, size_t count)
+    {
+        import std.range : repeat;
+
+        if (operands.length == count) return operands;
+        assert(operands.length == 0 && e.type == _program.types.never, "lowering gives every value its type's scalars");
+        return "undef".repeat(count).array;
+    }
+
+    /// The operand of `e`'s value, for a parent that wants one scalar.
     private string operandOf(const Expr e, Fragment value)
     {
-        if (value.value is null && e.type == _program.types.never) return "undef";
-        return value.value;
+        return operandsOf(e, value.operands, 1)[0];
     }
 
     private Fragment emit(const Expr e, const UnitLit)
@@ -561,19 +867,20 @@ private final class Generator
 
     private Fragment emit(const Expr e, const StringLit literal)
     {
-        return Fragment.constant(stringConstant(literal.value));
+        return Fragment.init.withOperands(stringConstant(literal.value));
     }
 
     /// A String constant: a private global holding `text`'s bytes, with no terminator.
-    private string stringConstant(string text)
+    private string[] stringConstant(string text)
     {
-        if (text.length == 0) return "zeroinitializer";
-        if (auto existing = text in _stringGlobals) return *existing;
+        import std.conv : to;
+
+        if (text.length == 0) return ["null", "0"];
+        if (auto existing = text in _stringGlobals) return [*existing, text.length.to!string];
         auto name = "@.str.%s".format(_globals.length);
         _globals ~= "%s = private unnamed_addr constant [%s x i8] c\"%s\"".format(name, text.length, escaped(text));
-        auto operand = "{ ptr %s, i64 %s }".format(name, text.length);
-        _stringGlobals[text] = operand;
-        return operand;
+        _stringGlobals[text] = name;
+        return [name, text.length.to!string];
     }
 
     /// The body of an LLVM `c"..."`: printable ASCII as is, every other byte as `\XX`.
@@ -588,22 +895,41 @@ private final class Generator
         return result;
     }
 
-    /// A local's value, loaded from its slot. A local with no operand, like a Unit one, has no slot.
+    /// A local's value, loaded from its slot. A local made of nothing, like a Unit one, has no slot.
     private Fragment emit(const Expr e, const LocalRef use)
     {
-        auto slot = _function.slots[use.local];
-        if (slot is null) return Fragment.init;
-        return _function.load(llvmType(use.local.type, e.span), slot);
+        auto place = placeOf(e);
+        return place.pointer is null ? Fragment.init : read(place);
     }
 
     private Fragment emit(const Expr e, const Call call)
     {
         auto func = _program.functions[call.target];
-        auto params = func.params.map!(p => paramType(p, e.span)).array;
-        auto arguments = emitArguments(call.args, params, func.params.map!(p => p.mutable).array);
-        auto called = arguments.code.then(_function.call(llvmType(func.returnType, e.span), mangled(call.target),
-            arguments.operands));
+        Type[] types;
+        foreach (param; func.params) types ~= param.type;
+        auto arguments = emitArguments(call.args, types, func.params.map!(p => p.mutable).array, e.span);
+        auto called = arguments.code.then(callFunction(func.returnType, mangled(call.target), arguments.operands, e.span));
         return endIfNever(called, e.type);
+    }
+
+    /// Calls `callee`, which returns a value of `type`. Several scalars come back as a struct,
+    /// which is taken apart at once.
+    private Fragment callFunction(Type type, string callee, const string[] arguments, Span span)
+    {
+        auto scalars = scalarsOf(type, span);
+        auto returned = structOf(scalars);
+        auto called = _function.call(returned, callee, arguments);
+        if (!isStruct(returned)) return called;
+        auto fields = called;
+        string[] operands;
+        foreach (i; 0 .. scalars.length)
+        {
+            auto held = _function.extract(returned, called.value, i);
+            auto field = fromStored(scalars[i], held.value);
+            fields = fields.then(held).then(field);
+            operands ~= field.value;
+        }
+        return fields.withOperands(operands);
     }
 
     private struct Arguments
@@ -612,45 +938,45 @@ private final class Generator
         string[] operands;
     }
 
-    /// Arguments as a call passes them, and their code. `params` is how each is passed, from
-    /// `passedAs`, with null for one that's left out, and `mutables` which are mutable.
-    private Arguments emitArguments(const Expr[] args, string[] params, const bool[] mutables)
+    /// Arguments as a call passes them, each written with its type, and their code. `types` is the
+    /// type of each param, and `mutables` which are mutable.
+    private Arguments emitArguments(const Expr[] args, const Type[] types, const bool[] mutables, Span span)
     {
         Arguments result;
         foreach (i, ref arg; args)
         {
-            auto type = params[i];
+            auto passed = passedAs(types[i], mutables[i], span);
             if (mutables[i])
             {
                 // Core passes a mutable local here, and the callee writes through its slot.
-                if (type is null) continue;
+                if (passed.length == 0) continue;
                 auto local = arg.kind.match!((const LocalRef use) => use.local, _ => cast(const(Local)) null);
                 assert(local !is null, "lowering passes a local to a mutable param");
                 result.operands ~= "ptr " ~ _function.slots[local];
                 continue;
             }
-            // Evaluated even when it has no operand, for what it does.
+            // Evaluated even when it's made of nothing, for what it does.
             auto value = emitExpr(arg);
             result.code = result.code.then(value);
-            if (type !is null) result.operands ~= type ~ " " ~ operandOf(arg, value);
+            foreach (at, operand; operandsOf(arg, value.operands, passed.length)) result.operands ~= passed[at] ~ " " ~ operand;
         }
         result.code = result.code.withValue(null);
         return result;
     }
 
-    /// How `param` is passed: as its LLVM type, as a `ptr` to the caller's slot when it's mutable,
-    /// or not at all, which is null, when its type has no operand. Definitions and calls agree
-    /// because both ask this.
-    private string paramType(const Local param, Span span)
+    /// The LLVM types of the arguments `param` is passed as. Definitions and calls agree because
+    /// both ask this.
+    private const(string)[] paramTypes(const Local param, Span span)
     {
         return passedAs(param.type, param.mutable, span);
     }
 
-    private string passedAs(Type type, bool mutable, Span span)
+    /// How a param of `type` is passed: an argument for each of its scalars, or one `ptr` to the
+    /// caller's slot when it's mutable. A type made of nothing isn't passed at all.
+    private const(string)[] passedAs(Type type, bool mutable, Span span)
     {
-        auto llType = llvmType(type, span);
-        if (llType == "void") return null;
-        return mutable ? "ptr" : llType;
+        auto scalars = scalarsOf(type, span);
+        return mutable && scalars.length > 0 ? ["ptr"] : scalars;
     }
 
     /// `code`, followed by the end of its block when `type` is `Never`: whatever follows is never
@@ -666,19 +992,13 @@ private final class Generator
     {
         auto signature = functionData(call.callee.type);
         auto closure = emitExpr(*call.callee);
-        auto descriptor = _function.extract(closureLayout, closure.value, 0);
-        auto code = _function.load("ptr", descriptor.value);
-        auto env = _function.extract(closureLayout, closure.value, 1);
-        string[] params;
+        auto parts = operandsOf(*call.callee, closure.operands, 2);
+        auto code = _function.load("ptr", parts[0]);
         bool[] mutables;
-        foreach (i, param; signature.params)
-        {
-            params ~= passedAs(param, signature.isMutable(i), e.span);
-            mutables ~= signature.isMutable(i);
-        }
-        auto arguments = emitArguments(call.args, params, mutables);
-        auto called = closure.then(descriptor).then(code).then(env).then(arguments.code)
-            .then(_function.call(llvmType(signature.ret, e.span), code.value, arguments.operands ~ ("ptr " ~ env.value)));
+        foreach (i; 0 .. signature.params.length) mutables ~= signature.isMutable(i);
+        auto arguments = emitArguments(call.args, signature.params, mutables, e.span);
+        auto called = closure.then(code).then(arguments.code)
+            .then(callFunction(signature.ret, code.value, arguments.operands ~ ("ptr " ~ parts[1]), e.span));
         return endIfNever(called, e.type);
     }
 
@@ -688,22 +1008,29 @@ private final class Generator
     {
         auto func = _program.functions[closure.target];
         auto descriptor = descriptorOf(closure.target, e.span);
-        if (func.origin != FunctionOrigin.lambda) return Fragment.constant("{ ptr %s, ptr null }".format(descriptor));
-        auto layout = environmentLayout(func);
-        string[] operands;
-        auto values = emitAll(closure.captures, operands);
-        if (layout == "{  }") return values.withValue("{ ptr %s, ptr null }".format(descriptor));
+        if (func.origin != FunctionOrigin.lambda) return Fragment.init.withOperands([descriptor, "null"]);
+        auto fields = environmentFields(func);
+        if (fields.length == 0)
+        {
+            const(string)[][] operands;
+            return emitAll(closure.captures, operands).withOperands([descriptor, "null"]);
+        }
 
-        auto env = alloc(layout);
-        auto result = values.then(env);
+        auto env = alloc(structOf(fields));
+        auto result = env;
         size_t at = 0;
         foreach (i, capture; func.captures)
         {
-            if (operands[i] is null) continue;
-            auto pointer = fieldPointer(layout, env.value, at++);
-            result = result.then(pointer).then(Fragment.store(llvmType(capture.type, e.span), operands[i], pointer.value));
+            auto scalars = scalarsOf(capture.type, e.span);
+            if (scalars.length == 0)
+            {
+                result = result.then(emitExpr(closure.captures[i]));
+                continue;
+            }
+            auto held = environmentField(fields, env.value, at++);
+            result = result.then(held).then(emitInto(closure.captures[i], scalars, held.value));
         }
-        return result.then(_function.insert(closureLayout, "{ ptr %s, ptr undef }".format(descriptor), "ptr", env.value, 1));
+        return result.withOperands([descriptor, env.value]);
     }
 
     /// The descriptor of function `target`, which a closure of it points to. A lambda's code takes
@@ -716,7 +1043,8 @@ private final class Generator
         auto name = "@\".fn.%s\"".format(target);
         _descriptors[target] = name;
         auto printed = stringConstant(func.printedName);
-        _globals ~= "%s = private constant %s { ptr %s, %s %s }".format(name, descriptorLayout, code, sliceLayout, printed);
+        _globals ~= "%s = private constant %s { ptr %s, ptr %s, i64 %s }".format(name, structOf(descriptorScalars), code,
+            printed[0], printed[1]);
         return name;
     }
 
@@ -729,16 +1057,15 @@ private final class Generator
 
         auto func = _program.functions[target];
         string[] declared;
-        foreach (i, param; func.params)
+        foreach (param; func.params)
         {
-            auto type = paramType(param, span);
-            if (type !is null) declared ~= "%s %%.a%s".format(type, i);
+            foreach (type; paramTypes(param, span)) declared ~= "%s %%.a%s".format(type, declared.length);
         }
         auto returned = llvmType(func.returnType, span);
         auto body = returned == "void"
             ? "  call void %s(%s)\n  ret void\n".format(mangled(target), declared.join(", "))
             : "  %%.r = call %s %s(%s)\n  ret %s %%.r\n".format(returned, mangled(target), declared.join(", "), returned);
-        _thunkDefinitions ~= "define private %s %s(%s) {\n.entry:\n%s}\n".format(returned, name,
+        _thunkDefinitions ~= "define private %s %s(%s) #0 {\n.entry:\n%s}\n".format(returned, name,
             (declared ~ "ptr %.env").join(", "), body);
         return name;
     }
@@ -760,7 +1087,9 @@ private final class Generator
             operands ~= param ~ " " ~ operandOf(arg, value);
         }
 
-        auto declaration = "declare ccc %s @%s(%s)%s".format(returnType, call.symbol, params.join(", "),
+        // `nobuiltin`, or LLVM takes a native named like a C library function for that function, and
+        // works out or rewrites calls to it with arithmetic of its own, which rounds differently.
+        auto declaration = "declare ccc %s @%s(%s) nobuiltin%s".format(returnType, call.symbol, params.join(", "),
             e.type == _program.types.never ? " noreturn" : "");
         if (call.symbol in runtime) return notImplemented("a native named like the runtime's own " ~ call.symbol, e.span);
         if (auto existing = call.symbol in _foreign)
@@ -822,24 +1151,8 @@ private final class Generator
         auto value = emitExpr(arg);
         if (arg.type == types.never) return value;
         auto name = "silver_%s_%s".format(call.intrinsic.to!string, runtimeSuffix(arg.type));
-        string[] operands;
-        if (arg.type == types.string_)
-        {
-            auto parts = sliceParts(value.value);
-            value = value.then(parts.code);
-            operands = [parts.data, parts.length];
-        }
-        else if (value.value !is null)
-        {
-            auto argument = value.value;
-            if (types.isInteger(arg.type))
-            {
-                value = value.then(widened(arg.type, argument, arg.span));
-                argument = value.value;
-            }
-            operands = [argument];
-        }
-        return value.then(callRuntime(name, operands)).withValue(null);
+        if (types.isInteger(arg.type)) value = value.then(widened(arg.type, value.value, arg.span));
+        return value.then(callRuntime(name, value.operands)).withValue(null);
     }
 
     /// The suffix for an argument of `type` passed as `Any`. Every integer is `int` or `uint`.
@@ -862,10 +1175,7 @@ private final class Generator
         _function.usesOutSlots = true;
         auto present = callRuntime("silver_read", [FunctionState.outData, FunctionState.outLength]);
         auto text = loadOutSlice();
-        auto layout = optionLayout(sliceLayout);
-        auto tagged = _function.insert(layout, "undef", "i1", present.value, 0);
-        auto whole = _function.insert(layout, tagged.value, sliceLayout, text.value, 1);
-        return present.then(text).then(tagged).then(whole);
+        return present.then(text).withOperands(present.value ~ text.operands);
     }
 
     /// The String or array a runtime call has just written to the out slots.
@@ -873,11 +1183,11 @@ private final class Generator
     {
         auto data = _function.load("ptr", FunctionState.outData);
         auto length = _function.load("i64", FunctionState.outLength);
-        return data.then(length).then(buildSlice(data.value, length.value));
+        return data.then(length).withOperands([data.value, length.value]);
     }
 
     /// A call to the runtime function `name`, which hands back a String through the out slots.
-    private Fragment callRuntimeForString(string name, string[] operands)
+    private Fragment callRuntimeForString(string name, const string[] operands)
     {
         _function.usesOutSlots = true;
         return callRuntime(name, operands ~ [FunctionState.outData, FunctionState.outLength]).then(loadOutSlice());
@@ -888,10 +1198,9 @@ private final class Generator
     private Fragment emit(const Expr e, const TestFailure failure)
     {
         auto text = emitExpr(*failure.message);
-        auto parts = sliceParts(text.value);
-        auto recorded = text.then(parts.code);
-        if (!failure.ends) return recorded.then(callRuntime("silver_test_failed", [parts.data, parts.length])).withValue(null);
-        return recorded.then(callRuntime("silver_test_stopped", [parts.data, parts.length]))
+        auto parts = operandsOf(*failure.message, text.operands, 2);
+        if (!failure.ends) return text.then(callRuntime("silver_test_failed", parts)).withValue(null);
+        return text.then(callRuntime("silver_test_stopped", parts))
             .then(Fragment.unreachable())
             .then(Fragment.label(_function.newLabel("after.stop")))
             .withValue(null);
@@ -903,24 +1212,20 @@ private final class Generator
     {
         auto returned = llvmType(functionData(work.type).ret, span);
         auto closure = emitExpr(work);
-        auto descriptor = _function.extract(closureLayout, closure.value, 0);
-        auto code = _function.load("ptr", descriptor.value);
-        auto env = _function.extract(closureLayout, closure.value, 1);
-        auto panicked = _function.call("i1", panicsGuard(returned), ["ptr " ~ code.value, "ptr " ~ env.value]);
+        auto parts = operandsOf(work, closure.operands, 2);
+        auto code = _function.load("ptr", parts[0]);
+        auto panicked = _function.call("i1", panicsGuard(returned), ["ptr " ~ code.value, "ptr " ~ parts[1]]);
 
         auto noneLabel = _function.newLabel("panics.none");
         auto caughtLabel = _function.newLabel("panics.caught");
         auto doneLabel = _function.newLabel("panics.done");
-        auto layout = optionLayout(sliceLayout);
         auto message = callRuntimeForString("silver_panics_message", []);
-        auto tagged = _function.insert(layout, "undef", "i1", "true", 0);
-        auto some = _function.insert(layout, tagged.value, sliceLayout, message.value, 1);
-        auto result = _function.result("phi %s [ zeroinitializer, %%%s ], [ %s, %%%s ]"
-            .format(layout, noneLabel, some.value, caughtLabel));
-        return closure.then(descriptor).then(code).then(env).then(panicked)
+        auto scalars = ["i1"] ~ sliceScalars;
+        auto result = merge(scalars, zeros(scalars), noneLabel, "true" ~ message.operands, caughtLabel);
+        return closure.then(code).then(panicked)
             .then(Fragment.jump(noneLabel)).then(Fragment.label(noneLabel))
             .then(Fragment.branch(panicked.value, caughtLabel, doneLabel))
-            .then(Fragment.label(caughtLabel)).then(message).then(tagged).then(some)
+            .then(Fragment.label(caughtLabel)).then(message)
             .then(Fragment.jump(doneLabel))
             .then(Fragment.label(doneLabel)).then(result);
     }
@@ -956,9 +1261,8 @@ private final class Generator
     private Fragment emitExplicitPanic(const Expr message, Span span)
     {
         auto text = emitExpr(message);
-        auto parts = sliceParts(text.value);
-        return text.then(parts.code)
-            .then(callRuntime("silver_panic_message", [cString(located(span)), parts.data, parts.length]))
+        return text
+            .then(callRuntime("silver_panic_message", cString(located(span)) ~ operandsOf(message, text.operands, 2)))
             .then(Fragment.unreachable())
             .then(Fragment.label(_function.newLabel("after.panic")))
             .withValue(null);
@@ -968,9 +1272,8 @@ private final class Generator
     private Fragment emitExitWithError(const Expr message)
     {
         auto text = emitExpr(message);
-        auto parts = sliceParts(text.value);
-        return text.then(parts.code)
-            .then(callRuntime("silver_exit_error", [parts.data, parts.length]))
+        return text
+            .then(callRuntime("silver_exit_error", operandsOf(message, text.operands, 2)))
             .then(Fragment.unreachable())
             .then(Fragment.label(_function.newLabel("after.exit")))
             .withValue(null);
@@ -991,16 +1294,35 @@ private final class Generator
         auto types = _program.types;
         auto operandType = prim.args[0].type;
 
-        string[] operands;
+        if (prim.op == PrimOp.Append)
+        {
+            auto element = scalarsOf(elementOf(e.type), e.span);
+            auto appended = prim.args[1].kind.match!(
+                (const ArrayLit literal) => element.length > 0 && literal.elements.length > 0
+                    ? emitAppendElements(prim.args[0], literal, element) : Fragment.init,
+                _ => Fragment.init,
+            );
+            if (appended.operands.length > 0) return appended;
+        }
+
+        const(string)[][] operands;
         auto arguments = emitAll(prim.args, operands);
+        /// Each argument as a parent that wants `count` scalars of each uses it.
+        const(string)[][] each(size_t count)
+        {
+            const(string)[][] result;
+            foreach (i, held; operands) result ~= operandsOf(prim.args[i], held, count);
+            return result;
+        }
 
         switch (prim.op)
         {
             case PrimOp.Concat:
                 auto layout = llvmType(elementOf(e.type), e.span);
-                return arguments.then(emitConcat(operands, layout, elementSizeOf(layout)));
+                return arguments.then(emitConcat(each(2), layout, elementSizeOf(layout)));
             case PrimOp.Append:
-                return arguments.then(emitAppend(operands[0], operands[1], llvmType(elementOf(e.type), e.span)));
+                auto slices = each(2);
+                return arguments.then(emitAppend(slices[0], slices[1], llvmType(elementOf(e.type), e.span)));
             case PrimOp.Format:
                 return arguments.then(emitFormat(operandType, operands[0], e.span));
             default:
@@ -1009,12 +1331,16 @@ private final class Generator
 
         // `()` has one value, so comparing two is a constant.
         if (operandType == types.unit) return arguments.then(Fragment.constant(prim.op == PrimOp.Equal ? "true" : "false"));
-        if (operandType == types.string_) return arguments.then(emitStringComparison(prim.op, operands[0], operands[1]));
-        return arguments.then(operation(prim, operandType, operands, e.span));
+        if (operandType == types.string_)
+        {
+            auto strings = each(2);
+            return arguments.then(emitStringComparison(prim.op, strings[0], strings[1]));
+        }
+        return arguments.then(operation(prim, operandType, each(1).map!(held => held[0]).array, e.span));
     }
 
     /// `prim.op` on `operands`, which have been evaluated already.
-    private Fragment operation(const Prim prim, Type operandType, string[] operands, Span span)
+    private Fragment operation(const Prim prim, Type operandType, const string[] operands, Span span)
     {
         auto types = _program.types;
         auto type = llvmType(operandType, span);
@@ -1078,32 +1404,27 @@ private final class Generator
     }
 
     /// `lhs op rhs` for two Strings, from the sign of the runtime's answer.
-    private Fragment emitStringComparison(PrimOp op, string lhs, string rhs)
+    private Fragment emitStringComparison(PrimOp op, const string[] lhs, const string[] rhs)
     {
-        auto left = sliceParts(lhs);
-        auto right = sliceParts(rhs);
-        auto order = callRuntime("silver_string_compare", [left.data, left.length, right.data, right.length]);
-        auto result = _function.result("icmp %s i32 %s, 0".format(comparison(op, false, false), order.value));
-        return left.code.then(right.code).then(order).then(result);
+        auto order = callRuntime("silver_string_compare", lhs ~ rhs);
+        return order.then(_function.result("icmp %s i32 %s, 0".format(comparison(op, false, false), order.value)));
     }
 
     /// A primitive or function value as a String, as `print` shows it.
-    private Fragment emitFormat(Type type, string value, Span span)
+    private Fragment emitFormat(Type type, const string[] value, Span span)
     {
         auto types = _program.types;
         if (types.isInteger(type))
         {
-            auto wide = widened(type, value, span);
+            auto wide = widened(type, value[0], span);
             return wide.then(callRuntimeForString(types.integerOf(type).signed ? "silver_format_int" : "silver_format_uint",
                 [wide.value]));
         }
-        if (type == types.float_) return callRuntimeForString("silver_format_float", [value]);
-        if (type == types.bool_) return callRuntimeForString("silver_format_bool", [value]);
-        if (type == types.char_) return callRuntimeForString("silver_format_char", [value]);
+        if (type == types.float_) return callRuntimeForString("silver_format_float", value);
+        if (type == types.bool_) return callRuntimeForString("silver_format_bool", value);
+        if (type == types.char_) return callRuntimeForString("silver_format_char", value);
         assert(types.isFunction(type), "lowering formats anything but a primitive or a function itself");
-        auto descriptor = _function.extract(closureLayout, value, 0);
-        auto printed = fieldPointer(descriptorLayout, descriptor.value, 1);
-        return descriptor.then(printed).then(_function.load(sliceLayout, printed.value));
+        return loadScalars(descriptorScalars, value[0], 1, 2);
     }
 
     /// `lhs op rhs` through LLVM's overflow intrinsic, panicking if the result doesn't fit.
@@ -1237,8 +1558,8 @@ private final class Generator
             .then(Fragment.unreachable());
     }
 
-    /// Either arm's value, through a phi. An arm that leaves, being `Never`, has none, and the
-    /// phi takes `undef` from wherever its dead block ends.
+    /// Either arm's value, through a phi for each scalar. An arm that leaves, being `Never`, has
+    /// none, and the phis take `undef` from wherever its dead block ends.
     private Fragment emit(const Expr e, const If if_)
     {
         auto condition = emitExpr(*if_.condition);
@@ -1253,16 +1574,10 @@ private final class Generator
             .then(falseBody).then(Fragment.jump(mergeLabel))
             .then(Fragment.label(mergeLabel));
 
-        auto type = llvmType(e.type, e.span);
-        if (type == "void") return code.withValue(null);
-        auto phi = _function.result("phi %s [ %s, %%%s ], [ %s, %%%s ]".format(type,
-            orUndef(trueBody.value), trueBody.endBlock, orUndef(falseBody.value), falseBody.endBlock));
-        return code.then(phi);
-    }
-
-    private static string orUndef(string value)
-    {
-        return value is null ? "undef" : value;
+        auto scalars = scalarsOf(e.type, e.span);
+        if (scalars.length == 0) return code.withValue(null);
+        return code.then(merge(scalars, operandsOf(*if_.trueBody, trueBody.operands, scalars.length), trueBody.endBlock,
+            operandsOf(*if_.falseBody, falseBody.operands, scalars.length), falseBody.endBlock));
     }
 
     private Fragment emit(const Expr e, const Block block)
@@ -1299,8 +1614,21 @@ private final class Generator
 
     private Fragment emit(const Expr e, const Return return_)
     {
-        auto value = emitExpr(*return_.value);
-        return value.then(Fragment.ret(_function.returnType, value.value))
+        auto scalars = _function.returnScalars;
+        Fragment value;
+        Fragment leave;
+        if (scalars.length > 1)
+        {
+            value = emitInto(*return_.value, scalars, FunctionState.resultSlot);
+            leave = Fragment.jump(FunctionState.returnBlock);
+        }
+        else
+        {
+            value = emitExpr(*return_.value);
+            auto operands = operandsOf(*return_.value, value.operands, scalars.length);
+            leave = Fragment.ret(structOf(scalars), operands.length == 0 ? null : operands[0]);
+        }
+        return value.then(leave)
             .then(Fragment.label(_function.newLabel("after.return")))
             .withValue(null);
     }
@@ -1317,14 +1645,89 @@ private final class Generator
         return s.kind.match!(kind => emit(s, kind)).withValue(null);
     }
 
+    /// A value that is only looked at where it already is isn't loaded.
     private Fragment emit(const Stmt s, const Eval eval)
     {
-        return emitExpr(eval.expr);
+        auto place = placeOf(eval.expr);
+        return place.pointer is null ? emitExpr(eval.expr) : place.code;
     }
 
+    /// A local that is itself with fields replaced has only those fields written, when working out
+    /// their values can't assign it. Any other value might read the local while it's being
+    /// evaluated, so it's evaluated first and then written.
     private Fragment emit(const Stmt s, const Assign assign)
     {
-        return storeLocal(assign.local, emitExpr(assign.value), s.span);
+        auto slot = _function.slots[assign.local];
+        if (slot is null) return emitExpr(assign.value);
+        auto layout = scalarsOf(assign.local.type, s.span);
+
+        const(Expr)[] values;
+        Stored[] targets;
+        if (layout.length > 1 && replacesFields(assign.value, assign.local, values, targets))
+        {
+            const(string)[][] operands;
+            Fragment code;
+            foreach (ref value; values)
+            {
+                auto evaluated = emitExpr(value);
+                code = code.then(evaluated);
+                operands ~= evaluated.operands;
+            }
+            foreach (i, target; targets)
+            {
+                if (target.count == 0) continue;
+                code = code.then(storeScalars(layout, slot, target.offset, operandsOf(values[i], operands[i], target.count)));
+            }
+            return code;
+        }
+        auto source = sourceOf(assign.value, layout);
+        return source.code.then(write(source, layout, slot));
+    }
+
+    /// Whether `e` is `local` with fields replaced, one after another, by values that assign
+    /// nothing. `values` and `targets` are then each replacement and the scalars it replaces, in
+    /// the order they're made.
+    private bool replacesFields(const Expr e, const Local local, ref const(Expr)[] values, ref Stored[] targets)
+    {
+        return e.kind.match!(
+            (const LocalRef use) => use.local is local,
+            (const Update update) {
+                if (!isInline(e.type) || !assignsNothing(*update.value)) return false;
+                if (!replacesFields(*update.object, local, values, targets)) return false;
+                values ~= *update.value;
+                targets ~= storedAt(e.type, update.index, e.span);
+                return true;
+            },
+            _ => false,
+        );
+    }
+
+    /// Whether evaluating `e` can't assign a local: it's made only of reads and of building values.
+    /// Anything that could hold a statement or call a function with a mutable parameter isn't.
+    private static bool assignsNothing(const Expr e)
+    {
+        bool every(const Expr[] exprs) => exprs.all!(expr => assignsNothing(expr));
+
+        return e.kind.match!(
+            (const UnitLit _) => true,
+            (const BoolLit _) => true,
+            (const IntLit _) => true,
+            (const FloatLit _) => true,
+            (const StringLit _) => true,
+            (const LocalRef _) => true,
+            (const Prim prim) => every(prim.args),
+            (const Convert convert) => assignsNothing(*convert.value),
+            (const Construct construct) => every(construct.fields),
+            (const Field field) => assignsNothing(*field.object),
+            (const Update update) => assignsNothing(*update.object) && assignsNothing(*update.value),
+            (const Inject inject) => inject.payload is null || assignsNothing(*inject.payload),
+            (const IsMember test) => assignsNothing(*test.subject),
+            (const Payload payload) => assignsNothing(*payload.subject),
+            (const ArrayLit literal) => every(literal.elements),
+            (const Index index) => assignsNothing(*index.array) && assignsNothing(*index.index),
+            (const Length length) => assignsNothing(*length.array),
+            _ => false,
+        );
     }
 
     /// The local's array copied with one element replaced, until something says when it can be
@@ -1332,142 +1735,241 @@ private final class Generator
     private Fragment emit(const Stmt s, const AssignElement assign)
     {
         auto at = position(assign.index);
-        auto value = emitExpr(assign.value);
+        auto element = scalarsOf(elementOf(assign.local.type), s.span);
+        auto value = sourceOf(assign.value, element);
         auto slot = _function.slots[assign.local];
-        auto array = _function.load(sliceLayout, slot);
-        auto parts = sliceParts(array.value);
-        auto outside = _function.result("icmp uge i64 %s, %s".format(at.value, parts.length));
-        auto code = at.then(value).then(array).then(parts.code).then(outside)
-            .then(emitPanicIf(outside.value, s.span, "Index is out of range"));
-        auto layout = llvmType(elementOf(assign.local.type), s.span);
-        if (layout == "void") return code;
+        auto array = loadScalars(sliceScalars, slot, 0, 2);
+        auto outside = _function.result("icmp uge i64 %s, %s".format(at.value, array.operands[1]));
+        auto code = at.then(value.code).then(array).then(outside)
+            .then(emitPanicIf(outside.value, s.span, "Index is out of range")).withValue(null);
+        if (element.length == 0) return code;
 
-        auto copy = emitConcat([array.value], layout, elementSizeOf(layout));
-        auto copied = sliceParts(copy.value);
-        auto pointer = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, copied.data, at.value));
-        return code.then(copy).then(copied.code).then(pointer)
-            .then(Fragment.store(layout, operandOf(assign.value, value), pointer.value))
-            .then(Fragment.store(sliceLayout, copy.value, slot));
+        auto layout = structOf(element);
+        auto copy = emitConcat([array.operands], layout, elementSizeOf(layout));
+        auto pointer = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, copy.operands[0], at.value));
+        return code.then(copy).then(pointer)
+            .then(write(value, element, pointer.value))
+            .then(storeScalars(sliceScalars, slot, 0, copy.operands));
     }
 
     private Fragment emit(const Stmt s, const Let let)
     {
-        return storeLocal(let.local, emitExpr(let.value), s.span);
+        auto slot = _function.slots[let.local];
+        if (slot is null) return emitExpr(let.value);
+        return emitInto(let.value, scalarsOf(let.local.type, s.span), slot);
     }
 
-    /// A Unit or Never value has no operand, so its local has no slot.
-    private Fragment storeLocal(const Local local, Fragment value, Span span)
+    // Records. A tuple or a declared type's value is its fields' scalars, one after another, except
+    // for a declared type that holds itself, whose value is a pointer to them on the heap, which
+    // never change once written.
+
+    /// Whether a value of the record `type` is its fields, not a pointer to them.
+    private bool isInline(Type type)
     {
-        auto slot = _function.slots[local];
-        if (slot is null || value.value is null) return value;
-        return value.then(Fragment.store(llvmType(local.type, span), value.value, slot));
+        return _program.types.isTuple(type) || !isBoxed(type);
     }
 
-    // Records. A tuple is an LLVM struct by value, and a declared type's value is a pointer to one
-    // on the heap, which never changes once built.
-
-    private bool isTuple(Type type)
+    /// Whether the declared type `type` can hold a value of itself with nothing but records, options
+    /// and error unions in between, so that its fields would never end. Each type on such a cycle
+    /// is boxed.
+    private bool isBoxed(Type type)
     {
-        return _program.types.isTuple(type);
+        if (auto known = type in _boxed) return *known;
+        bool[Type] seen;
+        bool reaches(Type from)
+        {
+            foreach (part; heldInline(from))
+            {
+                if (part == type) return true;
+                if (part in seen) continue;
+                seen[part] = true;
+                if (reaches(part)) return true;
+            }
+            return false;
+        }
+
+        auto boxed = reaches(type);
+        _boxed[type] = boxed;
+        return boxed;
+    }
+
+    /// The types whose values are part of a value of `type` itself, were no record boxed. An array,
+    /// a function value, a `Ref` and a sum hold theirs through a pointer.
+    private const(Type)[] heldInline(Type type)
+    {
+        auto types = _program.types;
+        if (types.isTuple(type)) return types.tupleElements(type);
+        if (types.isOption(type)) return [types.optionInner(type)];
+        if (types.isErrorUnion(type)) return [types.successOf(type), types.errorOf(type)];
+        if (auto fields = type in _program.recordFields) return *fields;
+        return null;
     }
 
     /// The types of a tuple's elements or a declared type's fields.
     private const(Type)[] fieldTypes(Type type)
     {
-        if (isTuple(type)) return _program.types.tupleElements(type);
+        if (_program.types.isTuple(type)) return _program.types.tupleElements(type);
         auto fields = type in _program.recordFields;
         assert(fields !is null, "lowering describes every declared type it uses");
         return *fields;
     }
 
-    /// The struct holding a record's fields: each with an operand, in order.
-    private string recordLayout(Type type, Span span)
+    /// The scalars of a record's fields, in order, which a boxed record's pointer points to.
+    private const(string)[] recordScalars(Type type, Span span)
     {
-        auto stored = fieldTypes(type).map!(f => llvmType(f, span)).filter!(t => t != "void");
-        return "{ %-(%s, %) }".format(stored);
+        const(string)[] scalars;
+        foreach (field; fieldTypes(type)) scalars ~= scalarsOf(field, span);
+        return scalars;
     }
 
-    /// Where field `index` is in `recordLayout`, or -1 for one with no operand.
-    private ptrdiff_t storedIndex(Type type, size_t index, Span span)
+    /// Which of `recordScalars` are field `index`.
+    private Stored storedAt(Type type, size_t index, Span span)
     {
         auto fields = fieldTypes(type);
-        if (llvmType(fields[index], span) == "void") return -1;
-        return fields[0 .. index].map!(f => llvmType(f, span)).filter!(t => t != "void").array.length;
+        size_t offset = 0;
+        foreach (field; fields[0 .. index]) offset += scalarsOf(field, span).length;
+        return Stored(offset, scalarsOf(fields[index], span).length);
     }
 
-    /// Whether a declared type's values hold nothing, so each is a null pointer.
-    private bool isEmptyRecord(Type type, Span span)
+    private struct Stored
     {
-        return fieldTypes(type).all!(f => llvmType(f, span) == "void");
+        size_t offset;
+        size_t count;
+    }
+
+    /// Whether a value of `type` is made of nothing. This doesn't ask for its scalars: a sum asks
+    /// it of its members' fields, which can hold the sum.
+    private bool isEmpty(Type type)
+    {
+        auto types = _program.types;
+        if (type == types.unit || type == types.never || type == types.none) return true;
+        if (types.isTuple(type)) return types.tupleElements(type).all!(t => isEmpty(t));
+        if (auto fields = type in _program.recordFields) return !isBoxed(type) && (*fields).all!(f => isEmpty(f));
+        return false;
     }
 
     private Fragment emit(const Expr e, const Construct construct)
     {
-        string[] operands;
+        const(string)[][] operands;
         auto values = emitAll(construct.fields, operands);
-        auto layout = recordLayout(e.type, e.span);
-        auto fields = fieldTypes(e.type);
-        if (isTuple(e.type))
+        const(string)[] whole;
+        foreach (i, field; fieldTypes(e.type))
         {
-            if (layout == "{  }") return values.withValue("zeroinitializer");
-            Fragment built = Fragment.constant("undef");
-            foreach (i, operand; operands)
-            {
-                auto at = storedIndex(e.type, i, e.span);
-                if (at < 0) continue;
-                built = built.then(_function.insert(layout, built.value, llvmType(fields[i], e.span), operand, at));
-            }
-            return values.then(built);
+            whole ~= operandsOf(construct.fields[i], operands[i], scalarsOf(field, e.span).length);
         }
-        if (isEmptyRecord(e.type, e.span)) return values.withValue("null");
+        if (isInline(e.type)) return values.withOperands(whole);
 
-        auto object = alloc(layout);
-        auto code = values.then(object);
-        foreach (i, operand; operands)
-        {
-            auto at = storedIndex(e.type, i, e.span);
-            if (at < 0) continue;
-            auto pointer = fieldPointer(layout, object.value, at);
-            code = code.then(pointer).then(Fragment.store(llvmType(fields[i], e.span), operand, pointer.value));
-        }
-        return code.withValue(object.value);
+        auto layout = recordScalars(e.type, e.span);
+        auto object = alloc(structOf(layout));
+        return values.then(object).then(storeScalars(layout, object.value, 0, whole)).withValue(object.value);
+    }
+
+    /// Scalars `offset` to `offset + count` of the memory `pointer` points to, which is laid out as
+    /// `layout`, once `code` has run. No pointer when there's no such place.
+    private struct Place
+    {
+        Fragment code;
+        string pointer;
+        const(string)[] layout;
+        size_t offset;
+        size_t count;
+    }
+
+    /// Where `e`'s value already is in memory: a local's slot, an array's element, a sum's payload,
+    /// or a field of one of those or of a boxed record. Reading one field of a wide record then
+    /// loads only that field, and a whole value is copied without becoming operands. When there's
+    /// no such place, no code has been generated.
+    private Place placeOf(const Expr e)
+    {
+        return e.kind.match!(
+            (const LocalRef use) {
+                auto layout = scalarsOf(use.local.type, e.span);
+                return Place(Fragment.init, _function.slots[use.local], layout, 0, layout.length);
+            },
+            (const Field field) {
+                auto type = field.object.type;
+                auto at = storedAt(type, field.index, e.span);
+                if (!isInline(type))
+                {
+                    auto object = emitExpr(*field.object);
+                    return Place(object.withValue(null), operandOf(*field.object, object), recordScalars(type, e.span),
+                        at.offset, at.count);
+                }
+                auto outer = placeOf(*field.object);
+                if (outer.pointer is null) return Place.init;
+                return Place(outer.code, outer.pointer, outer.layout, outer.offset + at.offset, at.count);
+            },
+            (const Index index) {
+                auto element = scalarsOf(e.type, e.span);
+                if (element.length == 0) return Place.init;
+                auto checked = emitIndexChecked(e, index);
+                auto pointer = _function.result("getelementptr %s, ptr %s, i64 %s".format(structOf(element),
+                    checked.operands[0], checked.operands[1]));
+                return Place(checked.then(pointer).withValue(null), pointer.value, element, 0, element.length);
+            },
+            (const Payload payload) {
+                auto type = payload.subject.type;
+                auto member = scalarsOf(e.type, e.span);
+                if (member.length == 0) return Place.init;
+                if (isOption(type) || isErrorUnion(type))
+                {
+                    auto outer = placeOf(*payload.subject);
+                    if (outer.pointer is null) return Place.init;
+                    return Place(outer.code, outer.pointer, outer.layout, outer.offset + heldAt(type, payload.member, e.span),
+                        member.length);
+                }
+                if (member == ["ptr"]) return Place.init;
+                auto subject = emitExpr(*payload.subject);
+                auto box = operandsOf(*payload.subject, subject.operands, 2)[1];
+                return Place(subject.withValue(null), box, member, 0, member.length);
+            },
+            _ => Place.init,
+        );
+    }
+
+    /// The value at `place`, loaded.
+    private Fragment read(Place place)
+    {
+        return place.code.then(loadScalars(place.layout, place.pointer, place.offset, place.count));
     }
 
     private Fragment emit(const Expr e, const Field field)
     {
+        auto place = placeOf(e);
+        if (place.pointer !is null) return read(place);
         auto object = emitExpr(*field.object);
         auto type = field.object.type;
-        auto at = storedIndex(type, field.index, e.span);
-        if (at < 0) return object.withValue(null);
-        auto layout = recordLayout(type, e.span);
-        if (isTuple(type)) return object.then(_function.extract(layout, object.value, at));
-        auto pointer = fieldPointer(layout, object.value, at);
-        return object.then(pointer).then(_function.load(llvmType(e.type, e.span), pointer.value));
+        auto at = storedAt(type, field.index, e.span);
+        auto whole = operandsOf(*field.object, object.operands, recordScalars(type, e.span).length);
+        return object.withOperands(whole[at.offset .. at.offset + at.count]);
     }
 
-    /// A tuple is changed by value; a declared type's value is copied to a new object.
+    /// A record's scalars with the field's replaced; a boxed one is copied to a new object.
     private Fragment emit(const Expr e, const Update update)
     {
         auto object = emitExpr(*update.object);
         auto value = emitExpr(*update.value);
         auto code = object.then(value);
         auto type = e.type;
-        auto at = storedIndex(type, update.index, e.span);
-        if (at < 0) return code.withValue(object.value);
-        auto layout = recordLayout(type, e.span);
-        auto fieldType = llvmType(fieldTypes(type)[update.index], e.span);
-        if (isTuple(type)) return code.then(_function.insert(layout, object.value, fieldType, value.value, at));
+        auto at = storedAt(type, update.index, e.span);
+        if (at.count == 0) return code.withOperands(object.operands);
+        auto layout = recordScalars(type, e.span);
+        auto replacement = operandsOf(*update.value, value.operands, at.count);
+        if (isInline(type))
+        {
+            auto whole = operandsOf(*update.object, object.operands, layout.length);
+            return code.withOperands(whole[0 .. at.offset] ~ replacement ~ whole[at.offset + at.count .. $]);
+        }
 
-        auto whole = _function.load(layout, object.value);
-        auto changed = _function.insert(layout, whole.value, fieldType, value.value, at);
-        auto copy = alloc(layout);
-        return code.then(whole).then(changed).then(copy).then(Fragment.store(layout, changed.value, copy.value))
+        auto copy = alloc(structOf(layout));
+        return code.then(copy).then(move(layout, copy.value, operandOf(*update.object, object)))
+            .then(storeScalars(layout, copy.value, at.offset, replacement))
             .withValue(copy.value);
     }
 
-    // Sums and options. An option is `{ i1, T }`, its tag saying whether there's a payload. A sum is
-    // `{ i32, ptr }`: the member's index, and its value, which is boxed unless it's already a
-    // pointer. A sum whose members are all markers is just the `i32`.
+    // Sums and options. An option is an `i1` saying whether there's a payload, then the payload's
+    // scalars. A sum is an `i32` and a `ptr`: the member's index, and its value, which is copied to
+    // the heap unless it's already one pointer. A sum whose members are all markers is just the `i32`.
 
     private bool isOption(Type type)
     {
@@ -1481,111 +1983,100 @@ private final class Generator
         return *members;
     }
 
-    private bool isAllMarkers(Type sum, Span span)
+    private bool isAllMarkers(Type sum)
     {
-        return membersOf(sum).all!(m => (m in _program.recordFields) !is null && isEmptyRecord(m, span));
+        return membersOf(sum).all!(m => (m in _program.recordFields) !is null && isEmpty(m));
     }
 
-    private string optionLayout(string payload)
-    {
-        return payload == "void" ? "{ i1 }" : "{ i1, %s }".format(payload);
-    }
-
-    // An error union is `{ i1, T, E }`: whether it's `Ok`, then a slot for each side, with one that
-    // has no operand left out. Nothing is boxed.
+    // An error union is an `i1` saying whether it's `Ok`, then the scalars of the value, then the
+    // error's, the side it isn't being zero. Nothing is boxed.
 
     private bool isErrorUnion(Type type)
     {
         return _program.types.isErrorUnion(type);
     }
 
-    private string errorUnionLayout(Type type, Span span)
-    {
-        auto sides = [llvmType(_program.types.successOf(type), span), llvmType(_program.types.errorOf(type), span)]
-            .filter!(s => s != "void").array;
-        return "{ i1%-(, %s%) }".format(sides);
-    }
-
-    /// Where member `member` (0 for the error, 1 for the value) of the error union `type` is in its
-    /// layout, or 0 when it has no operand.
-    private size_t errorUnionSlot(Type type, size_t member, Span span)
-    {
-        auto success = llvmType(_program.types.successOf(type), span) != "void";
-        if (member == 1) return success ? 1 : 0;
-        if (llvmType(_program.types.errorOf(type), span) == "void") return 0;
-        return success ? 2 : 1;
-    }
-
     private Fragment emit(const Expr e, const Inject inject)
     {
+        auto types = _program.types;
         auto type = e.type;
-        auto layout = llvmType(type, e.span);
+        auto tag = "%s".format(inject.member);
+        auto isSum = !isErrorUnion(type) && !isOption(type);
+        auto member = isSum && !isAllMarkers(type) ? scalarsOf(membersOf(type)[inject.member], e.span) : null;
+        if (inject.payload !is null && member.length > 0 && member != ["ptr"])
+        {
+            auto box = alloc(structOf(member));
+            return box.then(emitInto(*inject.payload, member, box.value)).withOperands([tag, box.value]);
+        }
+
         auto payload = inject.payload is null ? Fragment.init : emitExpr(*inject.payload);
+        /// The payload as `scalars`, which its member is made of.
+        const(string)[] held(const string[] scalars)
+        {
+            return inject.payload is null ? null : operandsOf(*inject.payload, payload.operands, scalars.length);
+        }
+
         if (isErrorUnion(type))
         {
-            auto tagged = payload.then(_function.insert(layout, "zeroinitializer", "i1", inject.member == 1 ? "true" : "false", 0));
-            auto slot = errorUnionSlot(type, inject.member, e.span);
-            if (slot == 0 || payload.value is null) return tagged;
-            auto side = llvmType(inject.payload.type, e.span);
-            return tagged.then(_function.insert(layout, tagged.value, side, payload.value, slot));
+            auto success = scalarsOf(types.successOf(type), e.span);
+            auto error = scalarsOf(types.errorOf(type), e.span);
+            return payload.withOperands(inject.member == 1
+                ? "true" ~ held(success) ~ zeros(error)
+                : "false" ~ zeros(success) ~ held(error));
         }
         if (isOption(type))
         {
-            if (inject.member == 0) return payload.withValue("zeroinitializer");
-            auto tagged = _function.insert(layout, "undef", "i1", "true", 0);
-            if (payload.value is null) return payload.then(tagged);
-            auto inner = llvmType(_program.types.optionInner(type), e.span);
-            return payload.then(tagged).then(_function.insert(layout, tagged.value, inner, payload.value, 1));
+            auto scalars = scalarsOf(type, e.span);
+            return payload.withOperands(inject.member == 0 ? zeros(scalars) : "true" ~ held(scalars[1 .. $]));
         }
-        if (isAllMarkers(type, e.span)) return payload.withValue("%s".format(inject.member));
-
-        auto memberLayout = llvmType(membersOf(type)[inject.member], e.span);
-        auto boxed = payload;
-        if (payload.value is null)
-        {
-            boxed = payload.withValue("null");
-        }
-        else if (memberLayout != "ptr")
-        {
-            auto box = alloc(memberLayout);
-            boxed = payload.then(box).then(Fragment.store(memberLayout, payload.value, box.value)).withValue(box.value);
-        }
-        auto tagged = _function.insert(layout, "undef", "i32", "%s".format(inject.member), 0);
-        return boxed.then(tagged).then(_function.insert(layout, tagged.value, "ptr", boxed.value, 1));
+        if (isAllMarkers(type)) return payload.withValue(tag);
+        return payload.withOperands([tag, member.length == 0 ? "null" : held(member)[0]]);
     }
 
     private Fragment emit(const Expr e, const IsMember test)
     {
-        auto subject = emitExpr(*test.subject);
         auto type = test.subject.type;
-        auto layout = llvmType(type, e.span);
+        auto place = placeOf(*test.subject);
+        auto subject = place.pointer is null
+            ? emitExpr(*test.subject)
+            : place.code.then(loadScalars(place.layout, place.pointer, place.offset, 1));
+        auto tag = place.pointer is null
+            ? operandsOf(*test.subject, subject.operands, scalarsOf(type, e.span).length)[0]
+            : subject.value;
         if (isOption(type) || isErrorUnion(type))
         {
-            auto tag = _function.extract(layout, subject.value, 0);
-            if (test.member == 1) return subject.then(tag);
-            return subject.then(tag).then(_function.result("xor i1 %s, true".format(tag.value)));
+            if (test.member == 1) return subject.withValue(tag);
+            return subject.then(_function.result("xor i1 %s, true".format(tag)));
         }
-        auto tag = isAllMarkers(type, e.span) ? subject : subject.then(_function.extract(layout, subject.value, 0));
-        return tag.then(_function.result("icmp eq i32 %s, %s".format(tag.value, test.member)));
+        return subject.then(_function.result("icmp eq i32 %s, %s".format(tag, test.member)));
     }
 
     private Fragment emit(const Expr e, const Payload payload)
     {
+        auto place = placeOf(e);
+        if (place.pointer !is null) return read(place);
         auto subject = emitExpr(*payload.subject);
         auto type = payload.subject.type;
-        auto layout = llvmType(type, e.span);
-        auto memberLayout = llvmType(e.type, e.span);
-        if (memberLayout == "void") return subject.withValue(null);
-        if (isOption(type)) return subject.then(_function.extract(layout, subject.value, 1));
-        if (isErrorUnion(type)) return subject.then(_function.extract(layout, subject.value, errorUnionSlot(type, payload.member, e.span)));
-        if (isAllMarkers(type, e.span)) return subject.withValue("null");
-        auto pointer = _function.extract(layout, subject.value, 1);
-        if (memberLayout == "ptr") return subject.then(pointer);
-        return subject.then(pointer).then(_function.load(memberLayout, pointer.value));
+        auto member = scalarsOf(e.type, e.span);
+        if (member.length == 0) return subject.withValue(null);
+        auto whole = operandsOf(*payload.subject, subject.operands, scalarsOf(type, e.span).length);
+        if (isOption(type) || isErrorUnion(type))
+        {
+            auto start = heldAt(type, payload.member, e.span);
+            return subject.withOperands(whole[start .. start + member.length]);
+        }
+        return subject.withValue(whole[1]);
     }
 
-    // Arrays and Strings: `{ ptr, i64 }`, element zero and the length, in a buffer that the
-    // runtime's `silver_array_append` makes and extends. An element with no operand is never
+    /// Where member `member`'s scalars start among those of the option or error union `type`.
+    private size_t heldAt(Type type, size_t member, Span span)
+    {
+        if (isOption(type) || member == 1) return 1;
+        return 1 + scalarsOf(_program.types.successOf(type), span).length;
+    }
+
+    // Arrays and Strings: a `ptr` and an `i64`, element zero and the length, in a buffer that the
+    // runtime's `silver_array_append` makes and extends. An element made of nothing is never
     // stored, so such an array's pointer is null.
 
     /// The element type of an array or String type.
@@ -1604,26 +2095,6 @@ private final class Generator
         return "ptrtoint (ptr getelementptr (%s, ptr null, i32 1) to i64)".format(layout);
     }
 
-    private struct SliceParts
-    {
-        Fragment code;
-        string data;
-        string length;
-    }
-
-    private SliceParts sliceParts(string value)
-    {
-        auto data = _function.extract(sliceLayout, value, 0);
-        auto length = _function.extract(sliceLayout, value, 1);
-        return SliceParts(data.then(length), data.value, length.value);
-    }
-
-    private Fragment buildSlice(string data, string length)
-    {
-        auto withData = _function.insert(sliceLayout, "undef", "ptr", data, 0);
-        return withData.then(_function.insert(sliceLayout, withData.value, "i64", length, 1));
-    }
-
     /// A new buffer with room for `count` elements of `size` bytes, as a slice whose elements the
     /// caller writes.
     private Fragment reserve(string count, string size)
@@ -1636,74 +2107,153 @@ private final class Generator
 
     private Fragment emit(const Expr e, const ArrayLit literal)
     {
-        string[] operands;
-        auto values = emitAll(literal.elements, operands);
         auto count = literal.elements.length;
-        if (count == 0) return values.withValue("zeroinitializer");
-        auto layout = llvmType(elementOf(e.type), e.span);
-        if (layout == "void") return values.then(buildSlice("null", "%s".format(count)));
-
-        auto buffer = reserve("%s".format(count), elementSizeOf(layout));
-        auto parts = sliceParts(buffer.value);
-        auto code = values.then(buffer).then(parts.code);
-        foreach (i, operand; operands)
+        if (count == 0) return Fragment.init.withOperands(["null", "0"]);
+        auto element = scalarsOf(elementOf(e.type), e.span);
+        if (element.length == 0)
         {
-            auto pointer = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, parts.data, i));
-            code = code.then(pointer).then(Fragment.store(layout, operand, pointer.value));
+            const(string)[][] operands;
+            return emitAll(literal.elements, operands).withOperands(["null", "%s".format(count)]);
         }
-        return code.withValue(buffer.value);
+
+        auto layout = structOf(element);
+        auto buffer = reserve("%s".format(count), elementSizeOf(layout));
+        return buffer.then(emitElements(literal, element, buffer.operands[0], "0")).withOperands(buffer.operands);
+    }
+
+    /// Evaluates each element of `literal`, which is made of `element`, and writes it where it
+    /// goes: into `data`, from position `start` on, which has just been made room for them.
+    private Fragment emitElements(const ArrayLit literal, const string[] element, string data, string start)
+    {
+        auto layout = structOf(element);
+        Fragment code;
+        foreach (i, ref value; literal.elements)
+        {
+            auto at = start == "0" ? Fragment.constant("%s".format(i)) : _function.result("add i64 %s, %s".format(start, i));
+            auto pointer = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, data, at.value));
+            code = code.then(at).then(pointer).then(emitInto(value, element, pointer.value));
+        }
+        return code.withValue(null);
+    }
+
+    /// `lhs ~= [a, b]`: room is made at `lhs`'s frontier and the elements written there, with no
+    /// array made of them first. Room that is claimed and never filled is lost to `lhs`, whose next
+    /// append then copies it whole, so when an element can leave, all are evaluated before any room
+    /// is asked for.
+    private Fragment emitAppendElements(const Expr lhs, const ArrayLit literal, const string[] element)
+    {
+        auto array = emitExpr(lhs);
+        auto parts = operandsOf(lhs, array.operands, 2);
+        immutable inPlace = literal.elements.all!(value => staysInside(value));
+        const(string)[][] values;
+        auto evaluated = inPlace ? Fragment.init : emitAll(literal.elements, values);
+
+        _function.usesOutSlots = true;
+        auto grown = callRuntime("silver_array_append", [parts[0], parts[1], "null", "%s".format(literal.elements.length),
+            elementSizeOf(structOf(element)), "true", FunctionState.outData, FunctionState.outLength]).then(loadOutSlice());
+        auto code = array.then(evaluated).then(grown);
+        if (inPlace) return code.then(emitElements(literal, element, grown.operands[0], parts[1])).withOperands(grown.operands);
+
+        auto layout = structOf(element);
+        foreach (i, value; values)
+        {
+            auto at = _function.result("add i64 %s, %s".format(parts[1], i));
+            auto pointer = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, grown.operands[0], at.value));
+            code = code.then(at).then(pointer).then(storeScalars(element, pointer.value, 0, values[i]));
+        }
+        return code.withOperands(grown.operands);
+    }
+
+    /// Whether control can only leave `e` by finishing it or by a panic: nothing in it jumps to a
+    /// loop or returns, which is what `?` does. A jump to a loop inside `e` counts, which costs
+    /// only the faster way to do the same thing. Every node is listed, as in `planSlots`.
+    private static bool staysInside(const Expr e)
+    {
+        bool every(const Expr[] exprs) => exprs.all!(expr => staysInside(expr));
+
+        return e.kind.match!(
+            (const UnitLit _) => true,
+            (const BoolLit _) => true,
+            (const IntLit _) => true,
+            (const FloatLit _) => true,
+            (const StringLit _) => true,
+            (const LocalRef _) => true,
+            (const Break _) => false,
+            (const Continue _) => false,
+            (const Return _) => false,
+            (const Call call) => every(call.args),
+            (const CallClosure call) => staysInside(*call.callee) && every(call.args),
+            (const MakeClosure closure) => every(closure.captures),
+            (const ForeignCall call) => every(call.args),
+            (const IntrinsicCall call) => every(call.args),
+            (const Prim prim) => every(prim.args),
+            (const Convert convert) => staysInside(*convert.value),
+            (const If if_) => staysInside(*if_.condition) && staysInside(*if_.trueBody) && staysInside(*if_.falseBody),
+            (const Block block) => block.statements.all!(statement => statement.kind.match!(
+                    (const Let let) => staysInside(let.value),
+                    (const Assign assign) => staysInside(assign.value),
+                    (const AssignElement assign) => staysInside(assign.index) && staysInside(assign.value),
+                    (const Eval eval) => staysInside(eval.expr),
+                )) && (block.result is null || staysInside(*block.result)),
+            (const Loop loop) => staysInside(*loop.body),
+            (const Construct construct) => every(construct.fields),
+            (const Field field) => staysInside(*field.object),
+            (const Update update) => staysInside(*update.object) && staysInside(*update.value),
+            (const Inject inject) => inject.payload is null || staysInside(*inject.payload),
+            (const IsMember test) => staysInside(*test.subject),
+            (const Payload payload) => staysInside(*payload.subject),
+            (const ArrayLit literal) => every(literal.elements),
+            (const Index index) => staysInside(*index.array) && staysInside(*index.index),
+            (const Slice slice) => staysInside(*slice.array) && staysInside(*slice.start) && staysInside(*slice.end),
+            (const Length length) => staysInside(*length.array),
+            (const Cell cell) => every(cell.args),
+            (const TestFailure failure) => !failure.ends && staysInside(*failure.message),
+        );
     }
 
     /// `operands`, Strings or arrays whose elements are stored as `layout`, joined into one
     /// buffer of exactly their total length.
-    private Fragment emitConcat(string[] operands, string layout, string size)
+    private Fragment emitConcat(const string[][] operands, string layout, string size)
     {
         Fragment code;
-        SliceParts[] parts;
         string total = "0";
-        foreach (operand; operands)
+        foreach (part; operands)
         {
-            auto part = sliceParts(operand);
-            parts ~= part;
-            auto sum = _function.result("add i64 %s, %s".format(total, part.length));
-            code = code.then(part.code).then(sum);
+            auto sum = _function.result("add i64 %s, %s".format(total, part[1]));
+            code = code.then(sum);
             total = sum.value;
         }
-        if (layout == "void") return code.then(buildSlice("null", total));
+        if (layout == "void") return code.withOperands(["null", total]);
 
         auto buffer = reserve(total, size);
-        auto result = sliceParts(buffer.value);
-        code = code.then(buffer).then(result.code);
-        useIntrinsic("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)");
+        code = code.then(buffer);
+        useIntrinsic(memcpyDeclaration);
         string offset = "0";
-        foreach (part; parts)
+        foreach (part; operands)
         {
-            auto target = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, result.data, offset));
-            auto bytes = _function.result("mul i64 %s, %s".format(part.length, size));
+            auto target = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, buffer.operands[0], offset));
+            auto bytes = _function.result("mul i64 %s, %s".format(part[1], size));
             auto copy = Fragment.instruction("call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)".format(
-                target.value, part.data, bytes.value));
-            auto next = _function.result("add i64 %s, %s".format(offset, part.length));
+                target.value, part[0], bytes.value));
+            auto next = _function.result("add i64 %s, %s".format(offset, part[1]));
             code = code.then(target).then(bytes).then(copy).then(next);
             offset = next.value;
         }
-        return code.withValue(buffer.value);
+        return code.withOperands(buffer.operands);
     }
 
     /// `lhs ~= rhs`'s value: in place at `lhs`'s frontier when there's room, leaving room to grow.
-    private Fragment emitAppend(string lhs, string rhs, string layout)
+    private Fragment emitAppend(const string[] lhs, const string[] rhs, string layout)
     {
-        auto left = sliceParts(lhs);
-        auto right = sliceParts(rhs);
-        auto code = left.code.then(right.code);
         if (layout == "void")
         {
-            auto total = _function.result("add i64 %s, %s".format(left.length, right.length));
-            return code.then(total).then(buildSlice("null", total.value));
+            auto total = _function.result("add i64 %s, %s".format(lhs[1], rhs[1]));
+            return total.withOperands(["null", total.value]);
         }
         _function.usesOutSlots = true;
-        auto call = callRuntime("silver_array_append", [left.data, left.length, right.data, right.length,
+        auto call = callRuntime("silver_array_append", [lhs[0], lhs[1], rhs[0], rhs[1],
             elementSizeOf(layout), "true", FunctionState.outData, FunctionState.outLength]);
-        return code.then(call).then(loadOutSlice());
+        return call.then(loadOutSlice());
     }
 
     /// An index of any integer type as an unsigned 64-bit one, so a negative one is too large.
@@ -1715,82 +2265,77 @@ private final class Generator
 
     private Fragment emit(const Expr e, const Index index)
     {
+        auto place = placeOf(e);
+        return place.pointer is null ? emitIndexChecked(e, index).withValue(null) : read(place);
+    }
+
+    /// The array and the position `index` reads, checked to be inside it. The operands are the
+    /// array's data and the position.
+    private Fragment emitIndexChecked(const Expr e, const Index index)
+    {
         auto array = emitExpr(*index.array);
-        auto parts = sliceParts(array.value);
+        auto parts = operandsOf(*index.array, array.operands, 2);
         auto at = position(*index.index);
-        auto outside = _function.result("icmp uge i64 %s, %s".format(at.value, parts.length));
-        auto code = array.then(parts.code).then(at).then(outside).then(emitPanicIf(outside.value, e.span, "Index is out of range"));
-        auto layout = llvmType(e.type, e.span);
-        if (layout == "void") return code.withValue(null);
-        auto pointer = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, parts.data, at.value));
-        return code.then(pointer).then(_function.load(layout, pointer.value));
+        auto outside = _function.result("icmp uge i64 %s, %s".format(at.value, parts[1]));
+        return array.then(at).then(outside).then(emitPanicIf(outside.value, e.span, "Index is out of range"))
+            .withOperands([parts[0], at.value]);
     }
 
     private Fragment emit(const Expr e, const Slice slice)
     {
         auto array = emitExpr(*slice.array);
-        auto parts = sliceParts(array.value);
+        auto parts = operandsOf(*slice.array, array.operands, 2);
         auto start = position(*slice.start);
         auto end = position(*slice.end);
         auto reversed = _function.result("icmp ugt i64 %s, %s".format(start.value, end.value));
-        auto tooLong = _function.result("icmp ugt i64 %s, %s".format(end.value, parts.length));
+        auto tooLong = _function.result("icmp ugt i64 %s, %s".format(end.value, parts[1]));
         auto outside = _function.result("or i1 %s, %s".format(reversed.value, tooLong.value));
-        auto code = array.then(parts.code).then(start).then(end).then(reversed).then(tooLong).then(outside)
-            .then(emitPanicIf(outside.value, e.span, "Slice is out of range"));
         auto length = _function.result("sub i64 %s, %s".format(end.value, start.value));
+        auto code = array.then(start).then(end).then(reversed).then(tooLong).then(outside)
+            .then(emitPanicIf(outside.value, e.span, "Slice is out of range")).then(length);
         auto layout = llvmType(elementOf(e.type), e.span);
-        if (layout == "void") return code.then(length).then(buildSlice("null", length.value));
-        auto data = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, parts.data, start.value));
-        return code.then(length).then(data).then(buildSlice(data.value, length.value));
+        if (layout == "void") return code.withOperands(["null", length.value]);
+        auto data = _function.result("getelementptr %s, ptr %s, i64 %s".format(layout, parts[0], start.value));
+        return code.then(data).withOperands([data.value, length.value]);
     }
 
     private Fragment emit(const Expr e, const Length length)
     {
         auto array = emitExpr(*length.array);
-        return array.then(_function.extract(sliceLayout, array.value, 1));
+        return array.withValue(operandsOf(*length.array, array.operands, 2)[1]);
     }
 
-    // Cells. A `Ref` points to a `{ i1, T }` on the heap, laid out as an option is: the `i1` says
-    // whether the cell holds its value, which it doesn't while `update` runs.
+    // Cells. A `Ref` points to an `i1` and its value's scalars on the heap, laid out as an option
+    // is: the `i1` says whether the cell holds its value, which it doesn't while `update` runs.
 
     private Fragment emit(const Expr e, const Cell cell)
     {
-        string[] operands;
+        const(string)[][] operands;
         auto args = emitAll(cell.args, operands);
-        auto contents = llvmType(_program.cellContents[cell.op == CellOp.New ? e.type : cell.args[0].type], e.span);
-        auto layout = optionLayout(contents);
+        auto contents = scalarsOf(_program.cellContents[cell.op == CellOp.New ? e.type : cell.args[0].type], e.span);
+        auto layout = "i1" ~ contents;
+        /// Argument `index`, which is what a cell holds.
+        const(string)[] held(size_t index) => operandsOf(cell.args[index], operands[index], contents.length);
 
-        Fragment fill(string target, string value)
+        Fragment fill(string target, const string[] value)
         {
-            auto flag = fieldPointer(layout, target, 0);
-            auto code = flag.then(Fragment.store("i1", "true", flag.value));
-            if (contents == "void") return code;
-            auto pointer = fieldPointer(layout, target, 1);
-            return code.then(pointer).then(Fragment.store(contents, value, pointer.value));
+            return storeScalars(layout, target, 0, ["true"]).then(storeScalars(layout, target, 1, value));
         }
 
         if (cell.op == CellOp.New)
         {
-            auto object = alloc(layout);
-            return args.then(object).then(fill(object.value, operands[0])).withValue(object.value);
+            auto object = alloc(structOf(layout));
+            return args.then(object).then(fill(object.value, held(0))).withValue(object.value);
         }
-        auto target = operands[0];
-        if (cell.op == CellOp.Fill) return args.then(fill(target, operands[1])).withValue(null);
+        auto target = operandsOf(cell.args[0], operands[0], 1)[0];
+        if (cell.op == CellOp.Fill) return args.then(fill(target, held(1))).withValue(null);
 
-        auto flag = fieldPointer(layout, target, 0);
-        auto full = _function.load("i1", flag.value);
+        auto full = loadScalars(layout, target, 0, 1);
         auto empty = _function.result("xor i1 %s, true".format(full.value));
-        auto code = args.then(flag).then(full).then(empty).then(emitPanicIf(empty.value, e.span, "Ref is being updated"));
-        if (cell.op == CellOp.Set)
-        {
-            if (contents == "void") return code.withValue(null);
-            auto pointer = fieldPointer(layout, target, 1);
-            return code.then(pointer).then(Fragment.store(contents, operands[1], pointer.value)).withValue(null);
-        }
-        if (cell.op == CellOp.Take) code = code.then(Fragment.store("i1", "false", flag.value));
-        if (contents == "void") return code.withValue(null);
-        auto pointer = fieldPointer(layout, target, 1);
-        return code.then(pointer).then(_function.load(contents, pointer.value));
+        auto code = args.then(full).then(empty).then(emitPanicIf(empty.value, e.span, "Ref is being updated"));
+        if (cell.op == CellOp.Set) return code.then(storeScalars(layout, target, 1, held(1))).withValue(null);
+        if (cell.op == CellOp.Take) code = code.then(storeScalars(layout, target, 0, ["false"]));
+        return code.then(loadScalars(layout, target, 1, contents.length));
     }
 
 
@@ -1832,7 +2377,7 @@ private final class Generator
 
     /// Calls the runtime function `name` with `operands`, typed from its binding. The value is
     /// the result's temp, or null for a void function.
-    private Fragment callRuntime(string name, string[] operands)
+    private Fragment callRuntime(string name, const string[] operands)
     {
         import std.range : zip;
 
@@ -1858,22 +2403,48 @@ private final class Generator
         return "%s(%s,%s)".format(span.file, location.line, location.column);
     }
 
+    /// How a value of `type` is laid out in memory, and returned.
     private string llvmType(Type type, Span span)
     {
+        return structOf(scalarsOf(type, span));
+    }
+
+    /// The LLVM types of the scalars a value of `type` is made of, in order: none for `()`, and
+    /// for a record, option or error union, those of everything it holds.
+    private const(string)[] scalarsOf(Type type, Span span)
+    {
+        if (auto known = type in _scalars) return *known;
+        // Boxing ends every cycle, so this is only reached if a new kind of type holds itself.
+        if (type in _scalarsPending)
+        {
+            return notImplemented!(const(string)[])("a type that holds itself by value: " ~ _program.types.describe(type), span);
+        }
+        _scalarsPending[type] = true;
+        auto scalars = scalarsOfNew(type, span);
+        _scalarsPending.remove(type);
+        _scalars[type] = scalars;
+        return scalars;
+    }
+
+    private const(string)[] scalarsOfNew(Type type, Span span)
+    {
         auto types = _program.types;
-        if (type == types.unit || type == types.never || type == types.none) return "void";
-        if (type == types.bool_) return "i1";
-        if (type == types.float_) return "double";
-        if (types.isInteger(type) || type == types.char_) return "i%s".format(types.integerOf(type).bits);
-        if (type == types.string_ || type == types.emptyArray || types.isArray(type)) return sliceLayout;
-        if (types.isFunction(type)) return closureLayout;
-        if (types.isOption(type)) return optionLayout(llvmType(types.optionInner(type), span));
-        if (types.isErrorUnion(type)) return errorUnionLayout(type, span);
-        if (types.isTuple(type)) return recordLayout(type, span);
-        if (type in _program.recordFields) return "ptr";
-        if (type in _program.cellContents) return "ptr";
-        if (type in _program.sumMembers) return isAllMarkers(type, span) ? "i32" : "{ i32, ptr }";
-        return notImplemented!string("the type " ~ types.describe(type), span);
+        if (type == types.unit || type == types.never || type == types.none) return null;
+        if (type == types.bool_) return ["i1"];
+        if (type == types.float_) return ["double"];
+        if (types.isInteger(type) || type == types.char_) return ["i%s".format(types.integerOf(type).bits)];
+        if (type == types.string_ || type == types.emptyArray || types.isArray(type)) return sliceScalars;
+        if (types.isFunction(type)) return closureScalars;
+        if (types.isOption(type)) return "i1" ~ scalarsOf(types.optionInner(type), span);
+        if (types.isErrorUnion(type))
+        {
+            return "i1" ~ scalarsOf(types.successOf(type), span) ~ scalarsOf(types.errorOf(type), span);
+        }
+        if (types.isTuple(type)) return recordScalars(type, span);
+        if (type in _program.recordFields) return isBoxed(type) ? ["ptr"] : recordScalars(type, span);
+        if (type in _program.cellContents) return ["ptr"];
+        if (type in _program.sumMembers) return isAllMarkers(type) ? ["i32"] : ["i32", "ptr"];
+        return notImplemented!(const(string)[])("the type " ~ types.describe(type), span);
     }
 
     private FunctionData functionData(Type type)

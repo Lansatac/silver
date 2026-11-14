@@ -5,6 +5,7 @@ module silver.sema.resolve;
 
 import std.algorithm;
 import std.array;
+import std.range : chain, iota, walkLength;
 import std.string;
 import std.sumtype;
 
@@ -118,6 +119,8 @@ package struct Resolution
     Id!FunctionDecl[][Id!FunctionDecl] boundFunctions;
     /// What each of those functions stands for.
     Requirement[Id!FunctionDecl] requirements;
+    /// What each module's `forward import`s pass on to its importers, by module and then name.
+    Forward[][string][string] forwards;
 
     /// The type parameters of `func`: those it declares, then its hidden ones.
     const(TypeParam)[] typeParamsOf(Id!FunctionDecl func) const
@@ -134,20 +137,67 @@ package struct Resolution
         {
             if (!isFunction(*symbol)) return Candidates.init;
         }
-        Id!FunctionDecl[][] groups = [own.functionsNamed(name)];
-        foreach (m; own.modulesProviding(name))
-        {
-            auto visible = publicFunctions(m, name);
-            if (visible.length > 0) groups ~= visible;
-        }
-        return Candidates(groups);
+        return grouped(own.functionsNamed(name), own.modulesProviding(name).array, m => broughtFunctions(m, name));
     }
 
-    /// The functions named `name` that the module `m` lets other modules see.
+    /// The functions named `name` that the module `m` declares and lets other modules see.
     Id!FunctionDecl[] publicFunctions(string m, string name) const
     {
         return moduleScopes[m].functionsNamed(name).filter!(f => !declarations.functions[f].isPrivate).array;
     }
+
+    /// The functions named `name` that importing the module `m` brings: its own, then those it forwards.
+    Id!FunctionDecl[] broughtFunctions(string m, string name) const
+    {
+        auto functions = publicFunctions(m, name);
+        foreach (forward; forwardsOf(m, name)) functions ~= publicFunctions(forward.origin, name);
+        return functions;
+    }
+
+    /// Where the module `m` forwards `name` from.
+    const(Forward)[] forwardsOf(string m, string name) const
+    {
+        auto byName = m in forwards;
+        if (byName is null) return null;
+        auto found = name in *byName;
+        return found is null ? null : *found;
+    }
+}
+
+/// A module that another forwards a name from, with the `forward import` that says so. The module
+/// is the one declaring the name, however many forwards it came through.
+package struct Forward
+{
+    string origin;
+    Span span;
+}
+
+/// `own`, then the functions each of `imports` brings that aren't among them, a group per import.
+/// An import that brings nothing another doesn't is left out, so imports that lead to the same
+/// functions count once.
+private Candidates grouped(Id!FunctionDecl[] own, const(string)[] imports,
+    scope Id!FunctionDecl[] delegate(string) brought)
+{
+    Id!FunctionDecl[][] groups;
+    string[] sources;
+    foreach (m; imports)
+    {
+        auto group = brought(m).filter!(f => !own.canFind(f)).array;
+        if (group.length == 0) continue;
+        groups ~= group;
+        sources ~= m;
+    }
+    bool covered(size_t i)
+    {
+        foreach (j, other; groups)
+        {
+            if (j == i || !groups[i].all!(f => other.canFind(f))) continue;
+            if (groups[i].length < other.length || j < i) return true;
+        }
+        return false;
+    }
+    auto kept = groups.length.iota.filter!(i => !covered(i)).array;
+    return Candidates(own ~ kept.map!(i => groups[i]).array, [string.init] ~ kept.map!(i => sources[i]).array);
 }
 
 /// A function that a bound supplies inside the generic function `owner`: the interface's function
@@ -184,6 +234,8 @@ package TypeSymbol expandAlias(TypeSymbol symbol, const(AliasDecl*[Id!AliasDecl]
 package struct Candidates
 {
     Id!FunctionDecl[][] groups;
+    /// The import that brought each group, where that's known. The first group has none.
+    string[] sources;
 
     size_t count() const => groups.map!(g => g.length).sum;
 }
@@ -265,6 +317,12 @@ package final class Scope
     auto modulesProviding(string name) const
     {
         return _imports.filter!(i => i.provides(name)).map!(i => i.name);
+    }
+
+    /// Every name declared here, as a value or as a type. One that's both is there twice.
+    auto names() const
+    {
+        return chain(_scopeTable.byKey, _typeTable.byKey);
     }
 
     const(SymbolId)* resolveLocal(string name) const
@@ -403,6 +461,7 @@ private final class NameResolver
     private const(TypeParam)[][Id!VarDecl] _bindingFloors;
     private Id!FunctionDecl[][Id!FunctionDecl] _boundFunctions;
     private Requirement[Id!FunctionDecl] _requirements;
+    private Forward[][string][string] _forwards;
     /// Where the nodes resolution makes up get their IDs.
     private NodeIds _ids;
 
@@ -423,6 +482,11 @@ private final class NameResolver
         {
             declareModule(mod.name, mod, (preludeName in program.modules) !is null);
         }
+        forwardNames(modules);
+        foreach (mod; modules)
+        {
+            reportForwardClashes(mod.name);
+        }
         // First, so that what uses an alias can see what it stands for.
         foreach (mod; modules)
         {
@@ -438,7 +502,138 @@ private final class NameResolver
         }
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
             _operatorLookups, _declarations, _nativeLibraries, cast(const(Scope)[string]) _moduleScopes, _hiddenParams, _sugarParams,
-            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements);
+            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements, _forwards);
+    }
+
+    /// Works out what every module forwards. A blanket forward passes on what its module forwards
+    /// too, so this repeats until nothing is added, which is also what ends a cycle of them.
+    private void forwardNames(R)(R modules)
+    {
+        for (auto changed = true; changed;)
+        {
+            changed = false;
+            foreach (mod; modules)
+            {
+                foreach (decl; mod.declarations)
+                {
+                    decl.kind.match!(
+                        (const ImportStmt forward) {
+                            auto target = forward.path.join(".");
+                            if (!forward.forward || target !in _moduleScopes) return;
+                            foreach (selected; forward.names)
+                            {
+                                if (forwardName(mod.name, target, selected.name, selected.span)) changed = true;
+                            }
+                            if (forward.names.length > 0) return;
+                            foreach (name; publicNames(target))
+                            {
+                                if (forwardName(mod.name, target, name, decl.span)) changed = true;
+                            }
+                        },
+                        (_) {},
+                    );
+                }
+            }
+        }
+    }
+
+    /// Has `from` forward what `target` gives its importers as `name`. False if that adds nothing.
+    private bool forwardName(string from, string target, string name, Span span)
+    {
+        auto origins = (declaresPublic(target, name) ? [target] : []) ~ forwardsOf(target, name).map!(f => f.origin).array;
+        bool added;
+        foreach (origin; origins)
+        {
+            if (origin == from || forwardsOf(from, name).canFind!(f => f.origin == origin)) continue;
+            _forwards.require(from).require(name) ~= Forward(origin, span);
+            added = true;
+        }
+        return added;
+    }
+
+    private const(Forward)[] forwardsOf(string m, string name)
+    {
+        auto byName = m in _forwards;
+        if (byName is null) return null;
+        auto found = name in *byName;
+        return found is null ? null : *found;
+    }
+
+    /// Every name importing `m` brings, sorted.
+    private string[] publicNames(string m)
+    {
+        auto own = _moduleScopes[m].names.filter!(n => declaresPublic(m, n)).array;
+        return (own ~ _forwards.get(m, null).keys).sort.uniq.array;
+    }
+
+    /// Whether `m` itself declares something public named `name`.
+    private bool declaresPublic(string m, string name)
+    {
+        auto moduleScope = _moduleScopes[m];
+        if (moduleScope.functionsNamed(name).any!(f => isPublic(SymbolId(f)))) return true;
+        auto symbol = moduleScope.resolveLocal(name);
+        if (symbol !is null && !isFunction(*symbol) && isPublic(*symbol)) return true;
+        auto type = moduleScope.resolveLocalType(name);
+        return type !is null && isPublic(*type);
+    }
+
+    /// Reports each name `m` forwards that its importers couldn't use: one that's also a different
+    /// declaration of `m`'s own, or that two of its forwards bring as different declarations.
+    /// Functions of one name are overloads wherever they're from, so those are left to the checker.
+    private void reportForwardClashes(string m)
+    {
+        static struct Brought
+        {
+            string origin;
+            Span span;
+        }
+
+        foreach (name; _forwards.get(m, null).keys.sort)
+        {
+            auto brought = (declaresPublic(m, name) ? [Brought(m)] : []) ~ _forwards[m][name].map!(f => Brought(f.origin, f.span)).array;
+            foreach (i, later; brought)
+            {
+                auto clash = brought[0 .. i].find!(earlier => differ(earlier.origin, later.origin, name));
+                if (clash.empty) continue;
+                auto earlier = clash.front.origin;
+                if (earlier == m)
+                {
+                    _collector.reportError(DiagnosticCode.DuplicateDeclaration, later.span,
+                        "'%s' from '%s' can't be forwarded, since this module declares a '%s' of its own"
+                            .format(name, later.origin, name));
+                }
+                else
+                {
+                    _collector.reportError(DiagnosticCode.AmbiguousName, later.span,
+                        ("'%s' would be forwarded from both '%s' and '%s', which declare different things by that name; "
+                            ~ "list the names to forward from one of them").format(name, earlier, later.origin));
+                }
+                break;
+            }
+        }
+    }
+
+    /// Whether the public `name` of module `a` and that of module `b` can't both be what one module
+    /// gives its importers: they're not all functions, and not one declaration.
+    private bool differ(string a, string b, string name)
+    {
+        const(SymbolId)* value(string m)
+        {
+            auto symbol = _moduleScopes[m].resolveLocal(name);
+            return symbol !is null && !isFunction(*symbol) && isPublic(*symbol) ? symbol : null;
+        }
+        const(TypeSymbol)* type(string m)
+        {
+            auto symbol = _moduleScopes[m].resolveLocalType(name);
+            return symbol !is null && isPublic(*symbol) ? symbol : null;
+        }
+        bool functions(string m) => _moduleScopes[m].functionsNamed(name).any!(f => isPublic(SymbolId(f)));
+
+        auto valueA = value(a), valueB = value(b);
+        if (valueA !is null && valueB !is null && *valueA != *valueB) return true;
+        if ((valueA !is null && functions(b)) || (valueB !is null && functions(a))) return true;
+        auto typeA = type(a), typeB = type(b);
+        return typeA !is null && typeB !is null && *typeA != *typeB;
     }
 
     private void declareModule(string name, const Module mod, bool hasPrelude)
@@ -725,10 +920,12 @@ private final class NameResolver
                     foreach (ref param; func.params)
                     {
                         _declarations.params[param.id] = &param;
-                        resolveTypeExpr(param.type, declScope, sugared ? InterfaceUse.parameter : InterfaceUse.none);
+                        resolveTypeExpr(param.type, declScope, sugared ? InterfaceUse.parameter
+                            : func.body is null ? InterfaceUse.bodilessParameter : InterfaceUse.none);
                     }
                     auto floored = sugared && func.body !is null;
-                    resolveTypeExpr(func.returnType, declScope, floored ? InterfaceUse.floor : InterfaceUse.none);
+                    resolveTypeExpr(func.returnType, declScope, floored ? InterfaceUse.floor
+                        : func.body is null ? InterfaceUse.bodilessResult : InterfaceUse.none);
                     if (floored)
                     {
                         if (auto floors = floorsIn(func.returnType)) _resultFloors[func.id] = floors;
@@ -745,7 +942,7 @@ private final class NameResolver
                         }
                         reportPrivateType(func.returnType, "a public function's signature");
                     }
-                    declScope = declareBounds(func, declScope, name);
+                    declScope = declareBounds(func, declScope, name, sugared);
 
                     if (func.body !is null)
                     {
@@ -788,7 +985,7 @@ private final class NameResolver
                         foreach (ref param; func.params)
                         {
                             _declarations.params[param.id] = &param;
-                            resolveTypeExpr(param.type, declScope);
+                            resolveTypeExpr(param.type, declScope, InterfaceUse.interfaceParameter);
                             if (!interface_.isPrivate) reportPrivateType(param.type, "a public interface");
                         }
                         resolveTypeExpr(func.returnType, declScope, InterfaceUse.interfaceResult);
@@ -803,13 +1000,17 @@ private final class NameResolver
     /// Gives `func` a hidden type parameter for each parameter whose type is an interface name, and
     /// declares the functions its bounds supply in its scope, which is `declScope` or a new one
     /// inside it.
-    private Scope declareBounds(ref const FunctionDecl func, Scope declScope, string moduleName)
+    private Scope declareBounds(ref const FunctionDecl func, Scope declScope, string moduleName, bool sugared)
     {
         TypeParam[] hidden;
-        foreach (ref param; func.params)
+        foreach (ref param; sugared ? func.params : null)
         {
-            if (interfaceNamed(param.type) is null) continue;
-            hidden ~= TypeParam(_ids.next!TypeParam, printTypeExpr(param.type), param.type.span, [cast() param.type]);
+            auto bounds = param.type.kind.match!(
+                (const JoinedType joined) => cast(TypeExpr[]) joined.parts,
+                _ => interfaceNamed(param.type) is null ? null : [cast() param.type],
+            );
+            if (bounds.length == 0) continue;
+            hidden ~= TypeParam(_ids.next!TypeParam, printTypeExpr(param.type), param.type.span, bounds);
             _sugarParams[param.type.id] = hidden[$ - 1].id;
         }
         foreach (ref param; hidden) _declarations.typeParams[param.id] = &param;
@@ -912,7 +1113,16 @@ private final class NameResolver
     /// Whether `m`'s declaration `symbol` can be seen from the module being resolved.
     private bool isVisible(SymbolId symbol, string m)
     {
-        if (m == _currentModule) return true;
+        return m == _currentModule || isPublic(symbol);
+    }
+
+    private bool isVisible(TypeSymbol symbol, string m)
+    {
+        return m == _currentModule || isPublic(symbol);
+    }
+
+    private bool isPublic(SymbolId symbol)
+    {
         return !symbol.match!(
             (const Id!FunctionDecl f) => _declarations.functions[f].isPrivate,
             (const Id!TypeDecl t) => _declarations.types[t].isPrivate,
@@ -922,9 +1132,8 @@ private final class NameResolver
         );
     }
 
-    private bool isVisible(TypeSymbol symbol, string m)
+    private bool isPublic(TypeSymbol symbol)
     {
-        if (m == _currentModule) return true;
         return !symbol.match!(
             (const Id!TypeDecl t) => _declarations.types[t].isPrivate,
             (const Id!AliasDecl a) => _declarations.aliases[a].isPrivate,
@@ -934,30 +1143,32 @@ private final class NameResolver
         );
     }
 
-    /// What the name `name` is in module `m`, if the module being resolved can see it: the first
-    /// visible function, for a name of functions.
+    /// What the name `name` is in module `m` or among what it forwards, if the module being
+    /// resolved can see it: the first visible function, for a name of functions.
     private const(SymbolId)* visibleSymbol(string m, string name)
     {
+        auto functions = visibleFunctions(m, name);
+        if (functions.length > 0) return new SymbolId(functions[0]);
         auto symbol = _moduleScopes[m].resolveLocal(name);
-        if (symbol is null) return null;
-        if (isFunction(*symbol))
+        if (symbol !is null && !isFunction(*symbol) && isVisible(*symbol, m)) return symbol;
+        foreach (forward; forwardsOf(m, name))
         {
-            auto functions = visibleFunctions(m, name);
-            return functions.length == 0 ? null : new SymbolId(functions[0]);
+            auto forwarded = _moduleScopes[forward.origin].resolveLocal(name);
+            if (forwarded !is null && !isFunction(*forwarded) && isPublic(*forwarded)) return forwarded;
         }
-        return isVisible(*symbol, m) ? symbol : null;
+        return null;
     }
 
-    /// The functions named `name` in module `m` that the module being resolved can see.
+    /// The functions named `name` in module `m` that the module being resolved can see, then
+    /// those `m` forwards.
     private Id!FunctionDecl[] visibleFunctions(string m, string name)
     {
-        return _moduleScopes[m].functionsNamed(name).filter!(f => isVisible(SymbolId(f), m)).array;
-    }
-
-    /// The visible functions named `name` in each imported module that has any, a group per module.
-    private Id!FunctionDecl[][] importedFunctions(string name, const Scope scopeTable)
-    {
-        return scopeTable.modulesProviding(name).map!(m => visibleFunctions(m, name)).filter!(g => g.length > 0).array;
+        auto functions = _moduleScopes[m].functionsNamed(name).filter!(f => isVisible(SymbolId(f), m)).array;
+        foreach (forward; forwardsOf(m, name))
+        {
+            functions ~= _moduleScopes[forward.origin].functionsNamed(name).filter!(f => isPublic(SymbolId(f))).array;
+        }
+        return functions;
     }
 
     /// Records `expr` as naming one of `candidates`, or as naming the function when there's one.
@@ -971,7 +1182,13 @@ private final class NameResolver
     private const(TypeSymbol)* visibleType(string m, string name)
     {
         auto symbol = _moduleScopes[m].resolveLocalType(name);
-        return symbol !is null && isVisible(*symbol, m) ? symbol : null;
+        if (symbol !is null && isVisible(*symbol, m)) return symbol;
+        foreach (forward; forwardsOf(m, name))
+        {
+            auto forwarded = _moduleScopes[forward.origin].resolveLocalType(name);
+            if (forwarded !is null && isPublic(*forwarded)) return forwarded;
+        }
+        return null;
     }
 
     /// Reports each private type that the resolved `type` mentions, which `where` would expose.
@@ -1034,7 +1251,7 @@ private final class NameResolver
                 "a top-level constant needs a type: `val %s: Type = ...`".format(constant.name));
             return;
         }
-        resolveTypeExpr(*constant.type, current);
+        resolveTypeExpr(*constant.type, current, InterfaceUse.constant);
 
         if (!isConstantType(*constant.type))
         {
@@ -1060,6 +1277,8 @@ private final class NameResolver
                     (const Id!InterfaceDecl _) => false,
                 );
             },
+            // Already reported as no type at all.
+            (const JoinedType _) => true,
             _ => false,
         );
     }
@@ -1085,12 +1304,13 @@ private final class NameResolver
                         auto owners = current.modulesProviding(name)
                             .filter!(m => visibleType(m, name) !is null)
                             .array;
-                        if (owners.length > 1)
+                        // One type reached through two imports is one type.
+                        if (owners.map!(m => *visibleType(m, name)).array.uniq.walkLength > 1)
                         {
                             _collector.reportError(DiagnosticCode.AmbiguousName, type.span, ambiguityMessage(name, owners));
                             return;
                         }
-                        if (owners.length == 1)
+                        if (owners.length > 0)
                         {
                             resolvedType = visibleType(owners[0], name);
                         }
@@ -1101,8 +1321,8 @@ private final class NameResolver
                     auto moduleName = named.path[0 .. $ - 1].join(".");
                     if (current.importedModules.canFind(moduleName))
                     {
-                        resolvedType = _moduleScopes[moduleName].resolveLocalType(name);
-                        if (resolvedType !is null && !isVisible(*resolvedType, moduleName))
+                        resolvedType = visibleType(moduleName, name);
+                        if (resolvedType is null && _moduleScopes[moduleName].resolveLocalType(name) !is null)
                         {
                             _collector.reportError(DiagnosticCode.PrivateMember, type.span,
                                 "`%s` is private to `%s`".format(name, moduleName));
@@ -1117,9 +1337,10 @@ private final class NameResolver
                     return;
                 }
                 auto isInterface = (*resolvedType).match!((const Id!InterfaceDecl _) => true, _ => false);
+                auto part = use == InterfaceUse.joined || use == InterfaceUse.joinedInFloor;
                 auto allowed = isInterface
-                    ? use == InterfaceUse.bound || use == InterfaceUse.joined || use == InterfaceUse.parameter || use == InterfaceUse.floor
-                    : use != InterfaceUse.bound && use != InterfaceUse.joined;
+                    ? part || use == InterfaceUse.bound || use == InterfaceUse.parameter || isFloor(use)
+                    : !part && use != InterfaceUse.bound;
                 if (!allowed)
                 {
                     reportInterfaceUse(printTypeExpr(type), type.span, use);
@@ -1129,13 +1350,14 @@ private final class NameResolver
             },
             (const OptionType option) => resolveTypeExpr(*option.inner, current, inside),
             (const ErrorUnionType u) {
-                auto part = inside == InterfaceUse.floor ? InterfaceUse.floorInErrorUnion : inside;
-                resolveTypeExpr(*u.success, current, part);
+                // Only the success side of a whole result type or annotation is a floor's place.
+                auto part = isFloor(inside) ? InterfaceUse.floorInErrorUnion : inside;
+                resolveTypeExpr(*u.success, current, use == InterfaceUse.floor ? InterfaceUse.floorPart : part);
                 foreach (error; u.errors) resolveTypeExpr(error, current, part);
             },
             (const ArrayType array) => resolveTypeExpr(*array.element, current, inside),
             (const FunctionType func) {
-                auto part = inside == InterfaceUse.floor ? InterfaceUse.floorInFunction : inside;
+                auto part = isFloor(inside) ? InterfaceUse.floorInFunction : inside;
                 foreach (param; func.params)
                 {
                     resolveTypeExpr(param, current, part);
@@ -1150,13 +1372,25 @@ private final class NameResolver
                 }
             },
             (const JoinedType joined) {
-                foreach (part; joined.parts)
+                auto partUse = isFloor(use) ? InterfaceUse.joinedInFloor : InterfaceUse.joined;
+                foreach (i, part; joined.parts)
                 {
                     auto named = part.kind.match!((const NamedType _) => true, _ => false);
-                    if (named) resolveTypeExpr(part, current, InterfaceUse.joined);
-                    else reportInterfaceUse(printTypeExpr(part), part.span, InterfaceUse.joined);
+                    auto optional = i + 1 == joined.parts.length ? part.kind.match!(
+                        (const OptionType option) => option.inner,
+                        _ => cast(const(TypeExpr)*) null,
+                    ) : null;
+                    if (named) resolveTypeExpr(part, current, partUse);
+                    else if (optional !is null)
+                    {
+                        _collector.reportError(DiagnosticCode.NotAnInterface, part.span,
+                            "`?` here is on `%s` alone, and `&` joins interfaces; for an option of the two together, write `(%s)?`"
+                                .format(printTypeExpr(*optional), (joined.parts[0 .. $ - 1].map!(p => printTypeExpr(p)).array
+                                    ~ printTypeExpr(*optional)).join(" & ")));
+                    }
+                    else reportInterfaceUse(printTypeExpr(part), part.span, partUse);
                 }
-                if (use != InterfaceUse.floor) reportInterfaceUse(printTypeExpr(type), type.span, use, true);
+                if (!isFloor(use) && use != InterfaceUse.parameter) reportInterfaceUse(printTypeExpr(type), type.span, use, true);
             },
         );
     }
@@ -1167,17 +1401,30 @@ private final class NameResolver
         final switch (use)
         {
             case InterfaceUse.floor:
+            case InterfaceUse.floorPart:
+            case InterfaceUse.joinedInFloor:
+                return InterfaceUse.floorPart;
             case InterfaceUse.floorInFunction:
             case InterfaceUse.floorInErrorUnion:
             case InterfaceUse.interfaceResult:
+            case InterfaceUse.bodilessResult:
+            case InterfaceUse.patternBinding:
                 return use;
             case InterfaceUse.none:
             case InterfaceUse.bound:
             case InterfaceUse.joined:
             case InterfaceUse.parameter:
             case InterfaceUse.lambdaParameter:
+            case InterfaceUse.bodilessParameter:
+            case InterfaceUse.interfaceParameter:
+            case InterfaceUse.constant:
                 return InterfaceUse.none;
         }
+    }
+
+    private static bool isFloor(InterfaceUse use)
+    {
+        return use == InterfaceUse.floor || use == InterfaceUse.floorPart;
     }
 
     /// A floor for each interface name or `A & B` that `type`, resolved as one that can have
@@ -1217,7 +1464,7 @@ private final class NameResolver
                 (_) {},
             );
         }
-        visit(type);
+        type.kind.match!((const ErrorUnionType u) => visit(*u.success), (_) => visit(type));
         foreach (ref floor; floors) _declarations.typeParams[floor.id] = &floor;
         return floors;
     }
@@ -1234,6 +1481,7 @@ private final class NameResolver
                     "`%s` is a type, and a bound names an interface".format(name));
                 return;
             case InterfaceUse.joined:
+            case InterfaceUse.joinedInFloor:
                 _collector.reportError(DiagnosticCode.NotAnInterface, span,
                     "`%s` is a type, and `&` joins interfaces".format(name));
                 return;
@@ -1242,6 +1490,17 @@ private final class NameResolver
                     ("`%s` %s, and only a module-level `def` can take any type that satisfies one; "
                         ~ "name the type this parameter takes").format(name, what));
                 return;
+            case InterfaceUse.bodilessParameter:
+                _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
+                    ("`%s` %s, and only a module-level `def` with a body can take any type that satisfies %s; "
+                        ~ "name the type this parameter takes").format(name, what, joined ? "them" : "one"));
+                return;
+            case InterfaceUse.interfaceParameter:
+                _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
+                    ("`%s` %s, and a function of an interface can't take any type that satisfies %s, since it has no "
+                        ~ "type parameters of its own; make the type a parameter of the interface").format(name, what,
+                            joined ? "them" : "one"));
+                return;
             case InterfaceUse.floorInFunction:
                 _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
                     ("`%s` %s, which can't stand for a type inside a function type; name the type with a type "
@@ -1249,7 +1508,22 @@ private final class NameResolver
                 return;
             case InterfaceUse.floorInErrorUnion:
                 _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
-                    "`%s` %s, which can't stand for a type inside an error union; write the type out".format(name, what));
+                    ("`%s` %s, which an error union takes only on its success side, and only where the error union "
+                        ~ "is the whole type; write the type out").format(name, what));
+                return;
+            case InterfaceUse.bodilessResult:
+                _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
+                    ("`%s` %s, which stands for the type a function's body returns, and this function has no body; "
+                        ~ "write the type it returns").format(name, what));
+                return;
+            case InterfaceUse.patternBinding:
+                _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
+                    ("`%s` %s, which a binding in a pattern can't have as its type; write the type out, or bind "
+                        ~ "the value with a `val` of its own").format(name, what));
+                return;
+            case InterfaceUse.constant:
+                _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
+                    "`%s` %s, and a top-level constant is a Bool, integer, Float, String or Unit".format(name, what));
                 return;
             case InterfaceUse.interfaceResult:
                 _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
@@ -1259,9 +1533,11 @@ private final class NameResolver
             case InterfaceUse.none:
             case InterfaceUse.parameter:
             case InterfaceUse.floor:
+            case InterfaceUse.floorPart:
                 _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span, joined
-                    ? ("`%s` joins interfaces, which only a `def`'s result type or a `val`'s annotation can; "
-                        ~ "use a type parameter with the bounds, as in `<T: %s>`").format(name, name)
+                    ? ("`%s` joins interfaces, which only a `def`'s result type, a `val`'s annotation or the whole type "
+                        ~ "of a module-level `def`'s parameter can; use a type parameter with the bounds, as in `<T: %s>`")
+                        .format(name, name)
                     : ("`%s` is an interface, which stands for a type only as a `def`'s result type, a `val`'s annotation "
                         ~ "or the whole type of a module-level `def`'s parameter; use a type parameter with a bound, as in "
                         ~ "`<T: %s>`, or a sum type of the types it holds").format(name, name));
@@ -1567,7 +1843,7 @@ private final class NameResolver
         pattern.kind.match!(
             (ref const VarDecl binding) {
                 _declarations.locals[binding.id] = &binding;
-                if (binding.type !is null) resolveTypeExpr(*binding.type, scopeTable);
+                if (binding.type !is null) resolveTypeExpr(*binding.type, scopeTable, InterfaceUse.patternBinding);
                 if (binding.name != discardName)
                 {
                     declareLocal(binding.name, binding.nameSpan, SymbolId(binding.id), scopeTable,
@@ -1652,7 +1928,7 @@ private final class NameResolver
     /// This module's functions `own` named `name`, then a group per imported module.
     private Candidates candidatesFor(string name, Id!FunctionDecl[] own, const Scope scopeTable)
     {
-        return Candidates(own ~ importedFunctions(name, scopeTable));
+        return grouped(own, scopeTable.modulesProviding(name).array, m => visibleFunctions(m, name));
     }
 
     /// Resolves an identifier or a member access chain, which may start with a module path.
@@ -1708,7 +1984,8 @@ private final class NameResolver
         {
             return recordFunctions(expr, name, candidatesFor(name, null, scopeTable));
         }
-        if (found.length == 1)
+        // One declaration reached through two imports is one declaration.
+        if (found.length > 0 && found.all!(f => f == found[0]))
         {
             return recordValue(expr, name, found[0]);
         }
@@ -1896,16 +2173,30 @@ private enum InterfaceUse
     parameter,
     /// The whole type of a lambda's or nested `def`'s parameter, which can't be generic.
     lambdaParameter,
+    /// The whole type of a parameter of a function with no body, or of an interface's function.
+    bodilessParameter,
+    interfaceParameter,
     /// A part of `A & B`, which has to be an interface.
     joined,
-    /// A result type or a `val`'s annotation, where an interface name or `A & B` is a floor: as
-    /// the whole type, or inside a tuple, an option, an array or a type argument.
+    /// A part of an `A & B` that's a floor, whose type arguments are a floor's place too.
+    joinedInFloor,
+    /// The whole of a result type or a `val`'s annotation, where an interface name or `A & B` is
+    /// a floor, as it is on the success side of an error union that's the whole type.
     floor,
-    /// Inside a function type or an error union in one of those, where there's no floor.
+    /// Inside one of those: a tuple's element, an option's or array's type, or a type argument.
+    floorPart,
+    /// Inside a function type in one of those, or an error union that isn't the whole type or
+    /// its errors, where there's no floor.
     floorInFunction,
     floorInErrorUnion,
     /// The result type of an interface's function.
     interfaceResult,
+    /// The result type of a function with no body to take the type from.
+    bodilessResult,
+    /// The annotation of a binding in a pattern.
+    patternBinding,
+    /// A top-level constant's type.
+    constant,
 }
 
 /// The names the language gives meaning to, which no declaration can take.

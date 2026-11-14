@@ -1,0 +1,31 @@
+// One declaration reached through several imports is one declaration, and imports that lead to
+// the same functions agree.
+import forward_support.outer
+import forward_support.facade
+import forward_support.arrays
+import forward_support.ranges : first, Shape, Circle
+import forward_support.left
+import forward_support.right : fromRight
+
+def main(): Unit {
+    // `arrays` alone has only the array's `first`; beside the facade it changes nothing.
+    printl(first([1, 2, 3]))
+    printl(first(Pile(4)))
+    printl(first("text"))
+    printl(limit)
+    val shape: Shape = Circle(2)
+    printl(describe(shape))
+    printl(Stack([5])[0])
+    printl(forward_support.outer.first([8]))
+    // The facade lists what it forwards from `arrays`, and this isn't among them.
+    printl(unlisted())
+    printl(forward_support.arrays.unlisted())
+
+    // A cycle of blanket forwards gives each module what both have.
+    printl(fromLeft())
+    printl(fromRight())
+    printl(forward_support.left.fromRight())
+    printl(side(1))
+    printl(side("one"))
+    printl(forward_support.left.side("two"))
+}

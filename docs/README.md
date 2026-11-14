@@ -4,6 +4,15 @@ Silver is a statically typed language with a functional feel: values are immutab
 
 These documents describe the language as designed. Where the implementation doesn't match the design yet, the end of each file has a **Current implementation** section. Silver can be run by an interpreter or compiled to a native program, and both are meant to behave identically.
 
+## Running and building
+
+- `silver <file>` runs a program with the interpreter, and `silver -b llvm <file>` compiles it and runs the result.
+- `silver build <file>` compiles it to an executable, which `-o` names. With `--emit-llvm` it writes the LLVM IR instead.
+- `silver test <path>` runs tests: see [Testing](language/testing.md#running-tests).
+- `-I <path>` adds a directory to search for imported modules.
+
+`-O`, or `--optimize`, optimizes a compiled program: with `silver build`, and with `-b llvm` when running or testing. It changes how fast the program runs and how deep it can recurse, and nothing else. Every check stays: overflow, bounds, invariants, and the rest of what [panics](language/control-flow.md#panics). So a program that doesn't run out of stack either way prints, panics and fails as it does without `-O`. How deep a program can recurse isn't specified, and optimizing can turn a recursion into a loop, which needs no stack: a program that panics with `Stack overflow` may then finish, never stop, or reach a different panic first, as [Panics](language/control-flow.md#panics) shows. `-O2` is another spelling of `-O`, and `-O0` is the default, no optimization; there are no other levels. With `--emit-llvm`, `-O` writes the IR as optimized. The interpreter has nothing to optimize, so `-O` without `build` or `-b llvm` is an error. Options are case-sensitive: `-o` names the output and `-O` optimizes.
+
 ## Contents
 
 | Document | Covers | Status |
@@ -23,7 +32,7 @@ These documents describe the language as designed. Where the implementation does
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
 | [Interfaces](language/interfaces.md) | Interfaces, bounds, conformance, interface names as parameter and result types and on bindings | Partial: no interface types as values, no `Ord`, no bounds on a type's parameters |
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
-| [Modules](language/modules.md) | Files, imports, visibility | Partial: no `forward import` or renamed imports |
+| [Modules](language/modules.md) | Files, imports, forwarding, visibility | Partial: no renamed imports, and the prelude doesn't forward `std` modules yet |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the standard library's natives |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, `panics`, the test runner | Partial: no companion files, `--filter` or `--format json` |
 

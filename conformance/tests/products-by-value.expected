@@ -1,0 +1,73 @@
+Line(Point(0, 0), Point(4, 6))
+Point(2, 3)
+6
+true
+false
+true
+Line(Point(0, 0), Point(9, 9))
+Line(Point(0, 0), Point(4, 6))
+Line(Point(0, 0), Point(10, 6))
+Line(Point(0, 0), Point(4, 6))
+Meters(2.5)
+3.5
+true
+Padded((), 7, ())
+false
+Nothing((), ())
+true
+Marker
+[Marker, Marker]
+1
+Named(home, Some(Point(0, 0)), [a, b])
+Named(home, None, [a, b])
+Some(0)
+true
+[Point(1, 2), Point(3, 4), Point(5, 6)]
+Point(3, 4)
+6
+Some(Point(3, 4))
+None
+[Point(1, 2), Point(3, 4), Point(5, 6), Point(0, 0)]
+[Point(3, 4), Point(5, 6)]
+true
+[Point(-1, -2), Point(3, 4), Point(5, 6), Point(7, 8)]
+[Point(1, 2), Point(3, 4), Point(5, 6)]
+3
+Line(Point(0, 0), Point(5, 6))
+Ok(Point(3, 4))
+Error(no point at 4)
+(Line(Point(0, 0), Point(4, 6)), Some(Point(0, 0)))
+Point(4, 6)
+Some(Point(0, 0))
+Some(Some(Point(1, 1)))
+None
+true
+Pair(text, Point(0, 0))
+Point(4, 6)
+Pair(Pair(1, 2), Pair(Marker, ()))
+Point(6, 8)
+Line(Point(0, 0), Point(6, 8))
+Line(Point(0, 0), Point(4, 6))
+dot at Point(1, 1)
+segment to Point(4, 6)
+blank
+[Dot(Point(1, 1)), Segment(Line(Point(0, 0), Point(4, 6))), Blank]
+true
+Point(101, 202)
+Line(Point(100, 200), Point(0, 0))
+Point(8, 9)
+Point(2, 1)
+Line(Point(1, 2), Point(3, 4))
+Point(6, 5)
+Point(0, 6)
+Some(Point(1, 2))
+None
+Point(1, 2)
+32
+Line(Point(-1, -1), Point(4, 6))
+Line(Point(0, 0), Point(4, 6))
+Wide(3, 1.5, c, true, -3, 40000, g, Some(3), Point(3, 3), [3, 3], (3, k), Line(Point(0, 0), Point(3, 3)))
+true
+false
+Point(4, 6)
+(2, k)

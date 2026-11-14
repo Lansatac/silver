@@ -1,0 +1,6 @@
+// What a module forwards is ranked as its own, so two forwarded functions can't take the same parameters.
+import forward_support.same
+
+def main(): Unit {
+    printl(1)
+}

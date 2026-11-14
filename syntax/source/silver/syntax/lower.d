@@ -159,8 +159,10 @@ private final class Lowering
         switch (cst.name)
         {
         case "Silver.ImportStatement":
-            auto names = cst.children[1 .. $].map!(n => ImportedName(n.matches[0], spanOf(n, file))).array;
-            return [Decl(spanOf(cst, file), DeclKind(ImportStmt(ids.next!ImportStmt, qualifiedName(cst[0]), names)))];
+            auto forward = cst[0].name == "Silver.FORWARD";
+            auto parts = cst.children[forward ? 1 : 0 .. $];
+            auto names = parts[1 .. $].map!(n => ImportedName(n.matches[0], spanOf(n, file))).array;
+            return [Decl(spanOf(cst, file), DeclKind(ImportStmt(ids.next!ImportStmt, qualifiedName(parts[0]), names, forward)))];
         case "Silver.FunctionDeclaration":
         case "Silver.NativeFunctionDeclaration":
         case "Silver.IntrinsicFunctionDeclaration":
@@ -433,15 +435,19 @@ private final class Lowering
             return convertTypeExpression(cst[0]);
         case "Silver.Type":
         case "Silver.SumMemberType":
-            // `OptionalType`, then `ErrorTypes` or a single `OptionalType` after `!`.
+            // `OptionalType`, then the types joined to it, then `ErrorTypes` or a single
+            // `OptionalType` after `!`.
             auto success = convertTypeExpression(cst[0]);
-            if (cst.children.length == 1) return success;
-            if (cst[1].name == "Silver.JoinedTypes")
+            auto rest = cst.children[1 .. $];
+            if (rest.length > 0 && rest[0].name == "Silver.JoinedTypes")
             {
-                auto parts = success ~ cst[1].children.map!(p => convertTypeExpression(p)).array;
-                return TypeExpr(ids.next!TypeExpr, spanOf(cst, file), TypeExprKind(JoinedType(parts)));
+                auto parts = success ~ rest[0].children.map!(p => convertTypeExpression(p)).array;
+                auto joined = Span(success.span.file, success.span.start, parts[$ - 1].span.end);
+                success = TypeExpr(ids.next!TypeExpr, joined, TypeExprKind(JoinedType(parts)));
+                rest = rest[1 .. $];
             }
-            auto listed = cst[1].name == "Silver.ErrorTypes" ? cst[1].children : cst.children[1 .. $];
+            if (rest.length == 0) return success;
+            auto listed = rest[0].name == "Silver.ErrorTypes" ? rest[0].children : rest;
             auto errors = listed.map!(e => convertTypeExpression(e)).array;
             return TypeExpr(ids.next!TypeExpr, spanOf(cst, file), TypeExprKind(ErrorUnionType(boxed(success), errors)));
         case "Silver.OptionalType":

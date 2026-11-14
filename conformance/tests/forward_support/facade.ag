@@ -1,0 +1,14 @@
+module forward_support.facade
+
+forward import forward_support.arrays : first, Stack, length, opIndex, limit
+forward import forward_support.ranges
+
+type Pile(height: Int)
+
+def count(p: Pile): Int => p.height
+
+// One of the facade's own beside the two it forwards.
+def first(text: String): String => "first of {text}"
+
+// A forward import is an import here too.
+def tallest(): Int => limit + forward_support.arrays.limit

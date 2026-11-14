@@ -1,0 +1,27 @@
+// Two boxed records are loaded from an array nothing else holds, kept while a great deal is
+// allocated, and then stored. They have to survive every collection in between.
+type Node(value: Int, next: Node?)
+type Ends(first: Node, last: Node)
+
+def noise(seed: Int, count: Int): Int {
+    mutable val keep: [Node] = []
+    for i in 0..count { keep = [Node(seed + i, None), Node(i, None)] }
+    keep[0].value - seed - count + 1
+}
+
+def pick(xs: [Ends], seed: Int, count: Int): [Ends] {
+    val e = xs[0]
+    val zero = noise(seed, count)
+    [e]
+}
+
+def one(i: Int): [Ends] => [Ends(Node(i, None), Node(i + 1, None))]
+
+def main(): Unit {
+    mutable val wrong = 0
+    for i in 0..8 {
+        val got = pick(one(i), i, 60000)
+        if got[0].first.value != i || got[0].last.value != i + 1 { wrong += 1 }
+    }
+    printl(wrong)
+}

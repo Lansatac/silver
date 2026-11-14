@@ -13,7 +13,7 @@ version (unittest)
     import std.stdio : File, stdin, writeln;
     import std.string : lineSplitter, replace, startsWith, strip;
     import silver.ast : DiagnosticException, formatDiagnostic, Program, SourceContext;
-    import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Toolchain;
+    import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, Toolchain;
     import silver.core : lowerProgram, CoreProgram = Program;
     import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed;
     import silver.loader : load, standardLibraryPath;
@@ -108,9 +108,9 @@ version (unittest)
     }
 
     /// Runs the tests of `c` on `backend`, and returns why the report isn't the expected one, or null.
-    string runTesting(Case c, TestBackend backend, string workDirectory)
+    string runTesting(Case c, TestBackend backend, string workDirectory, Optimization optimization = Optimization.none)
     {
-        auto text = report([runFile(c.sourcePath, [], backend, workDirectory)]);
+        auto text = report([runFile(c.sourcePath, [], backend, workDirectory, optimization)]);
         return compareOutput(c, text.replace(dirName(c.sourcePath) ~ dirSeparator, "").normalizeNewlines);
     }
 
@@ -218,6 +218,13 @@ version (unittest)
         return message.length == 0 ? null : message;
     }
 
+    /// How the compiled cases of one run are built.
+    struct Build
+    {
+        Toolchain toolchain;
+        Optimization optimization;
+    }
+
     struct CompiledRun
     {
         int status;
@@ -225,7 +232,7 @@ version (unittest)
     }
 
     /// Compiles `c` in `workDirectory` and runs it. Returns why it couldn't, or null with `run` set.
-    string compileAndRun(Case c, const Toolchain toolchain, string workDirectory, out CompiledRun run)
+    string compileAndRun(Case c, const Build build, string workDirectory, out CompiledRun run)
     {
         auto context = new SourceContext();
         Program program;
@@ -253,7 +260,7 @@ version (unittest)
         auto irPath = buildPath(workDirectory, c.name ~ ".ll");
         auto exePath = executablePath(buildPath(workDirectory, c.name));
         write(irPath, ir);
-        auto linked = linkExecutable(toolchain, irPath, exePath, lowered.libraries);
+        auto linked = linkExecutable(build.toolchain, irPath, exePath, lowered.libraries, build.optimization);
         if (!linked.succeeded)
         {
             return "linking failed (IR kept at " ~ irPath ~ "):\n" ~ linked.output;
@@ -354,7 +361,7 @@ version (unittest)
 
     /// Why each case in `all` failed when compiled, by name; a case that passed has no entry.
     /// A bundle that fails has its members rerun alone, so failures are reported per case.
-    string[string] compiledFailures(Case[] all, const string[] pending, const Toolchain toolchain, string workDirectory)
+    string[string] compiledFailures(Case[] all, const string[] pending, const Build build, string workDirectory)
     {
         Case[] alone;
         Case[] grouped;
@@ -378,7 +385,7 @@ version (unittest)
             bundles ~= makeBundle(name, members, buildPath(workDirectory, name ~ ".src"));
         }
         auto programs = bundles.map!(b => b.program).array;
-        auto bundleResults = inParallel(programs, (Case c) => runCompiled(c, toolchain, workDirectory));
+        auto bundleResults = inParallel(programs, (Case c) => runCompiled(c, build, workDirectory));
         foreach (i, bundle; bundles)
         {
             if (bundleResults[i] !is null)
@@ -387,7 +394,7 @@ version (unittest)
             }
         }
 
-        auto results = inParallel(alone, (Case c) => runCompiled(c, toolchain, workDirectory));
+        auto results = inParallel(alone, (Case c) => runCompiled(c, build, workDirectory));
         string[string] failures;
         foreach (i, c; alone)
         {
@@ -408,10 +415,10 @@ version (unittest)
     }
 
     /// Compiles and runs `c`, and returns why its output didn't match, or null if it did.
-    string runCompiled(Case c, const Toolchain toolchain, string workDirectory)
+    string runCompiled(Case c, const Build build, string workDirectory)
     {
         CompiledRun run;
-        if (auto failure = compileAndRun(c, toolchain, workDirectory, run))
+        if (auto failure = compileAndRun(c, build, workDirectory, run))
         {
             return failure;
         }
@@ -423,10 +430,10 @@ version (unittest)
     }
 
     /// Compiles and runs the panic case `c`, and returns why it didn't panic as expected, or null.
-    string runCompiledPanic(Case c, const Toolchain toolchain, string workDirectory)
+    string runCompiledPanic(Case c, const Build build, string workDirectory)
     {
         CompiledRun run;
-        if (auto failure = compileAndRun(c, toolchain, workDirectory, run))
+        if (auto failure = compileAndRun(c, build, workDirectory, run))
         {
             return failure;
         }
@@ -468,10 +475,10 @@ version (unittest)
     }
 
     /// Compiles and runs the error case `c`, and returns why it didn't report its error as expected, or null.
-    string runCompiledError(Case c, const Toolchain toolchain, string workDirectory)
+    string runCompiledError(Case c, const Build build, string workDirectory)
     {
         CompiledRun run;
-        if (auto failure = compileAndRun(c, toolchain, workDirectory, run))
+        if (auto failure = compileAndRun(c, build, workDirectory, run))
         {
             return failure;
         }
@@ -578,6 +585,97 @@ version (unittest)
         }
         return "output differs.\n--- expected\n" ~ expected ~ "\n--- actual\n" ~ actual;
     }
+
+    /// Every compiled case runs optimized as well, against the same expected output, which adds
+    /// about half as long again. `SILVER_CONFORMANCE_UNOPTIMIZED` leaves those runs out.
+    bool optimizedSkipped()
+    {
+        return environment.get("SILVER_CONFORMANCE_UNOPTIMIZED") !is null;
+    }
+
+    /// Sets `build` for running `what` compiled, or says why it's skipped and returns false.
+    bool findBuild(string what, Optimization optimization, out Build build)
+    {
+        if (optimization == Optimization.full && optimizedSkipped)
+        {
+            writeln("    note: SILVER_CONFORMANCE_UNOPTIMIZED is set. Optimized ", what, " was skipped.");
+            return false;
+        }
+        build.optimization = optimization;
+        if (auto missing = findToolchain(build.toolchain))
+        {
+            writeln("    note: ", missing, " The ", what, " was skipped.");
+            return false;
+        }
+        return true;
+    }
+
+    string described(string kind, Optimization optimization)
+    {
+        return (optimization == Optimization.full ? "Optimized " : "Compiled ") ~ kind;
+    }
+
+    /// A new directory for the files of one compiled run.
+    string workDirectoryFor(string kind, Optimization optimization)
+    {
+        auto directory = buildPath(tempDir, "silver-conformance-" ~ kind
+            ~ (optimization == Optimization.full ? "-optimized-" : "-") ~ thisProcessID.to!string);
+        mkdirRecurse(directory);
+        return directory;
+    }
+
+    /// Fails with `problems` if there are any. Failures keep their IR for inspection; a clean
+    /// run leaves nothing behind.
+    void finish(string problems, string workDirectory)
+    {
+        if (problems is null)
+        {
+            rmdirRecurse(workDirectory);
+        }
+        assert(problems is null, problems);
+    }
+
+    void checkCompiled(Optimization optimization)
+    {
+        Build build;
+        if (!findBuild("compiled conformance", optimization, build)) return;
+        auto workDirectory = workDirectoryFor("tests", optimization);
+        auto all = cases;
+        auto failed = compiledFailures(all, pendingCases(compiledPending), build, workDirectory);
+        finish(pendingProblems(described("conformance", optimization), all, failed, compiledPending), workDirectory);
+    }
+
+    void checkCompiledPanics(Optimization optimization)
+    {
+        Build build;
+        if (!findBuild("compiled panic conformance", optimization, build)) return;
+        auto workDirectory = workDirectoryFor("panics", optimization);
+        auto all = panicCases;
+        auto failed = failuresByName(all, inParallel(all, (Case c) => runCompiledPanic(c, build, workDirectory)));
+        finish(pendingProblems(described("panic", optimization), all, failed, compiledPending), workDirectory);
+    }
+
+    void checkCompiledErrors(Optimization optimization)
+    {
+        Build build;
+        if (!findBuild("compiled error conformance", optimization, build)) return;
+        auto workDirectory = workDirectoryFor("errors", optimization);
+        auto all = errorCases;
+        auto failed = failuresByName(all, inParallel(all, (Case c) => runCompiledError(c, build, workDirectory)));
+        finish(pendingProblems(described("error", optimization), all, failed, compiledPending), workDirectory);
+    }
+
+    void checkCompiledTesting(Optimization optimization)
+    {
+        Build build;
+        if (!findBuild("compiled testing conformance", optimization, build)) return;
+        // Of its own, since each test program is named after its file alone.
+        auto workDirectory = workDirectoryFor("testing", optimization);
+        auto all = testingCases;
+        auto failed = failuresByName(all,
+            inParallel(all, (Case c) => runTesting(c, TestBackend.llvm, workDirectory, optimization)));
+        finish(pendingProblems(described("testing", optimization), all, failed, compiledPending), workDirectory);
+    }
 }
 
 @("Interpreted conformance programs match their expected output")
@@ -592,25 +690,13 @@ unittest
 @("Compiled conformance programs match their expected output")
 unittest
 {
-    Toolchain toolchain;
-    if (auto missing = findToolchain(toolchain))
-    {
-        writeln("    note: ", missing, " Compiled conformance was skipped.");
-        return;
-    }
+    checkCompiled(Optimization.none);
+}
 
-    auto workDirectory = buildPath(tempDir, "silver-conformance-" ~ thisProcessID.to!string);
-    mkdirRecurse(workDirectory);
-
-    auto all = cases;
-    auto failed = compiledFailures(all, pendingCases(compiledPending), toolchain, workDirectory);
-    auto problems = pendingProblems("Compiled conformance", all, failed, compiledPending);
-    // Failures keep their IR for inspection; a clean run leaves nothing behind.
-    if (problems is null)
-    {
-        rmdirRecurse(workDirectory);
-    }
-    assert(problems is null, problems);
+@("Optimized conformance programs match their expected output")
+unittest
+{
+    checkCompiled(Optimization.full);
 }
 
 @("Interpreted programs that panic report the expected error")
@@ -625,24 +711,13 @@ unittest
 @("Compiled programs that panic report what the interpreter does and exit with the panic status")
 unittest
 {
-    Toolchain toolchain;
-    if (auto missing = findToolchain(toolchain))
-    {
-        writeln("    note: ", missing, " Compiled panic conformance was skipped.");
-        return;
-    }
+    checkCompiledPanics(Optimization.none);
+}
 
-    auto workDirectory = buildPath(tempDir, "silver-conformance-panics-" ~ thisProcessID.to!string);
-    mkdirRecurse(workDirectory);
-
-    auto all = panicCases;
-    auto failed = failuresByName(all, inParallel(all, (Case c) => runCompiledPanic(c, toolchain, workDirectory)));
-    auto problems = pendingProblems("Compiled panic", all, failed, compiledPending);
-    if (problems is null)
-    {
-        rmdirRecurse(workDirectory);
-    }
-    assert(problems is null, problems);
+@("Optimized programs that panic report what the interpreter does and exit with the panic status")
+unittest
+{
+    checkCompiledPanics(Optimization.full);
 }
 
 @("Interpreted tests report what the expected report says")
@@ -657,17 +732,13 @@ unittest
 @("Compiled tests report what the expected report says")
 unittest
 {
-    Toolchain toolchain;
-    if (auto missing = findToolchain(toolchain))
-    {
-        writeln("    note: ", missing, " Compiled testing conformance was skipped.");
-        return;
-    }
+    checkCompiledTesting(Optimization.none);
+}
 
-    auto all = testingCases;
-    auto failed = failuresByName(all, inParallel(all, (Case c) => runTesting(c, TestBackend.llvm, tempDir)));
-    auto problems = pendingProblems("Compiled testing", all, failed, compiledPending);
-    assert(problems is null, problems);
+@("Optimized tests report what the expected report says")
+unittest
+{
+    checkCompiledTesting(Optimization.full);
 }
 
 @("Interpreted programs whose main returns an error report it")
@@ -682,24 +753,13 @@ unittest
 @("Compiled programs whose main returns an error print it and exit with status 1")
 unittest
 {
-    Toolchain toolchain;
-    if (auto missing = findToolchain(toolchain))
-    {
-        writeln("    note: ", missing, " Compiled error conformance was skipped.");
-        return;
-    }
+    checkCompiledErrors(Optimization.none);
+}
 
-    auto workDirectory = buildPath(tempDir, "silver-conformance-errors-" ~ thisProcessID.to!string);
-    mkdirRecurse(workDirectory);
-
-    auto all = errorCases;
-    auto failed = failuresByName(all, inParallel(all, (Case c) => runCompiledError(c, toolchain, workDirectory)));
-    auto problems = pendingProblems("Compiled error", all, failed, compiledPending);
-    if (problems is null)
-    {
-        rmdirRecurse(workDirectory);
-    }
-    assert(problems is null, problems);
+@("Optimized programs whose main returns an error print it and exit with status 1")
+unittest
+{
+    checkCompiledErrors(Optimization.full);
 }
 
 @("Programs that sema rejects report the expected error")

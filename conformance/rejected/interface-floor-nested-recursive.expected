@@ -1,0 +1,1 @@
+T0045: The type `walk` returns is worked out from its body, which uses `walk` before that's known; write the type it returns out

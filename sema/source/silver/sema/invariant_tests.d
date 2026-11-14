@@ -77,10 +77,15 @@ unittest
     analyzedWith("type A(x: Int) invariant x > 0 else panic(\"no\")", "")
         .shouldReport(DiagnosticCode.InvalidErrorType, At("panic(\"no\")", 1));
     analyzedWith("type A(x: Int) invariant x > 0 else None", "").shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
-    analyzedWith("type A(x: Int) invariant x > 0 else B(x)\ntype B(x: Int) invariant x > 0 else x", "")
-        .shouldReport(DiagnosticCode.NotSupportedYet, At("B(x)", 1));
-    analyzedWith("type B(x: Int) invariant x > 0 else x\ntype A(x: Int) invariant x > 0 else B(x)", "")
-        .shouldHaveNoDiagnostics();
+    // An `else` can build a type with an invariant, declared before it or after, but not its own.
+    foreach (source; ["type A(x: Int) invariant x > 0 else B(x)\ntype B(x: Int) invariant x > 0 else x",
+        "type B(x: Int) invariant x > 0 else x\ntype A(x: Int) invariant x > 0 else B(x)"])
+    {
+        analyzedWith(source, "    val built = A(1)").shouldHaveNoDiagnostics();
+    }
+    analyzedWith("type A(x: Int) invariant x > 0 else A(x)", "").shouldReport(DiagnosticCode.NotSupportedYet, At("A(x)", 1));
+    analyzedWith("type A(x: Int) invariant x > 0 else B(x)\ntype B(x: Int) invariant x > 0 else A(x)", "")
+        .shouldReport(DiagnosticCode.NotSupportedYet, At("A(x)", 1));
 }
 
 @("a with that updates a field the invariant names yields an error union, and one that doesn't is plain")

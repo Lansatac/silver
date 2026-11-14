@@ -1,0 +1,5 @@
+FAIL "a failure shows a forwarded call as written" at forward.ag(15,6)
+    forward.ag(15,55): Expectation failed: next(1) == next(Pace(1))
+        left: 2
+        right: 101
+2 passed, 1 failed

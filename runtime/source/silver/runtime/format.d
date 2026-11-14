@@ -6,6 +6,7 @@ module silver.runtime.format;
 import std.conv : to;
 
 import silver.runtime.buffer : newString, silver_array_append;
+import silver.runtime.memory : SavedRegisters, silver_save_registers;
 import silver.runtime.panic : panic;
 
 /// D would show a NaN's sign bit, which means nothing.
@@ -61,6 +62,8 @@ private struct Formatted
 
 private void format(T)(T value, const(char)** data, size_t* length)
 {
+    SavedRegisters saved = void;
+    silver_save_registers(&saved);
     try
     {
         static if (is(T == double)) newString(floatText(value), data, length);

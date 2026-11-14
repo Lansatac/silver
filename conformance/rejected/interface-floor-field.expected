@@ -1,1 +1,1 @@
-S0026: `Range<Int> & Indexed<Int>` joins interfaces, which only a `def`'s result type or a `val`'s annotation can; use a type parameter with the bounds, as in `<T: Range<Int> & Indexed<Int>>`
+S0026: `Range<Int> & Indexed<Int>` joins interfaces, which only a `def`'s result type, a `val`'s annotation or the whole type of a module-level `def`'s parameter can; use a type parameter with the bounds, as in `<T: Range<Int> & Indexed<Int>>`

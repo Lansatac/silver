@@ -18,12 +18,28 @@ import silver.sema.typing;
 
 // Type checking for Silver programs.
 
-/// Where a conformance is looked for: the module whose functions a call there sees, and the
-/// module-level function it's written in, if any, whose own bounds supply functions too.
+/// Where a body is written: the module whose functions a call there sees, and the module-level
+/// function it's in, if any, whose own bounds supply functions to a conformance search too. A
+/// lambda's or nested `def`'s body has the site of the body around it.
 private struct Site
 {
     string module_;
     Id!FunctionDecl function_;
+    /// Whether that function is a test.
+    bool inTest;
+    /// The nested `def`s around this whose result types are being worked out, innermost first.
+    Unsettled* unsettled;
+}
+
+/// A nested `def` whose result type is being worked out from its body.
+private struct Unsettled
+{
+    Id!VarDecl self;
+    /// Its result type as written.
+    Span written;
+    Unsettled* outer;
+    /// Whether its body used it, which is reported once.
+    bool usedItself;
 }
 
 /// Where the checker is inside a function body. Passed by value, so a nested body (a lambda)
@@ -51,6 +67,9 @@ private struct InferredReturn
     /// What each postfix `?` on an error union passes on, and where it is.
     Type[] errors;
     Span[] errorSpans;
+    /// The errors written after a result type whose success side is a floor, which everything
+    /// returned is typed beside, or `Type.init`.
+    Type beside;
 }
 
 /// Where working out a result type from its function's body has got to.
@@ -97,18 +116,12 @@ private final class TypeChecker
     private Id!FunctionDecl[Id!FunctionDecl] _repeatedBounds;
     /// How many elements `placePath` has named, so each is a place of its own.
     private size_t _elementPlaces;
-    /// Whether the body being checked is a test's, or a lambda or nested `def` in one.
-    private bool _inTest;
-    /// The types with an invariant whose `else` hasn't been typed yet, so nothing can build one.
+    /// The types with an invariant whose `else` hasn't been typed yet, and whether it's being typed.
     private bool[Id!TypeDecl] _pendingInvariants;
     /// Each function whose result type is worked out from its body that has been started on.
     private ResultState[Id!FunctionDecl] _resultStates;
     /// Those found to need their own result type while it was being worked out.
     private bool[Id!FunctionDecl] _recursiveResults;
-    /// The nested `def`s whose result type is being worked out, by the result type as written,
-    /// and whether each has been reported for using itself.
-    private Span[Id!VarDecl] _unsettledLocals;
-    private bool[Id!VarDecl] _recursiveLocals;
 
     Typing checkProgram(const Program program)
     {
@@ -182,7 +195,7 @@ private final class TypeChecker
         }
 
         // After every signature, since an invariant's `else` can call anything, and before any body,
-        // since a body can build the type.
+        // since a body can build the type. One that another needs first is typed from there.
         noteInvariantMentions();
         foreach (mod; programModules)
         {
@@ -190,7 +203,7 @@ private final class TypeChecker
             {
                 decl.kind.match!(
                     (const TypeDecl t) {
-                        if (t.invariantError.isValid) _pendingInvariants[t.id] = true;
+                        if (t.invariantError.isValid) _pendingInvariants[t.id] = false;
                     },
                     (_) {},
                 );
@@ -202,7 +215,7 @@ private final class TypeChecker
             {
                 decl.kind.match!(
                     (const TypeDecl t) {
-                        if (t.invariantError.isValid) inferInvariantError(t);
+                        if (t.id in _pendingInvariants) inferInvariantError(t);
                     },
                     (_) {},
                 );
@@ -212,6 +225,7 @@ private final class TypeChecker
         foreach (mod; programModules)
         {
             checkOverloads(mod);
+            checkForwardedOverloads(mod.name);
         }
 
         foreach (mod; programModules)
@@ -298,6 +312,7 @@ private final class TypeChecker
         if (_repeatedBounds.length == 0 || !candidates.groups.joiner.any!(f => (f in _repeatedBounds) !is null)) return candidates;
         Candidates kept;
         foreach (group; candidates.groups) kept.groups ~= group.filter!(f => f !in _repeatedBounds).array.dup;
+        kept.sources = candidates.sources.dup;
         return kept;
     }
 
@@ -395,9 +410,7 @@ private final class TypeChecker
             );
         // An invariant's `else` was checked when its type was inferred.
         if (func.body is null || func.invariantErrorOf.isValid) return;
-        _inTest = func.testName !is null;
-        scope (exit) _inTest = false;
-        checkBody(*func.body, returnType, siteOf(func.id), _inTest);
+        checkBody(*func.body, returnType, siteOf(func.id), func.testName !is null);
     }
 
     /// Works out the result type of `f` from its body, checking the body, when it's written with
@@ -428,34 +441,72 @@ private final class TypeChecker
                 break;
         }
         _resultStates[f] = ResultState.working;
-        auto inTest = _inTest;
-        _inTest = false;
-        scope (exit) _inTest = inTest;
         auto result = inferReturn(*func.body, siteOf(f), false,
             Floored(signature.ret, *floors, "`%s` returns".format(func.name)));
         if (f in _recursiveResults) result = _types.error;
         _typing.symbolTypes[SymbolId(f)] = _types.function_(signature.params, result, signature.mutables);
         _resultStates[f] = ResultState.settled;
+        // Resolution has reported one that's written.
+        auto written = privateTypeIn(signature.ret) !is null || (*floors).any!(floor => _typing.bounds.get(floor.id, null)
+            .any!(bound => bound.args.any!(a => privateTypeIn(a) !is null)));
+        auto hidden = func.isPrivate || written ? null : privateTypeIn(result);
+        if (hidden !is null)
+        {
+            _collector.reportError(DiagnosticCode.PrivateTypeExposed, func.returnType.span,
+                ("`%s` is private, so it can't appear in a public function's signature, and `%s` returns `%s`; "
+                    ~ "make `%s` private or `%s` public").format(hidden, func.name, _types.describe(result), func.name, hidden));
+        }
+    }
+
+    /// The name of a private declared type that `type` is or holds, or null.
+    private string privateTypeIn(Type type)
+    {
+        string first(const(Type)[] types)
+        {
+            foreach (t; types)
+            {
+                if (auto found = privateTypeIn(t)) return found;
+            }
+            return null;
+        }
+        return _types[type].match!(
+            (const NominalData n) {
+                auto decl = _resolutions.declarations.types[n.decl];
+                return decl.isPrivate ? decl.name : first(n.args);
+            },
+            (const OptionData o) => privateTypeIn(o.inner),
+            (const ErrorUnionData u) => first([u.success, u.error]),
+            (const ErrorListData l) => first(l.members),
+            (const ArrayData a) => privateTypeIn(a.element),
+            (const FunctionData f) => first(f.params ~ f.ret),
+            (const TupleData t) => first(t.elements),
+            _ => null,
+        );
     }
 
     /// The type `floored.written` stands for once each of its floors is the type that `actual`,
     /// the type of the value at `span`, has there, or `error` after reporting a floor that
     /// `actual` doesn't give a type or gives one that doesn't satisfy its interfaces. A floor
     /// before another may say what the other is, as `Range<Range<Int>>` does.
-    private Type settleFloors(const Floored floored, Type actual, Site site, Span span)
+    private Type settleFloors(const Floored floored, Type actual, Site site, Span span, const(Expr)[] values)
     {
         if (actual == _types.error || _types.mentionsError(floored.written)) return _types.error;
+        if (_types.isFailure(actual)) return _declarer.requireTyped(actual, span);
+        auto untyped = actual == _types.none || actual == _types.emptyArray;
         Substitution found;
         bindParams(floored.written, actual, floored.floors, found);
         foreach (floor; floored.floors)
         {
             auto type = floor.id in found;
-            if (type is null)
+            if (type is null || untyped)
             {
+                auto whole = floored.floors.length == 1 && _types.isParameter(floored.written)
+                    ? "" : " in `%s`".format(_types.describe(floored.written));
                 _collector.reportError(DiagnosticCode.TypeMismatch, span, actual == _types.never
                     ? "%s nothing, so nothing says what type `%s` stands for; write the type out".format(floored.subject, floor.name)
-                    : "%s `%s`, which doesn't say what type `%s` stands for in `%s`".format(floored.subject,
-                        _types.describe(actual), floor.name, _types.describe(floored.written)));
+                    : "%s `%s`, which doesn't say what type `%s` stands for%s%s".format(floored.subject,
+                        _types.describe(actual), floor.name, whole, untyped ? "; write the type out"
+                            : literalHint(values, [floored.written])));
                 return _types.error;
             }
             foreach (declared; _typing.bounds.get(floor.id, null))
@@ -468,13 +519,52 @@ private final class TypeChecker
                 auto wanted = Bound(goal.decl, goal.args.map!(a => _types.substitute(a, found)).array);
                 auto whole = *type == actual ? "" : " in `%s`".format(_types.describe(actual));
                 _collector.reportError(conformance.tooDeep ? DiagnosticCode.BoundSearchTooDeep : DiagnosticCode.UnsatisfiedBound,
-                    floor.span, "%s `%s`%s, which isn't a `%s`: %s".format(floored.subject, _types.describe(*type), whole,
-                        _declarer.describe(wanted), conformance.failure is null
-                            ? "more than one function could say what its type arguments are" : conformance.failure));
+                    floor.span, "%s `%s`%s, which isn't %s: %s%s".format(floored.subject, _types.describe(*type), whole,
+                        withArticle(_declarer.describe(wanted)), conformance.failure is null
+                            ? "more than one function could say what its type arguments are" : conformance.failure,
+                        literalHint(values, wanted.args)));
                 return _types.error;
             }
         }
-        return _types.substitute(floored.written, found);
+        auto settled = _types.substitute(floored.written, found);
+        if (!isAssignable(actual, settled))
+        {
+            _collector.reportError(DiagnosticCode.TypeMismatch, span, "%s `%s`, where `%s` is written%s".format(floored.subject,
+                _types.describe(actual), _types.describe(floored.written), literalHint(values, [floored.written])));
+            return _types.error;
+        }
+        return settled;
+    }
+
+    /// What an error about `values` beside a floor adds when a literal in them could be why:
+    /// nothing is passed down beside a floor, so a literal there has its default type, whatever
+    /// number the types in `wanted` ask for.
+    private string literalHint(const(Expr)[] values, const(Type)[] wanted)
+    {
+        bool adapts(const Expr value) => isIntLiteral(value) || value.kind.match!(
+            (const ArrayLiteral literal) => literal.elements.any!(e => adapts(e)),
+            (const TupleLiteral literal) => literal.elements.any!(e => adapts(e)),
+            (const SomeExpr some) => adapts(*some.value),
+            (const BlockExpr block) => block.value !is null && adapts(*block.value),
+            _ => false,
+        );
+        bool otherNumber(Type type) => (isNumeric(type) && type != _types.int_) || _types[type].match!(
+            (const NominalData n) => n.args.any!(a => otherNumber(a)),
+            (const OptionData o) => otherNumber(o.inner),
+            (const ErrorUnionData u) => otherNumber(u.success),
+            (const ArrayData a) => otherNumber(a.element),
+            (const TupleData t) => t.elements.any!(e => otherNumber(e)),
+            _ => false,
+        );
+        return values.any!(v => adapts(v)) && wanted.any!(t => otherNumber(t))
+            ? "\n    a literal beside an interface name has its default type, so an integer literal is an `Int` here; "
+                ~ "write it as the type that's meant, as in `1.0` or `Float(1)`"
+            : "";
+    }
+
+    private static string withArticle(string name)
+    {
+        return ("AEIOU".canFind(name[0]) ? "an `" : "a `") ~ name ~ "`";
     }
 
     /// Declares what the bounds of `floors` name, once.
@@ -486,7 +576,8 @@ private final class TypeChecker
     /// Where the body of the module-level function `func` looks for conformances.
     private Site siteOf(Id!FunctionDecl func)
     {
-        return Site(_resolutions.declarations.functionModules[func], func);
+        return Site(_resolutions.declarations.functionModules[func], func,
+            _resolutions.declarations.functions[func].testName !is null);
     }
 
     /// The fields each invariant's condition names: those of its function's parameters that
@@ -510,6 +601,7 @@ private final class TypeChecker
     {
         auto func = _resolutions.declarations.functions[type.invariantError];
         auto params = signatureOf(func.id).params;
+        _pendingInvariants[type.id] = true;
         auto error = inferReturn(*func.body, siteOf(func.id));
         _pendingInvariants.remove(type.id);
         if (error == _types.never)
@@ -530,6 +622,37 @@ private final class TypeChecker
             (const FunctionData f) => _types.function_(f.params, own == _types.error ? own : _types.errorUnion(f.ret, own)),
             (_) => _typing.symbolTypes[constructor],
         );
+    }
+
+    /// Whether what the invariant of `decl` gives is known, typing its `else` first when nothing
+    /// has yet. It isn't, and that's reported at `span`, when that `else` is what's being typed
+    /// and has got here, so it needs its own type. `site` is where `span` is.
+    private bool requireInvariant(Id!TypeDecl decl, Span span, Site site)
+    {
+        auto working = decl in _pendingInvariants;
+        if (working is null) return true;
+        if (!*working)
+        {
+            inferInvariantError(*_resolutions.declarations.types[decl]);
+            return true;
+        }
+        auto name = _resolutions.declarations.types[decl].name;
+        // The `else` got here through a function whose body it wouldn't need if its result were written.
+        if (site.function_ in _resolutions.resultFloors && _resultStates.get(site.function_, ResultState.waiting) == ResultState.working)
+        {
+            auto through = _resolutions.declarations.functions[site.function_];
+            _collector.reportError(DiagnosticCode.NotSupportedYet, span,
+                ("This needs what building %s can give, which is worked out from the `else` of `%s`'s invariant, and that "
+                    ~ "`else` leads to `%s`, whose result type is worked out from this body; write the type `%s` returns in "
+                    ~ "place of `%s`, so the `else` doesn't need its body")
+                    .format(withArticle(name), name, through.name, through.name, printTypeExpr(through.returnType)));
+            return false;
+        }
+        _collector.reportError(DiagnosticCode.NotSupportedYet, span,
+            ("What building %s can give is worked out from the `else` of its invariant, which needs this before "
+                ~ "that's known; an `else` can't lead back to its own type")
+                .format(withArticle(name)));
+        return false;
     }
 
     /// Whether the invariant of `type`, a declared type, names its field `field`.
@@ -592,13 +715,11 @@ private final class TypeChecker
         if (auto floors = expr.id in _resolutions.lambdaFloors)
         {
             declareFloors(*floors);
-            if (lambda.self.isValid) _unsettledLocals[lambda.self] = lambda.returnType.span;
-            ret = inferReturn(*lambda.body, site, false, Floored(ret, *floors, "This function returns"));
-            if (lambda.self.isValid)
-            {
-                _unsettledLocals.remove(lambda.self);
-                if (lambda.self in _recursiveLocals) ret = _types.error;
-            }
+            auto self = Unsettled(lambda.self, lambda.returnType.span, site.unsettled);
+            auto inside = site;
+            if (lambda.self.isValid) inside.unsettled = &self;
+            ret = inferReturn(*lambda.body, inside, false, Floored(ret, *floors, "This function returns"));
+            if (self.usedItself) ret = _types.error;
         }
         else if (ret == Type.init)
         {
@@ -622,9 +743,11 @@ private final class TypeChecker
     private Type inferReturn(const Expr body, Site site, bool optional = false, const Floored floored = Floored.init)
     {
         InferredReturn inferred;
-        auto bodyType = synthesize(body, BodyContext(site, _types.error, false, &inferred));
+        if (isFallible(floored)) inferred.beside = _types.errorOf(floored.written);
+        auto bodyType = synthesizeBeside(body, inferred.beside, BodyContext(site, _types.error, false, &inferred));
         inferred.values ~= body;
         inferred.types ~= bodyType;
+        if (floored.floors.length > 0 && _types.isErrorUnion(floored.written)) return settleFallible(floored, inferred, site, body.span);
 
         auto joined = _types.never;
         foreach (i, type; inferred.types)
@@ -639,16 +762,23 @@ private final class TypeChecker
         {
             if (floored.floors.length > 0)
             {
+                auto passed = _types.describe(inferred.errors[0]);
                 _collector.reportError(DiagnosticCode.InvalidPropagation, inferred.errorSpans[0],
-                    "This `?` passes on an error, so the function returns an error union, which has to be written out");
+                    ("This `?` passes on `%s`, so the function returns an error union; write the errors after the "
+                        ~ "result type, as in `%s ! %s`").format(passed, _types.describe(floored.written), passed));
                 return _types.error;
             }
             joined = withPassedErrors(joined, inferred, body.span);
         }
-        joined = _declarer.requireTyped(joined, body.span);
-        if (joined == _types.error) return joined;
-        if (floored.floors.length > 0) joined = settleFloors(floored, joined, site, body.span);
-        else if (optional && joined != _types.never && !_types.isOption(joined)) joined = _declarer.optionOf(joined, body.span);
+        if (floored.floors.length > 0) joined = settleFloors(floored, joined, site, body.span, inferred.values);
+        else
+        {
+            joined = _declarer.requireTyped(joined, body.span);
+            if (optional && joined != _types.error && joined != _types.never && !_types.isOption(joined))
+            {
+                joined = _declarer.optionOf(joined, body.span);
+            }
+        }
         if (joined == _types.error) return joined;
 
         foreach (i, type; inferred.types)
@@ -656,6 +786,113 @@ private final class TypeChecker
             if (type != _types.never && type != joined) coerce(inferred.values[i], type, joined);
         }
         return joined;
+    }
+
+    /// Whether `floored` is an error union with floors on its success side, whose errors are passed
+    /// down to what gives it its type.
+    private bool isFallible(const Floored floored)
+    {
+        return floored.floors.length > 0 && _types.isErrorUnion(floored.written) && !_types.mentionsError(floored.written);
+    }
+
+    /// What a body returns whose result type is written `floored.written`, an error union with
+    /// floors on its success side. Its values were typed beside the errors as written, which is
+    /// where what its `?`s pass on has to fit too.
+    private Type settleFallible(const Floored floored, const InferredReturn inferred, Site site, Span span)
+    {
+        if (!isFallible(floored)) return _types.error;
+        auto declared = _types.errorOf(floored.written);
+        auto failed = false;
+        foreach (i, error; inferred.errors)
+        {
+            if (errorFits(error, declared)) continue;
+            _collector.reportError(DiagnosticCode.InvalidPropagation, inferred.errorSpans[i],
+                "`?` passes on `%s`, which this function's errors, `%s`, don't include"
+                    .format(_types.describe(error), _types.describe(declared)));
+            failed = true;
+        }
+        foreach (none; inferred.nones)
+        {
+            _collector.reportError(DiagnosticCode.InvalidPropagation, none,
+                "`?` would return `None`, but this function returns `%s`, so it needs a reason; write `?? { return Error(...) }`"
+                    .format(_types.describe(floored.written)));
+            failed = true;
+        }
+        auto result = settleBeside(floored, inferred.types, inferred.values, site, span, "only errors");
+        return failed ? _types.error : result;
+    }
+
+    /// The error union written `floored.written` once the floors on its success side are settled
+    /// from `values`, whose `types` came from `synthesizeBeside` with its errors. `failures` is
+    /// what the subject is said to give when none of them is a value.
+    private Type settleBeside(const Floored floored, const(Type)[] types, const(Expr)[] values, Site site, Span span,
+        string failures)
+    {
+        auto success = _types.never;
+        foreach (i, type; types)
+        {
+            auto part = _types.isFailure(type) ? _types.never : _types.isErrorUnion(type) ? _types.successOf(type) : type;
+            success = join(success, part, values[i].span, "Return values");
+        }
+        if (success == _types.error) return success;
+        if (success == _types.never && types.any!(t => _types.isFailure(t)))
+        {
+            _collector.reportError(DiagnosticCode.TypeMismatch, span,
+                "%s %s, so nothing gives the type `%s` stands for; write the type out"
+                    .format(floored.subject, failures, floored.floors[0].name));
+            return _types.error;
+        }
+        auto settled = settleFloors(Floored(_types.successOf(floored.written), floored.floors, floored.subject), success,
+            site, span, values);
+        if (settled == _types.error) return settled;
+
+        auto result = _types.errorUnion(settled, _types.errorOf(floored.written));
+        foreach (i, type; types)
+        {
+            if (type != _types.never && type != result) coerce(values[i], type, result);
+        }
+        return result;
+    }
+
+    /// The type of `expr` where an error union is expected whose errors are `errors` and whose
+    /// success side is whatever `expr` gives: an `Ok` or `Error` takes those errors, and so does a
+    /// value that can be some of them, through branches and a block's value. With no `errors`,
+    /// nothing is expected.
+    private Type synthesizeBeside(const Expr expr, Type errors, BodyContext ctx)
+    {
+        if (errors == Type.init) return synthesize(expr, ctx);
+        auto written = expr.kind.match!(
+            (const OkExpr ok) {
+                auto value = _declarer.requireTyped(synthesize(*ok.value, ctx), ok.value.span);
+                return value == _types.error ? value : _types.errorUnion(value, errors);
+            },
+            (const ErrorExpr error) {
+                auto reported = _collector.diagnostics.length;
+                check(*error.value, errors, ctx);
+                return _collector.diagnostics.length > reported ? _types.error : _types.failure(errors);
+            },
+            (const IfExpr if_) => if_.falseBody is null ? Type.init : synthesizeIf(if_, expr.span, ctx, errors),
+            (const BlockExpr block) => synthesizeBlock(block, expr.span, ctx, errors),
+            (const MatchExpr match_) => match_.origin == MatchOrigin.IfVal ? Type.init
+                : synthesizeMatch(match_, expr.span, ctx, errors),
+            _ => Type.init,
+        );
+        if (written != Type.init)
+        {
+            _typing.exprTypes[expr.id] = written;
+            return written;
+        }
+
+        auto type = synthesize(expr, ctx);
+        if (!_types.isErrorUnion(type) || _types.errorOf(type) == errors) return type;
+        if (!errorFits(_types.errorOf(type), errors))
+        {
+            _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
+                "This can be the error `%s`, which the errors written here, `%s`, don't include"
+                    .format(_types.describe(_types.errorOf(type)), _types.describe(errors)));
+            return _types.error;
+        }
+        return coerce(expr, type, _types.errorUnion(_types.successOf(type), errors));
     }
 
     /// The error union a lambda returns when its `?`s pass on errors and its values join to
@@ -791,7 +1028,7 @@ private final class TypeChecker
                     check(ret.value, ctx.returnType, ctx);
                     return;
                 }
-                auto type = synthesize(ret.value, ctx);
+                auto type = synthesizeBeside(ret.value, ctx.inferred.beside, ctx);
                 ctx.inferred.values ~= ret.value;
                 ctx.inferred.types ~= type;
             },
@@ -806,10 +1043,19 @@ private final class TypeChecker
         if (auto floors = binding.id in _resolutions.bindingFloors)
         {
             declareFloors(*floors);
-            auto written = _declarer.resolveType(*binding.type);
-            auto type = _declarer.requireTyped(synthesize(value, ctx), value.span);
-            auto settled = settleFloors(Floored(written, *floors, "`%s` is".format(binding.name)), type, ctx.site, value.span);
-            if (settled != _types.error && settled != type) coerce(value, type, settled);
+            auto floored = Floored(_declarer.resolveType(*binding.type), *floors, "`%s` is".format(binding.name));
+            auto settled = _types.error;
+            if (isFallible(floored))
+            {
+                auto type = synthesizeBeside(value, _types.errorOf(floored.written), ctx);
+                settled = settleBeside(floored, [type], [value], ctx.site, value.span, "only an error");
+            }
+            else
+            {
+                auto type = synthesize(value, ctx);
+                settled = settleFloors(floored, type, ctx.site, value.span, [value]);
+                if (settled != _types.error && settled != type) coerce(value, type, settled);
+            }
             _typing.symbolTypes[SymbolId(binding.id)] = settled;
         }
         else if (binding.type is null)
@@ -1361,7 +1607,7 @@ private final class TypeChecker
                 ? synthesizeConversion(call, _declarer.builtinType(_resolutions.conversions[expr.id]), expr.span, ctx)
                 : placeExpect(expr, isMethodCall(expr.id, *call.callee)
                     ? synthesizeMethodCall(expr, call, ctx, expected)
-                    : synthesizeCall(expr, call, ctx, expected)),
+                    : synthesizeCall(expr, call, ctx, expected), ctx.site),
             (const MemberAccess member) => synthesizeMemberAccess(expr, member, ctx, expected),
             (const WithExpr with_) => synthesizeWith(expr, with_, ctx),
             (const WhileExpr while_) => synthesizeWhile(while_, expr.span, ctx),
@@ -1530,7 +1776,7 @@ private final class TypeChecker
     }
 
     /// The type of a name used as a value, reporting the declarations that have none.
-    private Type symbolValue(SymbolId symbol, Span span)
+    private Type symbolValue(SymbolId symbol, Span span, Site site)
     {
         auto isSumName = symbol.match!(
             (const Id!TypeDecl type) => _resolutions.declarations.types[type].members.length > 0,
@@ -1542,6 +1788,8 @@ private final class TypeChecker
                 "A sum type has no value of its own; build one of its members");
             return _types.error;
         }
+
+        if (!symbol.match!((const Id!TypeDecl type) => requireInvariant(type, span, site), _ => true)) return _types.error;
 
         if (showsCondition(symbol))
         {
@@ -1568,11 +1816,11 @@ private final class TypeChecker
     }
 
     /// `call`, of type `type`, reported if it calls `expect` or `panics` outside a test.
-    private Type placeExpect(const Expr call, Type type)
+    private Type placeExpect(const Expr call, Type type, Site site)
     {
         auto callee = calleeOf(call.id);
         if (callee is null) callee = call.id in _typing.methodCallees;
-        if (_inTest || callee is null) return type;
+        if (site.inTest || callee is null) return type;
         if (isIntrinsic(*callee, "expect"))
         {
             _collector.reportError(DiagnosticCode.ExpectOutsideTest, call.span,
@@ -2239,10 +2487,8 @@ private final class TypeChecker
     {
         if (auto decl = expr.id in _resolutions.constructions)
         {
-            if (*decl in _pendingInvariants)
+            if (!requireInvariant(*decl, expr.span, ctx.site))
             {
-                _collector.reportError(DiagnosticCode.NotSupportedYet, expr.span,
-                    "An invariant's `else` can't build a value of a type with an invariant yet");
                 foreach (arg; call.args) synthesize(arg, ctx);
                 return _types.error;
             }
@@ -2351,7 +2597,7 @@ private final class TypeChecker
         if (imported.length == 1) return bestTrial(imported[0], name.span, spelled, reportable);
         if (imported.length > 1)
         {
-            if (reportable) reportImportedOverloads(name.span, spelled, imported.map!(g => g[0].func).array);
+            if (reportable) reportImportedOverloads(name.span, spelled, importsOf(candidates, imported.map!(g => functionsOf(g))));
             return Id!FunctionDecl.init;
         }
         if (reportable) reportNoOverload(name.span, spelled, groups);
@@ -2365,7 +2611,48 @@ private final class TypeChecker
     {
         auto imported = fitting.filter!(g => g.length > 0).array;
         auto exact = imported.filter!(g => g.any!(t => fitsExactly(t))).array;
-        return exact.length > 0 ? exact : imported;
+        return agreeing!(t => t.func)(exact.length > 0 ? exact : imported);
+    }
+
+    /// `groups`, each one import's functions that fit, without those whose functions another has
+    /// too: imports that lead to the same functions agree, however else they differ.
+    private static G[] agreeing(alias functionOf, G)(G[] groups)
+    {
+        bool covered(size_t i)
+        {
+            foreach (j, other; groups)
+            {
+                if (j == i || !groups[i].all!(t => other.any!(u => functionOf(u) == functionOf(t)))) continue;
+                if (groups[i].length < other.length || j < i) return true;
+            }
+            return false;
+        }
+        return groups.length.iota.filter!(i => !covered(i)).map!(i => groups[i]).array;
+    }
+
+    private static Id!FunctionDecl[] functionsOf(const(Trial)[] trials)
+    {
+        return trials.map!(t => cast() t.func).array;
+    }
+
+    /// The import that brought each of `groups`, which hold functions of `candidates`' imported
+    /// groups and are in their order.
+    private string[] importsOf(R)(const Candidates candidates, R groups)
+    {
+        string[] names;
+        size_t next = 1;
+        foreach (group; groups)
+        {
+            auto at = next;
+            while (at < candidates.groups.length && !group.all!(f => candidates.groups[at].canFind(f))) at++;
+            if (at < candidates.sources.length)
+            {
+                names ~= candidates.sources[at];
+                next = at + 1;
+            }
+            else names ~= _resolutions.declarations.functionModules[group[0]];
+        }
+        return names;
     }
 
     private bool fitsExactly(const Trial trial)
@@ -2818,10 +3105,9 @@ private final class TypeChecker
             "No `%s` takes these arguments:\n    %-(%s\n    %)".format(spelled, lines));
     }
 
-    /// Reports a call that functions of more than one imported module fit, one from each of `fits`.
-    private void reportImportedOverloads(Span span, string spelled, const(Id!FunctionDecl)[] fits)
+    /// Reports a call that functions of more than one imported module fit.
+    private void reportImportedOverloads(Span span, string spelled, const(string)[] modules)
     {
-        auto modules = fits.map!(f => _resolutions.declarations.functionModules[f]).array;
         _collector.reportError(DiagnosticCode.AmbiguousName, span,
             "This call fits a `%s` in more than one imported module (%s); qualify it, as in `%s.%s(...)`"
                 .format(spelled, modules.join(", "), modules[0], spelled));
@@ -2855,10 +3141,10 @@ private final class TypeChecker
         const(Id!FunctionDecl)[] fits = matching[0];
         if (fits.length == 0)
         {
-            auto imported = matching[1 .. $].filter!(g => g.length > 0).array;
+            auto imported = agreeing!(f => f)(matching[1 .. $].filter!(g => g.length > 0).array);
             if (imported.length > 1)
             {
-                auto modules = imported.map!(g => _resolutions.declarations.functionModules[g[0]]).array;
+                auto modules = importsOf(candidates, imported);
                 _collector.reportError(DiagnosticCode.AmbiguousName, name.span,
                     "A `%s` in more than one imported module (%s) is a `%s`; qualify it, as in `%s.%s`"
                         .format(spelled, modules.join(", "), _types.describe(expected), modules[0], spelled));
@@ -2899,10 +3185,14 @@ private final class TypeChecker
     private void reportOverloadedValue(const Expr name)
     {
         auto spelled = spelling(name);
-        auto first = (name.id in _resolutions.overloads).groups.joiner.front;
+        // One whose result is being worked out has no type to show yet.
+        auto known = (name.id in _resolutions.overloads).groups.joiner.filter!((f) {
+            settleResult(f, false);
+            return _resultStates.get(f, ResultState.settled) == ResultState.settled;
+        });
         _collector.reportError(DiagnosticCode.AmbiguousOverload, name.span,
-            "`%s` is overloaded, so as a value it needs a function type to choose by, as in `val f: %s = %s`"
-                .format(spelled, _types.describe(_typing.symbolTypes[SymbolId(first)]), spelled));
+            "`%s` is overloaded, so as a value it needs a function type to choose by%s".format(spelled, known.empty
+                ? "" : ", as in `val f: %s = %s`".format(_types.describe(_typing.symbolTypes[SymbolId(known.front)]), spelled)));
     }
 
     /// Reports two functions of one name in `mod` that take the same parameters, and notes which
@@ -2928,6 +3218,44 @@ private final class TypeChecker
                 },
                 (_) {},
             );
+        }
+    }
+
+    /// Reports each function the module `m` forwards that takes the same parameters as one of its
+    /// own or one forwarded before it, since its importers choose among them all as one module's.
+    private void checkForwardedOverloads(string m)
+    {
+        auto forwarded = m in _resolutions.forwards;
+        if (forwarded is null) return;
+        foreach (name; (*forwarded).keys.sort)
+        {
+            auto seen = _resolutions.publicFunctions(m, name);
+            foreach (forward; (*forwarded)[name])
+            {
+                auto brought = _resolutions.publicFunctions(forward.origin, name);
+                reportForwardedDuplicate(m, seen, brought, forward);
+                seen ~= brought;
+            }
+        }
+    }
+
+    private void reportForwardedDuplicate(string m, const(Id!FunctionDecl)[] seen, const(Id!FunctionDecl)[] brought, Forward forward)
+    {
+        foreach (later; brought)
+        {
+            foreach (earlier; seen)
+            {
+                if (!sameParameters(earlier, later) || asksForMore(earlier, later) || asksForMore(later, earlier)) continue;
+                auto home = _resolutions.declarations.functionModules[earlier];
+                _collector.reportError(DiagnosticCode.DuplicateOverload, forward.span,
+                    ("`%s` can't be forwarded: %s takes the same parameter types, so a module importing this one "
+                        ~ "couldn't choose between them%s").format(overloadLabel(later, true),
+                            home == m ? "this module's `" ~ overloadLabel(earlier) ~ "`" : "`" ~ overloadLabel(earlier, true)
+                                ~ "`, forwarded too,",
+                            _resolutions.boundFunctions.get(earlier, null).length + _resolutions.boundFunctions.get(later, null).length == 0
+                                ? "" : "; bounds only tell two functions apart when one asks for everything the other does, and more"));
+                return;
+            }
         }
     }
 
@@ -3089,8 +3417,8 @@ private final class TypeChecker
                 {
                     auto wanted = Bound(goal.decl, goal.args.map!(a => _types.substitute(a, bound)).array);
                     auto hidden = _resolutions.hiddenParams.get(func, null).canFind!(p => p.id == first.param);
-                    result.failure = (hidden ? "needs a `%2$s`, and `%3$s` isn't one: %4$s" : "needs `%1$s` to be a `%2$s`, and `%3$s` isn't one: %4$s")
-                        .format(_resolutions.declarations.typeParams[first.param].name, _declarer.describe(wanted),
+                    result.failure = (hidden ? "needs %2$s, and `%3$s` isn't one: %4$s" : "needs `%1$s` to be %2$s, and `%3$s` isn't one: %4$s")
+                        .format(_resolutions.declarations.typeParams[first.param].name, withArticle(_declarer.describe(wanted)),
                             _types.describe(goal.self), found.failure);
                     result.tooDeep = found.tooDeep;
                     return result;
@@ -3224,9 +3552,10 @@ private final class TypeChecker
             auto imported = groups[1 .. $].map!(g => fitting(g)).filter!(g => g.length > 0).array;
             auto exact = imported.filter!(g => g.any!(t => fitsExactly(t.trial))).array;
             if (exact.length > 0) imported = exact;
+            imported = agreeing!(t => t.trial.func)(imported);
             if (imported.length > 1)
             {
-                auto modules = imported.map!(g => _resolutions.declarations.functionModules[g[0].trial.func]).array;
+                auto modules = importsOf(candidates, imported.map!(g => g.map!(t => t.trial.func).array));
                 result.failure = ("a `%s` in more than one imported module (%-(%s, %)) takes %s; declare one in this module that "
                     ~ "calls the one you mean").format(name, modules, arguments());
                 return result;
@@ -3275,6 +3604,14 @@ private final class TypeChecker
         }
         auto ret = _types.substitute(signature.ret, best.binding);
         bindParams(wanted.ret, ret, open, bound);
+        if (_types.mentionsError(ret))
+        {
+            // Already reported, so what it would have said isn't asked for again.
+            foreach (param; open)
+            {
+                if (param.id !in bound && _types.mentionsParameter(wanted.ret, param.id)) bound[param.id] = _types.error;
+            }
+        }
         foreach (i, type; wanted.params)
         {
             if (known[i]) continue;
@@ -4169,6 +4506,7 @@ private final class TypeChecker
                 auto prefix = indexes[i][0 .. depth];
                 if (invariantMentions(type, name) && !checks.canFind(prefix))
                 {
+                    if (!requireInvariant(declOf(type), expr.span, ctx.site)) return _types.error;
                     checks ~= prefix.dup;
                     errors ~= invariantErrorOf(type);
                     checkedTypes ~= type;
@@ -4261,29 +4599,31 @@ private final class TypeChecker
         );
     }
 
+    /// Whether `symbol` is a nested `def` whose result type is being worked out from the body at
+    /// `site`, which is reported the first time.
+    private bool usesUnsettled(SymbolId symbol, Site site)
+    {
+        auto local = symbol.match!((const Id!VarDecl l) => l, _ => Id!VarDecl.init);
+        if (!local.isValid) return false;
+        for (auto nested = site.unsettled; nested !is null; nested = nested.outer)
+        {
+            if (nested.self != local) continue;
+            if (!nested.usedItself)
+            {
+                auto name = _resolutions.declarations.locals[local].name;
+                _collector.reportError(DiagnosticCode.RecursiveResultType, nested.written,
+                    ("The type `%s` returns is worked out from its body, which uses `%s` before that's known; "
+                        ~ "write the type it returns out").format(name, name));
+            }
+            nested.usedItself = true;
+            return true;
+        }
+        return false;
+    }
+
     private Type symbolType(SymbolId symbol)
     {
-        auto unsettled = symbol.match!(
-            (const Id!FunctionDecl f) {
-                settleResult(f);
-                return false;
-            },
-            (const Id!VarDecl local) {
-                auto written = local in _unsettledLocals;
-                if (written is null) return false;
-                if (local !in _recursiveLocals)
-                {
-                    auto name = _resolutions.declarations.locals[local].name;
-                    _collector.reportError(DiagnosticCode.RecursiveResultType, *written,
-                        ("The type `%s` returns is worked out from its body, which uses `%s` before that's known; "
-                            ~ "write the type it returns out").format(name, name));
-                }
-                _recursiveLocals[local] = true;
-                return true;
-            },
-            _ => false,
-        );
-        if (unsettled) return _types.error;
+        symbol.match!((const Id!FunctionDecl f) => settleResult(f), (_) {});
         if (auto type = symbol in _typing.symbolTypes) return *type;
         // A module used as a value; name resolution has already reported it.
         if (symbol.match!((const Id!Module _) => true, _ => false)) return _types.error;
@@ -4413,7 +4753,7 @@ private final class TypeChecker
 
         auto lookups = at.id in _resolutions.operatorLookups;
         auto recorded = lookups is null ? null : name in *lookups;
-        const(Candidates)* lookup = recorded is null ? null : new const Candidates(distinct(*recorded).groups);
+        const(Candidates)* lookup = recorded is null ? null : [distinct(*recorded)].ptr;
         // What's indexed or looped over is what a reader looks for the function by.
         bool takesFirst(Id!FunctionDecl f)
         {
@@ -4453,6 +4793,7 @@ private final class TypeChecker
             tried ~= all;
             fitting.groups ~= fits.map!(t => t.func).array;
         }
+        fitting.sources = lookup.sources.dup;
         auto reportable = !typed.any!(t => t != Type.init && _types.mentionsError(t));
         if (fitting.count == 0)
         {
@@ -4466,7 +4807,7 @@ private final class TypeChecker
         if (fitting.groups[0].length == 0 && imported.length > 1)
         {
             typeTheRest();
-            auto modules = imported.map!(g => _resolutions.declarations.functionModules[g[0].func]).array;
+            auto modules = importsOf(*lookup, imported.map!(g => functionsOf(g)));
             _collector.reportError(DiagnosticCode.AmbiguousName, span,
                 ("%s could use `%s` from more than one imported module (%s); declare one in this module that "
                     ~ "calls the one you mean, as in `def %s(...) => %s.%s(...)`")
@@ -4621,7 +4962,7 @@ private final class TypeChecker
         _typing.symbolTypes[SymbolId(binding.id)] = payload;
     }
 
-    private Type synthesizeIf(const IfExpr if_, Span span, BodyContext ctx)
+    private Type synthesizeIf(const IfExpr if_, Span span, BodyContext ctx, Type errors = Type.init)
     {
         checkIfHead(if_, ctx);
         if (if_.falseBody is null)
@@ -4630,8 +4971,8 @@ private final class TypeChecker
             return _types.unit;
         }
 
-        auto thenType = synthesize(*if_.trueBody, ctx);
-        auto elseType = synthesize(*if_.falseBody, ctx);
+        auto thenType = synthesizeBeside(*if_.trueBody, errors, ctx);
+        auto elseType = synthesizeBeside(*if_.falseBody, errors, ctx);
         auto joined = join(thenType, elseType, span, "Branches");
         if (joined != _types.error)
         {
@@ -4662,7 +5003,7 @@ private final class TypeChecker
         return _types.error;
     }
 
-    private Type synthesizeBlock(const BlockExpr block, Span span, BodyContext ctx)
+    private Type synthesizeBlock(const BlockExpr block, Span span, BodyContext ctx, Type errors = Type.init)
     {
         foreach (stmt; block.statements)
         {
@@ -4670,7 +5011,7 @@ private final class TypeChecker
         }
         if (block.value !is null)
         {
-            return synthesize(*block.value, ctx);
+            return synthesizeBeside(*block.value, errors, ctx);
         }
         return valuelessBlockType(block);
     }
@@ -4708,16 +5049,17 @@ private final class TypeChecker
     /// What `name`, which resolution found to be `symbol`, is as a value.
     private Type namedValue(const Expr name, SymbolId symbol, Type expected, Site site)
     {
-        if (!_inTest && symbol.match!((const Id!FunctionDecl f) => isIntrinsic(f, "panics"), _ => false))
+        if (!site.inTest && symbol.match!((const Id!FunctionDecl f) => isIntrinsic(f, "panics"), _ => false))
         {
             reportPanicsOutsideTest(name.span);
             return _types.error;
         }
+        if (usesUnsettled(symbol, site)) return _types.error;
         auto generic = genericNamed(name);
         if (generic.found && !takesAnyIntrinsically(symbol)) return instantiateValue(name, generic, expected, site);
         if (generic.found) _declarer.resolveTypeArguments(generic.written);
         else rejectTypeArguments(typeArgsOf(name), spelling(name), name.span);
-        return symbolValue(symbol, name.span);
+        return symbolValue(symbol, name.span, site);
     }
 
     /// Whether a constructor of `member`, which `owner` owns, should build the member itself.
@@ -4976,7 +5318,7 @@ private final class TypeChecker
         checkCoverage(match_, patterns, subject, span, _types, _declarer, _collector);
     }
 
-    private Type synthesizeMatch(const MatchExpr match_, Span span, BodyContext ctx)
+    private Type synthesizeMatch(const MatchExpr match_, Span span, BodyContext ctx, Type errors = Type.init)
     {
         if (match_.origin == MatchOrigin.IfVal)
         {
@@ -4984,7 +5326,7 @@ private final class TypeChecker
             return _types.unit;
         }
         checkMatchHead(match_, span, ctx);
-        auto types = match_.arms.map!(arm => synthesize(arm.body, ctx)).array;
+        auto types = match_.arms.map!(arm => synthesizeBeside(arm.body, errors, ctx)).array;
         auto joined = _types.never;
         foreach (i, type; types)
         {

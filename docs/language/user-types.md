@@ -189,5 +189,5 @@ val r = if val Circle(radius) = shape => radius else 0.0
 ## Current implementation
 
 - An invariant may name a field whose type contains a `Ref`, although the cell can change without going through the type.
-- An invariant's `else` can't build a value of a type whose own invariant is declared after it.
+- An invariant's `else` can't lead back to building a value of its own type, directly or through a function it calls whose result type is an [interface](interfaces.md#an-interface-name-as-a-result-type). Through such a function, the error names the type, the function and what to do: write that function's result type out, and its body is no longer part of the `else`.
 - Everything else above is implemented.

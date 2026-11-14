@@ -9,6 +9,7 @@ import std.stdio : readln, stdout;
 
 import silver.runtime.buffer : newString;
 import silver.runtime.format : floatText;
+import silver.runtime.memory : SavedRegisters, silver_save_registers;
 import silver.runtime.panic : panic;
 import silver.runtime.testing : testing, testOutput;
 
@@ -34,6 +35,8 @@ void silver_printl_char(uint value) { output([cast(dchar) value].to!string, true
 /// buffer (see `silver.runtime.buffer`), since every String on the heap must be in one.
 bool silver_read(const(char)** data, size_t* length)
 {
+    SavedRegisters saved = void;
+    silver_save_registers(&saved);
     // A test has no input.
     if (testing)
     {
@@ -56,6 +59,8 @@ bool silver_read(const(char)** data, size_t* length)
 
 private void output(lazy const(char)[] text, bool newline)
 {
+    SavedRegisters saved = void;
+    silver_save_registers(&saved);
     try
     {
         if (testing)

@@ -1,0 +1,6 @@
+// Forwarding gives a module's importers its names, not the path of the module they're from.
+import forward_support.some
+
+def main(): Unit {
+    printl(forward_support.one.same(1))
+}

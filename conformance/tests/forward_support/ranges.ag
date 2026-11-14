@@ -1,0 +1,18 @@
+module forward_support.ranges
+
+interface Counted {
+    def count(self: Self): Int
+}
+
+def first<R: Counted>(range: R): Int? => if count(range) == 0 => None else Some(count(range))
+
+def total<R: Counted>(range: R): Int => count(range) * 2
+
+type Shape = Circle(radius: Int) | Square(side: Int)
+
+alias Size = Int
+
+def describe(shape: Shape): String => match shape {
+    Circle(r) => "circle {r}"
+    Square(s) => "square {s}"
+}

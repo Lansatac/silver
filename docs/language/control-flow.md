@@ -134,7 +134,17 @@ panic: main.ag(12,5): invalid state
 
 A panic is for a bug. A failure a correct program can meet, such as a missing file or text that isn't a number, is an option or an error: see [Errors](errors.md).
 
-How deep a program can recurse isn't specified, and differs between the interpreter and compiled programs.
+How deep a program can recurse isn't specified. It differs between the interpreter and compiled programs, and between a compiled program and the same one optimized (`-O`), where a recursion can become a loop that uses no stack at all. So a recursion too deep for one of them can finish on another, run for ever, or reach a different panic first:
+
+```silver
+def count(n: Int, total: Int): Int => if n == 0 => total else count(n - 1, total + 1)
+def f(n: Int): Int => 1 +% f(n + 1)
+
+count(100000000, 0)     // compiled: panics with Stack overflow; with -O: 100000000
+f(0)                    // compiled: panics with Stack overflow; with -O: Integer overflow, from n + 1
+```
+
+Nothing else differs with `-O`: a program that stays within the stack either way does the same thing.
 
 ## Open questions
 

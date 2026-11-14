@@ -1,0 +1,11 @@
+module imports_support.facade
+
+forward import imports_support.counting : next
+
+interface Stepped {
+    def step(self: Self): Int
+}
+
+def next<T: Stepped>(x: T): Int => step(x) + 100
+
+test "a forwarding module's test isn't run" => expect(false)

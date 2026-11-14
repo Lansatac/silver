@@ -1,0 +1,17 @@
+// A literal beside an interface name in a result has its default type too.
+interface Range<T> {
+    def next(range: Self): (T, Self)?
+}
+
+interface Indexed<T> {
+    def length(value: Self): Int
+    def opIndex(value: Self, index: Int): T
+}
+
+def next<T>(xs: [T]): (T, [T])? => if length(xs) == 0 => None else (xs[0], xs[1..])
+
+def weighted(xs: [Int]): (Float, Range<Int>) => (1, xs)
+
+def main(): Unit {
+    printl(weighted([1]))
+}

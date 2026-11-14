@@ -1,0 +1,16 @@
+module forward_support.json
+
+interface Json {
+    def toJson(self: Self): String
+}
+
+def encode<T: Json>(value: T): String => "json:{toJson(value)}"
+
+def toJson(value: Int): String => "{value}"
+def toJson<T: Json>(values: [T]): String {
+    mutable val text = "["
+    for value in values {
+        text = text ~ toJson(value) ~ ";"
+    }
+    text ~ "]"
+}

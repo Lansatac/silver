@@ -1,0 +1,8 @@
+0.5
+Ok([1])
+Error(Empty)
+Error(BadDigit(0))
+[20]
+Error(200)
+Ok([3])
+Ok([4])

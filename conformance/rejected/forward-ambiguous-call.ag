@@ -1,0 +1,8 @@
+// A forwarding module's function and another import's that fit equally well are ambiguous, and
+// the error names the imports.
+import forward_support.some
+import forward_support.two
+
+def main(): Unit {
+    printl(same(1))
+}

@@ -1,0 +1,19 @@
+// A body that only returns errors doesn't say what the interface name stands for.
+interface Range<T> {
+    def next(range: Self): (T, Self)?
+}
+
+interface Indexed<T> {
+    def length(value: Self): Int
+    def opIndex(value: Self, index: Int): T
+}
+
+def next<T>(xs: [T]): (T, [T])? => if length(xs) == 0 => None else (xs[0], xs[1..])
+
+type Missing
+
+def found(xs: [Int]): Range<Int> ! Missing => Error(Missing)
+
+def main(): Unit {
+    printl(found([1]))
+}

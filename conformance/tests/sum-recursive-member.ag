@@ -1,0 +1,70 @@
+// Sums that hold themselves: through a member's first field, a generic member, a marker field, an
+// option, a tuple, an error union, an array, a function, a product, a boxed product, and each other.
+type Nat = Zero | Succ(pred: Nat)
+type Tree = Leaf | Node(left: Tree, value: Int, right: Tree)
+type List<T> = Cons(rest: List<T>, head: T) | Nil
+type Marker
+type Tagged = Plain | Wrapped(tag: Marker, inner: Tagged)
+type Chain = End | Link(next: Chain?)
+type Ping = PingEnd | PingMore(pong: Pong)
+type Pong = PongEnd | PongMore(ping: Ping)
+type Pair = Single | Both(pair: (Pair, Pair))
+type Wrap(inner: Peano)
+type Peano = Z | S(wrap: Wrap)
+type Color = Red | Green
+type Holder = Bare | Held(color: Color, more: Holder)
+type Risky = Safe | Tried(result: Risky ! Color)
+type Rose = Twig | Bush(children: [Rose])
+type Kind = Simple | Linked(item: Item)
+type Item(value: Int, next: Item?, kind: Kind)
+type Deep = Bottom | Up(a: (Marker, (Deep?, Marker)))
+type Fn = Stop | Go(step: (Fn) -> Fn)
+type Units = U1 | U2(m: Marker, t: (Marker, Marker))
+type OnlyUnits = Just(u: Units, o: OnlyUnits) | Done
+
+def count(n: Nat): Int => match n {
+    Zero => 0
+    Succ(pred) => 1 + count(pred)
+}
+
+def total(t: Tree): Int => match t {
+    Leaf => 0
+    Node(left, value, right) => total(left) + value + total(right)
+}
+
+def size<T>(list: List<T>): Int => match list {
+    Cons(rest, _) => 1 + size(rest)
+    Nil => 0
+}
+
+def main(): Unit {
+    val three = Succ(Succ(Succ(Zero)))
+    printl(three)
+    printl(count(three))
+    printl(three == Succ(Succ(Succ(Zero))))
+    val tree = Node(Node(Leaf, 1, Leaf), 2, Node(Leaf, 3, Leaf))
+    printl(tree)
+    printl(total(tree))
+    val list: List<String> = Cons(Cons(Nil, "b"), "a")
+    printl(list)
+    printl(size(list))
+    printl(Wrapped(Marker, Wrapped(Marker, Plain)))
+    printl(Link(Some(Link(None))))
+    printl(PingMore(PongMore(PingEnd)))
+    printl(Both((Single, Both((Single, Single)))))
+    printl(S(Wrap(S(Wrap(Z)))))
+    printl(Held(Red, Held(Green, Bare)))
+    val ok: Risky ! Color = Safe
+    printl(Tried(ok))
+    printl(Tried(Error(Green)))
+    printl(Bush([Twig, Bush([Twig])]))
+    printl(Item(1, Some(Item(2, None, Simple)), Linked(Item(3, None, Simple))))
+    printl(Up((Marker, (Some(Up((Marker, (None, Marker)))), Marker))))
+    val go: Fn = Go((x: Fn) => x)
+    printl(match go {
+        Stop => 0
+        Go(_) => 1
+    })
+    printl(U2(Marker, (Marker, Marker)) == U1)
+    printl(Just(U1, Just(U2(Marker, (Marker, Marker)), Done)))
+}

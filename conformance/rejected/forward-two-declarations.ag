@@ -1,0 +1,6 @@
+// One name forwarded from two modules has to be one declaration, or functions.
+import forward_support.both
+
+def main(): Unit {
+    printl(1)
+}

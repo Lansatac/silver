@@ -1,0 +1,32 @@
+// Branches that give different errors, each one of the errors written, in a body whose result
+// type is an interface name on the success side of an error union.
+
+import interfaces_support.floors
+
+type NotFound(code: Int)
+type TooLong
+
+def find(xs: [Int]): [Int] ! NotFound => if length(xs) == 0 => Error(NotFound(404)) else xs
+def short(xs: [Int]): [Int] ! TooLong => if length(xs) > 2 => Error(TooLong) else xs
+
+def arms(xs: [Int]): Range<Int> ! NotFound | TooLong => match length(xs) {
+    0 => Error(NotFound(0))
+    1 => Error(TooLong)
+    _ => xs
+}
+
+def either(xs: [Int], first: Bool): Range<Int> ! NotFound | TooLong => if first => find(xs) else short(xs)
+
+def mixed(xs: [Int]): Range<Int> ! NotFound | TooLong => if length(xs) == 0 => Error(NotFound(1)) else short(xs)
+
+def main(): Unit {
+    printl(arms([]))
+    printl(arms([1]))
+    printl(arms([1, 2]))
+    printl(either([], true))
+    printl(either([1, 2, 3], false))
+    printl(either([1], false))
+    printl(mixed([]))
+    printl(mixed([1, 2, 3]))
+    printl(mixed([5]))
+}

@@ -1,0 +1,17 @@
+// A wrapper library that forwards an interface's module and a type with the function that makes
+// it conform: importing the wrapper is enough for the search a bound makes.
+import forward_support.wrapper
+
+type Mine(label: String)
+
+def toJson(mine: Mine): String => "mine {mine.label}"
+
+def main(): Unit {
+    printl(report(1))
+    printl(report(Thing(2)))
+    printl(report([Thing(3), Thing(4)]))
+    printl(report(Mine("five")))
+    printl(encode([1, 2]))
+    val json: Json = Thing(6)
+    printl(toJson(json))
+}

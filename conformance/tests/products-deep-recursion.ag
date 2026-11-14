@@ -1,0 +1,17 @@
+// A value of many fields handed down and back up a deep recursion.
+type Wide(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, text: String, flag: Bool?)
+type Holder(first: Wide, second: Wide)
+
+def descend(holder: Holder, depth: Int): Holder {
+    if depth == 0 { return holder }
+    val below = descend(holder with (first = holder.first with (a = holder.first.a + 1)), depth - 1)
+    below with (second = below.second with (h = below.second.h + depth % 2))
+}
+
+def main(): Unit {
+    val wide = Wide(0, 1, 2, 3, 4, 5, 6, 0, "text", true)
+    val result = descend(Holder(wide, wide), 20000)
+    printl(result.first.a)
+    printl(result.second.h)
+    printl(result.first with (a = 0) == wide)
+}

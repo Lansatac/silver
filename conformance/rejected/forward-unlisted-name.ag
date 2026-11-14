@@ -1,0 +1,6 @@
+// A selective forward passes on only what it lists, and not its module's path.
+import forward_support.some
+
+def main(): Unit {
+    printl(limit)
+}

@@ -1,0 +1,13 @@
+module forward_support.arrays
+
+def first<T>(xs: [T]): T? => if length(xs) == 0 => None else xs[0]
+
+type Stack(items: [Int])
+
+def length(s: Stack): Int => length(s.items)
+def opIndex(s: Stack, index: Int): Int => s.items[index] * 10
+
+val limit: Int = 3
+
+def unlisted(): String => "arrays.unlisted"
+private def hidden(): Int => 0

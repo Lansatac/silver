@@ -6,6 +6,10 @@
 /// it and bumps `used`: no existing value reaches those bytes, so none can see the write, and when
 /// two values share the frontier the first append moves it and the second copies.
 ///
+/// A block has one byte more than its elements can use, so a pointer to the end of the last
+/// element is still inside it: optimized code can walk an array holding nothing else, and the
+/// collector takes a pointer to a block's very end for the block after it.
+///
 /// Every value's pointer is null, into a private global, or into a buffer. That's what lets
 /// `headerOf` trust whatever GC block a pointer is in, so memory from anywhere else (`to!string`,
 /// `readln`) has to be copied in first. `newString` does that.
@@ -13,6 +17,8 @@ module silver.runtime.buffer;
 
 import core.memory : GC;
 import core.stdc.string : memcpy;
+
+import silver.runtime.memory : collectable;
 
 private struct Header
 {
@@ -25,6 +31,9 @@ private struct Header
 // Elements are at most 16-aligned, like the block itself.
 static assert(Header.sizeof == 16);
 
+/// The bytes at a block's end that no element uses.
+private enum slack = 1;
+
 /// The last block looked up or allocated, since the lookup takes the GC lock and an append in a
 /// loop keeps asking about the same one. Thread-local, and as a GC root it keeps the block alive,
 /// so its memory can't be reused for a block with other bounds while it's cached.
@@ -35,8 +44,7 @@ private char* elementsOf(Header* header) nothrow @nogc
     return cast(char*)(header + 1);
 }
 
-/// The header of the buffer `data` points into, or null if it isn't on the heap. `data` must point
-/// at an element: one past the last element of a full block is already in the next block.
+/// The header of the buffer `data` points into, or null if it isn't on the heap.
 private Header* headerOf(const(void)* data) nothrow
 {
     auto cached = lastBlock;
@@ -71,7 +79,7 @@ void silver_array_append(const(void)* data, size_t length, const(void)* source, 
     auto added = sourceLength * elementSize;
     *resultLength = length + sourceLength;
 
-    // Without elements, `data` may be one past the end of a full block, so it says nothing.
+    // A value without elements starts a buffer of its own, wherever its pointer is.
     if (length > 0)
     {
         auto header = headerOf(data);
@@ -88,10 +96,10 @@ void silver_array_append(const(void)* data, size_t length, const(void)* source, 
     auto total = existing + added;
     // A block of single bytes can't hold a pointer, so the GC needn't look through a String's text.
     auto attributes = elementSize == 1 ? GC.BlkAttr.NO_SCAN : GC.BlkAttr.NONE;
-    auto block = GC.qalloc(Header.sizeof + (grow ? total * 2 : total), attributes);
+    auto block = collectable(Header.sizeof + (grow ? total * 2 : total) + slack, attributes);
     auto header = cast(Header*) block.base;
     header.used = total;
-    header.capacity = block.size - Header.sizeof;
+    header.capacity = block.size - Header.sizeof - slack;
     lastBlock = header;
 
     auto elements = elementsOf(header);

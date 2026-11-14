@@ -1,0 +1,1 @@
+S0026: `Range<Int> & Indexed<Int>` joins interfaces, and only a module-level `def` with a body can take any type that satisfies them; name the type this parameter takes

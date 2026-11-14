@@ -1,0 +1,29 @@
+Node(1, Some(Node(2, Some(Node(3, None)))))
+Some(3)
+3
+true
+false
+Node(1, Some(Node(9, None)))
+Node(1, Some(Node(2, Some(Node(3, None)))))
+500500
+5000
+Wrapped(Node(1, Some(Node(2, Some(Node(3, None))))), list)
+true
+1
+Some(Node(9, None))
+true
+Both(Node(1, Some(Node(2, Some(Node(3, None))))), Some(Node(1, Some(Node(2, Some(Node(3, None)))))))
+Even(0, Some(Odd(1, Some(Even(2, None)))))
+Some(2)
+true
+Chain((1, Some(Chain((2, None)))))
+1
+Some(Chain((2, None)))
+Step(Ok(Step(Error(end), 1)), 0)
+0
+Tree(root, [Tree(a, []), Tree(b, [Tree(c, [])])])
+4
+c
+true
+Sum(Number(1), Sum(Number(2), Number(3)))
+6

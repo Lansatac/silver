@@ -1,0 +1,1 @@
+S0021: `Steps` is private, so it can't appear in a public function's signature, and `pair` returns `(Int, Steps)?`; make `pair` private or `Steps` public

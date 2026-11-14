@@ -1,0 +1,1 @@
+S0026: `Range<Int>` is an interface, which stands for the type a function's body returns, and this function has no body; write the type it returns

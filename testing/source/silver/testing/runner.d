@@ -12,7 +12,7 @@ import std.path : baseName, buildPath, dirName, extension, stripExtension;
 import std.string : lineSplitter, strip;
 
 import silver.ast : DiagnosticException, formatDiagnostic, Program, SourceContext, SourceMap, Span;
-import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Toolchain;
+import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, Toolchain;
 import silver.core : lowerTests, CoreProgram = Program;
 import silver.interpreter.evaluator : Evaluator;
 import silver.loader : load, standardLibraryPath;
@@ -61,8 +61,9 @@ string[] testFiles(string path)
 
 /// Runs the tests that `file` declares, though not those of the modules it imports, with
 /// `importPaths` searched before the standard library and the file's own directory. A compiled
-/// run keeps its files in `workDirectory` while it runs.
-FileRun runFile(string file, const string[] importPaths, TestBackend backend, string workDirectory)
+/// run keeps its files in `workDirectory` while it runs, and is optimized as `optimization` says.
+FileRun runFile(string file, const string[] importPaths, TestBackend backend, string workDirectory,
+    Optimization optimization = Optimization.none)
 {
     auto run = FileRun(file);
     auto context = new SourceContext;
@@ -100,7 +101,7 @@ FileRun runFile(string file, const string[] importPaths, TestBackend backend, st
     TestResult[] compiledResults;
     if (backend != TestBackend.interpreter)
     {
-        run.problem = compiled(lowered, context.sources, file, workDirectory, compiledResults);
+        run.problem = compiled(lowered, context.sources, file, workDirectory, optimization, compiledResults);
         if (run.problem !is null) return run;
     }
     final switch (backend)
@@ -136,7 +137,7 @@ private TestResult[] interpreted(CoreProgram lowered, const SourceMap sources)
 /// Compiles the tests in `lowered` and runs them, setting `results`. Returns why that couldn't
 /// be done, or null. A test that crashes is reported as one, and the run carries on after it.
 private string compiled(const CoreProgram lowered, const SourceMap sources, string file, string workDirectory,
-    out TestResult[] results)
+    Optimization optimization, out TestResult[] results)
 {
     import std.process : Config, pipe, spawnProcess, thisProcessID, wait;
     import std.stdio : File;
@@ -157,7 +158,7 @@ private string compiled(const CoreProgram lowered, const SourceMap sources, stri
     auto irPath = base ~ ".ll", exePath = executablePath(base), errorPath = base ~ ".stderr";
     write(irPath, ir);
     scope (exit) remove(irPath);
-    auto linked = linkExecutable(toolchain, irPath, exePath, lowered.libraries);
+    auto linked = linkExecutable(toolchain, irPath, exePath, lowered.libraries, optimization);
     if (!linked.succeeded) return "linking failed:\n" ~ linked.output;
     scope (exit)
     {

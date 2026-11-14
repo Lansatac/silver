@@ -5,7 +5,7 @@ import std.path;
 import std.range;
 
 import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, SourceContext;
-import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Toolchain;
+import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, optimizeIr, Toolchain;
 import silver.core : lowerProgram, printCore = print;
 import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed, RuntimeError;
 import silver.loader : load, standardLibraryPath;
@@ -111,7 +111,7 @@ string compileToIr(string programFile, string[] importPaths, out string[] librar
 }
 
 /// Compiles the program in `programFile` to the executable `outputPath`. False after printing why it failed.
-bool compileToExecutable(string programFile, string[] importPaths, string outputPath)
+bool compileToExecutable(string programFile, string[] importPaths, string outputPath, Optimization optimization)
 {
     string[] libraries;
     auto ir = compileToIr(programFile, importPaths, libraries);
@@ -130,7 +130,7 @@ bool compileToExecutable(string programFile, string[] importPaths, string output
     std.file.write(irPath, ir);
     scope (exit) remove(irPath);
 
-    auto linked = linkExecutable(toolchain, irPath, outputPath, libraries);
+    auto linked = linkExecutable(toolchain, irPath, outputPath, libraries, optimization);
     if (!linked.succeeded)
     {
         stderr.writeln("Linking failed:\n", linked.output);
@@ -139,8 +139,9 @@ bool compileToExecutable(string programFile, string[] importPaths, string output
     return true;
 }
 
-/// Compiles the program in `programFile` to an executable, or only to LLVM IR if `emitLlvm`.
-int build(string programFile, string[] importPaths, string outputPath, bool emitLlvm)
+/// Compiles the program in `programFile` to an executable, or only to LLVM IR if `emitLlvm`:
+/// the IR codegen writes, or when optimizing, what clang makes of it.
+int build(string programFile, string[] importPaths, string outputPath, bool emitLlvm, Optimization optimization)
 {
     auto name = programFile.baseName.stripExtension;
     if (emitLlvm)
@@ -151,21 +152,41 @@ int build(string programFile, string[] importPaths, string outputPath, bool emit
         {
             return 1;
         }
-        std.file.write(outputPath.empty ? name ~ ".ll" : outputPath, ir);
+        auto irPath = outputPath.empty ? name ~ ".ll" : outputPath;
+        if (optimization == Optimization.none)
+        {
+            std.file.write(irPath, ir);
+            return 0;
+        }
+        Toolchain toolchain;
+        if (auto missing = findToolchain(toolchain))
+        {
+            stderr.writeln(missing);
+            return 1;
+        }
+        auto unoptimizedPath = temporaryPath(programFile, ".ll");
+        std.file.write(unoptimizedPath, ir);
+        scope (exit) remove(unoptimizedPath);
+        auto optimized = optimizeIr(toolchain, unoptimizedPath, irPath);
+        if (!optimized.succeeded)
+        {
+            stderr.writeln("Optimizing failed:\n", optimized.output);
+            return 1;
+        }
         return 0;
     }
     return compileToExecutable(programFile, importPaths,
-        outputPath.empty ? executablePath(name) : outputPath) ? 0 : 1;
+        outputPath.empty ? executablePath(name) : outputPath, optimization) ? 0 : 1;
 }
 
 /// Compiles the program in `programFile` to a temporary executable and runs it,
 /// returning its exit status.
-int compileAndRun(string programFile, string[] importPaths)
+int compileAndRun(string programFile, string[] importPaths, Optimization optimization)
 {
     import std.process : spawnProcess, wait;
 
     auto exePath = executablePath(temporaryPath(programFile, ""));
-    if (!compileToExecutable(programFile, importPaths, exePath))
+    if (!compileToExecutable(programFile, importPaths, exePath, optimization))
     {
         return 1;
     }
@@ -174,14 +195,14 @@ int compileAndRun(string programFile, string[] importPaths)
 }
 
 /// Runs the tests in the file or directory at `path`, reports them, and returns 0 if they all passed.
-int test(string path, string[] importPaths, Backend backend)
+int test(string path, string[] importPaths, Backend backend, Optimization optimization)
 {
     import std.algorithm : map;
     import silver.testing : report, runFile, succeeded, TestBackend, testFiles;
 
     auto testBackend = backend == Backend.both ? TestBackend.both
         : backend == Backend.llvm ? TestBackend.llvm : TestBackend.interpreter;
-    auto runs = testFiles(path).map!(file => runFile(file, importPaths, testBackend, tempDir)).array;
+    auto runs = testFiles(path).map!(file => runFile(file, importPaths, testBackend, tempDir, optimization)).array;
     write(report(runs));
     return succeeded(runs) ? 0 : 1;
 }
@@ -209,6 +230,47 @@ void printDiagnostic(const Diagnostic diagnostic, SourceContext context)
     stderr.writeln(formatDiagnostic(diagnostic, context.sources));
 }
 
+/// Takes `-O`, `--optimize` and `-O<level>` out of `args`, setting `optimize` as the last one says.
+/// There is one optimized mode, so the levels are `-O0`, none, and `-O2`, which is `-O`. Returns
+/// what's wrong with a level that is neither.
+string takeOptimization(ref string[] args, out bool optimize)
+{
+    import std.algorithm : startsWith;
+
+    string[] rest;
+    foreach (arg; args)
+    {
+        if (arg == "--optimize" || arg == "-O" || arg == "-O2") optimize = true;
+        else if (arg == "-O0") optimize = false;
+        else if (arg.startsWith("-O"))
+        {
+            return "`" ~ arg ~ "` isn't an optimization level: there's -O, also spelled -O2, and -O0 for none.";
+        }
+        else rest ~= arg;
+    }
+    args = rest;
+    return null;
+}
+
+@("-O and -O2 optimize, -O0 doesn't, the last one wins, and any other level is a mistake")
+unittest
+{
+    bool optimize;
+    auto args = ["silver", "-b", "llvm", "-O2", "f.ag"];
+    assert(takeOptimization(args, optimize) is null && optimize);
+    assert(args == ["silver", "-b", "llvm", "f.ag"]);
+
+    args = ["silver", "build", "-O", "-O0", "f.ag"];
+    assert(takeOptimization(args, optimize) is null && !optimize);
+    args = ["silver", "build", "-O0", "--optimize", "f.ag"];
+    assert(takeOptimization(args, optimize) is null && optimize);
+    args = ["silver", "build", "-o", "out", "f.ag"];
+    assert(takeOptimization(args, optimize) is null && !optimize && args.length == 5);
+
+    args = ["silver", "build", "-O3", "f.ag"];
+    assert(takeOptimization(args, optimize) !is null);
+}
+
 ///Application entry point
 int main(string[] args)
 {
@@ -217,24 +279,65 @@ int main(string[] args)
     bool emitLlvm;
     bool emitCore;
     Backend backend;
-	auto arguments = getopt(
+    bool optimize;
+    GetoptResult arguments;
+    if (auto mistake = takeOptimization(args, optimize))
+    {
+        stderr.writeln(mistake, "\nRun `silver --help` for the options.");
+        return 1;
+    }
+    try
+    {
+        arguments = getopt(
     args,
+    config.caseSensitive,
     "importPath|I", "Add a path to search for imported modules", &importPaths,
     "backend|b", "run, test: how to run the program: interpreter (default), llvm, or for tests, both", &backend,
     "output|o", "build: where to write the executable (or the IR, with --emit-llvm)", &outputPath,
-    "emit-llvm", "build: write LLVM IR instead of an executable", &emitLlvm,
+    "optimize|O", "build, and run or test with -b llvm: have clang optimize the compiled program."
+        ~ " -O2 is the same, and -O0 is the default, no optimization", &optimize,
+    "emit-llvm", "build: write LLVM IR instead of an executable, optimized with -O", &emitLlvm,
     "emit-core", "print the Core the program lowers to instead of running it", &emitCore,
     );
+    }
+    catch (Exception e)
+    {
+        stderr.writeln(e.msg, "\nRun `silver --help` for the options.");
+        return 1;
+    }
     immutable building = args.length == 3 && args[1] == "build";
     immutable testing = args.length == 3 && args[1] == "test";
-	if (arguments.helpWanted || !(args.length == 2 || building || testing))
-	{
-		defaultGetoptPrinter("The Silver interpreter and compiler.\n"
-            ~ "Usage: silver [OPTION]... <file>         run <file>\n"
-            ~ "       silver build [OPTION]... <file>   compile <file> to an executable with LLVM\n"
-            ~ "       silver test [OPTION]... <path>    run the tests in <path>, a file or a directory", arguments.options);
-		return 0;
-	}
+    immutable usage = "Usage: silver [OPTION]... <file>         run <file>\n"
+        ~ "       silver build [OPTION]... <file>   compile <file> to an executable with LLVM\n"
+        ~ "       silver test [OPTION]... <path>    run the tests in <path>, a file or a directory";
+    if (arguments.helpWanted)
+    {
+        defaultGetoptPrinter("The Silver interpreter and compiler.\n" ~ usage, arguments.options);
+        return 0;
+    }
+    if (!(args.length == 2 || building || testing))
+    {
+        // `-o f.ag` takes the file as its value.
+        stderr.writeln(args.length == 1 && !outputPath.empty
+            ? "-o needs a value, and took `" ~ outputPath ~ "`, which leaves no file to compile."
+            : args.length == 1 ? "No file was given." : "Too many arguments.",
+            "\n", usage, "\nRun `silver --help` for the options.");
+        return 1;
+    }
+    if (!outputPath.empty && !building)
+    {
+        stderr.writeln("-o applies to `silver build`, which is what writes a file.");
+        return 1;
+    }
+
+    // The interpreter has nothing to optimize, and saying so beats ignoring the flag.
+    if (optimize && !building && backend == Backend.interpreter)
+    {
+        stderr.writeln("-O applies to compiled programs: use it with `silver build`, or with `-b llvm`"
+            ~ (testing ? " or `-b both`" : ""));
+        return 1;
+    }
+    immutable optimization = optimize ? Optimization.full : Optimization.none;
 
 	auto programFile = args[$ - 1];
     if (testing)
@@ -244,7 +347,7 @@ int main(string[] args)
             stderr.writefln("'%s' doesn't exist!", programFile);
             return 1;
         }
-        return test(programFile, importPaths, backend);
+        return test(programFile, importPaths, backend, optimization);
     }
 	if(!programFile.exists || !programFile.isFile)
 	{
@@ -255,12 +358,12 @@ int main(string[] args)
     auto allImportPaths = importPaths.chain([standardLibraryPath(), programFile.dirName]).array;
     if (building)
     {
-        return build(programFile, allImportPaths, outputPath, emitLlvm);
+        return build(programFile, allImportPaths, outputPath, emitLlvm, optimization);
     }
     final switch (backend)
     {
         case Backend.interpreter: return interpret(programFile, allImportPaths, emitCore);
-        case Backend.llvm: return compileAndRun(programFile, allImportPaths);
+        case Backend.llvm: return compileAndRun(programFile, allImportPaths, optimization);
         case Backend.both:
             stderr.writeln("Only `silver test` runs a program both ways");
             return 1;

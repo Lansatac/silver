@@ -1,0 +1,81 @@
+// More places a floor goes: the success side of an error union, a type argument of a part of
+// `A & B`, and `A & B` as a parameter's whole type. A floored function's body is checked as a
+// function's body whatever needed its result first.
+
+import interfaces_support.floors
+
+type NotFound(code: Int)
+type TooLong
+
+type Bad(n: Int)
+// The `else` needs `pick`'s result, and `pick`'s body builds a type declared after this one.
+type Small(n: Int) invariant n < 10 else Bad(pick([n, 2])[0])
+type Even(n: Int) invariant n % 2 == 0 else Bad(n)
+
+def pick(xs: [Int]): Range<Int> & Indexed<Int> {
+    val even = Even(2)
+    if val Error(bad) = even { return [bad.n] }
+    xs
+}
+
+def find(xs: [Int]): [Int] ! NotFound => if length(xs) == 0 => Error(NotFound(404)) else xs
+
+// `?` passes an error on, as in any function returning an error union.
+def loaded(xs: [Int]): Range<Int> ! NotFound {
+    val found = find(xs)?
+    found.map(x => x + 1)
+}
+
+def checked(xs: [Int]): Range<Int> & Indexed<Int> ! NotFound | TooLong {
+    if length(xs) > 3 { return Error(TooLong) }
+    val found = find(xs)?
+    found.map(x => x * 2)
+}
+
+def maybe(xs: [Int]): Range<Int>? ! NotFound {
+    if length(xs) == 1 { return None }
+    find(xs)?
+}
+
+def direct(xs: [Int]): Range<Int> ! NotFound => find(xs)
+
+def rows(xs: [Int]): Range<Range<Int>> & Indexed<[Int]> => [xs, xs]
+
+// A hidden type parameter with both bounds.
+def middle(items: Range<Int> & Indexed<Int>): Int => items[length(items) / 2]
+def ends<T>(items: Range<T> & Indexed<T>, more: Range<Int>): (T, [Int]) => (items[0], more.array())
+
+def main(): Unit {
+    printl(loaded([1, 2]))
+    printl(loaded([]))
+    match checked([1, 2]) {
+        Ok(doubled) => printl(doubled[1])
+        Error(reason) => printl(reason)
+    }
+    printl(checked([1, 2, 3, 4]))
+    printl(checked([]))
+    printl(maybe([1]))
+    printl(maybe([1, 2]))
+    printl(maybe([]))
+    printl(direct([5]))
+
+    val kept: Range<Int> ! NotFound = find([7])
+    printl(kept)
+    val plain: Range<Int> & Indexed<Int> ! NotFound = [8]
+    printl(plain)
+    val later = (xs: [Int]): Range<Int> ! NotFound => (find(xs)?).filter(x => x > 1)
+    printl(later([1, 2]))
+    printl(later([]))
+
+    printl(rows([8])[1][0])
+    val grid: Range<Range<Int>> & Indexed<[Int]> = [[1], [2]]
+    printl(length(grid))
+
+    printl(middle([4, 5, 6]))
+    printl(middle([4, 5, 6].map(x => x + 1)))
+    printl(ends(["a", "b"], Countdown(2)))
+
+    printl(pick([1])[0])
+    printl(Small(3))
+    printl(Small(30))
+}

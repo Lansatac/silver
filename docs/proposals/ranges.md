@@ -223,7 +223,7 @@ val ys: [Int] = xs.map(x => x * 2)      // error, which says to add .array()
 
 An interface name in a type position means "some type that satisfies it", decided when the program is compiled.
 
-- **In a parameter** (implemented; see [Interfaces](../language/interfaces.md#an-interface-name-as-a-parameter-type)) it's shorthand for a bounded type parameter. `source: Range<T>` means `<S: Range<T>>(source: S)`. To say two parameters have the same type, name it. The hidden parameter is never written at a call and doesn't count as one, so `array<Int>(xs)` gives only `T`. A lambda or a nested `def` can't have such a parameter, since neither can be generic, and the error says to name the type.
+- **In a parameter** (implemented; see [Interfaces](../language/interfaces.md#an-interface-name-as-a-parameter-type)) it's shorthand for a bounded type parameter. `source: Range<T>` means `<S: Range<T>>(source: S)`. To say two parameters have the same type, name it. `source: Range<T> & Indexed<T>` gives the hidden parameter both bounds. The hidden parameter is never written at a call and doesn't count as one, so `array<Int>(xs)` gives only `T`. A lambda or a nested `def` can't have such a parameter, since neither can be generic, and the error says to name the type.
 - **In a return** it's a floor (implemented; see [Interfaces](../language/interfaces.md#an-interface-name-as-a-result-type)): the result's type is the body's, the compiler checks that it satisfies the interface, and callers get the real type. See "An interface name as a return type".
 - **On a binding** it's a floor too (implemented; see [Interfaces](../language/interfaces.md#on-a-binding)). `val thing: Range<Int> = [1, 2, 3]` checks that the value is a `Range<Int>`, and `thing` is an array, so `thing[0]` works. A `mutable val` annotated this way still has one type, so it can't be given a range of another type.
   - **Considered**: a view that narrows the binding to what the interface provides. This was the earlier decision, made so that a binding could annotate an opaque result. The same annotation would then keep the real type on a return and hide it on a binding.
@@ -245,6 +245,8 @@ def bad(xs: [Int]): Range<Int> => length(xs)    // error in bad: Int isn't a Ran
 - Several are joined with `&`, as in a bound: `def squares(xs: [Int]): Range<Int> & Indexed<Int>`. Adding a `filter` to that body is then an error there, and not in a caller that indexed the result.
 - A caller can use more than was promised. If it does, a change to the body can break it, and the error is at the caller.
 - An interface name can sit inside a tuple, an option, an array or a type argument of the result, each checked in its place, as `splitAt` returning `([T], Range<T>)` needs. It can't sit inside a function type, so `flatMap` names the type: `f: (T) -> R` with `R: Range<U>`.
+- It can be the success side of an error union that's the whole result, as in `def lines(path: String): Range<String> ! IoError`. The errors are written as usual.
+- A public function can't return a private type this way. Its callers would hold a type they can't name, which is what the rule for a signature is there to prevent.
 - A function of an interface can't return an interface type. Each conforming function would return a different type, which is an associated type without a name.
 - A function whose result type would depend on its own, as a recursive one's does, writes the type out.
 - Every other result type is still written in full. This isn't inference for results in general.
@@ -275,7 +277,7 @@ It costs an indirect call and an allocation per step, and it's a real type that 
 
 **Where it lives.** The interfaces, adapters and consumers are in `std.range`, and the prelude forwards all of it, so `xs.map(f).filter(g).array()` needs no import in any module. It has to be that way: conformance is looked up where a value is used, so a module that only loops over a chain another module built still needs the adapter's `next` in scope. Sources tied to a domain stay in their own modules, as random draws do in `std.random`.
 
-- What one import brings is ranked as one module (decided; see [modules](../language/modules.md#forms-of-import)), so an array's own `first` in `std.array` beats the general one in `std.range` when both come through the prelude.
+- What one import brings is ranked as one module (decided; see [modules](../language/modules.md#forwarding)), so an array's own `first` in `std.array` beats the general one in `std.range` when both come through the prelude.
 
 **Interfaces.** Four in the first version, each a capability of its own that composes with the others through `&`:
 
@@ -371,11 +373,12 @@ It's for where one type has to stand for many: a field, an element of an array, 
 
 Conformance is settled by the checker, and every call to `next` in a chain is a direct call to a specific instance. Nothing is looked up.
 
-The cost is allocation. Products are heap values today, so each step of an adapter builds a new adapter value, per layer, per element. Plain loops over arrays and `a..b` avoid it through the index-loop lowering. For chains:
+Stepping an adapter allocates nothing. A compiled program passes and returns a product as its fields, so an adapter is a few values LLVM can see through, and each step builds the next adapter in registers. A product is on the heap only when its type holds itself, as a list node does, or when it's held as a member of a sum. What a chain costs beyond the loop written by hand:
 
-- **Small products by value** is the direct fix. An adapter becomes a few values LLVM can see through, the allocation goes, and a closure pointer that doesn't change in a loop can be called directly and inlined. It doesn't depend on the memory strategy.
-- **Perceus-style reuse** removes the allocation when the range is unshared, by writing the new adapter into the old one's cell. It needs `next` to own its argument, so it comes with the late stage (borrow inference, cell reuse, the mid-level IR). It doesn't make an indirect call direct.
-- Today the toolchain compiles without optimization by default and declares `silver_alloc` with no allocator attributes, so LLVM removes none of this.
+- **Calls.** A chain becomes one loop only when every `next` in it is inlined into the consumer. Then a lambda written at the call is inlined as well, and a function passed in as a value stays an indirect call per element, as it is in the loop by hand. The compiler's own choice leaves a `next` that contains a loop, such as `Filtered`'s, as a call, so the library's steps and small consumers need to be forced inline.
+- **Checks that can't fail.** An adapter over an array tests its position against the length and then indexes, which tests it again. The library's steps need unchecked indexing and slicing where their own test proves the bound.
+- **Optimization.** The toolchain compiles without optimization unless `-O` asks for it, and without it a step is ordinary calls and copies.
+- **Erased ranges.** `Seq<T>` allocates per step. Perceus-style reuse would remove that when the range is unshared, by writing the new value into the old one's cell. It needs `next` to own its argument, so it comes with the late stage (borrow inference, cell reuse, the mid-level IR).
 
 ### When the program is compiled
 
@@ -388,7 +391,7 @@ The search is cheap: one lookup per bound, proportional to the functions of that
 3. Interfaces: structural conformance, parameters that conformance determines, witnesses (implemented).
 4. Interface names as types (implemented), with the erased form.
 5. The range library.
-6. Small products by value, for chains to be fast when compiled.
+6. Products by value (implemented), for chains to be fast when compiled.
 
 Not needed for ranges: a query written as a test in a body (`static if R: Sized`), an explicit adapter form, interfaces where `Self` is only in the return, operators mapped to interfaces, bounds on a type's own parameters.
 
@@ -405,7 +408,7 @@ Not needed for ranges: a query written as a test in a body (`static if R: Sized`
 2. **Ranges are the hardest test of interfaces, not the most needed.** After stage 1 the first things missed will be printing and comparing a `T`. `Show` and `Eq` raise questions ranges don't: whether `==` means `equals`, whether derived equality is a conformance, whether a local function can change either. Interfaces should be designed against all three together. (Decided since: `==` and printing aren't interfaces and need no bound, so `Show` and `Eq` drop out. See the [interfaces proposal](interfaces.md).)
 3. **A long chain of unbuilt features**, each designed on paper on top of the one before.
 4. **The combination is new.** Structural conformance, lookup at the call site and bodies checked once aren't found together elsewhere. D has structural ranges but checks per instantiation and can't see a caller's functions; Nim and C++ concepts are structural with caller-side lookup but don't check bodies at the definition; Go is structural but only within the type's package; Scala passes witnesses but declares them. Known hazards: accidental matches, two modules disagreeing about a conformance, and interfaces such as `Default` that can't be expressed.
-5. **Chains are slow when compiled** until products go by value.
+5. **Chains are slow when compiled** until products go by value. (Done since: they do. See "Cost" for what a chain still needs.)
 
 ## Open questions
 

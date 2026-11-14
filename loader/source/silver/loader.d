@@ -208,6 +208,18 @@ unittest
     program.modules.length.should.equal(3);
 }
 
+@("load follows forward imports, and a cycle of them ends")
+unittest
+{
+    auto directory = makeModuleDirectory("forward",
+        ["a.ag": "module a\nforward import b", "b.ag": "module b\nforward import c : c\nforward import a",
+            "c.ag": "module c\ndef c(): Int => 1"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto program = load("import a", "main.ag", [directory], new SourceContext);
+    program.modules.keys.sort.array.should.equal(["a", "b", "c", "main"]);
+}
+
 @("load maps a dotted import to a directory")
 unittest
 {

@@ -121,7 +121,7 @@ Matchers, fixtures, property testing, snapshots and reporters belong in librarie
 
 ## Current implementation
 
-- `assert`, `test`, `expect` and `silver test` are available on both backends. `silver test -b llvm` compiles the tests, and `-b both` runs them both ways and fails a test the two backends disagree on.
+- `assert`, `test`, `expect` and `silver test` are available on both backends. `silver test -b llvm` compiles the tests, and `-b both` runs them both ways and fails a test the two backends disagree on. `-O` with either optimizes the compiled tests.
 - A directory's tests are those of every `.ag` file under it, each loaded as a program of its own.
 - `panics` is available on both backends. Its work can't be a function that returns `Never`, such as `() => panic("x")`, because a type parameter doesn't take `Never` yet; `(): Unit => panic("x")` works.
 - Companion files, `--filter`, `--format json` and the library hooks aren't available yet.
