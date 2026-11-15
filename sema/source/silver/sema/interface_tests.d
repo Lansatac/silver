@@ -237,6 +237,25 @@ def sel<T: A & B>(x: T): T? => x
         .onlyMessage(DiagnosticCode.TypeMismatch).should.equal("Type `Int` is not assignable to type `String`");
 }
 
+@("a bound only the expected type decides is checked while an overload is chosen")
+unittest
+{
+    enum declared = `
+interface A { def a(x: Self): Int }
+interface B { def b(x: Self): Int }
+type Box(n: Int)
+def a(x: Int): Int => 1
+def a(x: Float): Int => 1
+def b(x: Float): Int => 1
+def pick<T: A>(): T? => None
+def pick<T: A & B>(): T? => None
+`;
+    analyzed(declared ~ "def main(): Unit {\n val i: Int? = pick()\n val f: Float? = pick()\n}").shouldHaveNoDiagnostics();
+    // A failure is a reason to choose another, so none holding is the call that fits nothing.
+    analyzed(declared ~ "def main(): Unit {\n val x: Box? = pick()\n}")
+        .onlyMessage(DiagnosticCode.NoMatchingOverload).should.contain("`Box` isn't one");
+}
+
 @("two functions whose bounds ask for different things are duplicates")
 unittest
 {
