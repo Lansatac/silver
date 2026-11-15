@@ -1,0 +1,7 @@
+def apply(f: ([Int]) -> Int, xs: [Int]): Int => f(xs)
+
+def main(): Unit {
+    val g: ([Int]) -> Int = length
+    printl(g([1, 2, 3]))
+    printl(apply(length, []))
+}

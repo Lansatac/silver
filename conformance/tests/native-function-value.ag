@@ -1,0 +1,9 @@
+import std.math
+
+def apply(f: (Float) -> Float, x: Float): Float => f(x)
+
+def main(): Unit {
+    val f: (Float) -> Float = sqrt
+    printl(f(16.0))
+    printl(apply(sqrt, 9.0))
+}

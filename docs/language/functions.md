@@ -230,5 +230,4 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 - A method call's receiver needs a type of its own, so `None.f()` and `[].f()` are errors. An integer literal receiver adapts, as in `(200).f()` with `f(x: UInt8)`.
 - Two native functions of one name in a module have to bind different C symbols, and two intrinsics can't share a name.
 - A `mutable` first parameter is rejected for a method call. A later `mutable` argument is fine.
-- A native function can't be used as a function value in compiled programs.
 - `tail` isn't available.

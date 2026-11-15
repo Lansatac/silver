@@ -87,4 +87,3 @@ Maps share the bracket syntax, with `:` between key and value, as in `["a": 1]`.
 ## Current implementation
 
 - `xs[i] = v` copies the whole array every time, even when nothing else holds it.
-- `length` is built into the compiler, so it can only be called, as `length(xs)` or `xs.length()`, and not used as a function value.
