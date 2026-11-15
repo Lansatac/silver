@@ -12,6 +12,7 @@ import silver.ast;
 import silver.sema.constant_eval;
 import silver.sema.coverage;
 import silver.sema.declare;
+import silver.sema.recursion;
 import silver.sema.type;
 import silver.sema.resolve;
 import silver.sema.typing;
@@ -82,11 +83,12 @@ private struct Reference
     Span span;
     Id!FunctionDecl func;
     Type[] typeArgs;
-    /// What checking found for it.
+    /// What checking found for it, and once its queries are answered, what was kept.
     Witness[] witnesses;
     /// The functions it was chosen from, which may ask more than it.
     const(Id!FunctionDecl)[] siblings;
     void delegate(Witness[] witnesses, Witness[] alternatives) store;
+    Witness[] alternatives;
 }
 
 /// A `for` in a generic function that steps, which loops by index where `length` and `opIndex`
@@ -174,9 +176,13 @@ private final class TypeChecker
     private bool[string] _reportedAnswers;
     /// The functions holding invariants and their `else`s, once `askerAt` has needed them.
     private bool[Id!FunctionDecl] _invariantFunctions;
+    /// For the type parameters a search makes up.
+    private NodeIds _ids;
 
     Typing checkProgram(const Program program)
     {
+        // As resolution does: new IDs only add to what's taken.
+        _ids = cast(NodeIds) program.ids;
         auto programModules = program.sortedModules;
 
         // phase 1: all declared types; phase 2: all signatures; phase 3: all bodies
@@ -301,6 +307,7 @@ private final class TypeChecker
 
         _declarer.checkInhabited(programModules);
         answerQueries();
+        rejectGrowingCalls();
 
         foreach (literal; _intLiterals)
         {
@@ -350,13 +357,48 @@ private final class TypeChecker
             foreach (loop; _steppedLoops) changed |= indexLoop(loop, false);
         }
         if (_typing.queries.length == 0) return;
-        foreach (reference; _references) findAgain(reference, true);
+        foreach (ref reference; _references) findAgain(reference, true);
         foreach (loop; _steppedLoops) indexLoop(loop, true);
+    }
+
+    /// Reports each generic function that needs an instance of itself at ever larger type
+    /// arguments, by calling itself or through other functions and the witnesses their uses find.
+    private void rejectGrowingCalls()
+    {
+        Use!(Id!FunctionDecl)[] uses;
+        void addWitnesses(Id!FunctionDecl from, const(Witness)[] witnesses, Span span)
+        {
+            foreach (w; witnesses)
+            {
+                if (w.func.isValid && w.typeArgs.length > 0) uses ~= Use!(Id!FunctionDecl)(from, w.func, w.typeArgs, span);
+                addWitnesses(from, w.witnesses, span);
+                addWitnesses(from, w.alternatives, span);
+            }
+        }
+        foreach (reference; _references)
+        {
+            auto from = reference.site.function_;
+            if (!from.isValid || !isGenericFunction(from)) continue;
+            uses ~= Use!(Id!FunctionDecl)(from, reference.func, reference.typeArgs, reference.span);
+            addWitnesses(from, reference.witnesses, reference.span);
+            addWitnesses(from, reference.alternatives, reference.span);
+        }
+
+        const(TypeParam)[] paramsOf(Id!FunctionDecl f) => _resolutions.typeParamsOf(f);
+        string name(Id!FunctionDecl f) => _resolutions.declarations.functions[f].name;
+        string instance(Id!FunctionDecl f, const(Type)[] args) => "`%s<%-(%s, %)>`".format(name(f), args.map!(a => _types.describe(a)));
+        for (auto cycle = growingCycle(uses, &paramsOf, _types); cycle !is null; cycle = growingCycle(uses, &paramsOf, _types))
+        {
+            _collector.reportError(DiagnosticCode.PolymorphicRecursion, cycle[0].span,
+                "`%s` can't be compiled, as it would need endlessly many instances, each calling a larger one: %-(%s, then %), and so on"
+                    .format(name(cycle[0].from), instancesAround(cycle, &paramsOf, _types, &instance)));
+            uses = uses.filter!(u => !cycle.canFind!(c => c.from == u.from)).array;
+        }
     }
 
     /// Searches for `reference`'s witnesses and alternatives again, keeping them when `keep`.
     /// Whether a function was given a query.
-    private bool findAgain(Reference reference, bool keep)
+    private bool findAgain(ref Reference reference, bool keep)
     {
         auto defer = Deferral(askerAt(reference.site), askerAt(reference.site), false, reference.span, keep);
         auto params = _resolutions.typeParamsOf(reference.func);
@@ -401,7 +443,12 @@ private final class TypeChecker
             rungs ~= Witness(sibling, theirParams.map!(p => binding[p.id]).array, fits.witnesses);
         }
         rungs.sort!((a, b) => asksForMore(a.func, b.func));
-        if (keep) reference.store(witnesses, rungs);
+        if (keep)
+        {
+            reference.store(witnesses, rungs);
+            reference.witnesses = witnesses;
+            reference.alternatives = rungs;
+        }
         return defer.changed;
     }
 
@@ -3594,11 +3641,44 @@ private final class TypeChecker
     private Conformance conformanceOf(Id!FunctionDecl func, ref Substitution bound, Site site, const(Goal)[] stack = null,
         Deferral* defer = null)
     {
+        auto params = _resolutions.typeParamsOf(func);
+        if (!bound.byValue.any!(v => mentionsAny(v, params))) return conformanceOf(func, params, null, null, bound, site, stack, defer);
+
+        // In a call from `func`'s own body, what `bound` says is in terms of the same type
+        // parameters it binds, and the search substitutes again for the ones it finds. So the
+        // search binds stand-ins for them instead, and what it finds is copied back.
+        auto standIns = params.map!(p => TypeParam(_ids.next!TypeParam, p.name, p.span, cast(TypeExpr[]) p.bounds)).array;
+        Substitution renaming;
+        Substitution renamed;
+        foreach (i, param; params)
+        {
+            renaming[param.id] = _types.parameter(standIns[i].id, param.name);
+            if (auto known = param.id in bound) renamed[standIns[i].id] = *known;
+        }
+        auto result = conformanceOf(func, params, standIns, renaming, renamed, site, stack, defer);
+        foreach (i, param; params)
+        {
+            if (param.id !in bound && standIns[i].id in renamed) bound[param.id] = renamed[standIns[i].id];
+        }
+        return result;
+    }
+
+    /// `conformanceOf`, with each of `func`'s type parameters `params` standing for the one
+    /// `renaming` gives in `bound`, which are `open`; with no `renaming`, they stand for themselves.
+    private Conformance conformanceOf(Id!FunctionDecl func, const(TypeParam)[] params, const(TypeParam)[] open,
+        Substitution renaming, ref Substitution bound, Site site, const(Goal)[] stack, Deferral* defer)
+    {
         Conformance result;
         auto supplied = _resolutions.boundFunctions.get(func, null);
         auto asked = defer is null ? null : _typing.queries.get(func, null);
         if (supplied.length == 0 && asked.length == 0) return result;
-        auto params = _resolutions.typeParamsOf(func);
+        if (renaming.length == 0) open = params;
+        Id!TypeParam key(Id!TypeParam param)
+        {
+            if (auto standIn = param in renaming) return _types[*standIn].match!((const TypeParamData p) => p.param, _ => param);
+            return param;
+        }
+        Type inTermsOfOpen(Type type) => _types.substitute(_types.substitute(type, renaming), bound);
         result.witnesses = new Witness[supplied.length];
         auto decided = new bool[supplied.length];
 
@@ -3613,22 +3693,22 @@ private final class TypeChecker
                 while (end < supplied.length && _resolutions.requirements[supplied[end]].param == first.param
                     && _resolutions.requirements[supplied[end]].bound == first.bound) end++;
                 if (decided[start]) continue;
-                auto self = first.param in bound;
+                auto self = key(first.param) in bound;
                 if (self is null) continue;
                 auto declared = _typing.bounds[first.param][first.bound];
-                auto goal = Goal(declared.decl, *self, declared.args.map!(a => _types.substitute(a, bound)).array);
+                auto goal = Goal(declared.decl, *self, declared.args.map!(a => inTermsOfOpen(a)).array);
                 // What's already an error has been reported, and anything satisfies it.
                 if (_types.mentionsError(goal.self) || goal.args.any!(a => _types.mentionsError(a)))
                 {
                     decided[start .. end] = true;
                     continue;
                 }
-                auto found = satisfy(goal, params, bound, site, stack, defer);
+                auto found = satisfy(goal, open, bound, site, stack, defer);
                 if (found.pending) continue;
                 if (found.tooDeep) return found;
                 if (found.failure !is null)
                 {
-                    auto wanted = Bound(goal.decl, goal.args.map!(a => _types.substitute(a, bound)).array);
+                    auto wanted = Bound(goal.decl, declared.args.map!(a => inTermsOfOpen(a)).array);
                     auto hidden = _resolutions.hiddenParams.get(func, null).canFind!(p => p.id == first.param);
                     result.failure = (hidden ? "needs %2$s, and `%3$s` isn't one: %4$s" : "needs `%1$s` to be %2$s, and `%3$s` isn't one: %4$s")
                         .format(_resolutions.declarations.typeParams[first.param].name, withArticle(_declarer.describe(wanted)),
@@ -3643,9 +3723,11 @@ private final class TypeChecker
             }
         }
         result.pending = decided.canFind(false);
-        if (asked.length > 0 && !result.pending && params.all!(p => (p.id in bound) !is null))
+        if (asked.length > 0 && !result.pending && open.all!(p => (p.id in bound) !is null))
         {
-            result.witnesses ~= answersTo(asked, bound, site, stack, defer);
+            Substitution whole;
+            foreach (param; params) whole[param.id] = bound[key(param.id)];
+            result.witnesses ~= answersTo(asked, whole, site, stack, defer);
         }
         return result;
     }

@@ -124,7 +124,15 @@ val wrap = Box<Int>
 
 ## Limits
 
-A generic function that calls itself with an ever larger type, such as `def grow<T>(x: T): Unit => grow([x])`, would need endlessly many instances. Instances nested too deeply are an error that shows the chain.
+Each instance is compiled for its own types, so a generic function can need itself again, directly or through other functions, only at type arguments that don't grow: its type parameters passed along or swapped, or types that don't mention them. One that needs itself at a larger type would need endlessly many instances, so it's an error at the call that makes the type grow, which shows the instances it would lead to. It's an error whether or not anything calls the function.
+
+```silver
+def same<T>(x: T, n: Int): Int => if n == 0 => 0 else same(x, n - 1)            // fine
+def swap<A, B>(a: A, b: B, n: Int): Int => if n == 0 => 0 else swap(b, a, n - 1)  // fine
+def grow<T>(x: T): Unit => grow([x])        // error: `grow<T>`, then `grow<[T]>`, then `grow<[[T]]>`, ...
+```
+
+The same goes for the functions a call finds for a bound, as the instances they're compiled at come from the call.
 
 ## Open questions
 
@@ -139,7 +147,7 @@ A generic function that calls itself with an ever larger type, such as `def grow
 
 ## Current implementation
 
-- Type arguments can nest 64 deep. Past that the program doesn't compile, and the error shows the instances, or the type, that led there.
+- Type arguments that don't grow without end can still nest only 64 deep. Past that the program doesn't compile, and the error shows the instances, or the type, that led there.
 - Inference treats two more kinds of argument as having no type of their own, as `None` does: a marker that a generic sum owns, such as `Nil`, and a generic function or constructor named without its type arguments. Each binds nothing, and is checked once the type arguments are known.
 - In step 1, an argument whose parameter type is already known when its turn comes is checked against it rather than given a type of its own, so with `f<T>(a: T, b: [T])`, `f(small, [1, 2])` adapts the literals to `small`'s type.
 - In step 4, a lambda whose parameter types aren't known at its turn is tried again after the arguments that follow it, and a bound that can now be solved is.

@@ -1,0 +1,1 @@
+T0048: `depth` can't be compiled, as it would need endlessly many instances, each calling a larger one: `depth<R>`, then `depth<Skipped<R>>`, then `depth<Skipped<Skipped<R>>>`, and so on

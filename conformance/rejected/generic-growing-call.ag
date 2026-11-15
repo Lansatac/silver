@@ -1,0 +1,18 @@
+// Each instance of `depth` calls one at a larger type, so it would need endlessly many. Its
+// bound holds at the call: the problem is only the growth.
+interface Steps<T> { def step(r: Self): (T, Self)? }
+
+def step(xs: [Int]): (Int, [Int])? => if xs.length() == 0 => None else (xs[0], xs[1..xs.length()])
+
+type Skipped<S>(source: S)
+
+def step<S: Steps<T>, T>(s: Skipped<S>): (T, Skipped<S>)? {
+    val (item, rest) = step(s.source)?
+    (item, Skipped(rest))
+}
+
+def depth<R: Steps<Int>>(r: R, n: Int): Int => if n == 0 => 0 else 1 + depth(Skipped(r), n - 1)
+
+def main(): Unit {
+    printl(depth([1, 2, 3], 3))
+}

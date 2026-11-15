@@ -294,6 +294,18 @@ unittest
     analyzedGeneric("    val qf = identity").shouldReport(DiagnosticCode.CannotInferTypeArgument, At("identity", 2));
 }
 
+@("a generic function can call itself with its type parameters passed along or swapped, but not with ones that grow")
+unittest
+{
+    analyzedModule(`
+def same<T>(x: T, n: Int): Int => if n == 0 => 0 else same(x, n - 1)
+def swap<A, B>(a: A, b: B, n: Int): Int => if n == 0 => 0 else swap(b, a, n - 1)
+def fixed<T>(x: T, n: Int): Int => if n == 0 => 0 else fixed([1], n - 1)`).shouldHaveNoDiagnostics();
+    analyzedModule("def grow<T>(x: T): Unit => grow([x])").shouldReport(DiagnosticCode.PolymorphicRecursion, At("grow", 2));
+    analyzedModule("def f<T>(x: T): Unit => g((x, x))\ndef g<U>(u: U): Unit => f([u])")
+        .shouldReport(DiagnosticCode.PolymorphicRecursion, At("g", 1));
+}
+
 @("a method call's receiver is its first argument for inference, and isn't converted")
 unittest
 {

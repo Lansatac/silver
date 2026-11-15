@@ -3387,22 +3387,6 @@ def f(): Bool => Box(1) == Box(2) && Box("a") == Box("b")
     names.should.equal(["f", "equal.Box<Int>", "equal.Box<String>"]);
 }
 
-@("polymorphic recursion stops at the nesting limit, showing the instances that led there")
-unittest
-{
-    import std.exception : collectException;
-    import silver.ast : DiagnosticCode, DiagnosticException;
-
-    auto error = collectException!DiagnosticException(loweredFunction(`
-def grow<T>(x: T): Unit => grow([x])
-
-def f(): Unit => grow(1)
-`, "f"));
-    assert(error !is null, "expected the nesting limit");
-    error.diagnostic.code.should.equal(DiagnosticCode.InstanceNestingTooDeep);
-    error.diagnostic.message.canFind("f\n    -> grow<Int>\n    -> grow<[Int]>").should.equal(true);
-}
-
 @("a call of a function a bound supplies is a call of the instance's witness, its argument promoted to fit")
 unittest
 {

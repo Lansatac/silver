@@ -111,6 +111,9 @@ enum DiagnosticCode : string
     /// A lambda written as an operand of `==` or `!=`, or in a value one builds, which can't be
     /// equal to the other side.
     LambdaInComparison = "T0047",
+    /// A generic type or function that needs itself at ever larger type arguments, so it would
+    /// need endlessly many instances.
+    PolymorphicRecursion = "T0048",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",
