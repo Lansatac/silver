@@ -139,6 +139,7 @@ private TestResult[] interpreted(CoreProgram lowered, const SourceMap sources)
 private string compiled(const CoreProgram lowered, const SourceMap sources, string file, string workDirectory,
     Optimization optimization, out TestResult[] results)
 {
+    import std.parallelism : task;
     import std.process : Config, pipe, spawnProcess, thisProcessID, wait;
     import std.stdio : File;
 
@@ -155,35 +156,37 @@ private string compiled(const CoreProgram lowered, const SourceMap sources, stri
     }
 
     auto base = buildPath(workDirectory, "silver-test-%s-%s".format(thisProcessID, baseName(file).stripExtension));
-    auto irPath = base ~ ".ll", exePath = executablePath(base), errorPath = base ~ ".stderr";
+    auto irPath = base ~ ".ll", exePath = executablePath(base);
     write(irPath, ir);
     scope (exit) remove(irPath);
     auto linked = linkExecutable(toolchain, irPath, exePath, lowered.libraries, optimization);
     if (!linked.succeeded) return "linking failed:\n" ~ linked.output;
-    scope (exit)
-    {
-        remove(exePath);
-        if (exists(errorPath)) remove(errorPath);
-    }
+    scope (exit) remove(exePath);
 
     results = lowered.tests.map!(t => TestResult(t.name, located(t.span, sources))).array;
     size_t next = 0;
     while (next < results.length)
     {
         auto output = pipe();
-        auto errors = File(errorPath, "w");
-        auto pid = spawnProcess([exePath], File(nullDevice), output.writeEnd, errors,
+        auto errors = pipe();
+        auto pid = spawnProcess([exePath], File(nullDevice), output.writeEnd, errors.writeEnd,
             ["SILVER_TEST_FROM": next.to!string], Config.none);
+        output.writeEnd.close();
+        errors.writeEnd.close();
+        // A pipe rather than a temp file: on Windows a handle to a file open here can leak into a child
+        // spawned by another thread and keep the file locked. Reading both pipes at once avoids a deadlock.
+        auto errorReader = task({ return cast(string) errors.readEnd.byChunk(4096).join; });
+        errorReader.executeInNewThread();
         auto records = cast(string) output.readEnd.byChunk(4096).join;
+        auto errorText = errorReader.yieldForce;
         auto status = wait(pid);
-        errors.close();
 
         auto unfinished = readRecords(records, results);
         if (unfinished == size_t.max && status == 0) break;
         // A test that never ended crashed, and if none started, the first one to run did.
         auto crashed = unfinished == size_t.max ? next : unfinished;
-        if (crashed < next || crashed >= results.length) return "the test program failed:\n" ~ readText(errorPath);
-        auto said = readText(errorPath).strip;
+        if (crashed < next || crashed >= results.length) return "the test program failed:\n" ~ errorText;
+        auto said = errorText.strip;
         auto how = status < 0 ? "signal %s".format(-status) : "exit status %s".format(status);
         results[crashed].failures ~= "The test crashed, with %s%s".format(how, said.length > 0 ? ": " ~ said : "");
         next = crashed + 1;
