@@ -121,6 +121,10 @@ package struct Resolution
     Requirement[Id!FunctionDecl] requirements;
     /// What each module's `forward import`s pass on to its importers, by module and then name.
     Forward[][string][string] forwards;
+    /// Names that are an alias of a generic type's instance, like `IntBox` after
+    /// `alias IntBox = Box<Int>`, by the alias: `resolutions` has the type, and the alias its
+    /// type arguments.
+    Id!AliasDecl[Id!Expr] aliasedInstances;
 
     /// The type parameters of `func`: those it declares, then its hidden ones.
     const(TypeParam)[] typeParamsOf(Id!FunctionDecl func) const
@@ -462,6 +466,7 @@ private final class NameResolver
     private Id!FunctionDecl[][Id!FunctionDecl] _boundFunctions;
     private Requirement[Id!FunctionDecl] _requirements;
     private Forward[][string][string] _forwards;
+    private Id!AliasDecl[Id!Expr] _aliasedInstances;
     /// Where the nodes resolution makes up get their IDs.
     private NodeIds _ids;
 
@@ -502,7 +507,7 @@ private final class NameResolver
         }
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
             _operatorLookups, _declarations, _nativeLibraries, cast(const(Scope)[string]) _moduleScopes, _hiddenParams, _sugarParams,
-            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements, _forwards);
+            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances);
     }
 
     /// Works out what every module forwards. A blanket forward passes on what its module forwards
@@ -2029,16 +2034,12 @@ private final class NameResolver
             return Path(Path.Kind.Value);
         }
 
-        // A value of the type would have to know the alias's type arguments, which a name can't carry.
-        if (auto instance = aliasedInstance(alias_))
-        {
-            _collector.reportError(DiagnosticCode.AliasIsNotAValue, expr.span,
-                "`%s` is an alias of `%s`, and its name can't give a value those type arguments; write `%s` instead"
-                    .format(name, printTypeExpr(*instance), printTypeExpr(*instance)));
-            return Path(Path.Kind.Error);
-        }
         auto isValue = expandAlias(TypeSymbol(alias_), _declarations.aliases, _typeResolutions).match!(
-            (const Id!TypeDecl type) { _resolutions[expr.id] = SymbolId(type); return true; },
+            (const Id!TypeDecl type) {
+                _resolutions[expr.id] = SymbolId(type);
+                if (aliasesInstance(alias_)) _aliasedInstances[expr.id] = alias_;
+                return true;
+            },
             (const Builtin builtin) {
                 if (expr.id != _callee || !isConversion(builtin)) return false;
                 _conversions[_call] = builtin;
@@ -2056,21 +2057,20 @@ private final class NameResolver
         return Path(Path.Kind.Error);
     }
 
-    /// The generic type with type arguments that `alias_` stands for, directly or through other
-    /// aliases, or null if it doesn't stand for one.
-    private const(TypeExpr)* aliasedInstance(Id!AliasDecl alias_)
+    /// Whether `alias_` stands for a generic type with type arguments, directly or through other
+    /// aliases.
+    private bool aliasesInstance(Id!AliasDecl alias_)
     {
         foreach (_; 0 .. _declarations.aliases.length)
         {
             auto target = &_declarations.aliases[alias_].target;
-            auto hasArgs = target.kind.match!((const NamedType n) => n.args.length > 0, _ => false);
-            if (hasArgs) return target;
+            if (target.kind.match!((const NamedType n) => n.args.length > 0, _ => false)) return true;
             auto next = target.id in _typeResolutions;
-            if (next is null) return null;
+            if (next is null) return false;
             alias_ = (*next).match!((const Id!AliasDecl a) => a, _ => Id!AliasDecl.init);
-            if (!alias_.isValid) return null;
+            if (!alias_.isValid) return false;
         }
-        return null;
+        return false;
     }
 
     /// Notes `symbol`, just found from `from`, as captured by each lambda between the two.

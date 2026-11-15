@@ -4110,8 +4110,12 @@ private final class TypeChecker
         const(TypeParam)[] ownerParams;
         /// The type a constructor names, in terms of `params`.
         Type member;
+        /// For a name that's an alias of an instance, like `IntBox` for `Box<Int>`, that instance,
+        /// which gives the type arguments.
+        Type aliased;
 
         bool found() const => type != Type.init;
+        bool writes() const => written.length > 0 || aliased != Type.init;
     }
 
     /// What `expr` uses generically, if it's a call or value of a generic function or constructor.
@@ -4135,6 +4139,7 @@ private final class TypeChecker
         g.span = name.span;
         g.spelled = spelling(name);
         g.written = typeArgsOf(name);
+        if (auto alias_ = name.id in _resolutions.aliasedInstances) g.aliased = _declarer.aliasType(*alias_);
         auto found = (*symbol).match!(
             (const Id!FunctionDecl f) {
                 g.params = _resolutions.typeParamsOf(f);
@@ -4343,6 +4348,20 @@ private final class TypeChecker
     private void bindWritten(const Generic g, ref Substitution bound)
     {
         auto args = _declarer.resolveTypeArguments(g.written);
+        if (g.aliased != Type.init)
+        {
+            if (args.length > 0 || g.aliased == _types.error)
+            {
+                if (args.length > 0)
+                {
+                    _collector.reportError(DiagnosticCode.WrongTypeArgumentCount, g.span,
+                        "`%s` isn't generic, so it takes no type arguments".format(g.spelled));
+                }
+                foreach (param; g.params ~ g.ownerParams) bound[param.id] = _types.error;
+                return;
+            }
+            args = _types.nominalArgs(g.aliased).dup;
+        }
         if (args.length == g.writable)
         {
             foreach (i, arg; args) bound[g.params[i].id] = arg;
@@ -4364,7 +4383,7 @@ private final class TypeChecker
             (const MemberAccess access) => access.typeArgs.length == 0,
             _ => false,
         );
-        if (genericName && genericNamed(expr).found) return true;
+        if (genericName && expr.id !in _resolutions.aliasedInstances && genericNamed(expr).found) return true;
         return isIntLiteral(expr) || isLambda(expr) || expr.kind.match!(
             (const NoneLiteral _) => true,
             (const OkExpr _) => true,
@@ -4439,7 +4458,7 @@ private final class TypeChecker
         {
             if (g.func.isValid && !sum) conformance = conformanceOf(g.func, bound, ctx.site);
         }
-        if (g.written.length > 0) bindWritten(g, bound);
+        if (g.writes) bindWritten(g, bound);
         foreach (i, arg; args)
         {
             if (typed[i] != Type.init)
@@ -4647,7 +4666,7 @@ private final class TypeChecker
         auto params = sum ? g.ownerParams : g.params;
         auto shape = sum ? g.owner : g.type;
         Substitution bound;
-        if (g.written.length > 0) bindWritten(g, bound);
+        if (g.writes) bindWritten(g, bound);
         if (params.any!(p => p.id !in bound)) bindExpected(shape, expected, params, bound);
         Conformance conformance;
         if (g.func.isValid) conformance = conformanceOf(g.func, bound, site);

@@ -1,0 +1,72 @@
+// An alias of a generic type's instance builds it, is a function value, and matches, with the
+// alias's type arguments.
+
+import generics_support.boxes
+
+type Box<T>(value: T)
+type Pair<A, B>(first: A, second: B)
+type Outcome<T> = Done(value: T) | Failed(reason: String)
+type Empty
+type NonEmpty<T>(items: [T]) invariant items.length() > 0 else Empty
+
+alias IntBox = Box<Int>
+alias Also = IntBox
+alias Entry = Pair<String, Int>
+alias Nested = Box<IntBox>
+alias IntDone = Done<Int>
+alias IntOutcome = Outcome<Int>
+alias Ints = NonEmpty<Int>
+type Held = :IntBox | :Entry
+
+def unbox(b: Also): Int => match b { Also(v) => v }
+
+def apply(make: (Int) -> IntBox, x: Int): IntBox => make(x)
+
+def describe(h: Held): String => match h {
+    IntBox(v) => "box {v}"
+    Entry(name, n) => "{name} = {n}"
+}
+
+def total(o: IntOutcome): Int => match o {
+    IntDone(v) => v
+    Failed(_) => 0
+}
+
+def first<T>(b: Box<T>): T => b.value
+
+def twice<T>(make: (Int) -> T, x: Int): (T, T) => (make(x), make(x + 1))
+
+def main(): Unit {
+    printl(IntBox(1))
+    printl(Also(2))
+    printl(Entry("a", 3))
+    printl(Nested(IntBox(4)))
+    printl(IntBox(1) == Box<Int>(1))
+    printl(first(IntBox(5)))
+
+    val make = IntBox
+    printl(make(6))
+    printl(apply(IntBox, 7))
+    printl(apply(Also, 8))
+    val pair: (String, Int) -> Entry = Entry
+    printl(pair("b", 9))
+    printl(twice(IntBox, 10))
+
+    printl(unbox(Also(12)))
+    printl(describe(IntBox(13)))
+    printl(describe(Entry("c", 14)))
+    if val IntBox(v) = Nested(IntBox(15)).value => printl(v)
+
+    val done: IntOutcome = IntDone(16)
+    printl(done)
+    printl(total(done))
+    printl(total(Failed("no")))
+
+    printl(Ints([17, 18])!)
+    printl(Ints([]) ?? Ints([19])!)
+
+    val labels = generics_support.boxes.Labels(["x", "y"])
+    printl(labels)
+    printl(Labels(["z"]).contents)
+    printl(match labels { Labels(items) => items.length() })
+}

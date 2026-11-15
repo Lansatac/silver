@@ -1,0 +1,23 @@
+Box(1)
+Box(2)
+Pair(a, 3)
+Box(Box(4))
+true
+5
+Box(6)
+Box(7)
+Box(8)
+Pair(b, 9)
+(Box(10), Box(11))
+12
+box 13
+c = 14
+15
+Done(16)
+16
+0
+NonEmpty([17, 18])
+NonEmpty([19])
+Crate([x, y])
+[z]
+2

@@ -1,0 +1,4 @@
+module generics_support.boxes
+
+type Crate<T>(contents: T)
+alias Labels = Crate<[String]>

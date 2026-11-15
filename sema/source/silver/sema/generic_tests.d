@@ -337,11 +337,16 @@ unittest
         .shouldReport(DiagnosticCode.NonExhaustiveMatch, At("match", 1));
 }
 
-@("an alias of an instance is a type, but its name can't build a value, which would lose the type arguments")
+@("an alias of an instance builds it, and is a function value, with the alias's type arguments")
 unittest
 {
     enum aliases = "type Box<T>(value: T)\nalias IntBox = Box<Int>\nalias Also = IntBox\n";
-    analyzed(aliases ~ "def f(b: Also): Int => match b {\n    Also(v) => v\n}\ndef main(): Unit {\n    val b: IntBox = Box(1)\n}")
-        .shouldHaveNoDiagnostics();
-    analyzed(aliases ~ "def main(): Unit {\n    val c = Also(2)\n}").shouldReport(DiagnosticCode.AliasIsNotAValue, At("Also", 2));
+    auto a = analyzed(aliases ~ "def f(b: Also): Int => match b {\n    Also(v) => v\n}\n"
+        ~ "def main(): Unit {\n    val c = Also(2)\n    val make = IntBox\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("Also(2)", "Box<Int>");
+    a.shouldDeclareType(At("make", 1), "(Int) -> Box<Int>");
+    analyzed(aliases ~ "def main(): Unit {\n    val c = Also<Int>(2)\n}")
+        .shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("Also", 2));
+    analyzed(aliases ~ "def main(): Unit {\n    val c = Also(\"no\")\n}").shouldReport(DiagnosticCode.TypeMismatch, At(`"no"`, 1));
 }
