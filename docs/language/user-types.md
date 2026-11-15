@@ -112,7 +112,7 @@ A bare name declares, so it's an error if the module already declares that name,
 
 A sum is nominal. Two sums with the same members are different types.
 
-A member can't be `Never` or the sum itself, and can't be listed twice. A bare name can only declare a marker in one sum of a module. To share a marker between sums, declare it on its own with `type Name` and write `:Name` in each.
+A member can't be `Never` or the sum itself, and can't be listed twice. Different instances of one generic are different members: `type Held = :Box<Int> | :Box<String>` is allowed. A bare name can only declare a marker in one sum of a module. To share a marker between sums, declare it on its own with `type Name` and write `:Name` in each.
 
 A sum's name isn't a value, so only its members can be constructed.
 
@@ -138,7 +138,7 @@ Common types: a member and its sum join to the sum. Otherwise a sum is never inv
 
 ### Promotion into a sum
 
-Promotion into a sum is one step and is never chained through an option. A literal adapts when exactly one member can take it. A `1` against `Int8 | String` adapts to `Int8`. Against `Int8 | Int` it's an error, and against `Int? | String` it's also an error that says to write `Some(1)`.
+Promotion into a sum takes a member to the sum, and then on through any option or error-union layers around it, as other promotions do. A literal adapts when exactly one member can take it. A `1` against `Int8 | String` adapts to `Int8`. Against `Int8 | Int` it's an error, and against `Int? | String` it's also an error that says to write `Some(1)`.
 
 ### Using sum values
 

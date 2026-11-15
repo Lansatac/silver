@@ -141,7 +141,18 @@ def tries<E>(r: Int ! E, n: Int): Int ! E | Oops {
 
 The same goes for everything else an instance needs at types that come from it: the functions a call finds for a bound, the `length` and `opIndex` a `for` loops by index with where the type has them, and the invariant of a type it builds or changes with `with`, as in `def ok<U>(xs: [U])` building a `W<[U]>` whose invariant calls `ok` again.
 
+A bound's alternatives are counted conservatively: every overload that could be chosen counts, whether or not the argument's type satisfies its bound, so the rule is read from declarations alone. This is rejected even though `[Int]` is never `Named`:
+
+```silver
+interface Named { def name(value: Self): String }
+def describe<T>(x: T): String => "plain"
+def describe<T: Named>(x: T): String => name(x) ~ ", then " ~ wrapped([x])
+def wrapped<T>(x: T): String => describe(x)
+```
+
 A generic type is the same: it can hold itself, in a field or as a member, directly or through other types, only at type arguments that don't grow. One that holds a larger instance of itself would need endlessly many types, so it's an error at the type that grows, whether or not anything uses it.
+
+A function-typed field that grows is rejected too, though nothing calls through it.
 
 ```silver
 type List<T> = Cons(head: T, rest: List<T>) | Nil         // fine
