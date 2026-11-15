@@ -128,10 +128,11 @@ val cs = [Red, Green]     // [Color]
 val p = Point2D(1, 2)     // Point2D
 ```
 
-Where a type is expected, a constructor checked against its member type produces the member, and checked against the sum it promotes:
+Where a type is expected, a constructor checked against its member type produces the member, and checked against the sum it promotes. Under `!` or `?`, the constructor is checked against what's expected of the value they unwrap:
 
 ```silver
 val c: Circle = Circle(1.0)
+val d: Circle = Circle(2.0)!    // with an invariant on Circle
 ```
 
 Common types: a member and its sum join to the sum. Otherwise a sum is never invented, so `if c => Point2D(1, 2) else Point3D(1, 2, 3)` needs an annotation.

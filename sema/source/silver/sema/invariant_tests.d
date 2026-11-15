@@ -153,3 +153,16 @@ unittest
 {
     analyzedWith("type Tiny(x: UInt8) invariant x + 1 > 0 else x", "    val t = Tiny(255)!").shouldHaveNoDiagnostics();
 }
+
+@("`!` and `?` pass what's expected on to a sum's member with an invariant, which builds the member")
+unittest
+{
+    enum shapes = "type Shape = Circle(r: Float) invariant (r > 0.0) else (\"not positive\") | Nothing\n"
+        ~ "def f(): Circle ! String {\n    val c: Circle = Circle(1.0)?\n    c\n}";
+    auto a = analyzedWith(shapes, "    val c: Circle = Circle(1.0)!\n    val o: Circle? = Circle(2.0)!\n    val s = Circle(3.0)!");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("Circle(1.0)", 1, "Circle ! String");
+    a.shouldHaveType("Circle(1.0)", 2, "Circle ! String");
+    a.shouldHaveType("Circle(2.0)", "Circle ! String");
+    a.shouldDeclareType(At("s", 1), "Shape");
+}

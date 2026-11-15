@@ -30,6 +30,11 @@ def checked(low: Int, high: Int): String => match Span(low, high) {
 
 def build(make: (Int, Int) -> Span ! Reversed, low: Int, high: Int): Span ! Reversed => make(low, high)
 
+def counted(count: Int): Counted<String> ! String {
+    val c: Counted<String> = Counted("b", count)?
+    c
+}
+
 def main(): Unit {
     // Construction yields the value or the error, from another module too, whose private function
     // the invariant calls.
@@ -76,4 +81,12 @@ def main(): Unit {
     val make: (Int, Int) -> Span ! Reversed = Span
     printl(make(3, 4))
     printl(build(Span, 4, 3))
+
+    // `!` and `?` build the member a sum declares inline when that's the type expected.
+    val circle: Circle = Circle(3.0)!
+    printl(circle.radius)
+    val tally: Counted<Int> = Counted<Int>(7, 2)!
+    printl(tally.value)
+    printl(counted(1))
+    printl(counted(0))
 }

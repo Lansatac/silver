@@ -391,6 +391,8 @@ private final class Indexer
                 }
             },
             (const UnaryExpr u) => visit(u.operand),
+            (const PropagateExpr p) => visit(p.operand),
+            (const AssertExpr a) => visit(a.operand),
             (const BinaryExpr b) { visit(b.left); visit(b.right); },
             (const CallExpr c) {
                 c.callee.kind.match!(

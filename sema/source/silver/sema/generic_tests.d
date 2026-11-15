@@ -677,3 +677,40 @@ unittest
     a.shouldDeclareType(At("n", 1), "Int");
     a.shouldDeclareType(At("s", 1), "String");
 }
+
+@("a constructor whose sum needs more type arguments than it gives names the sum with the ones it knows")
+unittest
+{
+    import std.algorithm : canFind;
+
+    enum either = "type Either<A, B> = Left(a: A) | Right(b: B)\nalias IntLeft = Left<Int>\n";
+    foreach (call; ["Left<Int>(2)", "IntLeft(2)", "Left(2)"])
+    {
+        auto a = analyzed(either ~ "def main(): Unit {\n    val x = " ~ call ~ "\n}");
+        a.shouldReport(DiagnosticCode.CannotInferTypeArgument, At(call, 1));
+        auto message = a.collector.diagnostics[0].message;
+        assert(message.canFind("builds a `Either<Int, B>`") && message.canFind("what `B` is"), message);
+    }
+}
+
+@("a generic value that couldn't be given its type arguments isn't reported again beside other elements")
+unittest
+{
+    analyzedGeneric("    val xs = [Box<Int>(1), Box]").shouldReport(DiagnosticCode.CannotInferTypeArgument, At("Box", 3));
+    analyzedGeneric("    val xs = [Box, Box<Int>(1)]").shouldReport(DiagnosticCode.CannotInferTypeArgument, At("Box", 2));
+}
+
+@("`!` and `?` pass what's expected on to a generic sum's member with an invariant, to build the member or infer the sum")
+unittest
+{
+    enum many = "type Empty\ntype Nums<T> = Many(xs: [T]) invariant (length(xs) > 0) else (Empty) | Blank\n";
+    auto a = analyzed(many ~ "def f(): Many<Int> ! Empty {\n    val q: Many<Int> = Many([])?\n    q\n}\n"
+        ~ "def main(): Unit {\n    val m: Many<Int> = Many<Int>([8, 9])!\n    val n: Many<Int>? = Many([8])!\n"
+        ~ "    val k: Nums<Int> = Many([])!\n    val s = Many([1])!\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("Many([])", 1, "Many<Int> ! Empty");
+    a.shouldHaveType("Many<Int>([8, 9])", "Many<Int> ! Empty");
+    a.shouldHaveType("Many([8])", "Many<Int> ! Empty");
+    a.shouldHaveType("Many([])", 2, "Nums<Int> ! Empty");
+    a.shouldDeclareType(At("s", 1), "Nums<Int>");
+}

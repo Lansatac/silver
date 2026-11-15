@@ -25,3 +25,7 @@ Ok(Counted(a, 1))
 Error(no count)
 Ok(Span(3, 4))
 Error(Reversed(4, 3))
+3
+7
+Ok(Counted(b, 1))
+Error(no count)

@@ -1975,7 +1975,7 @@ private final class TypeChecker
             (const Identifier _) => synthesizeIdentifier(expr, expected, ctx.site),
             (const SomeExpr some) => _declarer.optionOf(synthesize(*some.value, ctx), some.value.span),
             (const NoneLiteral _) => _types.none,
-            (const PropagateExpr propagate) => synthesizePropagate(propagate, expr.span, ctx),
+            (const PropagateExpr propagate) => synthesizePropagate(propagate, expr.span, ctx, expected),
             (const OkExpr ok) {
                 synthesize(*ok.value, ctx);
                 return _declarer.reportUntypedErrorUnion("Ok", expr.span);
@@ -1984,7 +1984,7 @@ private final class TypeChecker
                 auto reason = _declarer.requireTyped(synthesize(*error.value, ctx), error.value.span);
                 return reason == _types.error ? reason : _types.failure(reason);
             },
-            (const AssertExpr assertion) => synthesizeAssert(assertion, ctx),
+            (const AssertExpr assertion) => synthesizeAssert(assertion, ctx, expected),
             (const SafeMemberAccess access) => synthesizeSafeMember(expr, access, ctx),
             (const ArrayLiteral literal) => synthesizeArrayLiteral(literal, ctx),
             (const MapLiteral literal) => synthesizeMapLiteral(literal, expr.span, ctx),
@@ -2298,9 +2298,9 @@ private final class TypeChecker
 
     /// `x?`, which returns `None` from the enclosing function, so that has to return an option, or
     /// in a test's own body stops the test.
-    private Type synthesizePropagate(const PropagateExpr propagate, Span span, BodyContext ctx)
+    private Type synthesizePropagate(const PropagateExpr propagate, Span span, BodyContext ctx, Type expected = Type.init)
     {
-        auto operandType = _declarer.requireTyped(synthesize(*propagate.operand, ctx), propagate.operand.span);
+        auto operandType = _declarer.requireTyped(unwrapped(*propagate.operand, ctx, expected), propagate.operand.span);
         if (operandType == _types.error) return operandType;
         auto returnType = ctx.returnType;
         auto checked = ctx.inferred is null && !ctx.testBody && returnType != _types.error;
@@ -2359,7 +2359,7 @@ private final class TypeChecker
     }
 
     /// `x!`: the value of an option or error union, which lowering makes a panic when there isn't one.
-    private Type synthesizeAssert(const AssertExpr assertion, BodyContext ctx)
+    private Type synthesizeAssert(const AssertExpr assertion, BodyContext ctx, Type expected = Type.init)
     {
         // A construction from literals alone that `!` says can't fail is checked at compile time.
         auto construction = assertion.operand.kind.match!(
@@ -2369,13 +2369,39 @@ private final class TypeChecker
             _ => false,
         );
         if (construction) _literalConstructions ~= *assertion.operand;
-        auto operandType = _declarer.requireTyped(synthesize(*assertion.operand, ctx), assertion.operand.span);
+        auto operandType = _declarer.requireTyped(unwrapped(*assertion.operand, ctx, expected), assertion.operand.span);
         if (operandType == _types.error) return operandType;
         if (_types.isOption(operandType)) return _types.optionInner(operandType);
         if (_types.isErrorUnion(operandType)) return _types.successOf(operandType);
         _collector.reportError(DiagnosticCode.InvalidOperand, assertion.operand.span,
             "`!` needs an option or an error union, got `%s`".format(_types.describe(operandType)));
         return _types.error;
+    }
+
+    /// The operand of `!` or `?`, typed. What's expected of the value it unwraps is passed on only
+    /// when `unwrapsConstruction` said so.
+    private Type unwrapped(const Expr operand, BodyContext ctx, Type expected)
+    {
+        return expected == Type.init ? synthesize(operand, ctx) : synthesizeExact(operand, ctx, expected);
+    }
+
+    /// Whether `expr` is a `!` or `?` on a constructor of a member its sum owns that takes what's
+    /// expected of the value it unwraps, as it would without the `!`: to build the member, or to
+    /// infer the type arguments of a generic sum.
+    private bool unwrapsConstruction(const Expr expr, Type expected)
+    {
+        if (expected == Type.init || expected == _types.error) return false;
+        auto operand = expr.kind.match!(
+            (const AssertExpr a) => a.operand,
+            (const PropagateExpr p) => p.operand,
+            _ => null,
+        );
+        if (operand is null) return false;
+        auto g = genericUse(*operand);
+        if (g.found) return g.owner != Type.init;
+        auto constructed = constructedDecl(*operand);
+        auto owner = _declarer.ownerOf(constructed);
+        return owner !is null && wantsMember(_typing.nominalTypes[constructed], *owner, expected);
     }
 
     /// Whether an error of type `from` fits where `to` is expected: each type it lists is one `to`
@@ -4553,6 +4579,7 @@ private final class TypeChecker
         if (expected == Type.init || expected == _types.error) return;
         if (_types.isOption(expected) && !_types.isOption(result)) expected = _types.optionInner(expected);
         if (_types.isErrorUnion(expected) && !_types.isErrorUnion(result)) expected = _types.successOf(expected);
+        if (_types.isErrorUnion(result) && !_types.isErrorUnion(expected)) result = _types.successOf(result);
         auto decl = declOf(result);
         if (decl.isValid && declOf(expected).isValid && declOf(expected) != decl)
         {
@@ -4853,7 +4880,8 @@ private final class TypeChecker
                 auto owner = _resolutions.declarations.types[declOf(g.owner)].name;
                 _collector.reportError(DiagnosticCode.CannotInferTypeArgument, expr.span,
                     "This builds a `%s`, but nothing here says what `%s` is; annotate the type it's used as, as in `val x: %s = ...`"
-                        .format(_types.describe(g.owner), param.name, _declarer.example(owner, g.ownerParams.length, "")));
+                        .format(_types.describe(_types.substitute(g.owner, bound)), param.name,
+                            _declarer.example(owner, g.ownerParams.length, "")));
                 continue;
             }
             _collector.reportError(DiagnosticCode.CannotInferTypeArgument, expr.span,
@@ -5661,6 +5689,7 @@ private final class TypeChecker
         if (_types.isFailure(a) && valued(b)) return _types.errorUnion(b, _types.errorOf(a));
         if (_types.isFailure(b) && valued(a)) return _types.errorUnion(a, _types.errorOf(b));
 
+        if (_types.mentionsError(a) || _types.mentionsError(b)) return _types.error;
         _collector.reportError(DiagnosticCode.TypeMismatch, span,
             "%s have different types `%s` and `%s`".format(what, _types.describe(a), _types.describe(b)));
         return _types.error;
@@ -5767,7 +5796,7 @@ private final class TypeChecker
         }
         // What's expected can say what a generic use's type arguments are.
         auto isMethod = expr.kind.match!((const CallExpr call) => isMethodCall(expr.id, *call.callee), _ => false);
-        if (isMethod || genericUse(expr).found || isOverloadedUse(expr))
+        if (isMethod || genericUse(expr).found || isOverloadedUse(expr) || unwrapsConstruction(expr, expected))
         {
             return coerce(expr, synthesizeExact(expr, ctx, expected), expected);
         }
