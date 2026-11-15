@@ -1,6 +1,8 @@
 # Runs every package's tests, then the root's. Extra arguments go to each `dub test`.
 # Conformance runs each compiled program optimized as well; SILVER_CONFORMANCE_UNOPTIMIZED=1 skips that.
-$packages = 'silver:ast', 'silver:syntax', 'silver:loader', 'silver:sema', 'silver:core', 'silver:interpreter', 'silver:codegen', 'silver:testing', 'silver:conformance', 'silver'
+# Packages are named relative to this directory (`:sema`, not `silver:sema`): dub can resolve a
+# qualified name to another checkout of the package, such as a git worktree.
+$packages = ':ast', ':syntax', ':loader', ':sema', ':core', ':interpreter', ':codegen', ':testing', ':conformance', 'root'
 $failed = @()
 
 Push-Location $PSScriptRoot
@@ -9,7 +11,7 @@ try
     foreach ($package in $packages)
     {
         Write-Host "=== $package"
-        dub test $package @args
+        if ($package -eq 'root') { dub test @args } else { dub test $package @args }
         if ($LASTEXITCODE -ne 0) { $failed += $package }
     }
 }
