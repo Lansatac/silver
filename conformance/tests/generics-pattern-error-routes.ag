@@ -1,0 +1,26 @@
+// A pattern reaching through an error list finds the sum that holds the instance it names.
+
+type Box<T>(value: T)
+type A
+type B
+type S1 = :Box<Int> | :A
+type S2 = :Box<String> | :B
+alias StrBox = Box<String>
+
+def describe(r: Int ! S1 | S2): String => match r {
+    Ok(v) => "ok {v}"
+    Error(StrBox(s)) => "string {s}"
+    Error(Box<Int>(n)) => "int {n}"
+    Error(_) => "other"
+}
+
+def fail(e: S2): Int ! S1 | S2 => Error(e)
+
+def main(): Unit {
+    printl(describe(Ok(1)))
+    printl(describe(fail(Box("s"))))
+    val s1: S1 = Box(2)
+    val r: Int ! S1 | S2 = Error(s1)
+    printl(describe(r))
+    printl(describe(fail(B)))
+}

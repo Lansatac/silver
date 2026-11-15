@@ -658,3 +658,22 @@ unittest
     a.shouldDeclareType(At("n", 1), "Int");
     a.shouldDeclareType(At("m", 1), "Int");
 }
+
+@("a bare constructor pattern reaching through an error list needs one instance across the list")
+unittest
+{
+    enum types = "type Box<T>(value: T)\ntype A\ntype B\ntype S1 = :Box<Int> | :A\ntype S2 = :Box<String> | :B\n";
+    analyzed(types ~ "def f(r: Int ! S1 | S2): Int => match r {\n    Ok(v) => v\n    Error(Box(_)) => 0\n    Error(_) => 1\n}\n"
+        ~ "def main(): Unit {\n}").shouldReport(DiagnosticCode.AmbiguousInstance, At("Box", 4));
+    analyzed(types ~ "def f(r: Int ! Box<Int> | S2): Int => match r {\n    Ok(v) => v\n    Error(Box(_)) => 0\n    Error(_) => 1\n}\n"
+        ~ "def main(): Unit {\n}").shouldReport(DiagnosticCode.AmbiguousInstance, At("Box", 5));
+
+    // Every route reaching the same instance is fine, and an alias reaches only its own.
+    auto a = analyzed(types ~ "type S3 = :Box<Int> | :B\nalias StrBox = Box<String>\n"
+        ~ "def f(r: Int ! S1 | S3): Int => match r {\n    Ok(v) => v\n    Error(Box(n)) => n\n    Error(_) => 1\n}\n"
+        ~ "def g(r: Int ! S1 | S2): String => match r {\n    Ok(_) => \"\"\n    Error(StrBox(s)) => s\n    Error(_) => \"other\"\n}\n"
+        ~ "def main(): Unit {\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("n", 1), "Int");
+    a.shouldDeclareType(At("s", 1), "String");
+}

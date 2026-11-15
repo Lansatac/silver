@@ -6106,6 +6106,16 @@ private final class TypeChecker
     private CoveragePattern checkListPattern(const Pattern pattern, Type subject, BodyContext ctx)
     {
         auto members = _declarer.membersOf(subject);
+        auto instances = bareInstances(pattern, members);
+        if (instances.length > 1)
+        {
+            pattern.kind.match!(
+                (const ConstructorPattern c) { foreach (argument; c.arguments) checkArmPattern(argument, _types.error, ctx); },
+                (_) {},
+            );
+            _collector.reportError(DiagnosticCode.AmbiguousInstance, pattern.span, ambiguousInstanceMessage(subject, pattern, instances));
+            return CoveragePattern.init;
+        }
         auto through = reachedThrough(pattern, members);
         if (through >= 0)
         {
@@ -6138,8 +6148,14 @@ private final class TypeChecker
                 }
                 else if (auto symbol = c.type.id in _resolutions.typeResolutions)
                 {
-                    expandAlias(*symbol, _resolutions.declarations.aliases, _resolutions.typeResolutions)
-                        .match!((const Id!TypeDecl t) { decl = t; }, (_) {});
+                    // An alias names one instance, so it reaches only a sum that has that one.
+                    (*symbol).match!(
+                        (const Id!AliasDecl a) { written = _declarer.aliasType(a); },
+                        (_) {
+                            expandAlias(*symbol, _resolutions.declarations.aliases, _resolutions.typeResolutions)
+                                .match!((const Id!TypeDecl t) { decl = t; }, (_) {});
+                        },
+                    );
                 }
             },
             (const VarDecl binding) {
@@ -6151,6 +6167,46 @@ private final class TypeChecker
         if (!decl.isValid && written == Type.init) return -1;
         if (members.any!(m => names(m))) return -1;
         return members.countUntil!(m => _declarer.isSum(m) && _declarer.membersOf(m).any!(x => names(x)));
+    }
+
+    /// The instances of a generic type that a constructor pattern written without type arguments
+    /// or an alias can reach in an error list's `members`, directly or through a sum the list
+    /// names; none for any other pattern.
+    private Type[] bareInstances(const Pattern pattern, const(Type)[] members)
+    {
+        Id!TypeDecl decl;
+        pattern.kind.match!(
+            (const ConstructorPattern c) {
+                if (c.type.kind.match!((const NamedType n) => n.args.length > 0, (_) => false)) return;
+                if (auto symbol = c.type.id in _resolutions.typeResolutions)
+                {
+                    (*symbol).match!((const Id!TypeDecl t) { decl = t; }, (_) {});
+                }
+            },
+            (_) {},
+        );
+        if (!decl.isValid || _declarer.typeParamsOf(decl).length == 0) return null;
+        Type[] found;
+        void add(Type t)
+        {
+            if (declOf(t) == decl && !found.canFind(t)) found ~= t;
+        }
+        foreach (member; members)
+        {
+            add(member);
+            if (_declarer.isSum(member)) foreach (inner; _declarer.membersOf(member)) add(inner);
+        }
+        return found;
+    }
+
+    /// Why a constructor pattern without type arguments can't take apart a `subject` that can be
+    /// each of `instances`.
+    private string ambiguousInstanceMessage(Type subject, const Pattern pattern, const(Type)[] instances)
+    {
+        auto name = pattern.kind.match!((const ConstructorPattern c) => printTypeExpr(c.type), (_) => "");
+        return "`%s` can be more than one instance of `%s` (%-(%s%|, %)), so write which, as in `%s(...)`, or name an alias of it"
+            .format(_types.describe(subject), name, instances.map!(i => "`%s`".format(_types.describe(i))),
+                _types.describe(instances[0]));
     }
 
     /// Wildcards for what's inside a `member` that a pattern didn't take apart.
@@ -6284,9 +6340,7 @@ private final class TypeChecker
             {
                 checkArgumentsAsUnknown();
                 _collector.reportError(DiagnosticCode.AmbiguousInstance, pattern.span,
-                    "`%s` can be more than one instance of `%s` (%-(%s%|, %)), so write which, as in `%s(...)`, or name an alias of it"
-                        .format(_types.describe(subject), printTypeExpr(constructor.type),
-                            instance.map!(i => "`%s`".format(_types.describe(i))), _types.describe(instance[0])));
+                    ambiguousInstanceMessage(subject, pattern, instance));
                 return CoveragePattern.init;
             }
             Substitution unknown;
