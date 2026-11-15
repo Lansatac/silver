@@ -1,0 +1,1 @@
+T0048: `F` can't be instantiated, as it would need endlessly many types, each holding a larger one: `F<T>`, then `F<[T]>`, then `F<[[T]]>`, and so on

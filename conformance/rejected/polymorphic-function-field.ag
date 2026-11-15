@@ -1,0 +1,6 @@
+// A function-typed field that grows is rejected like any other growing field.
+type F<T>(f: (T) -> F<[T]>?)
+
+def main(): Unit {
+    printl(1)
+}

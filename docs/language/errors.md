@@ -66,7 +66,7 @@ val alsoGood: Int ! ParseError = Ok(42)
 val bad: Int ! ParseError = Error(BadDigit(2))
 ```
 
-- `T` promotes to `T ! E`, as it does to `T?`: one step, where a type is expected, with a literal adapting to `T` first.
+- `T` promotes to `T ! E`, as it does to `T?`: through every layer, where a type is expected, with a literal adapting to `T` first.
 - `Ok(x)` and `Error(e)` are reserved names, like `Some` and `None`. Each needs a type from context, so `val x = Error(Empty)` is an error.
 - `Error(e)` checks `e` against the error side, so a type in a list, or a member of a sum, is accepted.
 - An error is always written with `Error`. An `E` doesn't promote into `T ! E`, so every place a function fails is visible.

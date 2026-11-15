@@ -195,4 +195,5 @@ val r = if val Circle(radius) = shape => radius else 0.0
 
 - An invariant may name a field whose type contains a `Ref`, although the cell can change without going through the type.
 - An invariant's `else` can't lead back to building a value of its own type, directly or through a function it calls whose result type is an [interface](interfaces.md#an-interface-name-as-a-result-type). Through such a function, the error names the type, the function and what to do: write that function's result type out, and its body is no longer part of the `else`.
+- A member's injection into a sum doesn't yet combine with option and error-union layers: `val h: Held? = Box(7)` and `val e: Held ! Oops = Box("s")` are rejected (`T0001`), while a value of the sum type itself promotes through them. Write the sum first, as in `Some(h)` with `val h: Held = Box(7)`.
 - Everything else above is implemented.

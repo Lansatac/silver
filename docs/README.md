@@ -29,7 +29,7 @@ These documents describe the language as designed. Where the implementation does
 | [Maps](language/maps.md) | `[K: V]`, lookup and update, insertion order, keys | Designed, not implemented |
 | [Strings](language/strings.md) | Text, interpolation, characters, cutting, `std.string` | Partial: `read()` doesn't check for UTF-8; no raw or multi-line strings |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
-| [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, invariants, `match` | Implemented |
+| [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, invariants, `match` | Implemented, except a sum member promoting through option and error-union layers |
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
 | [Interfaces](language/interfaces.md) | Interfaces, bounds, conformance, interface names as parameter and result types and on bindings | Partial: no interface types as values, no `Ord`, no bounds on a type's parameters |
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |

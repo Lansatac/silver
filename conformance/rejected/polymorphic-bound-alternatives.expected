@@ -1,0 +1,1 @@
+T0048: `describe` can't be instantiated, as it would need endlessly many instances, each needing a larger one: `describe<T>`, then `wrapped<[T]>`, then `describe<[T]>`, then `wrapped<[[T]]>`, then `describe<[[T]]>`, and so on

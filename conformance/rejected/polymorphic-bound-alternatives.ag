@@ -1,0 +1,10 @@
+// A bound's alternatives are counted conservatively: `describe` at `[T]` could pick the bounded
+// overload, so the cycle grows even though `[Int]` is never `Named`.
+interface Named { def name(value: Self): String }
+def describe<T>(x: T): String => "plain"
+def describe<T: Named>(x: T): String => name(x) ~ ", then " ~ wrapped([x])
+def wrapped<T>(x: T): String => describe(x)
+
+def main(): Unit {
+    printl(describe(1))
+}
