@@ -256,6 +256,32 @@ def pick<T: A & B>(): T? => None
         .onlyMessage(DiagnosticCode.NoMatchingOverload).should.contain("`Box` isn't one");
 }
 
+@("a function the expected type rules out by its bounds isn't chosen again when nothing fits")
+unittest
+{
+    enum declared = `
+interface A { def a(x: Self): Int }
+interface B { def b(x: Self): Int }
+type Box(n: Int)
+def a(x: Int): Int => 1
+def b(x: Int): Int => 1
+def a(x: Box): Int => 1
+def mk<T: B>(n: Int): T? => None
+def mk<T: A & B>(x: T): T? => Some(x)
+def conv<T: A>(x: T): [T] => [x]
+def conv<T: A & B>(x: T): T => x
+`;
+    auto message = analyzed(declared ~ "def main(): Unit {\n val v: Box? = mk(1)\n}")
+        .onlyMessage(DiagnosticCode.NoMatchingOverload);
+    message.should.contain("`Box` isn't one");
+    message.should.contain("argument 1 can't be `Box`");
+    // Each fails on the literal, and a `[Box]` isn't an `A`, so the first isn't chosen without the expected type.
+    message = analyzed(declared ~ "def main(): Unit {\n val q: [Box] = conv(1)\n}")
+        .onlyMessage(DiagnosticCode.NoMatchingOverload);
+    message.should.contain("argument 1 can't be `Box`");
+    message.should.contain("argument 1 can't be `[Box]`");
+}
+
 @("two functions whose bounds ask for different things are duplicates")
 unittest
 {

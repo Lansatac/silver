@@ -3,7 +3,7 @@ module silver.sema.check;
 import std.algorithm;
 import std.array;
 import std.conv;
-import std.range : iota, repeat;
+import std.range : enumerate, iota, repeat;
 import std.sumtype;
 import std.string;
 
@@ -2901,7 +2901,8 @@ private final class TypeChecker
         Fit[] fits;
         /// Why it doesn't fit, or null when it does.
         string problem;
-        /// Whether what doesn't fit is an argument, against what the expected type binds.
+        /// Whether what doesn't fit is an argument, against what the expected type binds while the
+        /// bounds hold for it.
         bool againstExpected;
 
         bool fitsAll() const => problem is null;
@@ -2947,9 +2948,12 @@ private final class TypeChecker
             return tried;
         }
         auto tried = fitAll(expected);
-        // When what the expected type binds leaves nothing fitting the arguments, the choice is made
-        // without it, so the argument is reported against the chosen function, as for a lone one.
-        if (!tried.joiner.any!(t => t.fitsAll) && tried.joiner.any!(t => t.againstExpected)) tried = fitAll(Type.init);
+        // When every function that got this far fails only because what the expected type binds
+        // doesn't suit an argument, the choice is made without it, so the argument is reported
+        // against the chosen function, as for a lone one. One its bounds ruled out stays out.
+        auto pastArity = groups.joiner.map!(t => t.fitsAll).array;
+        auto reached = tried.joiner.array.enumerate.filter!(p => pastArity[p.index]).map!(p => p.value);
+        if (!reached.any!(t => t.fitsAll) && reached.all!(t => t.againstExpected)) tried = fitAll(Type.init);
         groups = tried;
         // An argument whose type is already an error fits anything, so it would only add to it.
         auto reportable = !typed.any!(t => t != Type.init && _types.mentionsError(t));
@@ -3106,6 +3110,7 @@ private final class TypeChecker
             bindExpected(signatureOf(trial.func).ret, expected, params, bound);
             // What the expected type binds has to suit the arguments that adapt, as it does once
             // this function is chosen. It only says whether they fit, not how well.
+            // When the bounds fail for it too, the function is ruled out whatever the arguments are.
             foreach (i; 0 .. call.args.length)
             {
                 if (!byShape(i)) continue;
@@ -3113,7 +3118,7 @@ private final class TypeChecker
                 if (fitAt(i, param) == Fit.none)
                 {
                     trial.problem = misfit(i, param);
-                    trial.againstExpected = true;
+                    trial.againstExpected = conformanceOf(trial.func, bound, site).failure is null;
                     return;
                 }
             }
