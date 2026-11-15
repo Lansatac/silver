@@ -213,6 +213,30 @@ def strong<T: B & A>(x: T): String => f(x)
     a.shouldHaveType("f(OnlyA(1))", "Int");
 }
 
+@("what the expected type binds has to suit a literal argument for a function to fit")
+unittest
+{
+    enum declared = `
+interface A { def a(x: Self): Int }
+interface B { def b(x: Self): Int }
+def a(x: Int): Int => 1
+def a(x: [Int]): Int => 1
+def b(x: [Int]): Int => 1
+def a(x: String): Int => 1
+def b(x: String): Int => 1
+def conv<T: A>(x: T): [T] => [x]
+def conv<T: A & B>(x: T): T => x
+def sel<T: A>(x: T): T? => x
+def sel<T: A & B>(x: T): T? => x
+`;
+    auto a = analyzed(declared ~ "def main(): Unit {\n val xs: [Int] = conv(1)\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("conv(1)", "[Int]");
+    // When it leaves nothing that fits, the choice is made without it, and the literal is the error.
+    analyzed(declared ~ "def main(): Unit {\n val s: String? = sel(1)\n}")
+        .onlyMessage(DiagnosticCode.TypeMismatch).should.equal("Type `Int` is not assignable to type `String`");
+}
+
 @("two functions whose bounds ask for different things are duplicates")
 unittest
 {

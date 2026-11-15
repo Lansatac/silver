@@ -2901,6 +2901,8 @@ private final class TypeChecker
         Fit[] fits;
         /// Why it doesn't fit, or null when it does.
         string problem;
+        /// Whether what doesn't fit is an argument, against what the expected type binds.
+        bool againstExpected;
 
         bool fitsAll() const => problem is null;
     }
@@ -2932,13 +2934,23 @@ private final class TypeChecker
             if (typed[i] == Type.init && (call.isMutable(i) || !isShaped(arg))) typed[i] = synthesize(arg, ctx);
         }
         auto writtenTypes = written.map!(w => quietlyResolved(w)).array;
-        foreach (ref group; groups)
+        Trial[][] fitAll(Type against)
         {
-            foreach (ref trial; group)
+            auto tried = groups.map!(g => g.dup).array;
+            foreach (ref group; tried)
             {
-                if (trial.fitsAll) fitTrial(trial, call, typed, writtenTypes, hasReceiver, ctx.site, expected);
+                foreach (ref trial; group)
+                {
+                    if (trial.fitsAll) fitTrial(trial, call, typed, writtenTypes, hasReceiver, ctx.site, against);
+                }
             }
+            return tried;
         }
+        auto tried = fitAll(expected);
+        // When what the expected type binds leaves nothing fitting the arguments, the choice is made
+        // without it, so the argument is reported against the chosen function, as for a lone one.
+        if (!tried.joiner.any!(t => t.fitsAll) && tried.joiner.any!(t => t.againstExpected)) tried = fitAll(Type.init);
+        groups = tried;
         // An argument whose type is already an error fits anything, so it would only add to it.
         auto reportable = !typed.any!(t => t != Type.init && _types.mentionsError(t));
 
@@ -3046,6 +3058,19 @@ private final class TypeChecker
         }
 
         string argument(size_t i) => hasReceiver && i == 0 ? "the receiver" : "argument %s".format(hasReceiver ? i : i + 1);
+        // A literal receiver has been synthesized to look for a field, but still adapts.
+        bool byShape(size_t i) => typed[i] == Type.init || isIntLiteral(call.args[i]);
+        Fit fitAt(size_t i, Type param)
+        {
+            return byShape(i) ? shapeFit(call.args[i], param, params) : typedFit(typed[i], param, params, call.isMutable(i));
+        }
+        string misfit(size_t i, Type param)
+        {
+            auto type = typed[i] == Type.init ? literalType(call.args[i]) : typed[i];
+            return type == Type.init
+                ? "%s can't be `%s`".format(argument(i), _types.describe(param))
+                : "%s is `%s`, not `%s`".format(argument(i), _types.describe(type), _types.describe(param));
+        }
         trial.fits = new Fit[call.args.length];
         foreach (i, arg; call.args)
         {
@@ -3057,15 +3082,10 @@ private final class TypeChecker
                 return;
             }
             auto param = _types.substitute(signature.params[i], bound);
-            // A literal receiver has been synthesized to look for a field, but still adapts.
-            auto byShape = typed[i] == Type.init || isIntLiteral(arg);
-            auto fit = byShape ? shapeFit(arg, param, params) : typedFit(typed[i], param, params, call.isMutable(i));
+            auto fit = fitAt(i, param);
             if (fit == Fit.none)
             {
-                auto type = typed[i] == Type.init ? literalType(arg) : typed[i];
-                trial.problem = type == Type.init
-                    ? "%s can't be `%s`".format(argument(i), _types.describe(param))
-                    : "%s is `%s`, not `%s`".format(argument(i), _types.describe(type), _types.describe(param));
+                trial.problem = misfit(i, param);
                 return;
             }
             trial.fits[i] = fit;
@@ -3084,6 +3104,19 @@ private final class TypeChecker
         {
             settleResult(trial.func, false);
             bindExpected(signatureOf(trial.func).ret, expected, params, bound);
+            // What the expected type binds has to suit the arguments that adapt, as it does once
+            // this function is chosen. It only says whether they fit, not how well.
+            foreach (i; 0 .. call.args.length)
+            {
+                if (!byShape(i)) continue;
+                auto param = _types.substitute(signature.params[i], bound);
+                if (fitAt(i, param) == Fit.none)
+                {
+                    trial.problem = misfit(i, param);
+                    trial.againstExpected = true;
+                    return;
+                }
+            }
             foreach (i, arg; call.args)
             {
                 if (typed[i] == Type.init && isIntLiteral(arg)) bindParams(signature.params[i], _types.int_, params, bound);
