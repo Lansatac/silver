@@ -184,7 +184,7 @@ val text = match held {
 }
 ```
 
-An instance the value can't be is an error, as `Box<String>(s)` on a `Box<Int>` is. An alias of an instance is used without type arguments, as `IntBox(n)`, and `Some`, `None`, `Ok` and `Error` take none either: the value's type gives them.
+An instance the value can't be is an error, as `Box<String>(s)` on a `Box<Int>` is. So is a pattern without type arguments on a value that can be more than one instance, as `Box(n)` on a `Held` is, nested or not: write which, as in `Box<Int>(n)`, or use an alias of it. An alias of an instance is used without type arguments, as `IntBox(n)`, and `Some`, `None`, `Ok` and `Error` take none either: the value's type gives them.
 
 A pattern compares by structure: a member pattern looks at the value's fields, and never calls the type's `opEquals`. So for a type whose `opEquals` treats `Fraction(1, 2)` and `Fraction(2, 4)` as equal, `f == Fraction(1, 2)` can be true where the pattern `Fraction(1, 2)` doesn't match `f`. To branch on the type's own equality, compare with `==`.
 

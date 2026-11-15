@@ -6280,6 +6280,15 @@ private final class TypeChecker
         else if (_declarer.typeParamsOf(decl).length > 0)
         {
             auto instance = (declOf(subject) == decl ? [subject] : _declarer.membersOf(subject).filter!(m => declOf(m) == decl).array);
+            if (instance.length > 1)
+            {
+                checkArgumentsAsUnknown();
+                _collector.reportError(DiagnosticCode.AmbiguousInstance, pattern.span,
+                    "`%s` can be more than one instance of `%s` (%-(%s%|, %)), so write which, as in `%s(...)`, or name an alias of it"
+                        .format(_types.describe(subject), printTypeExpr(constructor.type),
+                            instance.map!(i => "`%s`".format(_types.describe(i))), _types.describe(instance[0])));
+                return CoveragePattern.init;
+            }
             Substitution unknown;
             foreach (param; _declarer.typeParamsOf(decl)) unknown[param.id] = _types.error;
             type = instance.length > 0 ? instance[0] : _types.substitute(type, unknown);

@@ -88,6 +88,13 @@ immutable Case[] continuations = [
     parsesAs("val e = empty\n    <Int>()", "(val e (call empty<Int>))"),
     parsesAs("val e = a.empty\n    <Int>()", "(val e (call (. a empty<Int>)))"),
     parsesAs("val r = match b {\n    Box\n        <Int>(n) => n\n}", "(val r (match b (Box<Int>(n) n)))"),
+    parsesAs("val b: Box\n    <Int> = Box(1)", "(val b: Box<Int> (call Box 1))"),
+    parsesAs("mutable val b: Box\n    <Int>?\nb = c", ["(mutable val b: Box<Int>? None)", "(assign b c)"]),
+    parsesAs("val b: geo.Box\n    <Pair\n        <Int, String>> = c", "(val b: geo.Box<Pair<Int, String>> c)"),
+    declaresAs("def f(b: Box\n    <Int>): Box\n    <Int> => b", "(def f (b: Box<Int>): Box<Int> b)"),
+    declaresAs("alias IntBox = Box\n    <Int>", "(alias IntBox = Box<Int>)"),
+    parsesAs("val a = b\n    < c", "(val a (Less b c))"),
+    parsesAs("val a: Int = b\n    < c", "(val a: Int (Less b c))"),
     parsesAs("val r = match b {\n    Box<\n        Int\n    >(n) => n\n}", "(val r (match b (Box<Int>(n) n)))"),
 
     // After an opening bracket, around commas and before a closing bracket.

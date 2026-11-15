@@ -77,7 +77,7 @@ val b = Box<UInt8>(1)
 
 Type arguments on a constructor are those of the type it names, so `Ok<Int>(1)` names the member `Ok<Int>`.
 
-A constructor pattern can write them too, and then matches only that instance. Without them it takes the instance from the value it matches. Writing them tells apart members of one generic type, as in a sum like `type Held = :Box<Int> | :Box<String>`, and an instance the value can't be is an error. See [match](user-types.md#match).
+A constructor pattern can write them too, and then matches only that instance. Without them it takes the instance from the value it matches, which has to be able to be only one instance. Writing them tells apart members of one generic type, as in a sum like `type Held = :Box<Int> | :Box<String>`, and an instance the value can't be is an error. See [match](user-types.md#match).
 
 An alias of an instance gives its type arguments wherever its name is used: in a call, as a function value and in a pattern. The alias isn't generic itself, so no type arguments can be written after it.
 

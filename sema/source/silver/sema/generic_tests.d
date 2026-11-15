@@ -636,3 +636,25 @@ unittest
     auto a = analyzed(matching("    Box<Int>(n) => match n {\n        Nope(_) => 0\n        _ => 1\n    }\n    Box<Int>(m) => m\n    _ => 2\n"));
     assert(a.collector.diagnostics.map!(d => d.code).array == [DiagnosticCode.UnknownType, DiagnosticCode.UnreachableArm]);
 }
+
+@("a constructor pattern without type arguments needs the value to hold one instance of its type")
+unittest
+{
+    enum types = "type Box<T>(value: T)\ntype Held = :Box<Int> | :Box<String>\ntype Other\n"
+        ~ "type Pair<A, B>(left: A, right: B)\ntype One = :Box<Int> | :Other\n";
+    string body(string signature, string code) => types ~ "def f(" ~ signature ~ "): Int {\n" ~ code ~ "\n}\ndef main(): Unit {\n}";
+    analyzed(body("h: Held", "    match h {\n        Box(n) => 0\n        _ => 1\n    }"))
+        .shouldReport(DiagnosticCode.AmbiguousInstance, At("Box", 5));
+    analyzed(body("h: Held", "    if val Box(n) = h => 0 else 1"))
+        .shouldReport(DiagnosticCode.AmbiguousInstance, At("Box", 5));
+    analyzed(body("p: Pair<Held, Int>", "    match p {\n        Pair(Box(_), n) => n\n    }"))
+        .shouldReport(DiagnosticCode.AmbiguousInstance, At("Box", 5));
+    analyzed(body("r: Int ! Held | Other", "    match r {\n        Ok(v) => v\n        Error(Box(_)) => 0\n        Error(_) => 1\n    }"))
+        .shouldReport(DiagnosticCode.AmbiguousInstance, At("Box", 5));
+
+    auto a = analyzed(body("o: One, b: Box<Int>", "    val x = match o {\n        Box(n) => n\n        Other => 0\n    }\n"
+        ~ "    if val Box(m) = b => m + x else x"));
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("n", 1), "Int");
+    a.shouldDeclareType(At("m", 1), "Int");
+}

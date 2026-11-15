@@ -1,0 +1,12 @@
+// A constructor pattern without type arguments, on a value that can be more than one instance of
+// its type, has to say which.
+type Box<T>(value: T)
+type Held = :Box<Int> | :Box<String>
+
+def describe(h: Held): String => match h {
+    Box(n) => "a box"
+}
+
+def main(): Unit {
+    printl(describe(Box(1)))
+}

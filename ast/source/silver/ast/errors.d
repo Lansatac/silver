@@ -114,6 +114,9 @@ enum DiagnosticCode : string
     /// A generic type or function that needs itself at ever larger type arguments, so it would
     /// need endlessly many instances.
     PolymorphicRecursion = "T0048",
+    /// A constructor pattern of a generic type without type arguments, on a value that can be
+    /// more than one instance of it.
+    AmbiguousInstance = "T0049",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

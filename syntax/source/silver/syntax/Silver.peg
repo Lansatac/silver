@@ -125,7 +125,7 @@ Silver:
     FunctionType         < :'(' Nl? (FunctionTypeParam (Nl? :',' Nl? FunctionTypeParam)*)? Nl? :')' Nl? :"->" Nl? Type
     FunctionTypeParam    < (MUTABLE Nl?)? Type
     UnitType             < '(' Nl? ')'
-    NamedType            < TypePath TypeArguments?
+    NamedType            < TypePath (Nl? TypeArguments)?
     TypePath             <- (ValueName '.')* TypeName
     TypeArguments        < :'<' Nl? Type (Nl? :',' Nl? Type)* Nl? :'>'
 
