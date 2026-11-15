@@ -2731,14 +2731,14 @@ private final class TypeChecker
     /// the array a `[]` takes on.
     private bool promotes(const Expr expr, Type type, Type target)
     {
-        if (_declarer.isSum(target)) return isAssignable(type, target) || (isIntLiteral(expr) && _declarer.membersOf(target).any!(m => isNumeric(m)));
+        auto core = layerCore(target);
+        auto literalFits = isIntLiteral(expr)
+            && (isNumeric(core) || _declarer.isSum(core) && _declarer.membersOf(core).any!(m => isNumeric(m)));
+        if (_declarer.isSum(target)) return isAssignable(type, target) || literalFits;
         if (type == _types.emptyArray && _types.isArray(target)) return true;
-        if (_types.isErrorUnion(target))
-        {
-            return isAssignable(type, target) || (isIntLiteral(expr) && isNumeric(innermost(_types.successOf(target))));
-        }
+        if (_types.isErrorUnion(target)) return isAssignable(type, target) || literalFits;
         if (!_types.isOption(target) || _types.isOption(type) && !isAssignable(type, target)) return false;
-        return isAssignable(type, target) || (isIntLiteral(expr) && isNumeric(innermost(target)));
+        return isAssignable(type, target) || literalFits;
     }
 
     private Type innermost(Type option)
@@ -5994,10 +5994,7 @@ private final class TypeChecker
         }
         else if (_types.isOption(expected))
         {
-            if (isIntLiteral(expr) && isNumeric(innermost(expected)))
-            {
-                type = adaptLiteral(expr, innermost(expected));
-            }
+            if (isIntLiteral(expr)) type = adaptLayered(expr, type, expected);
             auto hasValue = type != _types.error && type != _types.never;
             if (hasValue && type != expected && isAssignable(type, expected))
             {
@@ -6007,11 +6004,7 @@ private final class TypeChecker
         }
         else if (_types.isErrorUnion(expected))
         {
-            auto success = _types.successOf(expected);
-            if (isIntLiteral(expr) && isNumeric(innermost(success)))
-            {
-                type = adaptLiteral(expr, innermost(success));
-            }
+            if (isIntLiteral(expr)) type = adaptLayered(expr, type, expected);
             auto hasValue = type != _types.error && type != _types.never;
             if (hasValue && type != expected && isAssignable(type, expected))
             {
@@ -6030,6 +6023,27 @@ private final class TypeChecker
         }
         requireAssignable(type, expected, expr.span);
         return type;
+    }
+
+    /// An integer literal, of type `type`, under the option and error-union layers of `expected`:
+    /// adapted to the number at their core, or injected into the sum there.
+    private Type adaptLayered(const Expr expr, Type type, Type expected)
+    {
+        auto core = layerCore(expected);
+        if (isNumeric(core)) return adaptLiteral(expr, core);
+        if (_declarer.isSum(core)) return injectLiteral(expr, core);
+        return type;
+    }
+
+    /// `type` with every option and error-union success layer taken off.
+    private Type layerCore(Type type)
+    {
+        while (true)
+        {
+            if (_types.isOption(type)) type = _types.optionInner(type);
+            else if (_types.isErrorUnion(type)) type = _types.successOf(type);
+            else return type;
+        }
     }
 
     /// An integer literal in a sum takes the type of its only integer member, or else of a Float one.
@@ -6524,12 +6538,12 @@ private final class TypeChecker
             return (_types.isErrorUnion(to) || _types.isFailure(to)) && errorFits(_types.errorOf(from), _types.errorOf(to));
         }
         return _types[to].match!(
-            // T -> T?, but not through a sum, since promotion is one step.
-            (const OptionData o) => _declarer.isSum(o.inner) ? from == o.inner : isAssignable(from, o.inner),
+            // T -> T?, through every layer, ending at most in one step into a sum.
+            (const OptionData o) => isAssignable(from, o.inner),
             // Widening, or T -> T ! E as for an option.
             (const ErrorUnionData u) {
                 if (_types.isErrorUnion(from) && _types.successOf(from) == u.success) return errorFits(_types.errorOf(from), u.error);
-                return _declarer.isSum(u.success) ? from == u.success : isAssignable(from, u.success);
+                return isAssignable(from, u.success);
             },
             (const ErrorListData _) => errorFits(from, to),
             (const NominalData _) => _declarer.membersOf(to).canFind(from),

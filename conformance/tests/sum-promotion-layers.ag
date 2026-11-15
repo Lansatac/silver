@@ -1,0 +1,45 @@
+// A member's injection into a sum goes on through the option and error-union layers around it.
+type Box<T>(value: T)
+type Held = :Box<Int> | :Box<String>
+type Oops(code: Int)
+type Mine = :Int | :String
+type Small = :Int8 | :String
+type Holder(h: Held?)
+
+def take(h: Held?): Held? => h
+def give(): Held ! Oops => Box("given")
+def mine(i: Int): Mine? => i
+def boxed(): Box<Int> ! Oops => Box(9)
+def passed(): Held? ! Oops {
+    val h: Held? = boxed()?
+    return h
+}
+
+def kind(s: Small? ! Oops): String => match s {
+    Ok(Some(_: Int8)) => "int8"
+    Ok(Some(_: String)) => "string"
+    Ok(None) => "none"
+    Error(_) => "error"
+}
+
+def main(): Unit {
+    val h: Held? = Box(7)
+    val e: Held ! Oops = Box("s")
+    val i = 3
+    val m: Mine? = i
+    val n: (Mine?)? = "n"
+    val xs: [Held?] = [Box(1), Box("a"), None]
+    printl(h)
+    printl(e)
+    printl(m)
+    printl(n)
+    printl(xs)
+    printl(Holder(Box(2)))
+    printl(take(Box("t")))
+    printl(give())
+    printl(mine(8))
+    printl(passed())
+    printl(kind(5))
+    printl(h == Box(7))
+    printl(m == 3)
+}

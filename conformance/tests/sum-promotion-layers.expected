@@ -1,0 +1,13 @@
+Some(Box(7))
+Ok(Box(s))
+Some(3)
+Some(Some(n))
+[Some(Box(1)), Some(Box(a)), None]
+Holder(Some(Box(2)))
+Some(Box(t))
+Ok(Box(given))
+Some(8)
+Ok(Some(Box(9)))
+int8
+true
+true

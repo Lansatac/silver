@@ -2833,11 +2833,56 @@ unittest
     analyzed("type V = :Int8 | :String\ndef main(): Unit {\n    val v: V = 300\n}").shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
 }
 
-@("promotion into a sum is one step")
+@("promotion into a sum is one step, under any option and error-union layers")
 unittest
 {
     analyzed("type V = :Int? | :String\ndef f(x: Int): V => x\ndef main(): Unit => ()").shouldReport(DiagnosticCode.TypeMismatch, At("x", 2));
-    analyzed("type A\ntype B = :A | :Int\ndef f(a: A): B? => a\ndef main(): Unit => ()").shouldReport(DiagnosticCode.TypeMismatch, At("a", 2));
+    analyzed("type V = :Int? | :String\ndef f(x: Int): V? => x\ndef main(): Unit => ()").shouldReport(DiagnosticCode.TypeMismatch, At("x", 2));
+    analyzed("type A\ntype B = :A | :Int\ntype C = :B | :String\ndef f(a: A): C? => a\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("a", 2));
+    analyzed("type V = :Int8 | :Int\ndef main(): Unit {\n    val v: V? = 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+    analyzed("type V = :Int? | :String\ndef main(): Unit {\n    val v: V? = 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+}
+
+/// Asserts that the `nth` expression spelled `text` is promoted to `expected` after it's evaluated.
+void shouldPromoteTo(const Analyzed a, string text, size_t nth, string expected,
+    string file = __FILE__, size_t line = __LINE__)
+{
+    auto start = occurrence(a.sources["main"], text, nth);
+    size_t[2] span = [start, start + text.length];
+    auto id = span in a.names["main"].exprs;
+    if (id is null) throw new AssertError(format("No expression spans exactly `%s` #%s", text, nth), file, line);
+    auto promoted = a.analysis.promotionOf(*id);
+    auto actual = promoted is null ? "nothing" : a.analysis.types.describe(*promoted);
+    if (actual != expected)
+    {
+        throw new AssertError(format("`%s` #%s is promoted to %s, expected %s", text, nth, actual, expected), file, line);
+    }
+}
+
+@("injection into a sum goes on through option and error-union layers")
+unittest
+{
+    enum decls = "type Box<T>(value: T)\ntype Held = :Box<Int> | :Box<String>\ntype Oops(code: Int)\ntype Mine = :Int | :String\n"
+        ~ "type Small = :Int8 | :String\ntype Holder(h: Held?)\n"
+        ~ "def take(h: Held?): Unit => ()\ndef give(): Held ! Oops => Box(\"g\")\ndef boxed(): Box<Int> ! Oops => Box(9)\n"
+        ~ "def passed(): Held? ! Oops {\n    val h: Held? = boxed()?\n    return h\n}\n";
+    auto a = analyzed(decls ~ "def main(): Unit {\n    val h: Held? = Box(7)\n    val e: Held ! Oops = Box(\"s\")\n"
+        ~ "    val i = 3\n    val m: Mine? = i\n    val l: Small? ! Oops = 5\n    val n: (Mine?)? = \"n\"\n"
+        ~ "    take(Box(1))\n    val held = Holder(Box(2))\n    val xs: [Held?] = [Box(4), None]\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("Box(7)", "Box<Int>");
+    a.shouldPromoteTo("Box(7)", 1, "Held?");
+    a.shouldPromoteTo(`Box("s")`, 1, "Held ! Oops");
+    a.shouldPromoteTo(`Box("g")`, 1, "Held ! Oops");
+    a.shouldPromoteTo("boxed()?", 1, "Held?");
+    a.shouldPromoteTo("i", 2, "Mine?");
+    a.shouldHaveType("5", "Int8");
+    a.shouldPromoteTo("5", 1, "Small? ! Oops");
+    a.shouldPromoteTo(`"n"`, 1, "(Mine?)?");
+    a.shouldPromoteTo("Box(1)", 1, "Held?");
+    a.shouldPromoteTo("Box(2)", 1, "Held?");
+    a.shouldPromoteTo("Box(4)", 1, "Held?");
 }
 
 @("a sum's name isn't a value, and it has no fields")
