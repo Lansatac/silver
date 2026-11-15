@@ -112,7 +112,7 @@ val bigger = point.scaled(2)
 
 `f` is looked up as a plain name would be, but only module-level functions are candidates. Constructors, conversions and constants aren't.
 
-The receiver behaves as any first argument does. It takes part in overload selection, and it adapts and promotes one step. A value is promoted after the field lookup, which uses its own type. So with `f(x: Int?)`, `value.f()` works on an `Int`. Promotion isn't chained, and `optional.f()` with `f(x: Int)` is an error, for which `?.` is the appropriate form.
+The receiver behaves as any first argument does. It takes part in overload selection, and it adapts and promotes like any argument. A value is promoted after the field lookup, which uses its own type. So with `f(x: Int?)`, `value.f()` works on an `Int`. Promotion only wraps, so `optional.f()` with `f(x: Int)` is an error, for which `?.` is the appropriate form.
 
 ## Overloading
 

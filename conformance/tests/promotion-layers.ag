@@ -1,0 +1,14 @@
+// A value promotes through every option and error-union layer of its expected type.
+type Oops(code: Int)
+
+def wrapped(): (Int?)? => 2
+
+def main(): Unit {
+    val a: (Int?)? = 1
+    val b: Int? ! Oops = 1
+    val c: (Int?)? ! Oops = 3
+    printl(a)
+    printl(b)
+    printl(wrapped())
+    printl(c)
+}

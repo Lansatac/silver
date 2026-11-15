@@ -28,7 +28,7 @@ val size = if isValid => compute() else { return None }
 
 ## Promotion
 
-Values do not convert implicitly, with a small number of exceptions called *promotions*. Each is one step, happens where a known type is expected, and is never chained:
+Values do not convert implicitly, with a small number of exceptions called *promotions*. Each happens where a known type is expected, and a value promotes through every option and error-union layer the expected type has, so `val a: (Int?)? = 1` is `Some(Some(1))` and `val b: Int? ! Oops = 1` is `Ok(Some(1))`:
 
 - `T` promotes to `T?`.
 - `T` promotes to `T ! E`, and an error union widens to one whose errors include its own.

@@ -1,0 +1,25 @@
+// Different instances of one generic are different members of a sum.
+type Box<T>(value: T)
+type Held = :Box<Int> | :Box<String>
+alias IntBox = Box<Int>
+alias TextBox = Box<String>
+
+def describe(h: Held): String => match h {
+    IntBox(_) => "int"
+    TextBox(_) => "text"
+}
+
+def size(h: Held): Int => match h {
+    b: Box<Int> => b.value
+    b: Box<String> => 100
+}
+
+def main(): Unit {
+    val a: Held = Box(7)
+    val b: Held = Box("seven")
+    printl(describe(a))
+    printl(describe(b))
+    printl(size(a))
+    printl(size(b))
+    printl(a == b)
+}

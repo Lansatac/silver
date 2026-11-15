@@ -1,0 +1,4 @@
+Some(Some(1))
+Ok(Some(1))
+Some(Some(2))
+Ok(Some(Some(3)))
