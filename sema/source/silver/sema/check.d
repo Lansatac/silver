@@ -3017,7 +3017,7 @@ private final class TypeChecker
             {
                 foreach (ref trial; group)
                 {
-                    if (trial.fitsAll) fitTrial(trial, call, typed, writtenTypes, hasReceiver, ctx.site, against);
+                    if (trial.fitsAll) fitTrial(trial, call, typed, writtenTypes, hasReceiver, ctx, against);
                 }
             }
             return tried;
@@ -3120,19 +3120,29 @@ private final class TypeChecker
         return trial;
     }
 
-    /// Fills in how well each argument fits `trial`'s function, or why one doesn't. A function
-    /// whose bounds don't hold for the types a call of it alone would infer doesn't fit; `expected`
-    /// is the type the call's result is expected to have, if any.
+    /// Fills in how well each argument fits `trial`'s function, or why one doesn't, binding its
+    /// type parameters as a call of it alone would, in a trial that records nothing. How well an
+    /// argument fits is read from what the arguments bind; the expected type, if any, binds too,
+    /// and the arguments and bounds have to suit what it binds, but it doesn't say how well.
     private void fitTrial(ref Trial trial, const CallExpr call, const(Type)[] typed, const(Type)[] written, bool hasReceiver,
-        Site site, Type expected)
+        BodyContext ctx, Type expected)
     {
         auto params = _resolutions.typeParamsOf(trial.func);
         auto signature = signatureOf(trial.func);
-        Substitution bound;
-        foreach (i, type; written) bound[params[i].id] = type;
-        foreach (i, type; typed)
+        Binding bindAgainst(Type against)
         {
-            if (type != Type.init && !isIntLiteral(call.args[i])) bindParams(signature.params[i], type, params, bound);
+            Binding binding;
+            foreach (i, type; written) binding.bound[params[i].id] = type;
+            binding.typed = typed.dup;
+            auto result = signature.ret;
+            if (against != Type.init)
+            {
+                settleResult(trial.func, false);
+                result = signatureOf(trial.func).ret;
+            }
+            bindCall(binding, signature, result, params, trial.func, call, against, ctx, true);
+            binding.conformance = conformanceOf(trial.func, binding.bound, ctx.site);
+            return binding;
         }
 
         string argument(size_t i) => hasReceiver && i == 0 ? "the receiver" : "argument %s".format(hasReceiver ? i : i + 1);
@@ -3149,6 +3159,8 @@ private final class TypeChecker
                 ? "%s can't be `%s`".format(argument(i), _types.describe(param))
                 : "%s is `%s`, not `%s`".format(argument(i), _types.describe(type), _types.describe(param));
         }
+
+        auto plain = bindAgainst(Type.init);
         trial.fits = new Fit[call.args.length];
         foreach (i, arg; call.args)
         {
@@ -3159,7 +3171,7 @@ private final class TypeChecker
                     : "%s has to be passed as `mutable`".format(argument(i));
                 return;
             }
-            auto param = _types.substitute(signature.params[i], bound);
+            auto param = _types.substitute(signature.params[i], plain.bound);
             auto fit = fitAt(i, param);
             if (fit == Fit.none)
             {
@@ -3169,45 +3181,26 @@ private final class TypeChecker
             trial.fits[i] = fit;
         }
 
-        if (_resolutions.boundFunctions.get(trial.func, null).length == 0) return;
-        // The order `applyGeneric` infers in: arguments with a type of their own, then the expected
-        // type, then integer literals. A lambda's result is still unknown here.
-        foreach (i, arg; call.args)
+        auto binding = plain;
+        if (expected != Type.init && !plain.failedEarly && _resolutions.boundFunctions.get(trial.func, null).length > 0)
         {
-            auto own = typed[i] != Type.init ? typed[i] : isUntyped(arg) ? Type.init : defaultType(arg);
-            if (own != Type.init) bindParams(signature.params[i], own, params, bound);
-        }
-        auto conformance = conformanceOf(trial.func, bound, site);
-        if (conformance.failure is null && params.any!(p => p.id !in bound))
-        {
-            settleResult(trial.func, false);
-            auto open = params.filter!(p => p.id !in bound).array;
-            bindExpected(signatureOf(trial.func).ret, expected, params, bound);
-            auto fromExpected = open.filter!(p => p.id in bound).array;
-            // What the expected type binds has to suit the arguments that adapt, as it does once
-            // this function is chosen. It only says whether they fit, not how well.
+            binding = bindAgainst(expected);
             foreach (i; 0 .. call.args.length)
             {
-                if (!byShape(i)) continue;
-                auto param = _types.substitute(signature.params[i], bound);
-                if (fitAt(i, param) == Fit.none)
-                {
-                    auto given = fromExpected.filter!(p => _types.mentionsParameter(signature.params[i], p.id)).array;
-                    trial.problem = misfit(i, param)
-                        ~ (given.length == 1 ? ", which the expected type gives `%s`".format(given[0].name) : "");
-                    trial.againstExpected = true;
-                    trial.boundsAgainstExpected = conformanceOf(trial.func, bound, site).failure !is null;
-                    return;
-                }
+                auto param = _types.substitute(signature.params[i], binding.bound);
+                if (fitAt(i, param) != Fit.none) continue;
+                auto given = binding.fromExpected.filter!(p => _types.mentionsParameter(signature.params[i], p)).array;
+                trial.problem = misfit(i, param) ~ (given.length == 1
+                    ? ", which the expected type gives `%s`".format(_resolutions.declarations.typeParams[given[0]].name) : "");
+                trial.againstExpected = true;
+                trial.boundsAgainstExpected = binding.conformance.failure !is null;
+                return;
             }
-            foreach (i, arg; call.args)
-            {
-                if (typed[i] == Type.init && isIntLiteral(arg)) bindParams(signature.params[i], _types.int_, params, bound);
-            }
-            conformance = conformanceOf(trial.func, bound, site);
-            trial.boundsAgainstExpected = conformance.failure !is null && fromExpected.length > 0;
         }
-        if (conformance.failure !is null) trial.problem = conformance.failure.replace("\n", "\n    ");
+        auto conformance = binding.conformance;
+        if (conformance.failure is null) return;
+        trial.problem = conformance.failure.replace("\n", "\n    ");
+        trial.boundsAgainstExpected = !binding.failedEarly && binding.fromExpected.length > 0;
     }
 
     /// How well an argument of type `actual` fits `param`, which may still mention some of the
@@ -4715,6 +4708,171 @@ private final class TypeChecker
         );
     }
 
+    /// What binding a call's type parameters has found.
+    private struct Binding
+    {
+        Substitution bound;
+        /// Each argument's type, once it has one of its own.
+        Type[] typed;
+        /// Which arguments have had their turn without a type of their own: checked against a
+        /// parameter that was known by then, or, in a trial, compared by their shape.
+        bool[] checked;
+        Conformance conformance;
+        /// Whether the bounds failed before the expected type was looked at.
+        bool failedEarly;
+        /// The type parameters the expected type bound.
+        Id!TypeParam[] fromExpected;
+        /// In a trial, the type parameters only a lambda's result would decide, which stay unbound.
+        Id!TypeParam[] undecided;
+    }
+
+    /// Binds `params`, the type parameters of a call of a function with `signature` and `result`,
+    /// from `call`'s arguments, in inference's order: those with a type of their own, left to
+    /// right; then the bounds of `func`, when it's valid, whose type is known; then the expected
+    /// type; then integer literals and lambdas, as each can be typed, and a lambda that can't be
+    /// yet may be once a later one binds what it needs.
+    ///
+    /// A call being checked runs it with `trial` false, and its arguments are synthesized, or
+    /// checked against a parameter known by their turn, as they're reached. Overload choice runs
+    /// it with `trial` true, which records nothing: an argument has the type `b.typed` gives it,
+    /// or the one synthesis would, and a lambda binds only what its annotations say, so what its
+    /// result would bind is undecided.
+    private void bindCall(ref Binding b, const FunctionData signature, Type result, const(TypeParam)[] params,
+        Id!FunctionDecl func, const CallExpr call, Type expected, BodyContext ctx, bool trial)
+    {
+        auto args = call.args;
+        if (b.typed.length < args.length) b.typed.length = args.length;
+        b.checked = new bool[args.length];
+        const(TypeParam)[] bindable() => b.undecided.length == 0 ? params : params.filter!(p => !b.undecided.canFind(p.id)).array;
+        void bind(size_t i, Type type)
+        {
+            bindParams(signature.params[i], type, bindable(), b.bound);
+        }
+        bool known(size_t i) => !signature.isMutable(i) && !call.isMutable(i) && isBound(signature.params[i], params, b.bound);
+        bool open() => params.any!(p => p.id !in b.bound);
+        void solveBounds()
+        {
+            if (!func.isValid) return;
+            b.conformance = conformanceOf(func, b.bound, ctx.site);
+            foreach (param; b.undecided) b.bound.remove(param);
+        }
+        void undecide(Type declared)
+        {
+            foreach (param; params)
+            {
+                if (param.id !in b.bound && _types.mentionsParameter(declared, param.id) && !b.undecided.canFind(param.id))
+                {
+                    b.undecided ~= param.id;
+                }
+            }
+        }
+        // A lambda in a trial: its annotations bind, and its result, unless it's written, is undecided.
+        void bindLambda(size_t i, const Expr arg, const Lambda lambda, const(FunctionData)* expectation)
+        {
+            Type[] types;
+            bool[] mutables;
+            foreach (j, param; lambda.params)
+            {
+                types ~= param.annotated ? quietlyResolved(param.type) : expectation.params[j];
+                mutables ~= param.mutable;
+            }
+            _types[signature.params[i]].match!(
+                (const FunctionData f) {
+                    foreach (j, param; f.params) bindParams(param, types[j], bindable(), b.bound);
+                },
+                (_) {},
+            );
+            undecide(signature.params[i]);
+        }
+
+        foreach (i, arg; args)
+        {
+            if (b.typed[i] != Type.init)
+            {
+                bind(i, b.typed[i]);
+                continue;
+            }
+            if (!call.isMutable(i) && isUntyped(arg)) continue;
+            if (known(i))
+            {
+                if (!trial) checkArgument(arg, _types.substitute(signature.params[i], b.bound), ctx);
+                b.checked[i] = true;
+                continue;
+            }
+            if (trial)
+            {
+                auto type = defaultType(arg);
+                if (type != Type.init) bind(i, type);
+                b.checked[i] = true;
+                continue;
+            }
+            b.typed[i] = synthesize(arg, ctx);
+            bind(i, b.typed[i]);
+        }
+        solveBounds();
+        b.failedEarly = b.conformance.failure !is null;
+        if (open())
+        {
+            auto before = params.filter!(p => p.id !in b.bound).array;
+            bindExpected(result, expected, bindable(), b.bound);
+            b.fromExpected = before.filter!(p => p.id in b.bound).map!(p => cast() p.id).array;
+        }
+        for (auto progress = true; progress;)
+        {
+            progress = false;
+            foreach (i, arg; args)
+            {
+                if (b.typed[i] != Type.init || b.checked[i]) continue;
+                if (known(i))
+                {
+                    if (!trial) checkArgument(arg, _types.substitute(signature.params[i], b.bound), ctx);
+                    b.checked[i] = progress = true;
+                }
+                else if (isIntLiteral(arg))
+                {
+                    if (trial)
+                    {
+                        bind(i, _types.int_);
+                        b.checked[i] = true;
+                    }
+                    else
+                    {
+                        b.typed[i] = synthesize(arg, ctx);
+                        bind(i, b.typed[i]);
+                    }
+                    progress = true;
+                }
+                else if (isLambda(arg))
+                {
+                    auto lambda = arg.kind.match!((const Lambda l) => l, (_) => Lambda.init);
+                    auto expectation = lambdaExpectation(lambda, signature.params[i], params, b.bound);
+                    // Against a bare parameter, a lambda is its own type when it says all of it.
+                    auto annotated = !_types.isFunction(signature.params[i]) && lambda.params.all!(p => p.annotated);
+                    if (expectation is null && !annotated) continue;
+                    if (trial)
+                    {
+                        bindLambda(i, arg, lambda, expectation);
+                        b.checked[i] = true;
+                    }
+                    else
+                    {
+                        auto optional = expectation !is null && expectation.ret == Type.init
+                            && _types.isOption(signatureOf(signature.params[i]).ret);
+                        b.typed[i] = typeLambda(arg, lambda, expectation, ctx.site, optional);
+                        bind(i, b.typed[i]);
+                    }
+                    progress = true;
+                }
+            }
+            if (progress && open()) solveBounds();
+        }
+        if (!trial) return;
+        foreach (i, arg; args)
+        {
+            if (isLambda(arg) && !b.checked[i]) undecide(signature.params[i]);
+        }
+    }
+
     /// A call of `g` with `call`'s arguments, whose type arguments are written or inferred. With a
     /// `receiver`, the first argument is a method call's, already synthesized.
     /// `pretyped` is as for `applyCallee`. `hasReceiver` says the first argument is the `x` of `x.f()`.
@@ -4726,7 +4884,6 @@ private final class TypeChecker
         auto params = sum ? g.ownerParams : g.params;
         auto shape = sum ? withResult(g.type, ownerResult(g)) : g.type;
         auto typed = new Type[args.length];
-        auto checked = new bool[args.length];
         foreach (i, type; pretyped) typed[i] = type;
         void typeTheRest()
         {
@@ -4753,71 +4910,16 @@ private final class TypeChecker
             return _types.error;
         }
 
-        Substitution bound;
-        bool known(size_t i) => !signature.isMutable(i) && !call.isMutable(i) && isBound(signature.params[i], params, bound);
-        // A bound is looked into as soon as its type is known, and the function found for it can
-        // say what the interface's own type arguments are.
+        Binding binding;
+        binding.typed = typed;
+        if (g.writes) bindWritten(g, binding.bound);
+        auto bounded = sum ? Id!FunctionDecl.init : g.func;
+        bindCall(binding, signature, signature.ret, params, bounded, call, expected, ctx, false);
+        auto checked = binding.checked;
+        reportUnbound(expr, g, params, sum, signature, args, typed, hasReceiver, binding.bound, expected);
+        auto bound = binding.bound;
         Conformance conformance;
-        void solveBounds()
-        {
-            if (g.func.isValid && !sum) conformance = conformanceOf(g.func, bound, ctx.site);
-        }
-        if (g.writes) bindWritten(g, bound);
-        foreach (i, arg; args)
-        {
-            if (typed[i] != Type.init)
-            {
-                bindParams(signature.params[i], typed[i], params, bound);
-                continue;
-            }
-            if (!call.isMutable(i) && isUntyped(arg)) continue;
-            if (known(i))
-            {
-                checkArgument(arg, _types.substitute(signature.params[i], bound), ctx);
-                checked[i] = true;
-                continue;
-            }
-            typed[i] = synthesize(arg, ctx);
-            bindParams(signature.params[i], typed[i], params, bound);
-        }
-        solveBounds();
-        if (params.any!(p => p.id !in bound)) bindExpected(signature.ret, expected, params, bound);
-        // A lambda that can't be typed yet may be once a later argument binds what it needs.
-        for (auto progress = true; progress;)
-        {
-            progress = false;
-            foreach (i, arg; args)
-            {
-                if (typed[i] != Type.init || checked[i]) continue;
-                if (known(i))
-                {
-                    checkArgument(arg, _types.substitute(signature.params[i], bound), ctx);
-                    checked[i] = progress = true;
-                }
-                else if (isIntLiteral(arg))
-                {
-                    typed[i] = synthesize(arg, ctx);
-                    bindParams(signature.params[i], typed[i], params, bound);
-                    progress = true;
-                }
-                else if (isLambda(arg))
-                {
-                    auto lambda = arg.kind.match!((const Lambda l) => l, (_) => Lambda.init);
-                    auto expectation = lambdaExpectation(lambda, signature.params[i], params, bound);
-                    // Against a bare parameter, a lambda is its own type when it says all of it.
-                    auto annotated = !_types.isFunction(signature.params[i]) && lambda.params.all!(p => p.annotated);
-                    if (expectation is null && !annotated) continue;
-                    auto optional = expectation !is null && expectation.ret == Type.init
-                        && _types.isOption(signatureOf(signature.params[i]).ret);
-                    typed[i] = typeLambda(arg, lambda, expectation, ctx.site, optional);
-                    bindParams(signature.params[i], typed[i], params, bound);
-                    progress = true;
-                }
-            }
-            if (progress && params.any!(p => p.id !in bound)) solveBounds();
-        }
-        reportUnbound(expr, g, params, sum, signature, args, typed, hasReceiver, bound, expected);
-        solveBounds();
+        if (bounded.isValid) conformance = conformanceOf(bounded, bound, ctx.site);
         if (conformance.failure !is null) reportUnsatisfied(g.span, g.spelled, conformance);
 
         auto paramTypes = signature.params.map!(p => _types.substitute(p, bound)).array;
@@ -5536,7 +5638,7 @@ private final class TypeChecker
             foreach (f; group)
             {
                 auto trial = arityTrial(f, args.length, 0);
-                if (trial.fitsAll) fitTrial(trial, call, typed, null, false, ctx.site, Type.init);
+                if (trial.fitsAll) fitTrial(trial, call, typed, null, false, ctx, Type.init);
                 all ~= trial;
                 if (trial.fitsAll) fits ~= trial;
             }
@@ -5575,28 +5677,22 @@ private final class TypeChecker
 
         auto params = _resolutions.typeParamsOf(function_);
         auto signature = signatureOf(function_);
-        Substitution bound;
-        foreach (i, type; typed)
+        Binding binding;
+        binding.typed = typed;
+        bindCall(binding, signature, signature.ret, params, function_, call, Type.init, ctx, false);
+        auto bound = binding.bound;
+        auto checked = binding.checked;
+        void typeUnchecked()
         {
-            if (type != Type.init) bindParams(signature.params[i], type, params, bound);
-        }
-        conformanceOf(function_, bound, ctx.site);
-        auto checked = new bool[args.length];
-        foreach (i, arg; args)
-        {
-            if (typed[i] != Type.init) continue;
-            if (isBound(signature.params[i], params, bound))
+            foreach (i, arg; args)
             {
-                check(arg, _types.substitute(signature.params[i], bound), ctx);
-                checked[i] = true;
-                continue;
+                if (typed[i] == Type.init && !checked[i] && arg.id.isValid) synthesize(arg, ctx);
             }
-            typed[i] = synthesize(arg, ctx);
-            bindParams(signature.params[i], typed[i], params, bound);
         }
         auto unbound = params.filter!(p => p.id !in bound);
         if (!unbound.empty)
         {
+            typeUnchecked();
             _collector.reportError(DiagnosticCode.CannotInferTypeArgument, span,
                 "%s uses `%s: %s` here, but nothing it passes says what its `%s` is".format(syntax, name,
                     _types.describe(symbolType(SymbolId(function_))), unbound.front.name));
@@ -5605,6 +5701,7 @@ private final class TypeChecker
         auto conformance = conformanceOf(function_, bound, ctx.site);
         if (conformance.failure !is null)
         {
+            typeUnchecked();
             _collector.reportError(conformance.tooDeep ? DiagnosticCode.BoundSearchTooDeep : DiagnosticCode.UnsatisfiedBound, span,
                 "%s calls `%s`, and `%s` %s".format(syntax, name, overloadLabel(function_), conformance.failure));
             return failed;
@@ -5615,7 +5712,9 @@ private final class TypeChecker
         found.signature = signatureOf(_types.substitute(symbolType(SymbolId(function_)), bound));
         foreach (i, arg; args)
         {
-            if (!checked[i] && arg.id.isValid) coerce(arg, typed[i], found.signature.params[i]);
+            if (checked[i] || !arg.id.isValid) continue;
+            if (typed[i] != Type.init) coerce(arg, typed[i], found.signature.params[i]);
+            else checkArgument(arg, found.signature.params[i], ctx);
         }
         return found;
     }
