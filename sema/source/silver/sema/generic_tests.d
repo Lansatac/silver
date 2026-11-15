@@ -609,3 +609,30 @@ unittest
     a.shouldHaveNoDiagnostics();
     a.shouldDeclareType(At("n", 1), "Int");
 }
+
+@("a reserved name with type arguments doesn't make the arms after it unreachable")
+unittest
+{
+    analyzed("def f(o: Int?): Int => match o {\n    Some<Int>(x) => x\n    None => 0\n}\ndef main(): Unit {\n}")
+        .shouldReport(DiagnosticCode.UnknownType, At("Some", 1));
+    analyzed("def f(r: Int ! String): Int => match r {\n    Ok<Int>(x) => x\n    Error(_) => 0\n}\ndef main(): Unit {\n}")
+        .shouldReport(DiagnosticCode.UnknownType, At("Ok", 1));
+    analyzed("def f(r: Int ! String): Int => match r {\n    Error<String>(_) => 0\n    Ok(x) => x\n}\ndef main(): Unit {\n}")
+        .shouldReport(DiagnosticCode.UnknownType, At("Error", 1));
+}
+
+@("a pattern whose type didn't resolve leaves the match's coverage unchecked")
+unittest
+{
+    enum types = "type Box<T>(value: T)\ntype Held = :Box<Int> | :Box<String>\n";
+    string matching(string arms) => types ~ "def f(h: Held): Int => match h {\n" ~ arms ~ "}\ndef main(): Unit {\n}";
+    analyzed(matching("    Box<Nope>(v) => 0\n    _ => 1\n")).shouldReport(DiagnosticCode.UnknownType, At("Nope", 1));
+    analyzed(matching("    Box<Nope>(v) => 0\n")).shouldReport(DiagnosticCode.UnknownType, At("Nope", 1));
+    analyzed(matching("    Nope(v) => 0\n    Box<Int>(n) => n\n    _ => 1\n")).shouldReport(DiagnosticCode.UnknownType, At("Nope", 1));
+    analyzed(matching("    v: Nope => 0\n    _ => 1\n")).shouldReport(DiagnosticCode.UnknownType, At("Nope", 1));
+    // Only the match with the broken pattern is left unchecked.
+    import std.algorithm : map;
+    import std.array : array;
+    auto a = analyzed(matching("    Box<Int>(n) => match n {\n        Nope(_) => 0\n        _ => 1\n    }\n    Box<Int>(m) => m\n    _ => 2\n"));
+    assert(a.collector.diagnostics.map!(d => d.code).array == [DiagnosticCode.UnknownType, DiagnosticCode.UnreachableArm]);
+}

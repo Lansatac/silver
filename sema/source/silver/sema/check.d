@@ -154,6 +154,9 @@ private final class TypeChecker
 
     private TypeTable _types;
     private Collector _collector;
+    /// Whether a pattern of the match being checked names a type that name resolution couldn't,
+    /// which it reported before checking began.
+    private bool _unresolvedPattern;
     private const Resolution _resolutions;
     /// What checking produces, built up in place.
     private Typing _typing;
@@ -5969,10 +5972,14 @@ private final class TypeChecker
     {
         auto subject = _declarer.requireTyped(synthesize(*match_.subject, ctx), match_.subject.span);
         auto reported = _collector.diagnostics.length;
+        auto outer = _unresolvedPattern;
+        _unresolvedPattern = false;
+        scope (exit) _unresolvedPattern = outer;
         auto patterns = match_.arms.map!(arm => checkArmPattern(arm.pattern, subject, ctx)).array;
         if (match_.origin != MatchOrigin.Match || subject == _types.error || subject == _types.never) return;
-        // A pattern that's already wrong would only be reported again as a gap in the coverage.
-        if (_collector.diagnostics.length > reported) return;
+        // A pattern that's already wrong would only be reported again as a gap in the coverage, or
+        // make the arms after it look unreachable.
+        if (_collector.diagnostics.length > reported || _unresolvedPattern) return;
         checkCoverage(match_, patterns, subject, span, _types, _declarer, _collector);
     }
 
@@ -6176,6 +6183,7 @@ private final class TypeChecker
         }
         auto type = _declarer.resolveType(*binding.type);
         _typing.symbolTypes[SymbolId(binding.id)] = type;
+        if (type == _types.error) _unresolvedPattern = true;
         if (type == _types.error || isUnknown(subject) || type == subject) return CoveragePattern.init;
 
         string key;
@@ -6228,6 +6236,7 @@ private final class TypeChecker
         else
         {
             // Name resolution reported it.
+            _unresolvedPattern = true;
             checkArgumentsAsUnknown();
             return CoveragePattern.init;
         }
@@ -6237,6 +6246,8 @@ private final class TypeChecker
             written = _declarer.resolveType(constructor.type);
             if (written == _types.error)
             {
+                // Name resolution reported an unknown type argument; the declarer, the rest.
+                _unresolvedPattern = true;
                 checkArgumentsAsUnknown();
                 return CoveragePattern.init;
             }
