@@ -776,3 +776,26 @@ unittest
     analyzed(unwrapping ~ "def main(): Unit {\n    val r = Circle(1.0)!.r\n}")
         .shouldReport(DiagnosticCode.UnknownMember, At("Circle(1.0)!.r", 1));
 }
+
+@("`?` with a known error types a bare type parameter toward the whole option or error union, as the docs say")
+unittest
+{
+    enum none = "type Oops\ndef none<T>(): T => panic(\"none\")\n";
+    auto a = analyzed(none ~ "def f(): Int ! Oops {\n    val y: Int = none()?\n    y\n}\n"
+        ~ "def g(): Int? {\n    val y: Int = none()?\n    Some(y)\n}\ndef main(): Unit {}");
+    // Today `T` is bound to `Int`, the expected type with its error union stripped, and `?` reports T0005.
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("none()", 1, "Int ! Oops");
+    a.shouldHaveType("none()", 2, "Int?");
+}
+
+@("the T0031 for a bare type parameter under `!` doesn't suggest type arguments that `!` would reject")
+unittest
+{
+    import std.algorithm : canFind;
+
+    auto a = analyzed("def none<T>(): T => panic(\"none\")\ndef main(): Unit {\n    val y: Int = none()!\n}");
+    a.shouldReport(DiagnosticCode.CannotInferTypeArgument, At("none()", 1));
+    auto message = a.collector.diagnostics[0].message;
+    assert(!message.canFind("none<Int>()"), "`none<Int>()!` is T0005: " ~ message);
+}

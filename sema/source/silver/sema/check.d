@@ -171,6 +171,9 @@ private final class TypeChecker
     /// Constructions of a type with an invariant from literals alone, which are checked once the
     /// literals' types are final.
     private const(Expr)[] _literalConstructions;
+    /// The option or error union `!` or `?` is typing its operand toward, which a bare type
+    /// parameter takes whole, though against any other expected type it takes what that holds.
+    private Type _unwrapTarget;
     /// The functions bounds supply that an earlier bound of the same function supplies already,
     /// by the earlier one.
     private Id!FunctionDecl[Id!FunctionDecl] _repeatedBounds;
@@ -2439,6 +2442,9 @@ private final class TypeChecker
         auto member = owner !is null && wantsMember(_typing.nominalTypes[constructed], *owner, expected);
         if (isMethod || unwraps || member || genericUse(expr).found || isOverloadedUse(expr))
         {
+            auto outer = _unwrapTarget;
+            _unwrapTarget = expected;
+            scope (exit) _unwrapTarget = outer;
             return synthesizeExact(expr, ctx, expected);
         }
         return synthesize(expr, ctx);
@@ -4623,8 +4629,9 @@ private final class TypeChecker
         // What `!` unwraps, when the result isn't something it can unwrap.
         auto unwrapped = _types.isErrorUnion(expected) && _types.errorOf(expected) == _types.error;
         if (unwrapped && !_types.isOption(result) && !_types.isErrorUnion(result)) return;
-        if (_types.isOption(expected) && !_types.isOption(result)) expected = _types.optionInner(expected);
-        if (_types.isErrorUnion(expected) && !_types.isErrorUnion(result)) expected = _types.successOf(expected);
+        auto bare = _types.isParameter(result) && expected == _unwrapTarget;
+        if (!bare && _types.isOption(expected) && !_types.isOption(result)) expected = _types.optionInner(expected);
+        if (!bare && _types.isErrorUnion(expected) && !_types.isErrorUnion(result)) expected = _types.successOf(expected);
         if (_types.isErrorUnion(result) && !_types.isErrorUnion(expected)) result = _types.successOf(result);
         auto decl = declOf(result);
         if (decl.isValid && declOf(expected).isValid && declOf(expected) != decl)
@@ -4809,7 +4816,7 @@ private final class TypeChecker
             }
             if (progress && params.any!(p => p.id !in bound)) solveBounds();
         }
-        reportUnbound(expr, g, params, sum, signature, args, typed, hasReceiver, bound);
+        reportUnbound(expr, g, params, sum, signature, args, typed, hasReceiver, bound, expected);
         solveBounds();
         if (conformance.failure !is null) reportUnsatisfied(g.span, g.spelled, conformance);
 
@@ -4871,7 +4878,8 @@ private final class TypeChecker
     /// Reports the first of `params` that nothing bound, as the argument that didn't fit when one
     /// should have bound it, and binds each to `error`.
     private void reportUnbound(const Expr expr, const Generic g, const(TypeParam)[] params, bool sum,
-        const FunctionData signature, const(Expr)[] args, const(Type)[] typed, bool hasReceiver, ref Substitution bound)
+        const FunctionData signature, const(Expr)[] args, const(Type)[] typed, bool hasReceiver, ref Substitution bound,
+        Type expected)
     {
         auto reported = false;
         foreach (param; params)
@@ -4930,8 +4938,13 @@ private final class TypeChecker
                             _declarer.example(owner, g.ownerParams.length, "")));
                 continue;
             }
-            _collector.reportError(DiagnosticCode.CannotInferTypeArgument, expr.span,
-                "Nothing in this call says what `%s` is; write the type arguments, as in `%s`"
+            // Under `!`, `Int` expected of a bare `T` could mean `Int?` or `Int ! E`, and `Int` itself is wrong.
+            auto unwrapped = expected != Type.init && _types.isErrorUnion(expected) && _types.errorOf(expected) == _types.error
+                && _types.isParameter(signature.ret);
+            _collector.reportError(DiagnosticCode.CannotInferTypeArgument, expr.span, unwrapped
+                ? "Nothing in this call says what `%s` is: `!` takes an option or an error union, and either could be meant; write the type arguments"
+                    .format(param.name)
+                : "Nothing in this call says what `%s` is; write the type arguments, as in `%s`"
                     .format(param.name, _declarer.example(g.spelled, g.writable, args.length == 0 ? "()" : "(...)")));
         }
     }

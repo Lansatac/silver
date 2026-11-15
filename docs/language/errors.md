@@ -124,6 +124,7 @@ val c: Circle = (if b => Circle(1.0) else Circle(2.0))!   // each builds the mem
 val o: Int? = maybe()!!                                   // maybe<Int?>, an Int??
 def none<T>(): T => ...
 val y: Int = none()!                                      // error: T could be Int? or Int ! E
+val z: Int = none()?                                      // none<Int ! Oops>, in a function returning Int ! Oops
 ```
 
 The object of a field access has nothing expected of it, so `Circle(1.0)!.radius` builds the sum and has no field `radius`; write `val c: Circle = Circle(1.0)!` first.
