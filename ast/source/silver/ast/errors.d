@@ -117,6 +117,9 @@ enum DiagnosticCode : string
     /// A constructor pattern of a generic type without type arguments, on a value that can be
     /// more than one instance of it.
     AmbiguousInstance = "T0049",
+    /// A value where an error union is expected that is one of its errors and could also become
+    /// its success, so it has to be written as `Error(...)` or `Ok(...)`.
+    ErrorOrSuccess = "T0050",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

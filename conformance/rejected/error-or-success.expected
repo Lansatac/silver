@@ -1,0 +1,1 @@
+T0050: `Oops` is one of the errors of `H2 ! Oops` and can also be its success; write `Error(...)` to fail with it, or `Ok(...)` to succeed

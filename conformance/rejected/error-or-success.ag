@@ -1,0 +1,10 @@
+// A value that's one of an error union's errors, and could also become its success, has to say
+// which it is.
+type Oops(code: Int)
+type H2 = :Oops | :Int
+
+def a(): H2 ! Oops => Oops(1)
+
+def main(): Unit {
+    printl(a())
+}

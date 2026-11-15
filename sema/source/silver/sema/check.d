@@ -6122,6 +6122,7 @@ private final class TypeChecker
         }
         else if (_types.isOption(expected))
         {
+            if (isBothSides(expr, type, expected)) return _types.error;
             if (isIntLiteral(expr)) type = adaptLayered(expr, type, expected);
             auto hasValue = type != _types.error && type != _types.never;
             if (hasValue && type != expected && isAssignable(type, expected))
@@ -6132,6 +6133,7 @@ private final class TypeChecker
         }
         else if (_types.isErrorUnion(expected))
         {
+            if (isBothSides(expr, type, expected)) return _types.error;
             if (isIntLiteral(expr)) type = adaptLayered(expr, type, expected);
             auto hasValue = type != _types.error && type != _types.never;
             if (hasValue && type != expected && isAssignable(type, expected))
@@ -6161,6 +6163,25 @@ private final class TypeChecker
         if (isNumeric(core)) return adaptLiteral(expr, core);
         if (_declarer.isSum(core)) return injectLiteral(expr, core);
         return type;
+    }
+
+    /// Reports `expr`, of `type`, when an error-union layer of `expected` lists it as an error and
+    /// it could also become that layer's success, since it would silently be a success.
+    private bool isBothSides(const Expr expr, Type type, Type expected)
+    {
+        if (type == _types.error || type == _types.never || _types.mentionsError(type) || _types.isErrorUnion(type)
+            || _types.isFailure(type) || type == _types.none || type == _types.emptyArray) return false;
+        for (auto layer = expected; _types.isOption(layer) || _types.isErrorUnion(layer);
+            layer = _types.isOption(layer) ? _types.optionInner(layer) : _types.successOf(layer))
+        {
+            if (!_types.isErrorUnion(layer) || _types.mentionsError(layer)) continue;
+            if (!errorFits(type, _types.errorOf(layer)) || !isAssignable(type, _types.successOf(layer))) continue;
+            _collector.reportError(DiagnosticCode.ErrorOrSuccess, expr.span,
+                "`%s` is one of the errors of `%s` and can also be its success; write `Error(...)` to fail with it, or `Ok(...)` to succeed"
+                    .format(_types.describe(type), _types.describe(layer)));
+            return true;
+        }
+        return false;
     }
 
     /// `type` with every option and error-union success layer taken off.

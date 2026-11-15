@@ -275,3 +275,17 @@ def errorOf<T, E>(r: T ! E): E? => match r {
     a.shouldDeclareType(At("unwrapped", 1), "Int");
     a.shouldDeclareType(At("reason", 1), "(Negative | Overflow)?");
 }
+
+@("a value that's one of the errors and could also be the success has to say which it is")
+unittest
+{
+    enum types = "type H2 = :Missing | :Int\n";
+    analyzedErrors("", types ~ "def a(): H2 ! Missing => Missing(\"k\")\n")
+        .shouldReport(DiagnosticCode.ErrorOrSuccess, At("Missing", 5));
+    analyzedErrors("", types ~ "def a(m: Missing): (H2 ! Missing)? => m\n")
+        .shouldReport(DiagnosticCode.ErrorOrSuccess, At("m", 2));
+    analyzedErrors("", "def a(m: Missing): Missing ! ConfigError => m\n")
+        .shouldReport(DiagnosticCode.ErrorOrSuccess, At("m", 2));
+    analyzedErrors("", types ~ "def a(): H2 ! Missing => Ok(Missing(\"k\"))\ndef b(): H2 ! Missing => Error(Missing(\"k\"))\n"
+        ~ "def c(): H2 ! Missing => 1\n").shouldHaveNoDiagnostics();
+}
