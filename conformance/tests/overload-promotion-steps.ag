@@ -1,0 +1,22 @@
+// An overload reached in fewer promotion steps beats one that needs more.
+type Box<T>(value: T)
+type Held = :Box<Int> | :Box<String>
+type Oops(code: Int)
+type Mine = :Int | :String
+
+def g(h: Held?): String => "held"
+def g(b: Box<Int>?): String => "box"
+def n(x: (Int?)?): String => "two layers"
+def n(x: Int ! Oops): String => "one layer"
+def m(x: Mine?): String => "mine"
+def m(x: Int?): String => "int"
+
+def main(): Unit {
+    printl(g(Box(1)))
+    printl(g(Box("s")))
+    val i = 1
+    printl(n(i))
+    printl(n(2))
+    printl(m(i))
+    printl(m("t"))
+}

@@ -2965,8 +2965,24 @@ private final class TypeChecker
         return call in _resolutions.callees;
     }
 
-    /// How well an argument fits a parameter, worst first.
-    private enum Fit { none, converted, exact }
+    /// How well an argument fits a parameter: not at all, or in some number of promotion steps,
+    /// fewer being better.
+    private struct Fit
+    {
+        /// 0 when it doesn't fit, and otherwise `int.max` less the steps.
+        int rank;
+
+        enum none = Fit(0);
+        enum exact = Fit(int.max);
+        enum converted = promoted(1);
+
+        static Fit promoted(int steps) => steps < 0 ? none : Fit(int.max - steps);
+
+        /// This fit with `more` steps after it, as a layer around what fits adds one.
+        Fit then(int more) const => this == none ? none : Fit(rank - more);
+
+        int opCmp(const Fit other) const => rank < other.rank ? -1 : rank > other.rank ? 1 : 0;
+    }
 
     /// One candidate of an overloaded call, tried against its arguments.
     private struct Trial
@@ -3211,7 +3227,7 @@ private final class TypeChecker
         if (mentionsAny(param, params)) return couldBe(param, actual, params) ? Fit.exact : Fit.none;
         if (actual == param) return Fit.exact;
         if (mutable) return Fit.none;
-        return isAssignable(actual, param) ? Fit.converted : Fit.none;
+        return Fit.promoted(fitSteps(actual, param));
     }
 
     private bool mentionsAny(Type type, const(TypeParam)[] params)
@@ -3303,20 +3319,33 @@ private final class TypeChecker
         auto bare = _types[param].match!((const TypeParamData p) => params.canFind!(q => q.id == p.param), _ => false);
         auto members = _declarer.membersOf(param);
         bool sumHas(bool delegate(Type) test) => members.any!(m => test(m));
-        // Inside an option, a fit is at best a conversion, since the value is promoted.
+        // Inside an option, the value is promoted, which is a step more.
         Fit inOption(Fit delegate(Type) inner)
         {
             if (!_types.isOption(param)) return inner(param);
-            return min(inner(_types.optionInner(param)), Fit.converted);
+            return inner(_types.optionInner(param)).then(1);
         }
 
         if (isIntLiteral(arg))
         {
             if (bare || param == _types.int_) return Fit.exact;
-            auto inner = _types.isOption(param) ? innermost(param) : param;
-            auto numeric = isNumeric(inner) || params.canFind!(p => inner == _declarer.parameterType(p))
-                || sumHas(m => isNumeric(m));
-            return numeric ? Fit.converted : Fit.none;
+            // A step for each layer, one for an injection, and one for taking a type other than `Int`.
+            auto steps = 0;
+            auto core = param;
+            for (; _types.isOption(core) || _types.isErrorUnion(core); steps++)
+            {
+                core = _types.isOption(core) ? _types.optionInner(core) : _types.successOf(core);
+            }
+            if (params.canFind!(p => core == _declarer.parameterType(p))) return Fit.promoted(max(steps, 1));
+            if (_declarer.isSum(core))
+            {
+                auto numbers = _declarer.membersOf(core).filter!(m => isNumeric(m)).array;
+                if (numbers.empty) return Fit.none;
+                steps++;
+                core = numbers.canFind(_types.int_) ? _types.int_ : numbers[0];
+            }
+            if (!isNumeric(core)) return Fit.none;
+            return Fit.promoted(steps + (core == _types.int_ ? 0 : 1));
         }
         if (isLambda(arg))
         {
@@ -6627,29 +6656,42 @@ private final class TypeChecker
 
     private bool isAssignable(Type from, Type to)
     {
-        if (from == to) return true;
-        if (from == _types.error || to == _types.error) return true;  // already reported
-        if (from == _types.never) return true;                         // no value ever arrives
-        if (from == _types.none) return _types.isOption(to) || _types.isErrorUnion(to) && _types.isOption(_types.successOf(to));
-        if (to == _types.any) return true;                             // print's placeholder
+        return fitSteps(from, to) >= 0;
+    }
+
+    /// The fit relation: in how many promotion steps a value of type `from` becomes a `to`, or -1
+    /// when it can't. Each layer of option or error union it's promoted through is a step, and so
+    /// are the widening of an error union and the injection of a member into its sum, so `Box(7)`
+    /// into `Held?` is 2. Checking, inference and overload choice all ask this.
+    private int fitSteps(Type from, Type to)
+    {
+        if (from == to) return 0;
+        if (from == _types.error || to == _types.error) return 0;  // already reported
+        if (from == _types.never) return 0;                         // no value ever arrives
+        if (from == _types.none)
+        {
+            return _types.isOption(to) || _types.isErrorUnion(to) && _types.isOption(_types.successOf(to)) ? 1 : -1;
+        }
+        if (to == _types.any) return 1;                             // print's placeholder
         if (_types.isFailure(from))
         {
-            return (_types.isErrorUnion(to) || _types.isFailure(to)) && errorFits(_types.errorOf(from), _types.errorOf(to));
+            return (_types.isErrorUnion(to) || _types.isFailure(to)) && errorFits(_types.errorOf(from), _types.errorOf(to)) ? 1 : -1;
         }
+        int layer(int inner) => inner < 0 ? -1 : inner + 1;
         return _types[to].match!(
             // T -> T?, through every layer, ending at most in one step into a sum.
-            (const OptionData o) => isAssignable(from, o.inner),
+            (const OptionData o) => layer(fitSteps(from, o.inner)),
             // Widening, or T -> T ! E as for an option.
             (const ErrorUnionData u) {
-                if (_types.isErrorUnion(from) && _types.successOf(from) == u.success) return errorFits(_types.errorOf(from), u.error);
-                return isAssignable(from, u.success);
+                if (_types.isErrorUnion(from) && _types.successOf(from) == u.success) return errorFits(_types.errorOf(from), u.error) ? 1 : -1;
+                return layer(fitSteps(from, u.success));
             },
-            (const ErrorListData _) => errorFits(from, to),
-            (const NominalData _) => _declarer.membersOf(to).canFind(from),
+            (const ErrorListData _) => errorFits(from, to) ? 1 : -1,
+            (const NominalData _) => _declarer.membersOf(to).canFind(from) ? 1 : -1,
             // Both have the layout of an array with no elements, so no conversion hides here.
             (const ArrayData a) => from == _types.emptyArray
-                || (_types.isArray(from) && _types.arrayElement(from) == _types.never),
-            _ => false,
+                || (_types.isArray(from) && _types.arrayElement(from) == _types.never) ? 1 : -1,
+            _ => -1,
         );
     }
 

@@ -122,6 +122,26 @@ unittest
     a.shouldCall(At("f", 5), At("f", 2));
 }
 
+@("fewer promotion steps beat more, counting each layer and each injection")
+unittest
+{
+    enum types = "type Box<T>(value: T)\ntype Held = :Box<Int> | :Box<String>\ntype Oops(code: Int)\ntype Mine = :Int | :String\n";
+    auto a = analyzedWith(types ~ "def g(h: Held?): Unit => ()\ndef g(b: Box<Int>?): Unit => ()\n"
+        ~ "def n(x: (Int?)?): Unit => ()\ndef n(x: Int ! Oops): Unit => ()\n"
+        ~ "def m(x: Mine?): Unit => ()\ndef m(x: Int?): Unit => ()",
+        "    g(Box(1))\n    val i = 1\n    n(i)\n    n(1)\n    m(i)\n    m(1)");
+    a.shouldHaveNoDiagnostics();
+    a.shouldCall(At("g", 3), At("g", 2));
+    a.shouldCall(At("n", 3), At("n", 2));
+    a.shouldCall(At("n", 4), At("n", 2));
+    a.shouldCall(At("m", 3), At("m", 2));
+    a.shouldCall(At("m", 4), At("m", 2));
+
+    // An injection and a layer are one step each, so they tie.
+    analyzedWith(types ~ "def k(h: Held): Unit => ()\ndef k(b: Box<Int>?): Unit => ()", "    k(Box(1))")
+        .shouldReport(DiagnosticCode.AmbiguousOverload, At("k", 3));
+}
+
 @("a literal prefers its default type, and two other types tie")
 unittest
 {
