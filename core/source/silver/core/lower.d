@@ -280,8 +280,8 @@ private final class Lowering
             ? chain[0 .. shown] ~ "... %s more ...".format(chain.length - 2 * shown) ~ chain[$ - shown .. $]
             : chain;
         throw new DiagnosticException(Diagnostic(DiagnosticCode.InstanceNestingTooDeep, _span,
-            "Type arguments nest more than %s deep, as a generic function that calls itself with a larger type "
-                .format(instanceNestingLimit) ~ "would need endlessly many instances:\n    %-(%s\n    -> %)".format(elided)));
+            "Type arguments nest past the limit of %s deep, through:\n    %-(%s\n    -> %)"
+                .format(instanceNestingLimit, elided)));
     }
 
     /// `first<Int>`, or the plain name of a function that isn't generic. An overloaded one adds its
@@ -472,15 +472,15 @@ private final class Lowering
             printedName(key));
     }
 
-    /// Stops at a type nested too deeply, which a generic type whose fields hold ever larger
-    /// instances of itself makes.
+    /// Stops at a type nested too deeply. Sema rejects the generic types that would nest without
+    /// end, so this is a program whose types are finite but deep.
     private void reportTypeNesting(Type type)
     {
         import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException;
 
         throw new DiagnosticException(Diagnostic(DiagnosticCode.InstanceNestingTooDeep, _span,
-            "Type arguments nest more than %s deep, as a generic type whose fields hold ever larger instances of itself "
-                .format(instanceNestingLimit) ~ "would need endlessly many types; the deepest is `%s`".format(types.describe(type))));
+            "Type arguments nest past the limit of %s deep; the deepest is `%s`"
+                .format(instanceNestingLimit, types.describe(type))));
     }
 
     /// The types of the declared types `program` uses, which backends need to lay them out.
@@ -3385,6 +3385,27 @@ def f(): Bool => Box(1) == Box(2) && Box("a") == Box("b")
 `, "f");
     auto names = result.program.functions.map!(f => f.name).array;
     names.should.equal(["f", "equal.Box<Int>", "equal.Box<String>"]);
+}
+
+@("type arguments nested past the limit by a finite program are an error that doesn't say the instances are endless")
+unittest
+{
+    import std.exception : collectException;
+    import std.range : repeat;
+    import silver.ast : DiagnosticCode, DiagnosticException;
+
+    auto deep = "[".repeat(66).join ~ "Int" ~ "]".repeat(66).join;
+    auto error = collectException!DiagnosticException(loweredFunction(`
+def id<T>(x: T): T => x
+
+def f(): Unit {
+    val a: ` ~ deep ~ ` = []
+    id(a)
+}
+`, "f"));
+    assert(error !is null, "expected the nesting limit");
+    error.diagnostic.code.should.equal(DiagnosticCode.InstanceNestingTooDeep);
+    error.diagnostic.message.canFind("endlessly").should.equal(false);
 }
 
 @("a call of a function a bound supplies is a call of the instance's witness, its argument promoted to fit")

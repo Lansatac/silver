@@ -712,7 +712,7 @@ package final class Declarer
             void holds(Type type, Span span)
             {
                 eachNominal(_types, type, (Type _, const NominalData n) {
-                    if (n.args.length > 0) uses ~= Use!(Id!TypeDecl)(from, n.decl, n.args, span);
+                    if (n.args.length > 0 && !n.args.any!(a => _types.mentionsError(a))) uses ~= Use!(Id!TypeDecl)(from, n.decl, n.args, span);
                 });
             }
             if (decl.members.length > 0)
@@ -729,7 +729,7 @@ package final class Declarer
         for (auto cycle = growingCycle(uses, &paramsOf, _types); cycle !is null; cycle = growingCycle(uses, &paramsOf, _types))
         {
             _collector.reportError(DiagnosticCode.PolymorphicRecursion, cycle[0].span,
-                "`%s` can't be compiled, as it would need endlessly many types, each holding a larger one: %-(%s, then %), and so on"
+                "`%s` can't be instantiated, as it would need endlessly many types, each holding a larger one: %-(%s, then %), and so on"
                     .format(decls[cycle[0].from].name, instancesAround(cycle, &paramsOf, _types, &instance)));
             uses = uses.filter!(u => !cycle.canFind!(c => c.from == u.from)).array;
         }

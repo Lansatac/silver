@@ -1,0 +1,24 @@
+// A generic function can call itself with an error list that adds to its own: a list absorbs
+// repeats, so `E | Oops` at `E = Other | Oops` is the same type, and the instances are finite.
+type Oops(code: Int)
+type Other(code: Int)
+
+def tries<E>(r: Int ! E, n: Int): Int ! E | Oops {
+    if n == 0 { return r? }
+    val widened: Int ! E | Oops = r
+    tries(widened, n - 1)
+}
+
+def main(): Unit {
+    val start: Int ! Other = 5
+    match tries(start, 3) {
+        Ok(v) => printl(v)
+        Error(_) => printl("error")
+    }
+    val failed: Int ! Other = Error(Other(1))
+    match tries(failed, 2) {
+        Ok(v) => printl(v)
+        Error(Other(code)) => printl("other {code}")
+        Error(Oops(code)) => printl("oops {code}")
+    }
+}

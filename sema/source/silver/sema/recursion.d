@@ -24,9 +24,11 @@ package struct Use(Decl)
 /// it grows, or null if there's none.
 ///
 /// Each type parameter is a node, and each use gives an edge from a parameter of `from` to the
-/// parameter of `to` whose argument mentions it. An edge grows when that argument isn't the
-/// parameter itself. With no cycle that has an edge that grows, the instances are finite, since
-/// around any cycle the arguments only pass parameters along or swap them.
+/// parameter of `to` whose argument mentions it. An edge grows unless that argument passes the
+/// parameter along: is the parameter itself, or an error list with it as a member, since a list
+/// absorbs repeats, so `E | Oops` at `E = Other | Oops` is the same list again.
+/// With no cycle that has an edge that grows, the instances are finite: around any cycle the
+/// arguments only pass parameters along, swap them, or add to an error list from a fixed set.
 package const(Use!Decl)[] growingCycle(Decl)(const(Use!Decl)[] uses, const(TypeParam)[] delegate(Decl) paramsOf,
     const TypeTable types)
 {
@@ -48,7 +50,7 @@ package const(Use!Decl)[] growingCycle(Decl)(const(Use!Decl)[] uses, const(TypeP
             if (k >= targets.length) break;
             foreach (param; paramsOf(use.from).filter!(p => types.mentionsParameter(arg, p.id)))
             {
-                auto edge = Edge(targets[k].id, i, !isParameter(types, arg, param.id));
+                auto edge = Edge(targets[k].id, i, !passes(types, arg, param.id));
                 edges[param.id] ~= edge;
                 if (edge.grows)
                 {
@@ -141,4 +143,12 @@ package void eachNominal(const TypeTable types, Type type, void delegate(Type, c
 private bool isParameter(const TypeTable types, Type type, Id!TypeParam param)
 {
     return types[type].match!((const TypeParamData p) => p.param == param, _ => false);
+}
+
+private bool passes(const TypeTable types, Type type, Id!TypeParam param)
+{
+    return isParameter(types, type, param) || types[type].match!(
+        (const ErrorListData l) => l.members.all!(m => isParameter(types, m, param) || !types.mentionsParameter(m, param)),
+        _ => false,
+    );
 }

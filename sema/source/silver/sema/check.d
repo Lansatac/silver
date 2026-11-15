@@ -102,6 +102,17 @@ private struct SteppedLoop
     Type element;
 }
 
+/// A value of a type with an invariant built, or changed by a `with` the invariant checks, in a
+/// function. The type is `type`, or found in what `expr` gives.
+private struct InvariantUse
+{
+    Site site;
+    Span span;
+    Id!TypeDecl decl;
+    Id!Expr expr;
+    Type type;
+}
+
 /// What a lambda with no known return type was found to return.
 private struct InferredReturn
 {
@@ -170,6 +181,7 @@ private final class TypeChecker
     /// Every use of a generic function, for `answerQueries`.
     private Reference[] _references;
     private SteppedLoop[] _steppedLoops;
+    private InvariantUse[] _invariantUses;
     /// For a name chosen from several functions, the ones of its group, which may ask more.
     private const(Id!FunctionDecl)[][Id!Expr] _siblings;
     /// What's been reported about answers, so a use searched again isn't reported twice.
@@ -363,38 +375,120 @@ private final class TypeChecker
     }
 
     /// Reports each generic function that needs an instance of itself at ever larger type
-    /// arguments, by calling itself or through other functions and the witnesses their uses find.
+    /// arguments: by calling itself or through other functions, the witnesses their uses and
+    /// loops find, and the invariants of the values they build.
     private void rejectGrowingCalls()
     {
         Use!(Id!FunctionDecl)[] uses;
+        void add(Id!FunctionDecl from, Id!FunctionDecl to, const(Type)[] args, Span span)
+        {
+            // What's already an error has been reported.
+            if (!to.isValid || args.length == 0 || args.any!(a => _types.mentionsError(a))) return;
+            uses ~= Use!(Id!FunctionDecl)(from, to, args, span);
+        }
         void addWitnesses(Id!FunctionDecl from, const(Witness)[] witnesses, Span span)
         {
             foreach (w; witnesses)
             {
-                if (w.func.isValid && w.typeArgs.length > 0) uses ~= Use!(Id!FunctionDecl)(from, w.func, w.typeArgs, span);
+                add(from, w.func, w.typeArgs, span);
                 addWitnesses(from, w.witnesses, span);
                 addWitnesses(from, w.alternatives, span);
             }
         }
+        bool generic(Id!FunctionDecl f) => f.isValid && isGenericFunction(f);
         foreach (reference; _references)
         {
             auto from = reference.site.function_;
-            if (!from.isValid || !isGenericFunction(from)) continue;
-            uses ~= Use!(Id!FunctionDecl)(from, reference.func, reference.typeArgs, reference.span);
+            if (!generic(from)) continue;
+            add(from, reference.func, reference.typeArgs, reference.span);
             addWitnesses(from, reference.witnesses, reference.span);
             addWitnesses(from, reference.alternatives, reference.span);
+        }
+        foreach (loop; _steppedLoops)
+        {
+            if (!generic(loop.site.function_)) continue;
+            if (auto functions = loop.for_ in _typing.loops) addWitnesses(loop.site.function_, functions.indexedIf, loop.span);
+        }
+        // An invariant's functions have the type's parameters, and each value built needs them at its own.
+        foreach (use; _invariantUses)
+        {
+            if (!generic(use.site.function_)) continue;
+            auto decl = _resolutions.declarations.types[use.decl];
+            auto type = use.expr.isValid ? _typing.exprTypes.get(use.expr, _types.error) : use.type;
+            auto args = argumentsOf(type, *decl);
+            if (args is null) continue;
+            add(use.site.function_, decl.invariantFunction, args, use.span);
+            if (decl.invariantError.isValid) add(use.site.function_, decl.invariantError, args, use.span);
         }
 
         const(TypeParam)[] paramsOf(Id!FunctionDecl f) => _resolutions.typeParamsOf(f);
         string name(Id!FunctionDecl f) => _resolutions.declarations.functions[f].name;
-        string instance(Id!FunctionDecl f, const(Type)[] args) => "`%s<%-(%s, %)>`".format(name(f), args.map!(a => _types.describe(a)));
         for (auto cycle = growingCycle(uses, &paramsOf, _types); cycle !is null; cycle = growingCycle(uses, &paramsOf, _types))
         {
             _collector.reportError(DiagnosticCode.PolymorphicRecursion, cycle[0].span,
-                "`%s` can't be compiled, as it would need endlessly many instances, each calling a larger one: %-(%s, then %), and so on"
-                    .format(name(cycle[0].from), instancesAround(cycle, &paramsOf, _types, &instance)));
+                "`%s` can't be instantiated, as it would need endlessly many instances, each needing a larger one: %-(%s, then %), and so on"
+                    .format(name(cycle[0].from), instancesAround(cycle, &paramsOf, _types, &describeInstance)));
             uses = uses.filter!(u => !cycle.canFind!(c => c.from == u.from)).array;
         }
+    }
+
+    /// Notes that a generic function may build a value of a type with an invariant, for
+    /// `rejectGrowingCalls`.
+    private void noteInvariantUse(InvariantUse use)
+    {
+        if (!_resolutions.declarations.types[use.decl].invariantFunction.isValid || !isGenericFunction(use.site.function_)) return;
+        use.site.unsettled = null;
+        _invariantUses ~= use;
+    }
+
+    /// The type arguments of the instance of `decl` in `type`, for the type parameters of its
+    /// invariant's functions, or null if there's none. A member a sum declares inline is built as
+    /// the sum, and has the sum's parameters it mentions.
+    private const(Type)[] argumentsOf(Type type, const TypeDecl decl)
+    {
+        auto owner = _declarer.ownerOf(decl.id);
+        auto sought = owner !is null && decl.inheritsParams ? _types[*owner].match!((const NominalData n) => n.decl, _ => decl.id)
+            : decl.id;
+        const(Type)[] found;
+        eachNominal(_types, type, (Type _, const NominalData n) {
+            if (found is null && n.decl == sought && n.args.length > 0) found = n.args;
+        });
+        if (found is null || sought == decl.id) return found;
+        auto sumParams = _resolutions.declarations.types[sought].typeParams;
+        const(Type)[] args;
+        foreach (param; decl.typeParams)
+        {
+            auto at = sumParams.countUntil!(p => p.id == param.id);
+            if (at < 0 || at >= found.length) return null;
+            args ~= found[at];
+        }
+        return args;
+    }
+
+    /// `first<Int>`; for an invariant, `the invariant of W<Int>`; and a parameter whose type is
+    /// an interface name is shown by what it's given, as in `primes with r a Skipped<R>`.
+    private string describeInstance(Id!FunctionDecl f, const(Type)[] args)
+    {
+        auto func = _resolutions.declarations.functions[f];
+        auto declared = func.typeParams.length;
+        auto shown = args[0 .. declared].map!(a => _types.describe(a)).array;
+        if (func.invariantOf.isValid)
+        {
+            auto type = "%s%s".format(_resolutions.declarations.types[func.invariantOf].name,
+                shown.length > 0 ? "<%-(%s, %)>".format(shown) : "");
+            return func.invariantErrorOf.isValid ? "the `else` of `%s`'s invariant".format(type) : "the invariant of `%s`".format(type);
+        }
+        auto text = "`%s%s`".format(func.name, shown.length > 0 ? "<%-(%s, %)>".format(shown) : "");
+        string[] given;
+        foreach (k, param; _resolutions.hiddenParams.get(f, null))
+        {
+            auto arg = args[declared + k];
+            if (_types[arg].match!((const TypeParamData p) => p.param == param.id, _ => false)) continue;
+            auto written = func.params.find!(p => _resolutions.sugarParams.get(p.type.id, Id!TypeParam.init) == param.id);
+            if (written.empty) continue;
+            given ~= "`%s` %s".format(written.front.name, withArticle(_types.describe(arg)));
+        }
+        return given.length > 0 ? "%s with %-(%s and %)".format(text, given) : text;
     }
 
     /// Searches for `reference`'s witnesses and alternatives again, keeping them when `keep`.
@@ -2741,6 +2835,7 @@ private final class TypeChecker
     {
         if (auto decl = expr.id in _resolutions.constructions)
         {
+            noteInvariantUse(InvariantUse(ctx.site, expr.span, *decl, expr.id));
             if (!requireInvariant(*decl, expr.span, ctx.site))
             {
                 foreach (arg; call.args) synthesize(arg, ctx);
@@ -5014,6 +5109,7 @@ private final class TypeChecker
                 auto prefix = indexes[i][0 .. depth];
                 if (invariantMentions(type, name) && !checks.canFind(prefix))
                 {
+                    noteInvariantUse(InvariantUse(ctx.site, expr.span, declOf(type), Id!Expr.init, type));
                     if (!requireInvariant(declOf(type), expr.span, ctx.site)) return _types.error;
                     checks ~= prefix.dup;
                     errors ~= invariantErrorOf(type);
@@ -5576,6 +5672,7 @@ private final class TypeChecker
             return _types.error;
         }
         if (usesUnsettled(symbol, site)) return _types.error;
+        symbol.match!((const Id!TypeDecl type) => noteInvariantUse(InvariantUse(site, name.span, type, name.id)), (_) {});
         auto generic = genericNamed(name);
         if (generic.found && !takesAnyIntrinsically(symbol)) return instantiateValue(name, generic, expected, site);
         if (generic.found) _declarer.resolveTypeArguments(generic.written);

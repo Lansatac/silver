@@ -304,6 +304,8 @@ def fixed<T>(x: T, n: Int): Int => if n == 0 => 0 else fixed([1], n - 1)`).shoul
     analyzedModule("def grow<T>(x: T): Unit => grow([x])").shouldReport(DiagnosticCode.PolymorphicRecursion, At("grow", 2));
     analyzedModule("def f<T>(x: T): Unit => g((x, x))\ndef g<U>(u: U): Unit => f([u])")
         .shouldReport(DiagnosticCode.PolymorphicRecursion, At("g", 1));
+    // An argument that's already an error isn't growth as well.
+    analyzedModule("def grow<T>(x: T): Unit => grow((x, None))").shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
 }
 
 @("a generic type can hold itself at its type parameters passed along or swapped, but not at ones that grow")
@@ -319,6 +321,54 @@ type Fixed<T>(next: Fixed<Int>?, value: T)`).shouldHaveNoDiagnostics();
     analyzedModule("type Nest<T>(next: Nest<[T]>?)").shouldReport(DiagnosticCode.PolymorphicRecursion, At("Nest", 2));
     analyzedModule("type A<T>(b: B<[T]>?)\ntype B<U>(a: A<U>?)").shouldReport(DiagnosticCode.PolymorphicRecursion, At("B", 1));
     analyzedModule("type F<T>(f: (T) -> F<[T]>?)").shouldReport(DiagnosticCode.PolymorphicRecursion, At("(T)", 1));
+}
+
+@("an error list that adds to a type parameter's absorbs repeats, so calling itself with one doesn't grow")
+unittest
+{
+    analyzedModule(`
+type Oops(code: Int)
+def tries<E>(r: Int ! E, n: Int): Int ! E | Oops {
+    if n == 0 { return r? }
+    val widened: Int ! E | Oops = r
+    tries(widened, n - 1)
+}`).shouldHaveNoDiagnostics();
+}
+
+@("a generic function that needs itself at a larger type through what a loop's indexing finds for each instance")
+unittest
+{
+    analyzedModule(`
+interface Steps<T> { def next(r: Self): (T, Self)? }
+interface Counted { def size(r: Self): Int }
+type Doubled<R>(source: R)
+def next<R: Steps<Int>>(d: Doubled<R>): (Int, Doubled<R>)? {
+    val (item, rest) = next(d.source)?
+    (item * 2, Doubled(rest))
+}
+def size<R: Counted>(d: Doubled<R>): Int => size(d.source)
+def length<R: Steps<Int> & Counted>(d: Doubled<R>): Int => count(d) + size(d.source)
+def opIndex<R: Steps<Int> & Counted>(d: Doubled<R>, i: Int): Int => i
+def count<R: Steps<Int>>(r: R): Int {
+    mutable val k = 0
+    for _ in Doubled(r) { k += 1 }
+    k
+}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("count", 1));
+}
+
+@("a generic function that builds a larger instance of a type whose invariant calls it needs endlessly many instances")
+unittest
+{
+    analyzedModule(`
+type Bad
+type W<T>(items: [T]) invariant ok(items) else Bad
+def ok<U>(xs: [U]): Bool {
+    if length(xs) > 0 { return true }
+    match W([xs]) {
+        Ok(_) => true
+        Error(_) => false
+    }
+}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("W", 2));
 }
 
 @("a method call's receiver is its first argument for inference, and isn't converted")

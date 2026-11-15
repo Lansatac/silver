@@ -1,1 +1,1 @@
-T0048: `Grow` can't be compiled, as it would need endlessly many types, each holding a larger one: `Grow<T>`, then `Grow<(T, T)>`, then `Grow<((T, T), (T, T))>`, and so on
+T0048: `Grow` can't be instantiated, as it would need endlessly many types, each holding a larger one: `Grow<T>`, then `Grow<(T, T)>`, then `Grow<((T, T), (T, T))>`, and so on

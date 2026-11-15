@@ -124,15 +124,22 @@ val wrap = Box<Int>
 
 ## Limits
 
-Each instance is compiled for its own types, so a generic function can need itself again, directly or through other functions, only at type arguments that don't grow: its type parameters passed along or swapped, or types that don't mention them. One that needs itself at a larger type would need endlessly many instances, so it's an error at the call that makes the type grow, which shows the instances it would lead to. It's an error whether or not anything calls the function.
+Each instance is compiled for its own types, so a generic function can need itself again, directly or through other functions, only at type arguments that don't grow: its type parameters passed along or swapped, types that don't mention them, or an error list that adds fixed errors to a type parameter's, as in `E | Oops`, since a list holds each error once. One that needs itself at a larger type would need endlessly many instances, so it's an error at the call that makes the type grow, which shows the instances it would lead to. It's an error whether or not anything calls the function.
 
 ```silver
 def same<T>(x: T, n: Int): Int => if n == 0 => 0 else same(x, n - 1)            // fine
 def swap<A, B>(a: A, b: B, n: Int): Int => if n == 0 => 0 else swap(b, a, n - 1)  // fine
 def grow<T>(x: T): Unit => grow([x])        // error: `grow<T>`, then `grow<[T]>`, then `grow<[[T]]>`, ...
+
+// fine: at `E = Other`, `E | Oops` is `Other | Oops`, and at that, `Other | Oops` again
+def tries<E>(r: Int ! E, n: Int): Int ! E | Oops {
+    if n == 0 { return r? }
+    val widened: Int ! E | Oops = r
+    tries(widened, n - 1)
+}
 ```
 
-The same goes for the functions a call finds for a bound, as the instances they're compiled at come from the call.
+The same goes for everything else an instance needs at types that come from it: the functions a call finds for a bound, the `length` and `opIndex` a `for` loops by index with where the type has them, and the invariant of a type it builds or changes with `with`, as in `def ok<U>(xs: [U])` building a `W<[U]>` whose invariant calls `ok` again.
 
 A generic type is the same: it can hold itself, in a field or as a member, directly or through other types, only at type arguments that don't grow. One that holds a larger instance of itself would need endlessly many types, so it's an error at the type that grows, whether or not anything uses it.
 
