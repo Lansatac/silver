@@ -350,3 +350,18 @@ unittest
         .shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("Also", 2));
     analyzed(aliases ~ "def main(): Unit {\n    val c = Also(\"no\")\n}").shouldReport(DiagnosticCode.TypeMismatch, At(`"no"`, 1));
 }
+
+@("an alias of an instance in a constructor pattern takes apart only that instance")
+unittest
+{
+    enum aliases = "type Box<T>(value: T)\nalias IntBox = Box<Int>\nalias Also = IntBox\n";
+    analyzed(aliases ~ "def main(): Unit {\n    val n = match Box(\"s\") {\n        Also(v) => 0\n    }\n}")
+        .shouldReport(DiagnosticCode.PatternMismatch, At("Also", 2));
+    analyzed(aliases ~ "def main(): Unit {\n    if val IntBox(v) = Box(\"s\") => printl(v)\n}")
+        .shouldReport(DiagnosticCode.PatternMismatch, At("IntBox", 3));
+    auto a = analyzed(aliases ~ "alias StrBox = Box<String>\ntype Held = :IntBox | :StrBox\n"
+        ~ "def f(h: Held): String => match h {\n    IntBox(n) => \"int\"\n    StrBox(s) => s\n}\ndef main(): Unit {\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("n", 1), "Int");
+    a.shouldDeclareType(At("s", 1), "String");
+}

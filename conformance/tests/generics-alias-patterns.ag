@@ -1,0 +1,28 @@
+// A constructor pattern through an alias of an instance takes apart that instance and no other, so
+// it tells apart members of one generic type with different type arguments.
+
+type Box<T>(value: T)
+type Outcome<T> = Done(value: T) | Failed(reason: String)
+
+alias IntBox = Box<Int>
+alias StrBox = Box<String>
+alias IntDone = Done<Int>
+type Held = :IntBox | :StrBox
+
+def describe(h: Held): String => match h {
+    IntBox(n) => "int {n + 1}"
+    StrBox(s) => "str {s}"
+}
+
+def total(o: Outcome<Int>): Int => match o {
+    IntDone(v) => v
+    Failed(_) => 0
+}
+
+def main(): Unit {
+    printl(describe(IntBox(1)))
+    printl(describe(StrBox("s")))
+    printl(describe(Box<Int>(2)))
+    printl(total(IntDone(3)))
+    if val IntBox(n) = IntBox(4) => printl(n * 2)
+}

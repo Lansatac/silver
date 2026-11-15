@@ -5990,10 +5990,12 @@ private final class TypeChecker
         }
 
         Id!TypeDecl decl;
+        Type aliased;
         if (auto symbol = constructor.type.id in _resolutions.typeResolutions)
         {
             expandAlias(*symbol, _resolutions.declarations.aliases, _resolutions.typeResolutions)
                 .match!((const Id!TypeDecl type) { decl = type; }, (_) {});
+            (*symbol).match!((const Id!AliasDecl a) { aliased = _declarer.aliasType(a); }, (_) {});
         }
         else
         {
@@ -6015,9 +6017,14 @@ private final class TypeChecker
                 .format(printTypeExpr(constructor.type)));
         }
 
-        // A generic type takes the arguments of the instance the subject is or holds.
+        // A generic type takes the arguments of the instance an alias names, or else of the
+        // instance the subject is or holds.
         auto type = _typing.nominalTypes[decl];
-        if (_declarer.typeParamsOf(decl).length > 0)
+        if (aliased != Type.init && aliased != _types.error && declOf(aliased) == decl)
+        {
+            type = aliased;
+        }
+        else if (_declarer.typeParamsOf(decl).length > 0)
         {
             auto instance = (declOf(subject) == decl ? [subject] : _declarer.membersOf(subject).filter!(m => declOf(m) == decl).array);
             Substitution unknown;
