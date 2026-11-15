@@ -1,0 +1,12 @@
+// Against an option of a sum with an option member, a bare `None` is the outer `None`, while an
+// option value is injected into the member and then wrapped.
+type V = :Int? | :String
+
+def main(): Unit {
+    val x: Int? = None
+    val v: V? = x
+    val w: V? = None
+    printl(v)
+    printl(w)
+    printl(v == w)
+}
