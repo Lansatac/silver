@@ -556,3 +556,56 @@ unittest
     a.shouldDeclareType(At("n", 1), "Int");
     a.shouldDeclareType(At("s", 1), "String");
 }
+
+@("a constructor pattern with type arguments takes apart only that instance")
+unittest
+{
+    enum types = "type Box<T>(value: T)\ntype Held = :Box<Int> | :Box<String>\n"
+        ~ "type Outcome<T> = Done(value: T) | Failed(reason: String)\ntype Pair<A, B>(left: A, right: B)\n";
+    auto a = analyzed(types ~ "def f(h: Held): String => match h {\n    Box<Int>(n) => \"int\"\n    Box<String>(s) => s\n}\n"
+        ~ "def g(o: Outcome<Int>): Int => match o {\n    Done<Int>(d) => d\n    Failed(_) => 0\n}\n"
+        ~ "def k(p: Pair<Box<UInt8>, Outcome<Int>>): Int => match p {\n"
+        ~ "    Pair<Box<UInt8>, Outcome<Int>>(Box<UInt8>(1), Done<Int>(e)) => e\n    _ => 0\n}\n"
+        ~ "def main(): Unit {\n    if val Box<String>(t) = Box(\"s\") => printl(t)\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("n", 1), "Int");
+    a.shouldDeclareType(At("s", 1), "String");
+    a.shouldDeclareType(At("d", 1), "Int");
+    a.shouldDeclareType(At("e", 1), "Int");
+    a.shouldDeclareType(At("t", 1), "String");
+
+    analyzed(types ~ "def f(h: Held): Int => match h {\n    Box<Int>(n) => n\n}\ndef main(): Unit {\n}")
+        .shouldReport(DiagnosticCode.NonExhaustiveMatch, At("match", 1));
+    analyzed(types ~ "def f(h: Held): Int => match h {\n    Box<Bool>(n) => 0\n    _ => 1\n}\ndef main(): Unit {\n}")
+        .shouldReport(DiagnosticCode.PatternMismatch, At("Box", 4));
+    analyzed(types ~ "def main(): Unit {\n    if val Box<String>(t) = Box(1) => printl(t)\n}")
+        .shouldReport(DiagnosticCode.PatternMismatch, At("Box", 4));
+    analyzed(types ~ "def f(o: Outcome<Int>): Int => match o {\n    Done<String>(d) => 0\n    _ => 1\n}\ndef main(): Unit {\n}")
+        .shouldReport(DiagnosticCode.PatternMismatch, At("Done", 2));
+}
+
+@("a constructor pattern's type arguments are checked as a type's are")
+unittest
+{
+    enum types = "type Box<T>(value: T)\ntype Point(x: Int, y: Int)\nalias IntBox = Box<Int>\n";
+    string matching(string pattern) => types ~ "def f(b: Box<Int>): Int => match b {\n    "
+        ~ pattern ~ " => 0\n    _ => 1\n}\ndef main(): Unit {\n}";
+    analyzed(matching("Box<Int, String>(v)")).shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("Box", 4));
+    analyzed(types ~ "def f(b: Box<Int>): Int => match b {\n    Box<Nope>(v) => 0\n}\ndef main(): Unit {\n}")
+        .shouldReport(DiagnosticCode.UnknownType, At("Nope", 1));
+    analyzed(matching("IntBox<Int>(v)")).shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("IntBox", 2));
+    analyzed(types ~ "def f(p: Point): Int => match p {\n    Point<Int>(x, y) => x\n}\ndef main(): Unit {\n}")
+        .shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("Point", 3));
+    analyzed(types ~ "def f(o: Int?): Int => match o {\n    Some<Int>(x) => x\n}\ndef main(): Unit {\n}")
+        .shouldReport(DiagnosticCode.UnknownType, At("Some", 1));
+}
+
+@("a constructor pattern with type arguments reaches through a sum an error list names")
+unittest
+{
+    enum types = "type Box<T>(value: T)\ntype Held = :Box<Int> | :Box<String>\ntype Other\n";
+    auto a = analyzed(types ~ "def f(r: Int ! Held | Other): Int => match r {\n    Ok(v) => v\n"
+        ~ "    Error(Box<Int>(n)) => n\n    Error(Box<String>(_)) => 0\n    Error(Other) => 1\n}\ndef main(): Unit {\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("n", 1), "Int");
+}

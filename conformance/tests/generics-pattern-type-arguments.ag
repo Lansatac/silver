@@ -1,0 +1,43 @@
+// A constructor pattern can name its type arguments, as construction does, and then takes apart
+// that instance and no other, so it tells apart members of one generic type with different ones.
+
+type Box<T>(value: T)
+type Held = :Box<Int> | :Box<String> | :Box<[Int]>
+type Outcome<T> = Done(value: T) | Failed(reason: String)
+type Pair<A, B>(left: A, right: B)
+
+def describe(h: Held): String => match h {
+    Box<Int>(n) => "int {n + 1}"
+    Box<String>(s) => "str {s}"
+    Box<[Int]>(xs) => "ints {xs}"
+}
+
+def total(o: Outcome<Int>): Int => match o {
+    Done<Int>(v) => v
+    Failed(_) => 0
+}
+
+def both(p: Pair<Held, Outcome<UInt8>>): String => match p {
+    Pair<Held, Outcome<UInt8>>(Box<Int>(n), Done<UInt8>(255)) => "int {n} and the largest"
+    Pair(Box<String>(s), Done(d)) => "str {s} and {d}"
+    Pair(_, Failed(reason)) => reason
+    _ => "other"
+}
+
+def pair(h: Held, o: Outcome<UInt8>): Pair<Held, Outcome<UInt8>> => Pair(h, o)
+
+def main(): Unit {
+    printl(describe(Box(1)))
+    printl(describe(Box("s")))
+    printl(describe(Box([2, 3])))
+    printl(total(Done(4)))
+    printl(total(Failed("no")))
+    printl(both(pair(Box(5), Done(255))))
+    printl(both(pair(Box("t"), Done(6))))
+    printl(both(pair(Box(7), Failed("failed"))))
+    printl(both(pair(Box(8), Done(9))))
+    if val Box<UInt8>(n) = Box<UInt8>(200) => printl(n + 50)
+    val held: Held = Box("u")
+    if val Box<String>(s) = held => printl(s) else printl("not a string")
+    if val Box<Int>(n) = held => printl(n) else printl("not an int")
+}

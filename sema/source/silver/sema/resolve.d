@@ -1868,7 +1868,13 @@ private final class NameResolver
                 }
             },
             (ref const ConstructorPattern constructor) {
-                resolveTypeExpr(constructor.type, scopeTable);
+                auto named = constructor.type.kind.match!((const NamedType n) => n, (_) => NamedType.init);
+                if (named.path.length == 1 && isReserved(named.path[0]) && named.args.length > 0)
+                {
+                    _collector.reportError(DiagnosticCode.UnknownType, constructor.type.span,
+                        "`%s` takes no type arguments, since the value's type gives them".format(named.path[0]));
+                }
+                else resolveTypeExpr(constructor.type, scopeTable);
                 foreach (ref argument; constructor.arguments)
                 {
                     declarePattern(argument, scopeTable);

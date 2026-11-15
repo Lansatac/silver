@@ -142,7 +142,7 @@ Silver:
     MatchArm             < MatchPattern Nl? :'=>' Nl? Expression
     MatchPattern         < MatchTuplePattern / ConstructorPattern / Literal / TypedBinding / BindingName
     MatchTuplePattern    < :'(' Nl? MatchPattern (Nl? :',' Nl? MatchPattern)+ Nl? :')'
-    ConstructorPattern   < TypePath (:'(' Nl? MatchPattern (Nl? :',' Nl? MatchPattern)* Nl? :')')?
+    ConstructorPattern   < TypePath (Nl? TypeArguments)? (:'(' Nl? MatchPattern (Nl? :',' Nl? MatchPattern)* Nl? :')')?
     TypedBinding         < BindingName TypeAnnotation
 
     ForExpression        < :FOR Nl? (TuplePattern / BindingName) Nl? :IN Nl? Condition Nl? Block

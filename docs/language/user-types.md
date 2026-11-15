@@ -173,6 +173,19 @@ A match must be exhaustive, and the error names what's missing, including throug
 
 Bindings are immutable and in scope only in their arm.
 
+A member pattern of a [generic](generics.md) type can write its type arguments, as construction does, and then matches only that instance. Without them it takes the instance from the value, as `Box(v)` on a `Box<Int>` binds an `Int`. Written ones are how a sum over two instances of one type is taken apart:
+
+```silver
+type Held = :Box<Int> | :Box<String>
+
+val text = match held {
+    Box<Int>(n) => String(n)
+    Box<String>(s) => s
+}
+```
+
+An instance the value can't be is an error, as `Box<String>(s)` on a `Box<Int>` is. An alias of an instance is used without type arguments, as `IntBox(n)`, and `Some`, `None`, `Ok` and `Error` take none either: the value's type gives them.
+
 A pattern compares by structure: a member pattern looks at the value's fields, and never calls the type's `opEquals`. So for a type whose `opEquals` treats `Fraction(1, 2)` and `Fraction(2, 4)` as equal, `f == Fraction(1, 2)` can be true where the pattern `Fraction(1, 2)` doesn't match `f`. To branch on the type's own equality, compare with `==`.
 
 `if val` is the one-arm form. It takes a constructor pattern, including `Some(p)`, `None`, `Ok(p)` and `Error(p)`, and doesn't need to be exhaustive:

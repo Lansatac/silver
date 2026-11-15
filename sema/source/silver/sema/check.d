@@ -6125,7 +6125,11 @@ private final class TypeChecker
         auto written = Type.init;
         pattern.kind.match!(
             (const ConstructorPattern c) {
-                if (auto symbol = c.type.id in _resolutions.typeResolutions)
+                if (c.type.kind.match!((const NamedType n) => n.args.length > 0, (_) => false))
+                {
+                    written = quietlyResolved(c.type);
+                }
+                else if (auto symbol = c.type.id in _resolutions.typeResolutions)
                 {
                     expandAlias(*symbol, _resolutions.declarations.aliases, _resolutions.typeResolutions)
                         .match!((const Id!TypeDecl t) { decl = t; }, (_) {});
@@ -6227,6 +6231,16 @@ private final class TypeChecker
             checkArgumentsAsUnknown();
             return CoveragePattern.init;
         }
+        auto written = Type.init;
+        if (constructor.type.kind.match!((const NamedType n) => n.args.length > 0, (_) => false))
+        {
+            written = _declarer.resolveType(constructor.type);
+            if (written == _types.error)
+            {
+                checkArgumentsAsUnknown();
+                return CoveragePattern.init;
+            }
+        }
         if (!decl.isValid || _resolutions.declarations.types[decl].members.length > 0)
         {
             checkArgumentsAsUnknown();
@@ -6241,10 +6255,14 @@ private final class TypeChecker
                 .format(printTypeExpr(constructor.type)));
         }
 
-        // A generic type takes the arguments of the instance an alias names, or else of the
-        // instance the subject is or holds.
+        // A generic type takes the arguments written after it or of the instance an alias names,
+        // or else of the instance the subject is or holds.
         auto type = _typing.nominalTypes[decl];
-        if (aliased != Type.init && aliased != _types.error && declOf(aliased) == decl)
+        if (written != Type.init)
+        {
+            type = written;
+        }
+        else if (aliased != Type.init && aliased != _types.error && declOf(aliased) == decl)
         {
             type = aliased;
         }

@@ -87,6 +87,8 @@ immutable Case[] continuations = [
     declaresAs("type Box<T>\n    = Full(value: T) | Empty", ["(type Full<T> (value: T))", "(type Box<T> = Full<T> | Empty)", "(type Empty)"]),
     parsesAs("val e = empty\n    <Int>()", "(val e (call empty<Int>))"),
     parsesAs("val e = a.empty\n    <Int>()", "(val e (call (. a empty<Int>)))"),
+    parsesAs("val r = match b {\n    Box\n        <Int>(n) => n\n}", "(val r (match b (Box<Int>(n) n)))"),
+    parsesAs("val r = match b {\n    Box<\n        Int\n    >(n) => n\n}", "(val r (match b (Box<Int>(n) n)))"),
 
     // After an opening bracket, around commas and before a closing bracket.
     parsesAs("a = [\n    1,\n    2,\n]", "(assign a (array 1 2))"),

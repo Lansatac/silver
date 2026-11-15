@@ -366,12 +366,20 @@ private final class Lowering
         }
     }
 
-    /// `TypePath MatchPattern*`. `Some` and `None` are written like constructors, as in expressions.
+    /// `TypePath TypeArguments? MatchPattern*`. `Some` and `None` are written like constructors, as in expressions.
     private Pattern convertConstructorPattern(ParseTree cst)
     {
         auto span = spanOf(cst, file);
         auto path = cst[0].children.map!(part => part.matches[0]).array;
-        auto arguments = cst.children[1 .. $].map!(a => convertMatchPattern(a)).array;
+        auto typed = cst.children.length > 1 && cst[1].name == "Silver.TypeArguments";
+        auto arguments = cst.children[typed ? 2 : 1 .. $].map!(a => convertMatchPattern(a)).array;
+        if (typed)
+        {
+            auto typeArgs = cst[1].children.map!(a => convertTypeExpression(a)).array;
+            auto typeSpan = Span(file, cst[0].begin, spanOf(cst[1], file).end);
+            auto type = TypeExpr(ids.next!TypeExpr, typeSpan, TypeExprKind(NamedType(path, typeArgs)));
+            return Pattern(ids.next!Pattern, span, PatternKind(ConstructorPattern(type, arguments)));
+        }
         if (path == ["None"] && arguments.length == 0)
         {
             return Pattern(ids.next!Pattern, span, PatternKind(NonePattern()));
