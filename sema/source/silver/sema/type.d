@@ -1,6 +1,7 @@
 module silver.sema.type;
 
-import std.algorithm : any, map, maxElement;
+import std.algorithm : all, any, map, maxElement;
+import std.range : iota;
 import std.array : join;
 static import std.array;
 import std.sumtype;
@@ -244,6 +245,31 @@ final class TypeTable
             (const FunctionData f) => f.params.any!(p => mentionsError(p)) || mentionsError(f.ret),
             (const TupleData tuple) => tuple.elements.any!(e => mentionsError(e)),
             (const NominalData nominal) => nominal.args.any!(a => mentionsError(a)),
+            _ => false,
+        );
+    }
+
+    /// Whether `a` and `b` could be the same type, `error` standing for any type, so that a
+    /// difference between them is one an earlier error made.
+    bool sameApartFromError(Type a, Type b) const
+    {
+        if (a == b || a == error || b == error) return true;
+        bool all(const(Type)[] x, const(Type)[] y) => x.length == y.length
+            && x.length.iota.all!(i => sameApartFromError(x[i], y[i]));
+        auto other = _types[b.index];
+        return _types[a.index].match!(
+            (const OptionData o) => other.match!((const OptionData p) => sameApartFromError(o.inner, p.inner), _ => false),
+            (const ErrorUnionData u) => other.match!(
+                (const ErrorUnionData v) => sameApartFromError(u.success, v.success) && sameApartFromError(u.error, v.error),
+                _ => false),
+            (const ErrorListData l) => other.match!((const ErrorListData m) => all(l.members, m.members), _ => false),
+            (const FailureData f) => other.match!((const FailureData g) => sameApartFromError(f.error, g.error), _ => false),
+            (const ArrayData x) => other.match!((const ArrayData y) => sameApartFromError(x.element, y.element), _ => false),
+            (const FunctionData f) => other.match!(
+                (const FunctionData g) => f.mutables == g.mutables && all(f.params, g.params) && sameApartFromError(f.ret, g.ret),
+                _ => false),
+            (const TupleData x) => other.match!((const TupleData y) => all(x.elements, y.elements), _ => false),
+            (const NominalData x) => other.match!((const NominalData y) => x.decl == y.decl && all(x.args, y.args), _ => false),
             _ => false,
         );
     }

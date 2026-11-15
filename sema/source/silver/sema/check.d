@@ -2385,9 +2385,9 @@ private final class TypeChecker
         return expected == Type.init ? synthesize(operand, ctx) : synthesizeExact(operand, ctx, expected);
     }
 
-    /// Whether `expr` is a `!` or `?` on a constructor of a member its sum owns that takes what's
-    /// expected of the value it unwraps, as it would without the `!`: to build the member, or to
-    /// infer the type arguments of a generic sum.
+    /// Whether `expr` is a `!` or `?` directly on a constructor that takes what's expected of the
+    /// value it unwraps, as it would without the `!`: a generic type's, to infer its type arguments,
+    /// or a member's its sum owns, to build the member rather than the sum.
     private bool unwrapsConstruction(const Expr expr, Type expected)
     {
         if (expected == Type.init || expected == _types.error) return false;
@@ -2398,7 +2398,7 @@ private final class TypeChecker
         );
         if (operand is null) return false;
         auto g = genericUse(*operand);
-        if (g.found) return g.owner != Type.init;
+        if (g.found) return g.member != Type.init;
         auto constructed = constructedDecl(*operand);
         auto owner = _declarer.ownerOf(constructed);
         return owner !is null && wantsMember(_typing.nominalTypes[constructed], *owner, expected);
@@ -4470,6 +4470,7 @@ private final class TypeChecker
         bool wanted(Type type)
         {
             if (_types.isOption(type)) return wanted(_types.optionInner(type));
+            if (_types.isErrorUnion(type)) return wanted(_types.successOf(type));
             auto decl = declOf(type);
             if (decl == member) return true;
             return decl.isValid && decl != owner && _declarer.membersOf(type).any!(m => declOf(m) == member);
@@ -4936,6 +4937,8 @@ private final class TypeChecker
         _typing.typeArguments[g.name] = params.map!(p => bound[p.id]).array;
         if (g.func.isValid && !sum) noteNamed(site, g, conformance.witnesses);
         if (sum) _typing.constructedMembers[expr.id] = memberBuilt(g, bound);
+        // Without its type arguments the value has no type, rather than one made up from `error`.
+        if (params.any!(p => bound[p.id] == _types.error)) return _types.error;
         return _types.substitute(shape, bound);
     }
 
@@ -5689,7 +5692,7 @@ private final class TypeChecker
         if (_types.isFailure(a) && valued(b)) return _types.errorUnion(b, _types.errorOf(a));
         if (_types.isFailure(b) && valued(a)) return _types.errorUnion(a, _types.errorOf(b));
 
-        if (_types.mentionsError(a) || _types.mentionsError(b)) return _types.error;
+        if (_types.sameApartFromError(a, b)) return _types.error;
         _collector.reportError(DiagnosticCode.TypeMismatch, span,
             "%s have different types `%s` and `%s`".format(what, _types.describe(a), _types.describe(b)));
         return _types.error;

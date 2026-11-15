@@ -714,3 +714,37 @@ unittest
     a.shouldHaveType("Many([])", 2, "Nums<Int> ! Empty");
     a.shouldDeclareType(At("s", 1), "Nums<Int>");
 }
+
+@("`?` in a function returning a generic member's error union builds the member, as for a non-generic member")
+unittest
+{
+    enum many = "type Empty\ntype Nums<T> = Many(xs: [T]) invariant (length(xs) > 0) else (Empty) | Blank\n";
+    auto a = analyzed(many ~ "def f(): Many<Int> ! Empty => Many([1, 2])?\n"
+        ~ "def g(): Many<Int> ! Empty {\n    val n: Many<Int> ! Empty = Many([3])!\n    n\n}\n"
+        ~ "def main(): Unit {}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("Many([1, 2])", "Many<Int> ! Empty");
+}
+
+@("`!` passes what's expected on to a generic product with an invariant, as it does to a generic sum's member")
+unittest
+{
+    enum nonEmpty = "type Empty\ntype NonEmpty<T>(items: [T]) invariant length(items) > 0 else Empty\n";
+    auto a = analyzed(nonEmpty ~ "def main(): Unit {\n    val s: NonEmpty<Int> = NonEmpty([])!\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("NonEmpty([])", "NonEmpty<Int> ! Empty");
+}
+
+@("branches whose shapes differ outside an already reported error are still reported as a mismatch")
+unittest
+{
+    import std.algorithm : canFind, map;
+
+    // `Box` alone has no type, so `Box(Box)` is a `Box<Error>`.
+    auto a = analyzedGeneric("    val c = true\n    val y = if c => Box(Box) else 5");
+    auto codes = a.collector.diagnostics.map!(d => d.code);
+    assert(codes.canFind(DiagnosticCode.CannotInferTypeArgument), "expected T0031");
+    assert(codes.canFind(DiagnosticCode.TypeMismatch), "`Box<...>` against `Int` is a mismatch whatever Box's type argument is");
+    analyzedGeneric("    val c = true\n    val y = if c => Box(Box) else Box(1)")
+        .shouldReport(DiagnosticCode.CannotInferTypeArgument, At("Box", 3));
+}
