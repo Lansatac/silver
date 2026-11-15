@@ -2300,7 +2300,7 @@ private final class TypeChecker
     /// in a test's own body stops the test.
     private Type synthesizePropagate(const PropagateExpr propagate, Span span, BodyContext ctx, Type expected = Type.init)
     {
-        auto operandType = _declarer.requireTyped(unwrapped(*propagate.operand, ctx, expected), propagate.operand.span);
+        auto operandType = _declarer.requireTyped(unwrapped(*propagate.operand, ctx, expected, true), propagate.operand.span);
         if (operandType == _types.error) return operandType;
         auto returnType = ctx.returnType;
         auto checked = ctx.inferred is null && !ctx.testBody && returnType != _types.error;
@@ -2378,30 +2378,70 @@ private final class TypeChecker
         return _types.error;
     }
 
-    /// The operand of `!` or `?`, typed. What's expected of the value it unwraps is passed on only
-    /// when `unwrapsConstruction` said so.
-    private Type unwrapped(const Expr operand, BodyContext ctx, Type expected)
+    /// The operand of `!` or `?` (`propagates`), typed toward an option or error union of `expected`,
+    /// what's expected of the value it unwraps. For `?` that's the one the function can return;
+    /// otherwise its error isn't known, and stands as `error`, which nothing binds to.
+    private Type unwrapped(const Expr operand, BodyContext ctx, Type expected, bool propagates = false)
     {
-        return expected == Type.init ? synthesize(operand, ctx) : synthesizeExact(operand, ctx, expected);
+        if (expected == Type.init || expected == _types.error) return synthesize(operand, ctx);
+        auto ret = ctx.returnType;
+        auto returns = propagates && ctx.inferred is null && !ctx.testBody;
+        auto toward = returns && _types.isOption(ret) ? _types.option(expected)
+            : _types.errorUnion(expected, returns && _types.isErrorUnion(ret) ? _types.errorOf(ret) : _types.error);
+        return synthesizeToward(operand, toward, ctx);
     }
 
-    /// Whether `expr` is a `!` or `?` directly on a constructor that takes what's expected of the
-    /// value it unwraps, as it would without the `!`: a generic type's, to infer its type arguments,
-    /// or a member's its sum owns, to build the member rather than the sum.
-    private bool unwrapsConstruction(const Expr expr, Type expected)
+    /// The type of `expr`, toward `expected`, an option or error union that `!` or `?` will unwrap.
+    /// It only binds type arguments and picks an owned member over its sum, through branches and a
+    /// block's value; nothing is coerced to it.
+    private Type synthesizeToward(const Expr expr, Type expected, BodyContext ctx)
     {
-        if (expected == Type.init || expected == _types.error) return false;
-        auto operand = expr.kind.match!(
-            (const AssertExpr a) => a.operand,
-            (const PropagateExpr p) => p.operand,
-            _ => null,
+        Type joinedOf(const(Expr)[] bodies, const(Type)[] types, Span span, string what)
+        {
+            auto joined = _types.never;
+            foreach (i, type; types) joined = join(joined, type, bodies[i].span, what);
+            if (joined != _types.error)
+            {
+                foreach (i, body; bodies) coerce(body, types[i], joined);
+            }
+            _typing.exprTypes[expr.id] = joined;
+            return joined;
+        }
+
+        auto branched = expr.kind.match!(
+            (const IfExpr if_) {
+                if (if_.falseBody is null) return Type.init;
+                checkIfHead(if_, ctx);
+                const(Expr)[] bodies = [*if_.trueBody, *if_.falseBody];
+                return joinedOf(bodies, bodies.map!(b => synthesizeToward(b, expected, ctx)).array, expr.span, "Branches");
+            },
+            (const MatchExpr match_) {
+                if (match_.origin == MatchOrigin.IfVal) return Type.init;
+                checkMatchHead(match_, expr.span, ctx);
+                auto bodies = match_.arms.map!(arm => arm.body).array;
+                return joinedOf(bodies, bodies.map!(b => synthesizeToward(b, expected, ctx)).array, expr.span, "Match arms");
+            },
+            (const BlockExpr block) {
+                if (block.value is null) return Type.init;
+                foreach (stmt; block.statements) checkStmt(stmt, ctx);
+                auto type = synthesizeToward(*block.value, expected, ctx);
+                _typing.exprTypes[expr.id] = type;
+                return type;
+            },
+            _ => Type.init,
         );
-        if (operand is null) return false;
-        auto g = genericUse(*operand);
-        if (g.found) return g.member != Type.init;
-        auto constructed = constructedDecl(*operand);
+        if (branched != Type.init) return branched;
+
+        auto isMethod = expr.kind.match!((const CallExpr call) => isMethodCall(expr.id, *call.callee), _ => false);
+        auto unwraps = expr.kind.match!((const AssertExpr _) => true, (const PropagateExpr _) => true, _ => false);
+        auto constructed = constructedDecl(expr);
         auto owner = _declarer.ownerOf(constructed);
-        return owner !is null && wantsMember(_typing.nominalTypes[constructed], *owner, expected);
+        auto member = owner !is null && wantsMember(_typing.nominalTypes[constructed], *owner, expected);
+        if (isMethod || unwraps || member || genericUse(expr).found || isOverloadedUse(expr))
+        {
+            return synthesizeExact(expr, ctx, expected);
+        }
+        return synthesize(expr, ctx);
     }
 
     /// Whether an error of type `from` fits where `to` is expected: each type it lists is one `to`
@@ -4511,13 +4551,15 @@ private final class TypeChecker
     {
         if (actual == _types.error || actual == _types.never || actual == _types.none || actual == _types.emptyArray
             || actual == _types.any) return;
+        // What `!` unwraps is an option or an error union whose error isn't known, so it's either.
+        auto unwrapped = _types.isErrorUnion(actual) && _types.errorOf(actual) == _types.error;
         auto data = _types[actual];
         _types[declared].match!(
             (const TypeParamData p) {
-                if (params.canFind!(q => q.id == p.param) && p.param !in bound) bound[p.param] = actual;
+                if (params.canFind!(q => q.id == p.param) && p.param !in bound && !unwrapped) bound[p.param] = actual;
             },
-            (const OptionData o) => bindParams(o.inner, _types.isOption(actual) ? _types.optionInner(actual) : actual,
-                params, bound),
+            (const OptionData o) => bindParams(o.inner, _types.isOption(actual) ? _types.optionInner(actual)
+                : unwrapped ? _types.successOf(actual) : actual, params, bound),
             (const ErrorUnionData u) {
                 if (_types.isErrorUnion(actual))
                 {
@@ -4578,6 +4620,9 @@ private final class TypeChecker
     private void bindExpected(Type result, Type expected, const(TypeParam)[] params, ref Substitution bound)
     {
         if (expected == Type.init || expected == _types.error) return;
+        // What `!` unwraps, when the result isn't something it can unwrap.
+        auto unwrapped = _types.isErrorUnion(expected) && _types.errorOf(expected) == _types.error;
+        if (unwrapped && !_types.isOption(result) && !_types.isErrorUnion(result)) return;
         if (_types.isOption(expected) && !_types.isOption(result)) expected = _types.optionInner(expected);
         if (_types.isErrorUnion(expected) && !_types.isErrorUnion(result)) expected = _types.successOf(expected);
         if (_types.isErrorUnion(result) && !_types.isErrorUnion(expected)) result = _types.successOf(result);
@@ -5797,9 +5842,10 @@ private final class TypeChecker
             );
             return coerce(expr, typeLambda(expr, lambda, &data, ctx.site), expected);
         }
-        // What's expected can say what a generic use's type arguments are.
+        // What's expected can say what a generic use's type arguments are, also through `!` and `?`.
         auto isMethod = expr.kind.match!((const CallExpr call) => isMethodCall(expr.id, *call.callee), _ => false);
-        if (isMethod || genericUse(expr).found || isOverloadedUse(expr) || unwrapsConstruction(expr, expected))
+        auto unwraps = expr.kind.match!((const AssertExpr _) => true, (const PropagateExpr _) => true, _ => false);
+        if (isMethod || unwraps || genericUse(expr).found || isOverloadedUse(expr))
         {
             return coerce(expr, synthesizeExact(expr, ctx, expected), expected);
         }

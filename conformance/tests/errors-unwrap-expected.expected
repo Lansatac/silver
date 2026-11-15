@@ -1,0 +1,9 @@
+3
+5
+[1, 2]
+Ok(Circle(10))
+Ok(42)
+Error(Oops)
+Some(8)
+None
+None

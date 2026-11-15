@@ -113,6 +113,21 @@ It's how a caller says that a failure here would be a bug in their own code. So 
 
 `!` also works on an option, where it's the payload or a panic. It follows its operand on the same line.
 
+### What's expected of the operand
+
+Where a type `X` is expected of `x!` or `x?`, `x` is typed toward `X ! E`, or `X?` for `?` in a function returning an option. For `?`, `E` is the error the function returns. For `!` any error will do, so `E` isn't known, and `x` may be an option as well. This only binds type arguments and picks a member over its sum, as an expected type does elsewhere; it never chooses between overloads, and `x` isn't converted to it. It reaches through `if`, `match` and a block's value, and through another `!` or `?`:
+
+```silver
+def mk<T>(): T ! Oops => ...
+val n: Int = mk()!                                        // mk<Int>
+val c: Circle = (if b => Circle(1.0) else Circle(2.0))!   // each builds the member, Circle ! NotPositive
+val o: Int? = maybe()!!                                   // maybe<Int?>, an Int??
+def none<T>(): T => ...
+val y: Int = none()!                                      // error: T could be Int? or Int ! E
+```
+
+The object of a field access has nothing expected of it, so `Circle(1.0)!.radius` builds the sum and has no field `radius`; write `val c: Circle = Circle(1.0)!` first.
+
 ### The option operators
 
 These work on an error union as they do on an option, and drop the error:

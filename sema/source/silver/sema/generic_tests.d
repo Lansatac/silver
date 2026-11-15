@@ -748,3 +748,31 @@ unittest
     analyzedGeneric("    val c = true\n    val y = if c => Box(Box) else Box(1)")
         .shouldReport(DiagnosticCode.CannotInferTypeArgument, At("Box", 3));
 }
+
+@("`!` and `?` type their operand toward an option or error union of what's expected, through branches and nesting")
+unittest
+{
+    enum unwrapping = "type Oops\ntype Shape = Circle(r: Float) invariant (r > 0.0) else (\"no\") | Nothing\n"
+        ~ "def mk<T>(): T ! Oops => Error(Oops)\ndef maybe<T>(): T? => None\ndef nested<T>(): T? ! Oops => Ok(None)\n"
+        ~ "def none<T>(): T => panic(\"none\")\n"
+        ~ "def f(): Int ! Oops {\n    val x: Int = mk()?\n    x\n}\n"
+        ~ "def g(): Int? {\n    val x: Int = maybe()?\n    Some(x)\n}\n";
+    auto a = analyzed(unwrapping ~ "def main(): Unit {\n    val b = true\n    val x: Int = mk()!\n"
+        ~ "    val c: Circle = (if b => Circle(1.0) else Circle(2.0))!\n"
+        ~ "    val m: Circle = (match b {\n        true => Circle(3.0)\n        false => { Circle(4.0) }\n    })!\n"
+        ~ "    val o: Int? = maybe()!!\n    val n: Int = nested()!!\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("mk()", 1, "Int ! Oops");
+    a.shouldHaveType("maybe()", 1, "Int?");
+    a.shouldHaveType("mk()", 2, "Int ! Oops");
+    a.shouldHaveType("if b => Circle(1.0) else Circle(2.0)", "Circle ! String");
+    a.shouldHaveType("Circle(4.0)", "Circle ! String");
+    a.shouldHaveType("maybe()", 2, "(Int?)?");
+    a.shouldHaveType("nested()", "Int? ! Oops");
+    // With `!` the error isn't known, so nothing says whether `T` is an option or an error union.
+    analyzed(unwrapping ~ "def main(): Unit {\n    val y: Int = none()!\n}")
+        .shouldReport(DiagnosticCode.CannotInferTypeArgument, At("none()", 1));
+    // A field's object has nothing expected of it, so this builds the sum.
+    analyzed(unwrapping ~ "def main(): Unit {\n    val r = Circle(1.0)!.r\n}")
+        .shouldReport(DiagnosticCode.UnknownMember, At("Circle(1.0)!.r", 1));
+}

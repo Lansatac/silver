@@ -128,7 +128,7 @@ val cs = [Red, Green]     // [Color]
 val p = Point2D(1, 2)     // Point2D
 ```
 
-Where a type is expected, a constructor checked against its member type produces the member, and checked against the sum it promotes. A constructor directly under `!` or `?` is checked against what's expected of the value it unwraps:
+Where a type is expected, a constructor checked against its member type produces the member, and checked against the sum it promotes. Under `!` or `?` it builds the member too, since what's expected of their value reaches their operand (see [Errors](errors.md#whats-expected-of-the-operand)):
 
 ```silver
 val c: Circle = Circle(1.0)
