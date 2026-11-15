@@ -3198,7 +3198,7 @@ private final class TypeChecker
         }
 
         auto binding = plain;
-        if (expected != Type.init && !plain.failedEarly && _resolutions.boundFunctions.get(trial.func, null).length > 0)
+        if (expected != Type.init && !plain.failedEarly)
         {
             binding = bindAgainst(expected);
             foreach (i; 0 .. call.args.length)
@@ -3439,17 +3439,29 @@ private final class TypeChecker
         );
     }
 
-    /// The type an argument made only of literals has when nothing else says, or `Type.init` when
-    /// part of it has none of its own.
+    /// The type synthesis gives an argument made only of literals, or `Type.init` when part of it
+    /// has none of its own. An array's elements join as they do there, so `[Some(1), None]` is an
+    /// `[Int?]`.
     private Type defaultType(const Expr arg)
     {
         if (isIntLiteral(arg)) return _types.int_;
         Type[] each(const(Expr)[] elements) => elements.map!(e => defaultType(e)).array;
+        Type joined(Type a, Type b)
+        {
+            if (a == Type.init || b == Type.init) return Type.init;
+            if (isAssignable(a, b)) return b;
+            if (isAssignable(b, a)) return a;
+            if (a == _types.none && !_types.isOption(b)) return _types.option(b);
+            if (b == _types.none && !_types.isOption(a)) return _types.option(a);
+            return Type.init;
+        }
         return arg.kind.match!(
+            (const NoneLiteral _) => _types.none,
             (const ArrayLiteral literal) {
                 auto elements = each(literal.elements);
-                auto alike = elements.length > 0 && elements[0] != Type.init && elements.all!(e => e == elements[0]);
-                return alike ? _types.array(elements[0]) : Type.init;
+                if (elements.length == 0) return Type.init;
+                auto element = elements.fold!((a, b) => joined(a, b));
+                return element == Type.init || element == _types.none ? Type.init : _types.array(element);
             },
             (const TupleLiteral literal) {
                 auto elements = each(literal.elements);
@@ -3457,7 +3469,7 @@ private final class TypeChecker
             },
             (const SomeExpr some) {
                 auto inner = defaultType(*some.value);
-                return inner == Type.init ? Type.init : _types.option(inner);
+                return inner == Type.init || inner == _types.none ? Type.init : _types.option(inner);
             },
             _ => literalType(arg),
         );
