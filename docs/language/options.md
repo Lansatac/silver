@@ -73,7 +73,7 @@ It's how a caller says that a missing value here would be a bug. It follows its 
 
 ## Equality and ordering
 
-`==` and `!=` work on `T?` when `T` is comparable. When exactly one side is an option, the other is checked against it and promoted, so `value == 3` and `value == None` both work. Ordering isn't defined on options.
+`==` and `!=` work on `T?`. When exactly one side is an option, the other is checked against it and promoted, so `value == 3` and `value == None` both work. Ordering isn't defined on options.
 
 ## Current implementation
 

@@ -1,0 +1,100 @@
+// Two function values are equal when they come from the same function, or the same lambda with
+// equal captures.
+
+import std.math
+import std.ref
+import functions_equality_support.shapes
+
+type Point(x: Int, y: Int)
+type Handler = Click(run: (Int) -> Int) | Ignore
+type Listener(name: String, run: (Int) -> Int)
+
+def increment(x: Int): Int => x + 1
+def identity<T>(x: T): T => x
+def adder(n: Int): (Int) -> Int => x => x + n
+def twice(f: (Int) -> Int): (Int) -> Int => x => f(f(x))
+def constant<T>(value: T): () -> T => () => value
+
+def show(x: Int): String => "int"
+def show(x: String): String => "string"
+
+// Both elements are the closure `count` builds of itself.
+def counter(start: Int): ((Int) -> Int, (Int) -> Int) {
+    def count(k: Int): Int {
+        if k == 0 { return start }
+        count(k - 1)
+    }
+    (count, count)
+}
+
+def main(): Unit {
+    printl("named functions")
+    printl(increment == increment)
+    printl(increment != increment)
+    val inc: (Int) -> Int = increment
+    printl(inc == increment)
+    val ident: (Int) -> Int = identity
+    val ident2: (Int) -> Int = identity
+    val identString: (String) -> String = identity
+    printl(ident == ident2)
+    printl(identString == identity<String>)
+    val showInt: (Int) -> String = show
+    val showInt2: (Int) -> String = show
+    printl(showInt == showInt2)
+    printl(Point == Point)
+    printl(sqrt == sqrt)
+    printl(area == areaFunction())
+
+    printl("lambdas")
+    val f = adder(1)
+    printl(f == f)
+    printl(adder(1) == adder(1))
+    printl(adder(1) == adder(2))
+    printl(adder(1) != adder(2))
+    printl(twice(increment) == twice(increment))
+    printl(twice(twice(inc)) == twice(twice(inc)))
+    printl(twice(inc) == twice(f))
+    printl(constant(1) == constant(1))
+    printl(constant("a") == constant("b"))
+    printl(scaled(2) == scaled(2))
+    printl(scaled(2) == scaled(3))
+    val noCaptures = (x: Int) => x
+    val noCaptures2 = (x: Int) => x
+    printl(noCaptures == noCaptures)
+    printl(noCaptures == noCaptures2)
+    printl(inc == noCaptures)
+
+    printl("nested defs")
+    val (a, b) = counter(3)
+    val (c, _) = counter(4)
+    val (d, _) = counter(3)
+    printl(a == b)
+    printl(a == c)
+    printl(a == d)
+
+    printl("one lambda in a loop")
+    mutable val made: [() -> Int] = []
+    for i in 0..3 { made ~= [() => i] }
+    printl(made[0] == made[1])
+    printl(made[2] == made[2])
+
+    printl("captures that are compared their own way")
+    val cell = Ref(0)
+    val reads = () => get(cell)
+    val readsOther = { val other = Ref(0); () => get(other) }
+    printl(reads == reads)
+    printl(reads == readsOther)
+    val nan = 0.0 / 0.0
+    val withNan = () => nan
+    printl(withNan == withNan)
+
+    printl("inside other values")
+    printl(Click(inc) == Click(inc))
+    printl(Click(inc) == Click(f))
+    printl(Click(inc) == Ignore)
+    printl(Listener("a", adder(1)) == Listener("a", adder(1)))
+    printl(Listener("a", adder(1)) == Listener("a", adder(2)))
+    printl([inc, f] == [inc, f])
+    printl(Some(inc) == None)
+    printl((inc, 1) == (inc, 1))
+}

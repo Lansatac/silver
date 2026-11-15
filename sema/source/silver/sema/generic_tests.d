@@ -160,16 +160,16 @@ def f<T, E>(x: T, xs: [T], o: T?, b: Box<T>, r: Result<T, E>): (T, [T]) {
 }`).shouldHaveNoDiagnostics();
 }
 
-@("generic code can't compare, order or print a type parameter's values")
+@("generic code compares and prints a type parameter's values, but can't order or convert them")
 unittest
 {
-    analyzedModule("def f<T>(a: T, b: T): Bool => a == b").shouldReport(DiagnosticCode.OpaqueTypeParameter, At("a", 2));
-    analyzedModule("def f<T>(a: [T]): Bool => a != a").shouldReport(DiagnosticCode.OpaqueTypeParameter, At("a", 2));
-    analyzedModule("type Box<T>(v: T)\ndef f<T>(a: Box<T>): Bool => a == a").shouldReport(DiagnosticCode.OpaqueTypeParameter, At("a", 2));
+    analyzedModule("def f<T>(a: T, b: T): Bool => a == b").shouldHaveNoDiagnostics();
+    analyzedModule("def f<T>(a: [T]): Bool => a != a").shouldHaveNoDiagnostics();
+    analyzedModule("type Box<T>(v: T)\ndef f<T>(a: Box<T>): Bool => a == a").shouldHaveNoDiagnostics();
+    analyzedModule("def f<T>(a: T): Unit => printl(a)").shouldHaveNoDiagnostics();
+    analyzedModule("def f<T>(a: T?): String => String(a)").shouldHaveNoDiagnostics();
+    analyzedModule("def f<T>(a: T): String => \"{a}\"").shouldHaveNoDiagnostics();
     analyzedModule("def f<T>(a: T, b: T): Bool => a < b").shouldReport(DiagnosticCode.OpaqueTypeParameter, At("a", 2));
-    analyzedModule("def f<T>(a: T): Unit => printl(a)").shouldReport(DiagnosticCode.OpaqueTypeParameter, At("a", 2));
-    analyzedModule("def f<T>(a: T?): String => String(a)").shouldReport(DiagnosticCode.OpaqueTypeParameter, At("a", 2));
-    analyzedModule("def f<T>(a: T): String => \"{a}\"").shouldReport(DiagnosticCode.OpaqueTypeParameter, At("a", 2));
     analyzedModule("def f<T>(a: T): Int => Int(a)").shouldReport(DiagnosticCode.OpaqueTypeParameter, At("a", 2));
 }
 

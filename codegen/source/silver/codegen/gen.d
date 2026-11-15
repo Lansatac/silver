@@ -233,9 +233,10 @@ private immutable sliceScalars = ["ptr", "i64"];
 /// The scalars of every function value: its function's descriptor, then the environment the code
 /// takes after its params.
 private immutable closureScalars = ["ptr", "ptr"];
-/// A constant for each function used as a value: the code a closure calls, then the String a
-/// function value prints as.
-private immutable descriptorScalars = ["ptr", "ptr", "i64"];
+/// A constant for each function used as a value: the code a closure calls, the String a function
+/// value prints as, then its `captureEquality`, or null. Two closures are of one function when
+/// they point to one descriptor.
+private immutable descriptorScalars = ["ptr", "ptr", "i64", "ptr"];
 
 private final class Generator
 {
@@ -259,6 +260,8 @@ private final class Generator
     private string[string] _panicsGuards;
     /// The descriptor of each function used as a value, by the function's index.
     private string[size_t] _descriptors;
+    /// Whether `@silver.function.equal` has been defined.
+    private bool _functionEquality;
     private bool[Type] _boxed;
     /// The name of each struct type, by what it's made of, and their definitions.
     private string[immutable(string)[]] _structs;
@@ -775,6 +778,7 @@ private final class Generator
             },
             (const Length length) => planSlots(slots, *length.array),
             (const Cell cell) => all(cell.args),
+            (const Capture capture) => planSlots(slots, *capture.closure),
             (const TestFailure failure) => planSlots(slots, *failure.message),
         );
     }
@@ -1043,9 +1047,48 @@ private final class Generator
         auto name = "@\".fn.%s\"".format(target);
         _descriptors[target] = name;
         auto printed = stringConstant(func.printedName);
-        _globals ~= "%s = private constant %s { ptr %s, ptr %s, i64 %s }".format(name, structOf(descriptorScalars), code,
-            printed[0], printed[1]);
+        auto compare = func.captureEquality == noFunction ? "null" : mangled(func.captureEquality);
+        _globals ~= "%s = private constant %s { ptr %s, ptr %s, i64 %s, ptr %s }".format(name, structOf(descriptorScalars),
+            code, printed[0], printed[1], compare);
         return name;
+    }
+
+    /// Whether the function values `a` and `b` are equal: closures of one function, whose
+    /// `captureEquality`, if it has one, says their captures are.
+    private Fragment emitFunctionEquality(const string[] a, const string[] b)
+    {
+        enum name = "@silver.function.equal";
+        if (!_functionEquality)
+        {
+            _functionEquality = true;
+            _thunkDefinitions ~= "define private i1 %s(ptr %%a, ptr %%a.env, ptr %%b, ptr %%b.env) {\n.entry:\n".format(name)
+                ~ "  %same = icmp eq ptr %a, %b\n"
+                ~ "  br i1 %same, label %same.function, label %unequal\nsame.function:\n"
+                ~ "  %%field = getelementptr %s, ptr %%a, i32 0, i32 3\n".format(structOf(descriptorScalars))
+                ~ "  %compare = load ptr, ptr %field\n"
+                ~ "  %none = icmp eq ptr %compare, null\n"
+                ~ "  br i1 %none, label %equal, label %captures\ncaptures:\n"
+                ~ "  %result = call i1 %compare(ptr %a, ptr %a.env, ptr %b, ptr %b.env)\n"
+                ~ "  ret i1 %result\nequal:\n  ret i1 true\nunequal:\n  ret i1 false\n}\n";
+        }
+        return _function.result("call i1 %s(ptr %s, ptr %s, ptr %s, ptr %s)".format(name, a[0], a[1], b[0], b[1]));
+    }
+
+    /// Capture `capture.index` of a closure of the lambda `capture.target`, from its environment.
+    private Fragment emit(const Expr e, const Capture capture)
+    {
+        auto func = _program.functions[capture.target];
+        auto closure = emitExpr(*capture.closure);
+        auto scalars = scalarsOf(func.captures[capture.index].type, e.span);
+        if (scalars.length == 0) return closure.withValue(null);
+        size_t at = 0;
+        foreach (before; func.captures[0 .. capture.index])
+        {
+            if (scalarsOf(before.type, e.span).length > 0) at++;
+        }
+        auto env = operandsOf(*capture.closure, closure.operands, 2)[1];
+        auto held = environmentField(environmentFields(func), env, at);
+        return closure.then(held).then(loadScalars(scalars, held.value, 0, scalars.length));
     }
 
     /// The thunk for calling function `target` through a closure.
@@ -1331,6 +1374,23 @@ private final class Generator
 
         // `()` has one value, so comparing two is a constant.
         if (operandType == types.unit) return arguments.then(Fragment.constant(prim.op == PrimOp.Equal ? "true" : "false"));
+        if (types.isFunction(operandType) || operandType in _program.cellContents)
+        {
+            assert(prim.op == PrimOp.Equal || prim.op == PrimOp.NotEqual, "function values and Refs are only compared for equality");
+            Fragment same;
+            if (types.isFunction(operandType))
+            {
+                auto closures = each(2);
+                same = emitFunctionEquality(closures[0], closures[1]);
+            }
+            else
+            {
+                auto cells = each(1);
+                same = _function.result("icmp eq ptr %s, %s".format(cells[0][0], cells[1][0]));
+            }
+            if (prim.op == PrimOp.Equal) return arguments.then(same);
+            return arguments.then(same).then(_function.result("xor i1 %s, true".format(same.value)));
+        }
         if (operandType == types.string_)
         {
             auto strings = each(2);
@@ -1726,6 +1786,7 @@ private final class Generator
             (const ArrayLit literal) => every(literal.elements),
             (const Index index) => assignsNothing(*index.array) && assignsNothing(*index.index),
             (const Length length) => assignsNothing(*length.array),
+            (const Capture capture) => assignsNothing(*capture.closure),
             _ => false,
         );
     }
@@ -2207,6 +2268,7 @@ private final class Generator
             (const Slice slice) => staysInside(*slice.array) && staysInside(*slice.start) && staysInside(*slice.end),
             (const Length length) => staysInside(*length.array),
             (const Cell cell) => every(cell.args),
+            (const Capture capture) => staysInside(*capture.closure),
             (const TestFailure failure) => !failure.ends && staysInside(*failure.message),
         );
     }

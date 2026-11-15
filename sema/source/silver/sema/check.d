@@ -2280,8 +2280,7 @@ private final class TypeChecker
     {
         foreach (part; interpolated.parts)
         {
-            auto type = _declarer.requireTyped(synthesize(part, ctx), part.span);
-            if (_types.mentionsParameter(type)) reportOpaque(part.span, type, "it can't go in a string hole", "show: (%s) -> String");
+            _declarer.requireTyped(synthesize(part, ctx), part.span);
         }
         return _types.string_;
     }
@@ -2336,8 +2335,7 @@ private final class TypeChecker
         auto arg = call.args[0];
         if (target == _types.string_)
         {
-            auto type = _declarer.requireTyped(synthesize(arg, ctx), arg.span);
-            if (_types.mentionsParameter(type)) reportOpaque(arg.span, type, "it can't be converted to a `String`", "show: (%s) -> String");
+            _declarer.requireTyped(synthesize(arg, ctx), arg.span);
             return target;
         }
         if (isIntLiteral(arg))
@@ -2358,45 +2356,29 @@ private final class TypeChecker
         return target;
     }
 
-    /// Whether `==` can compare two values of `type`. Nothing is known about a type parameter's
-    /// values, so a type that mentions one can't be compared.
-    private bool isComparable(Type type)
+    /// The lambda written as `e`, or as part of the value `e` builds with a constructor, a tuple,
+    /// an array, `Some`, `Ok` or `Error`. A lambda deeper in, such as an argument of another call,
+    /// isn't part of the value compared.
+    private const(Expr)* writtenLambda(ref const Expr e)
     {
-        if (_types.mentionsParameter(type)) return false;
-        bool[Id!TypeDecl] visited;
-        return isComparable(type, visited);
-    }
-
-    /// A declared type is comparable when its fields and members are, with its own type parameters
-    /// counting as comparable, and its type arguments are too. A type can contain itself through an
-    /// option field, so one already visited counts as comparable: only a type that really can't be
-    /// compared can make the answer false.
-    private bool isComparable(Type type, ref bool[Id!TypeDecl] visited)
-    {
-        bool declared(Id!TypeDecl decl)
+        const(Expr)* among(const Expr[] parts)
         {
-            if (decl in visited) return true;
-            visited[decl] = true;
-            // A `Ref` could be compared by identity or by contents, and neither is settled.
-            if (_declarer.isIntrinsic(decl)) return false;
-            return _typing.fields[decl].all!(f => isComparable(f.type, visited))
-                && _typing.members.get(decl, null).all!(m => isComparable(m, visited));
+            foreach (ref part; parts)
+            {
+                if (auto found = writtenLambda(part)) return found;
+            }
+            return null;
         }
 
-        return _types[type].match!(
-            (const Primitive primitive) => primitive.kind != Primitive.Kind.Any,
-            (const OptionData option) => isComparable(option.inner, visited),
-            (const ErrorUnionData u) => isComparable(u.success, visited) && isComparable(u.error, visited),
-            (const ErrorListData l) => l.members.all!(m => isComparable(m, visited)),
-            (const FailureData f) => isComparable(f.error, visited),
-            (const ArrayData array) => isComparable(array.element, visited),
-            (const EmptyArrayType _) => true,
-            (const FunctionData _) => false,
-            (const NominalData nominal) => nominal.args.all!(a => isComparable(a, visited)) && declared(nominal.decl),
-            (const TupleData tuple) => tuple.elements.all!(e => isComparable(e, visited)),
-            (const NoneType _) => true,
-            (const ErrorType _) => true,
-            (const TypeParamData _) => true,
+        return e.kind.match!(
+            (const Lambda _) => &e,
+            (const TupleLiteral tuple) => among(tuple.elements),
+            (const ArrayLiteral array) => among(array.elements),
+            (const SomeExpr some) => writtenLambda(*some.value),
+            (const OkExpr ok) => writtenLambda(*ok.value),
+            (const ErrorExpr error) => writtenLambda(*error.value),
+            (const CallExpr call) => e.id in _resolutions.constructions ? among(call.args) : null,
+            _ => null,
         );
     }
 
@@ -2555,7 +2537,24 @@ private final class TypeChecker
         Type leftType, rightType;
         if (binary.op == BinaryOp.Equal || binary.op == BinaryOp.NotEqual)
         {
-            synthesizeCompared(binary, leftType, rightType, ctx);
+            auto lambda = writtenLambda(*binary.left);
+            if (lambda is null) lambda = writtenLambda(*binary.right);
+            if (lambda is null)
+            {
+                synthesizeCompared(binary, leftType, rightType, ctx);
+            }
+            else
+            {
+                // What the lambda's parameters would be is beside the point, so only this is reported.
+                auto collector = _collector;
+                _collector = new Collector;
+                synthesizeCompared(binary, leftType, rightType, ctx);
+                _collector = collector;
+                _collector.reportError(DiagnosticCode.LambdaInComparison, lambda.span,
+                    "This lambda is equal to nothing else, since a function value is equal only to one made by the same "
+                        ~ "function or lambda; compare a named function, or a value made earlier");
+                return _types.error;
+            }
         }
         else
         {
@@ -2679,18 +2678,7 @@ private final class TypeChecker
                 if (leftType != rightType)
                 {
                     _collector.reportError(DiagnosticCode.InvalidOperand, span,
-                        "`%s` can't compare `%s` and `%s`".format(binary.op, _types.describe(leftType), _types.describe(rightType)));
-                    return _types.error;
-                }
-                if (_types.mentionsParameter(leftType))
-                {
-                    return reportOpaque(span, leftType, "its values can't be compared with `%s`".format(cast(string) binary.op),
-                        "same: (%s, %s) -> Bool");
-                }
-                if (!isComparable(leftType))
-                {
-                    _collector.reportError(DiagnosticCode.InvalidOperand, span,
-                        "`%s` can't compare values of type `%s`".format(binary.op, _types.describe(leftType)));
+                        "`%s` can't compare `%s` and `%s`".format(cast(string) binary.op, _types.describe(leftType), _types.describe(rightType)));
                     return _types.error;
                 }
                 return _types.bool_;
@@ -5698,10 +5686,6 @@ private final class TypeChecker
         else if (expected == _types.any)
         {
             type = _declarer.requireTyped(type, expr.span);
-            if (_types.mentionsParameter(type))
-            {
-                return reportOpaque(expr.span, type, "it can't be printed or go where any value is taken", "show: (%s) -> String");
-            }
         }
         else if (type == _types.emptyArray && _types.isArray(expected))
         {

@@ -82,4 +82,4 @@ A constant can't be a `Ref`, or have a type that contains one. A `Ref` at module
 
 ## Current implementation
 
-All of this is implemented on both backends, except `==`: a `Ref` isn't comparable yet, and neither is a type that contains one. Using a `Ref` from inside its own `update` panics with "Ref is being updated" (`R0010`).
+All of this is implemented on both backends. Using a `Ref` from inside its own `update` panics with "Ref is being updated" (`R0010`).

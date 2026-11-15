@@ -14,7 +14,7 @@ val pair: (UInt8, Int?) = (1, 2)
 
 Unannotated, each element is typed on its own, so `(1, None)` needs an annotation. A tuple *value* never converts: `(Int, Int)` isn't assignable to `(Int, Int?)`.
 
-Tuples are compared elementwise with `==` and `!=` when every element is comparable, and have no ordering. A tuple prints as `(1, a)`.
+Tuples are compared elementwise with `==` and `!=`, and have no ordering. A tuple prints as `(1, a)`.
 
 A tuple passed to a function is one argument. `f((1, 2))` passes one tuple, and `f(1, 2)` passes two arguments.
 

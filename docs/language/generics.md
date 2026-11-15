@@ -131,7 +131,6 @@ A generic function that calls itself with an ever larger type, such as `def grow
 
 ## Current implementation
 
-- A value whose type mentions a type parameter can't yet be compared with `==`, printed, converted with `String(x)` or put in a string hole. Each is an error, and a function that needs one takes it as a parameter.
 - Type arguments can nest 64 deep. Past that the program doesn't compile, and the error shows the instances, or the type, that led there.
 - An alias of an instance, as in `alias IntBox = Box<Int>`, is a type like any other, but its name can't build a value: write `Box<Int>(1)`.
 - Inference treats two more kinds of argument as having no type of their own, as `None` does: a marker that a generic sum owns, such as `Nil`, and a generic function or constructor named without its type arguments. Each binds nothing, and is checked once the type arguments are known.

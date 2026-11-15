@@ -53,12 +53,11 @@ unittest
     analyzedRef("    val r = Ref(1)\n    val v = match r {\n        c => c.get()\n    }").shouldHaveNoDiagnostics();
 }
 
-@("a Ref isn't comparable, and neither is a type holding one")
+@("a Ref is comparable, and so is a type holding one")
 unittest
 {
-    analyzedRef("    val r = Ref(1)\n    val same = r == r").shouldReport(DiagnosticCode.InvalidOperand, At("r", 2));
-    analyzedRef("    val h = Holder(Ref(1))\n    val same = h == h", "type Holder(cell: Ref<Int>)\n")
-        .shouldReport(DiagnosticCode.InvalidOperand, At("h", 2));
+    analyzedRef("    val r = Ref(1)\n    val same = r == r").shouldHaveNoDiagnostics();
+    analyzedRef("    val h = Holder(Ref(1))\n    val same = h == h", "type Holder(cell: Ref<Int>)\n").shouldHaveNoDiagnostics();
 }
 
 @("a Ref of a type needs a value of it to build, so a type holding a Ref of itself needs an option")

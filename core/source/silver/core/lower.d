@@ -222,8 +222,16 @@ private final class Lowering
     /// The functions lowering makes up, by what they're for, so each is made once.
     private size_t[Type] _equalities;
     private size_t[Type] _formats;
-    /// A constructor used as a value, by the function type it has.
-    private size_t[Type] _constructors;
+    /// A constructor used as a value, by its type and the function type it has.
+    private size_t[Type][Id!(ast.TypeDecl)] _constructors;
+    /// Each lambda's function, by the instance it was lowered in and the lambda, so a closure of
+    /// it is always of one function, and so equal to another of it with equal captures.
+    private size_t[Id!(ast.Expr)][InstanceKey] _lambdas;
+    /// The function type of each lambda's closures, by the lambda's function.
+    private Type[size_t] _lambdaTypes;
+    /// Whether the program compares function values, which is when each lambda with captures
+    /// needs a `captureEquality`.
+    private bool _comparesFunctions;
     private size_t[Id!(ast.FunctionDecl)] _nativeWrappers;
     /// An intrinsic used as a value, by the instance it is.
     private size_t[InstanceKey] _intrinsicWrappers;
@@ -331,7 +339,44 @@ private final class Lowering
             auto lowered = lowerFunction(key);
             functions[_slots[key]] = lowered;
         }
+        if (_comparesFunctions) compareCaptures();
         nameWitnesses();
+    }
+
+    /// Gives each lambda with captures a `captureEquality`. It's made only once every function is
+    /// lowered, since a comparison can reach a closure of any lambda in the program.
+    private void compareCaptures()
+    {
+        foreach (slot; _lambdaTypes.keys.sort)
+        {
+            if (functions[slot].captures.length == 0) continue;
+            // Made first, since making it can move `functions`.
+            auto compare = captureEqualityFunction(slot);
+            functions[slot].captureEquality = compare;
+        }
+        assert(_pending.length == 0, "equality is derived, and calls nothing that's lowered from source");
+    }
+
+    /// The function telling whether two closures of the lambda at `target` hold equal captures.
+    private size_t captureEqualityFunction(size_t target)
+    {
+        auto lambda = functions[target];
+        _span = lambda.body.span;
+        _moduleName = lambda.moduleName;
+        auto span = _span;
+        auto type = _lambdaTypes[target];
+        auto a = new Local("a", type);
+        auto b = new Local("b", type);
+        Expr capture(Local closure, size_t i)
+        {
+            return Expr(lambda.captures[i].type, span, ExprKind(Capture(boxed(use(closure, span)), target, i)));
+        }
+        Expr[] tests;
+        foreach (i; 0 .. lambda.captures.length) tests ~= equality(capture(a, i), capture(b, i));
+        auto slot = reserveSlot();
+        functions[slot] = Function("equal.captures." ~ lambda.name, _moduleName, [a, b], null, types.bool_,
+            allOf(tests, span), FunctionOrigin.derived);
+        return slot;
     }
 
     /// Adds its witnesses to the name of each instance that another shares its function and type
@@ -554,6 +599,7 @@ private final class Lowering
                 },
                 (const Length length) => visitExpr(*length.array),
                 (const Cell cell) => all(cell.args),
+                (const Capture capture) => visitExpr(*capture.closure),
                 (_) {},
             );
         }
@@ -789,9 +835,12 @@ private final class Lowering
     /// or the member of that sum which `decl` declares.
     private size_t constructor(Id!(ast.TypeDecl) decl, Type type)
     {
-        if (auto existing = type in _constructors) return *existing;
+        if (auto byType = decl in _constructors)
+        {
+            if (auto existing = type in *byType) return *existing;
+        }
         auto slot = reserveSlot();
-        _constructors[type] = slot;
+        _constructors[decl][type] = slot;
         auto signature = functionData(type);
         // A type with an invariant builds an error union of itself.
         auto record = types.isErrorUnion(signature.ret) ? types.successOf(signature.ret) : signature.ret;
@@ -1794,8 +1843,14 @@ private final class Lowering
         auto signature = _analysis.signatureOf(e.id);
         auto captured = _analysis.capturesOf(e.id);
         auto captureValues = captured.map!(c => symbolValue(c, symbolType(c), span)).array;
+        if (auto lowered = _current in _lambdas)
+        {
+            if (auto existing = e.id in *lowered) return Expr(type, span, ExprKind(MakeClosure(*existing, captureValues)));
+        }
 
         auto slot = reserveSlot();
+        _lambdas[_current][e.id] = slot;
+        _lambdaTypes[slot] = type;
         auto outerLocals = _locals;
         auto outerSelves = _selves;
         auto outerReturn = _returnType;
@@ -2143,7 +2198,8 @@ private final class Lowering
     private Expr equality(Expr a, Expr b)
     {
         auto type = a.type;
-        if (isPrimitive(type)) return prim(PrimOp.Equal, types.bool_, a, b);
+        if (types.isFunction(type)) _comparesFunctions = true;
+        if (isPrimitive(type) || types.isFunction(type) || isCellType(type)) return prim(PrimOp.Equal, types.bool_, a, b);
         return Expr(types.bool_, a.span, ExprKind(Call(equalityFunction(type), [a, b])));
     }
 

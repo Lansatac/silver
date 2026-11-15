@@ -67,7 +67,14 @@ struct Function
     FunctionOrigin origin;
     /// How a function value of it prints: `identity<Int>`, `Point`, `lambda`.
     string printedName;
+    /// For a lambda with captures, the derived function telling whether two closures of it hold
+    /// equal captures, as `(a: F, b: F): Bool` reading them with `Capture`. `noFunction` when
+    /// nothing is captured, or the program compares no function values.
+    size_t captureEquality = noFunction;
 }
+
+/// A `Function.captureEquality` that there isn't.
+enum size_t noFunction = size_t.max;
 
 enum FunctionOrigin
 {
@@ -90,7 +97,7 @@ struct Expr
 
 alias ExprKind = SumType!(UnitLit, BoolLit, IntLit, FloatLit, StringLit, LocalRef, Call, CallClosure, MakeClosure,
     ForeignCall, IntrinsicCall, Prim, Convert, If, Block, Loop, Break, Continue, Return, Construct, Field, Update,
-    Inject, IsMember, Payload, ArrayLit, Index, Slice, Length, Cell, TestFailure);
+    Inject, IsMember, Payload, ArrayLit, Index, Slice, Length, Cell, Capture, TestFailure);
 
 /// `()`.
 struct UnitLit
@@ -186,7 +193,9 @@ enum PrimOp
     BitNot,
     ShiftLeft,
     ShiftRight,
-    /// Comparisons take two arguments of one primitive type.
+    /// Comparisons take two arguments of one primitive type. `Equal` and `NotEqual` also take two
+    /// `Ref`s, equal when they're the same cell, and two function values, equal when they're
+    /// closures of the same function and its `captureEquality`, if it has one, says so.
     Equal,
     NotEqual,
     Less,
@@ -345,6 +354,14 @@ struct Cell
 {
     CellOp op;
     Expr[] args;
+}
+
+/// Capture `index` of `closure`, a function value that is a closure of the lambda `target`.
+struct Capture
+{
+    Expr* closure;
+    size_t target;
+    size_t index;
 }
 
 /// A failure of the running test, with `message`, a String that already says where it happened.

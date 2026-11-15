@@ -65,7 +65,7 @@ increment == increment              // true
 increment == (x => increment(x))    // false
 ```
 
-Two lambdas with the same text are different functions, and a lambda that calls a function isn't that function. So a lambda written in a comparison can't be equal to the other side, and it's an error there: as an operand of `==` or `!=`, or as part of a value an operand builds with a constructor, a tuple, an array or `Some`.
+Two lambdas with the same text are different functions, and a lambda that calls a function isn't that function. So a lambda written in a comparison can't be equal to the other side, and it's an error there: as an operand of `==` or `!=`, or as part of a value an operand builds with a constructor, a tuple, an array, `Some`, `Ok` or `Error`.
 
 ```silver
 button == Button("OK", () => save())     // error: this lambda is equal to nothing else
@@ -105,5 +105,4 @@ A function value prints as the function it comes from, without anything it captu
 
 ## Current implementation
 
-- Function values and `Ref`s aren't comparable yet. Comparing two, or two values of a type that contains one, is an error.
 - `Any` is a placeholder type visible in prelude signatures such as `print(value: Any)`, standing in for a design based on generics. It can't be an element of an array, tuple or option, a field, or a member of a sum.

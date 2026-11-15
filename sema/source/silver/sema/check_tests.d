@@ -474,8 +474,7 @@ unittest
     analyzedMain(`val x: UInt8? = 1
     printl(x == 300)`).shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
     analyzedMain("printl(3 == None)").shouldReport(DiagnosticCode.InvalidOperand, At("3 == None", 1));
-    analyzed("def f(a: () -> Int, b: (() -> Int)?): Bool => b == a\ndef main(): Unit => ()")
-        .shouldReport(DiagnosticCode.InvalidOperand, At("b == a", 1));
+    analyzed("def f(a: () -> Int, b: (() -> Int)?): Bool => b == a\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
 }
 
 @("postfix ? needs an option, in a function that returns one")
@@ -1043,24 +1042,36 @@ unittest
     a.shouldHaveNoDiagnostics();
 }
 
-@("type checking reports == on functions, at the comparison")
+@("type checking compares function values, and types with one anywhere inside")
 unittest
 {
-    analyzed("def f(): Int => 1\ndef main(): Unit {\n    printl(f == f)\n}")
-        .shouldReport(DiagnosticCode.InvalidOperand, At("f", 2));
-    analyzed("def f(): Int => 1\ndef main(): Unit {\n    printl(f != f)\n}")
-        .shouldReport(DiagnosticCode.InvalidOperand, At("f", 2));
-    analyzed("type T(i: Int)\ndef main(): Unit {\n    printl(T == T)\n}")
-        .shouldReport(DiagnosticCode.InvalidOperand, At("T", 2));
+    analyzed("def f(): Int => 1\ndef main(): Unit {\n    printl(f == f)\n    printl(f != f)\n}").shouldHaveNoDiagnostics();
+    analyzed("type T(i: Int)\ndef main(): Unit {\n    printl(T == T)\n}").shouldHaveNoDiagnostics();
+    analyzedEquality("type T(f: (Int) -> Int)").shouldHaveNoDiagnostics();
+    analyzedEquality("type T(f: ((Int) -> Int)?)").shouldHaveNoDiagnostics();
+    analyzedEquality("type Inner(f: () -> Int)\ntype T(inner: Inner)").shouldHaveNoDiagnostics();
+    analyzedEquality("type T(next: T?, f: () -> Int)").shouldHaveNoDiagnostics();
 }
 
-@("type checking reports == on a type with a function anywhere inside it")
+@("a lambda written in a comparison is an error, as is one in a value an operand builds")
 unittest
 {
-    analyzedEquality("type T(f: (Int) -> Int)").shouldReport(DiagnosticCode.InvalidOperand, At("a", 2));
-    analyzedEquality("type T(f: ((Int) -> Int)?)").shouldReport(DiagnosticCode.InvalidOperand, At("a", 2));
-    analyzedEquality("type Inner(f: () -> Int)\ntype T(inner: Inner)").shouldReport(DiagnosticCode.InvalidOperand, At("a", 2));
-    analyzedEquality("type T(next: T?, f: () -> Int)").shouldReport(DiagnosticCode.InvalidOperand, At("a", 2));
+    enum prefix = "def f(x: Int): Int => x\ntype Box(run: (Int) -> Int)\ndef main(): Unit {\n    val g: (Int) -> Int = f\n";
+    void rejects(string body, string lambda)
+    {
+        analyzed(prefix ~ body ~ "\n}").shouldReport(DiagnosticCode.LambdaInComparison, At(lambda, 1));
+    }
+
+    rejects("    _ = g == (x => f(x))", "x => f(x)");
+    rejects("    _ = ((x: Int) => x) != g", "(x: Int) => x");
+    rejects("    _ = Box(g) == Box(x => x)", "x => x");
+    rejects("    _ = (g, 1) == (x => x, 1)", "x => x");
+    rejects("    _ = [g] == [x => x]", "x => x");
+    rejects("    _ = Some(g) == Some(x => x)", "x => x");
+    analyzed("type Bad\n" ~ prefix ~ "    val r: ((Int) -> Int) ! Bad = Ok(g)\n    _ = r == Ok(x => x)\n}")
+        .shouldReport(DiagnosticCode.LambdaInComparison, At("x => x", 1));
+    // A lambda passed to a call is used to work out the value compared, and isn't part of it.
+    analyzed("def apply(run: (Int) -> Int): Int => run(1)\n" ~ prefix ~ "    _ = apply(x => x + 1) == 2\n}").shouldHaveNoDiagnostics();
 }
 
 @("type checking reports == between different declared types with the same fields")
@@ -2032,8 +2043,7 @@ unittest
     print([1] != xs)
     print(xs == [])`).shouldHaveNoDiagnostics();
     analyzedMain(`print([1] < [2])`).shouldReport(DiagnosticCode.InvalidOperand, At("[1]", 1));
-    analyzed("def f(): Unit => ()\ndef main(): Unit => print([f] == [f])")
-        .shouldReport(DiagnosticCode.InvalidOperand, At("[f] == [f]", 1));
+    analyzed("def f(): Unit => ()\ndef main(): Unit => print([f] == [f])").shouldHaveNoDiagnostics();
 }
 
 @("while val needs an option, and its binding is only in scope in the body")
@@ -2384,7 +2394,7 @@ unittest
     analyzed(`def f(): Unit => ()
 def main(): Unit {
     _ = (f, 1) == (f, 1)
-}`).shouldReport(DiagnosticCode.InvalidOperand, At("(f, 1) == (f, 1)", 1));
+}`).shouldHaveNoDiagnostics();
     analyzedMain(`_ = (1, 2) < (1, 3)`).shouldReport(DiagnosticCode.InvalidOperand, At("(1, 2)", 1));
 }
 
@@ -2838,11 +2848,11 @@ unittest
     sumMain("    mutable val p = Empty\n    p.text = \"a\"").shouldReport(DiagnosticCode.UnknownMember, At("p.text", 1));
 }
 
-@("sums are comparable when every member is, and aren't ordered")
+@("sums are comparable, and aren't ordered")
 unittest
 {
     analyzed("type F(f: () -> Int)\ntype S = :F | :Int\ndef main(): Unit {\n    val a: S = 1\n    val q = a == a\n}")
-        .shouldReport(DiagnosticCode.InvalidOperand, At("a == a", 1));
+        .shouldHaveNoDiagnostics();
     sumMain("    val q = Red < Green").shouldReport(DiagnosticCode.InvalidOperand, At("Red", 2));
 }
 

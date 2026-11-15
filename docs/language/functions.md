@@ -224,7 +224,6 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 ## Current implementation
 
 - A nested function can call itself and those declared before it, but not one declared after it.
-- Function values aren't comparable yet.
 - Of the operator functions, `opIndex`, `opIndexAssign` and `opSlice` are available. `opEquals`, `opHash`, `opCompare` and `opString` aren't, so `==` and printing are always the structural ones, and `<` works only on numbers and strings.
 - Only module-level functions can be overloaded. Two nested `def`s of one name in a block are an error.
 - When more than one candidate is left, an `if`, `match` or block is typed before any is chosen, even when its values are all literals, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.

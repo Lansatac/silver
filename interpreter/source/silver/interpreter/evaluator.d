@@ -169,6 +169,7 @@ final class Evaluator
                     (_) => assert(0, "Core's types say this is an array"),
                 ),
                 (const Cell cell) => evaluate(cell, frame),
+                (const Capture capture) => evaluate(*capture.closure, frame).as!Closure.captures[capture.index],
                 (const TestFailure failure) => fail(evaluate(*failure.message, frame).as!string, failure.ends),
             );
         }
@@ -408,11 +409,26 @@ final class Evaluator
             assert(0, "an integer type with no D type of its width");
         }
         auto lhs = args[0];
+        if (lhs.has!Closure || lhs.has!CellValue)
+        {
+            assert(prim.op == PrimOp.Equal || prim.op == PrimOp.NotEqual, "function values and Refs are only compared for equality");
+            auto same = lhs.has!Closure ? sameFunction(lhs.as!Closure, args[1].as!Closure) : lhs.as!CellValue is args[1].as!CellValue;
+            return Value(prim.op == PrimOp.Equal ? same : !same);
+        }
         if (lhs.has!double) return floatPrim(prim.op, lhs.as!double, args);
         if (lhs.has!bool) return compare(prim.op, lhs.as!bool, args[1].as!bool);
         if (lhs.has!string) return compare(prim.op, lhs.as!string, args[1].as!string);
         if (lhs.has!Unit) return compare(prim.op, 0, 0);
         assert(0, "lowering only makes a Prim of primitives, arrays aside");
+    }
+
+    /// Whether `a` and `b` are closures of one function holding equal captures.
+    private bool sameFunction(Closure a, Closure b)
+    {
+        if (a.target != b.target) return false;
+        auto compare = _program.functions[a.target].captureEquality;
+        if (compare == noFunction) return true;
+        return invoke(compare, [Value(a), Value(b)], null, null).as!bool;
     }
 
     private static Value concat(Value[] parts)

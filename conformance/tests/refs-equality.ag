@@ -1,0 +1,35 @@
+// Two Refs are equal when they're the same cell, whatever it holds.
+import std.ref
+
+type Node(value: Int, next: Ref<Node?>)
+type Pair(name: String, cell: Ref<Int>)
+
+def main(): Unit {
+    val a = Ref(1)
+    val b = a
+    printl(a == b)
+    printl(a == Ref(1))
+    printl(a != Ref(1))
+    printl(Ref(1) == Ref(1))
+
+    // Writing the cell doesn't change the answer.
+    b.set(2)
+    printl(a == b)
+    val c = Ref(2)
+    printl(a == c)
+    printl(a.get() == c.get())
+
+    // Inside other values, a Ref compares the same way.
+    printl(Pair("x", a) == Pair("x", b))
+    printl(Pair("x", a) == Pair("x", c))
+    printl(Some(a) == Some(b))
+    printl([a, c] == [b, c])
+    printl((a, 1) == (c, 1))
+
+    // A cell that leads back to itself compares without trouble.
+    val loop = Ref<Node?>(None)
+    val node = Node(1, loop)
+    loop.set(Some(node))
+    printl(node == node)
+    printl(node == Node(1, Ref<Node?>(Some(node))))
+}

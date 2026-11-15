@@ -165,6 +165,10 @@ private struct Printer
                 output ~= "cell.%s".format(cell.op);
                 arguments(cell.args);
             },
+            (const Capture capture) {
+                expr(*capture.closure);
+                output ~= ".capture.%s".format(capture.index);
+            },
             (const ForeignCall call) {
                 output ~= "foreign \"%s\"".format(call.symbol);
                 arguments(call.args);

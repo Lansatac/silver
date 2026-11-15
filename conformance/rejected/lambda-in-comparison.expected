@@ -1,0 +1,1 @@
+T0047: This lambda is equal to nothing else, since a function value is equal only to one made by the same function or lambda; compare a named function, or a value made earlier

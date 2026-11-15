@@ -1,0 +1,58 @@
+// Generic code compares and prints a type parameter's values as everyone else does.
+import std.ref
+
+type Box<T>(item: T)
+type Point(x: Int, y: Int)
+type Shape = Circle(r: Int) | Square(side: Int)
+
+def contains<T>(xs: [T], wanted: T): Bool {
+    for x in xs {
+        if x == wanted { return true }
+    }
+    false
+}
+
+def indexOf<T>(xs: [T], wanted: T): Int? {
+    mutable val i = 0
+    for x in xs {
+        if x != wanted {
+            i += 1
+            continue
+        }
+        return Some(i)
+    }
+    None
+}
+
+def same<T>(a: Box<T>, b: Box<T>): Bool => a == b
+def describe<T>(value: T): String => "{value} / " ~ String(value)
+def show<T>(values: [T]): Unit {
+    for value in values { printl(value) }
+}
+def increment(x: Int): Int => x + 1
+
+def main(): Unit {
+    printl(contains([1, 2, 3], 2))
+    printl(contains(["a", "b"], "c"))
+    printl(contains([Point(1, 2)], Point(1, 2)))
+    printl(contains([Circle(1), Square(2)], Square(3)))
+    printl(contains([Some(1.5), None], None))
+    printl(indexOf([[1], [2, 3]], [2, 3]))
+    printl(indexOf([increment], increment))
+
+    val cell = Ref(0)
+    printl(contains([cell], cell))
+    printl(contains([cell], Ref(0)))
+    printl(same(Box(1), Box(1)))
+    printl(same(Box([()]), Box([])))
+    printl(same(Box(cell), Box(cell)))
+
+    printl(describe(3))
+    printl(describe("text"))
+    printl(describe(Box(Point(1, 2))))
+    printl(describe([Circle(1)]))
+    printl(describe(Some(cell)))
+    printl(describe(increment))
+    printl(describe(()))
+    show([Some(1), None])
+}

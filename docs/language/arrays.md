@@ -68,7 +68,7 @@ A slice keeps its whole underlying storage alive.
 
 ## Comparison and printing
 
-`==` and `!=` compare elementwise when `T` is comparable. Arrays have no ordering. An array prints as `[1, 2, 3]`.
+`==` and `!=` compare elementwise. Arrays have no ordering. An array prints as `[1, 2, 3]`.
 
 ## Ranges
 

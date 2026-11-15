@@ -1,0 +1,21 @@
+true
+false
+true
+false
+true
+Some(1)
+Some(0)
+true
+false
+true
+false
+true
+3 / 3
+text / text
+Box(Point(1, 2)) / Box(Point(1, 2))
+[Circle(1)] / [Circle(1)]
+Some(Ref(0)) / Some(Ref(0))
+increment / increment
+() / ()
+Some(1)
+None

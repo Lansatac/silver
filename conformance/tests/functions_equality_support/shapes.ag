@@ -1,0 +1,7 @@
+module functions_equality_support.shapes
+
+type Square(side: Int)
+
+def area(s: Square): Int => s.side * s.side
+def areaFunction(): (Square) -> Int => area
+def scaled(by: Int): (Square) -> Int => s => area(s) * by

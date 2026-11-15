@@ -1,0 +1,9 @@
+// A lambda written in a comparison can't be equal to the other side.
+type Button(label: String, action: () -> Unit)
+
+def save(): Unit => printl("saved")
+
+def main(): Unit {
+    val button = Button("OK", save)
+    printl(button == Button("OK", () => save()))
+}
