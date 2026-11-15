@@ -15,7 +15,7 @@ import silver.sema.type;
 /// initializers already have errors, and `negatedLiterals` the integer literals under a `-`. Each
 /// of `literalConstructions`, a call building a type with an invariant from literals, is reported
 /// if the invariant is a constant expression that's false for them.
-package ConstValue[Id!ConstDecl] evaluateConstants(M)(M modules, TypeTable types, const Type[Id!Expr] exprTypes,
+package SideTable!(Id!ConstDecl, ConstValue) evaluateConstants(M)(M modules, TypeTable types, const SideTable!(Id!Expr, Type) exprTypes,
     const Resolution resolutions, const bool[Id!ConstDecl] unevaluable, const bool[Id!Expr] negatedLiterals,
     Collector collector, const(Expr)[] literalConstructions)
 {
@@ -41,12 +41,12 @@ package ConstValue[Id!ConstDecl] evaluateConstants(M)(M modules, TypeTable types
 private struct ConstantEvaluator
 {
     private TypeTable _types;
-    private const Type[Id!Expr] _exprTypes;
+    private const SideTable!(Id!Expr, Type) _exprTypes;
     private const Resolution _resolutions;
     private const bool[Id!ConstDecl] _unevaluable;
     private const bool[Id!Expr] _negatedLiterals;
     private Collector _collector;
-    private ConstValue[Id!ConstDecl] _constants;
+    private SideTable!(Id!ConstDecl, ConstValue) _constants;
     /// True while a constant's dependencies are being evaluated, and false once they're done.
     private bool[Id!ConstDecl] _evaluating;
     private bool[Id!ConstDecl] _cycleReported;

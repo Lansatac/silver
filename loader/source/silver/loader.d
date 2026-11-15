@@ -5,6 +5,7 @@ import std.file : exists, readText;
 import std.format : format;
 import std.path : absolutePath, baseName, buildNormalizedPath, buildPath, dirName, stripExtension;
 import std.sumtype;
+import std.typecons : Tuple;
 
 import silver.ast;
 import silver.syntax.parse : parse;
@@ -24,9 +25,9 @@ Program load(string source, string file, string[] importPaths, SourceContext con
     context.sources.add(file, source);
     Program program;
     program.sources = context.sources;
-    program.ids = new NodeIds;
     auto start = new Module;
-    *start = parse(source, baseName(file).stripExtension, program.ids, file);
+    auto startName = baseName(file).stripExtension;
+    *start = parse(source, startName, new NodeIds(ModuleKey.of(startName, source)), file);
     if (auto declaration = start.declaration)
     {
         start.name = declaration.path.join(".");
@@ -50,7 +51,7 @@ Program load(string source, string file, string[] importPaths, SourceContext con
     auto preludePath = findModule(["prelude"], importPaths);
     if (preludePath !is null && "prelude" !in program.modules)
     {
-        program.modules["prelude"] = parseModuleFile(preludePath, ["prelude"], program.ids, context);
+        program.modules["prelude"] = parseModuleFile(preludePath, ["prelude"], context);
         unscanned ~= program.modules["prelude"];
     }
 
@@ -89,7 +90,7 @@ Program load(string source, string file, string[] importPaths, SourceContext con
                         importPaths.join("\n")));
                 continue;
             }
-            program.modules[name] = parseModuleFile(modulePath, path, program.ids, context);
+            program.modules[name] = parseModuleFile(modulePath, path, context);
             unscanned ~= program.modules[name];
         }
     }
@@ -122,13 +123,12 @@ private string findModule(string[] chain, string[] importPaths)
 /// Reads and parses the module at `path`, which was found by looking up the module `chain`.
 /// The text is recorded in `context.sources` before parsing, so a parse error can be reported
 /// against it. A missing or mismatched `module` line is reported, and the module is still loaded.
-private Module* parseModuleFile(string path, string[] chain, NodeIds ids, SourceContext context)
+private Module* parseModuleFile(string path, string[] chain, SourceContext context)
 {
     auto name = chain.join(".");
     auto text = readText(path);
     context.sources.add(path, text);
-    auto loaded = new Module;
-    *loaded = parse(text, name, ids, path);
+    auto loaded = parsed(name, text, path);
     if (loaded.declaration is null)
     {
         context.collector.reportError(DiagnosticCode.MissingModuleDeclaration, Span(path, 0, 0),
@@ -143,6 +143,22 @@ private Module* parseModuleFile(string path, string[] chain, NodeIds ids, Source
     }
     return loaded;
 }
+
+/// The module `name` parsed from `text`, read from `path`. Each is parsed once per thread and shared
+/// by every program that loads it, since nothing changes an AST after loading and its IDs depend
+/// only on its name and text. The starting file isn't kept: it's named after parsing, from its
+/// `module` line, and is rarely loaded twice.
+private Module* parsed(string name, string text, string path)
+{
+    auto key = Tuple!(string, string, string)(name, path, text);
+    if (auto known = key in parsedModules) return *known;
+    auto loaded = new Module;
+    *loaded = parse(text, name, new NodeIds(ModuleKey.of(name, text)), path);
+    parsedModules[key] = loaded;
+    return loaded;
+}
+
+private Module*[Tuple!(string, string, string)] parsedModules;
 
 /// The directory that `file` is in once the directories and file name that `chain` names are
 /// taken off the end, e.g. "lib" for "lib/std/math.ag" and ["std", "math"]. Null if `file`
@@ -294,6 +310,25 @@ def main(): Unit => ()", "main.ag", [directory], new SourceContext);
     auto modules = program.modules.byValue.map!(m => *m).array;
     modules.length.should.equal(3);
     assert(idProblems(modules) == []);
+}
+
+@("load shares an imported module between programs until its file changes")
+unittest
+{
+    import std.file : write;
+
+    auto directory = makeModuleDirectory("shared", ["a.ag": "module a\ndef a(): Int => 1"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto first = load("import a", "main.ag", [directory], new SourceContext);
+    auto second = load("import a\ndef main(): Unit => ()", "main.ag", [directory], new SourceContext);
+    assert(first.modules["a"] is second.modules["a"]);
+    assert(first.modules["main"] !is second.modules["main"]);
+
+    write(buildPath(directory, "a.ag"), "module a\ndef a(): Int => 2");
+    auto changed = load("import a", "main.ag", [directory], new SourceContext);
+    assert(changed.modules["a"] !is first.modules["a"]);
+    assert(changed.modules["a"].id != first.modules["a"].id);
 }
 
 @("standardLibraryPath holds prelude.ag")

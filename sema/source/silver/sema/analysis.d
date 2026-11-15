@@ -428,8 +428,11 @@ Analysis analyze(const ref Program program, Collector collector, Target target =
     import silver.sema.resolve : resolveNames;
 
     auto entryPoint = checkEntryPoint(program, collector, testing);
-    auto resolution = resolveNames(program, collector, target);
-    auto typing = checkTypes(program, resolution, collector);
+    // The nodes sema makes, which no module's source has. Modules' ASTs can be shared between
+    // programs, so nothing is added to them.
+    auto made = new NodeIds(ModuleKey.analysis);
+    auto resolution = resolveNames(program, collector, target, made);
+    auto typing = checkTypes(program, resolution, collector, made);
     checkEntryPointReturn(entryPoint, resolution, typing, collector);
     return new Analysis(resolution, typing, entryPoint);
 }

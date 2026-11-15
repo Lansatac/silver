@@ -33,7 +33,7 @@ private final class IdCheck
             problems ~= format("%s at %s has no ID", N.stringof, where);
             return;
         }
-        auto key = N.stringof ~ " " ~ id.toString;
+        auto key = format("%s %s %s", N.stringof, id.moduleKey.value, id);
         if (auto first = key in seen)
         {
             problems ~= format("%s at %s and %s share ID %s", N.stringof, *first, where, id);

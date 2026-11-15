@@ -11,6 +11,7 @@ import std.sumtype;
 
 import silver.ast;
 import silver.sema.target : intrinsicAlias, intrinsicNamed, isIntrinsicType, Target;
+public import silver.sema.table : SideTable;
 
 /// An `Id!AliasDecl` is only ever in a scope: a use of one records what it stands for.
 alias SymbolId = SumType!(Id!FunctionDecl, Id!Param, Id!VarDecl, Id!Module, Id!TypeDecl, Id!ConstDecl, Id!AliasDecl);
@@ -61,41 +62,41 @@ private TypeSymbol[string] builtinTypes() pure
 /// Every declaration in a program, by ID. The pointers are into the AST.
 package struct Declarations
 {
-    const(FunctionDecl)*[Id!FunctionDecl] functions;
+    SideTable!(Id!FunctionDecl, const(FunctionDecl)*) functions;
     /// The module each function is declared in.
-    string[Id!FunctionDecl] functionModules;
-    const(TypeDecl)*[Id!TypeDecl] types;
+    SideTable!(Id!FunctionDecl, string) functionModules;
+    SideTable!(Id!TypeDecl, const(TypeDecl)*) types;
     /// The module each type is declared in.
-    string[Id!TypeDecl] typeModules;
-    const(InterfaceDecl)*[Id!InterfaceDecl] interfaces;
-    const(ConstDecl)*[Id!ConstDecl] constants;
-    const(AliasDecl)*[Id!AliasDecl] aliases;
-    const(VarDecl)*[Id!VarDecl] locals;
-    const(Param)*[Id!Param] params;
-    const(TypeParam)*[Id!TypeParam] typeParams;
+    SideTable!(Id!TypeDecl, string) typeModules;
+    SideTable!(Id!InterfaceDecl, const(InterfaceDecl)*) interfaces;
+    SideTable!(Id!ConstDecl, const(ConstDecl)*) constants;
+    SideTable!(Id!AliasDecl, const(AliasDecl)*) aliases;
+    SideTable!(Id!VarDecl, const(VarDecl)*) locals;
+    SideTable!(Id!Param, const(Param)*) params;
+    SideTable!(Id!TypeParam, const(TypeParam)*) typeParams;
 }
 
 /// What name resolution produced.
 package struct Resolution
 {
-    SymbolId[Id!Expr] resolutions;
-    TypeSymbol[Id!TypeExpr] typeResolutions;
-    Id!FunctionDecl[Id!Expr] callees;
-    Id!TypeDecl[Id!Expr] constructions;
+    SideTable!(Id!Expr, SymbolId) resolutions;
+    SideTable!(Id!TypeExpr, TypeSymbol) typeResolutions;
+    SideTable!(Id!Expr, Id!FunctionDecl) callees;
+    SideTable!(Id!Expr, Id!TypeDecl) constructions;
     /// The locals and params each lambda uses from outside itself, in first-use order.
-    const(SymbolId)[][Id!Expr] captures;
+    SideTable!(Id!Expr, const(SymbolId)[]) captures;
     /// Calls like `UInt8(x)`, by the type they convert to.
-    Builtin[Id!Expr] conversions;
+    SideTable!(Id!Expr, Builtin) conversions;
     /// For a call `x.f(...)` on a value, the functions a plain `f` finds at module level. The type
     /// checker decides whether one is used, since a field of `x` comes first.
-    Candidates[Id!Expr] methodLookups;
+    SideTable!(Id!Expr, Candidates) methodLookups;
     /// Names that could be more than one function, by the name's expression. The type checker
     /// chooses, so these have no entry in `resolutions`.
-    Candidates[Id!Expr] overloads;
+    SideTable!(Id!Expr, Candidates) overloads;
     /// For each `for` and each `x[i]`, by name, the functions that calls of `length`, `opIndex`,
     /// `opIndexAssign`, `opSlice` and `next` there would choose from, since that syntax means calls
     /// of them on anything but an array or `a..b`.
-    Candidates[string][Id!Expr] operatorLookups;
+    SideTable!(Id!Expr, Candidates[string]) operatorLookups;
     Declarations declarations;
     /// The `native library` of each module that names one.
     string[string] nativeLibraries;
@@ -103,28 +104,28 @@ package struct Resolution
     const(Scope)[string] moduleScopes;
     /// The type parameters a function has beyond those it declares: one for each parameter whose
     /// type is an interface name, in parameter order. They come after the declared ones.
-    const(TypeParam)[][Id!FunctionDecl] hiddenParams;
+    SideTable!(Id!FunctionDecl, const(TypeParam)[]) hiddenParams;
     /// For a parameter type that's an interface name, the hidden type parameter it stands for,
     /// and for an interface name or `A & B` in a result type or a `val`'s annotation, its floor.
-    Id!TypeParam[Id!TypeExpr] sugarParams;
+    SideTable!(Id!TypeExpr, Id!TypeParam) sugarParams;
     /// The floors in a function's result type: one for each interface name or `A & B` in it, an
     /// outer one before those in its type arguments. Each stands for the type the body gives
     /// there, which its bounds check, and none is a type parameter of the function.
-    const(TypeParam)[][Id!FunctionDecl] resultFloors;
+    SideTable!(Id!FunctionDecl, const(TypeParam)[]) resultFloors;
     /// The same for a lambda's or nested `def`'s result type, and for a `val`'s annotation.
-    const(TypeParam)[][Id!Expr] lambdaFloors;
-    const(TypeParam)[][Id!VarDecl] bindingFloors;
+    SideTable!(Id!Expr, const(TypeParam)[]) lambdaFloors;
+    SideTable!(Id!VarDecl, const(TypeParam)[]) bindingFloors;
     /// The functions a generic function's bounds supply inside it, in the order its witnesses are
     /// kept: by type parameter, then bound, then the interface's function.
-    Id!FunctionDecl[][Id!FunctionDecl] boundFunctions;
+    SideTable!(Id!FunctionDecl, Id!FunctionDecl[]) boundFunctions;
     /// What each of those functions stands for.
-    Requirement[Id!FunctionDecl] requirements;
+    SideTable!(Id!FunctionDecl, Requirement) requirements;
     /// What each module's `forward import`s pass on to its importers, by module and then name.
     Forward[][string][string] forwards;
     /// Names that are an alias of a generic type's instance, like `IntBox` after
     /// `alias IntBox = Box<Int>`, by the alias: `resolutions` has the type, and the alias its
     /// type arguments.
-    Id!AliasDecl[Id!Expr] aliasedInstances;
+    SideTable!(Id!Expr, Id!AliasDecl) aliasedInstances;
 
     /// The type parameters of `func`: those it declares, then its hidden ones.
     const(TypeParam)[] typeParamsOf(Id!FunctionDecl func) const
@@ -218,8 +219,8 @@ package struct Requirement
 
 /// The builtin or declared type `symbol` is another name for. It's still an alias if it stands
 /// for a type with no name, like `[Int]`, or is recursive.
-package TypeSymbol expandAlias(TypeSymbol symbol, const(AliasDecl*[Id!AliasDecl]) aliases,
-    const(TypeSymbol[Id!TypeExpr]) typeResolutions)
+package TypeSymbol expandAlias(TypeSymbol symbol, const SideTable!(Id!AliasDecl, const(AliasDecl)*) aliases,
+    const SideTable!(Id!TypeExpr, TypeSymbol) typeResolutions)
 {
     foreach (_; 0 .. aliases.length)
     {
@@ -245,9 +246,10 @@ package struct Candidates
 }
 
 /// Resolves every name in `program`, reporting problems to `collector`.
-package Resolution resolveNames(const ref Program program, Collector collector, Target target)
+/// The nodes resolution makes get their IDs from `ids`.
+package Resolution resolveNames(const ref Program program, Collector collector, Target target, NodeIds ids)
 {
-    return new NameResolver(collector, target).resolveProgram(program);
+    return new NameResolver(collector, target, ids).resolveProgram(program);
 }
 
 private immutable Scope universal = new Scope(builtinTypes);
@@ -435,15 +437,15 @@ private final class NameResolver
 {
     private enum preludeName = "prelude";
 
-    private SymbolId[Id!Expr] _resolutions;
-    private TypeSymbol[Id!TypeExpr] _typeResolutions;
-    private Id!FunctionDecl[Id!Expr] _callees;
-    private Id!TypeDecl[Id!Expr] _constructions;
-    private const(SymbolId)[][Id!Expr] _captures;
-    private Builtin[Id!Expr] _conversions;
-    private Candidates[Id!Expr] _methodLookups;
-    private Candidates[Id!Expr] _overloads;
-    private Candidates[string][Id!Expr] _operatorLookups;
+    private SideTable!(Id!Expr, SymbolId) _resolutions;
+    private SideTable!(Id!TypeExpr, TypeSymbol) _typeResolutions;
+    private SideTable!(Id!Expr, Id!FunctionDecl) _callees;
+    private SideTable!(Id!Expr, Id!TypeDecl) _constructions;
+    private SideTable!(Id!Expr, const(SymbolId)[]) _captures;
+    private SideTable!(Id!Expr, Builtin) _conversions;
+    private SideTable!(Id!Expr, Candidates) _methodLookups;
+    private SideTable!(Id!Expr, Candidates) _overloads;
+    private SideTable!(Id!Expr, Candidates[string]) _operatorLookups;
     private Declarations _declarations;
     private Collector _collector;
     /// Each module's own top-level declarations, by module name.
@@ -452,35 +454,33 @@ private final class NameResolver
     /// The call whose callee is being resolved, since only there can an alias of a builtin be a value.
     private Id!Expr _call;
     private Id!Expr _callee;
-    private bool[Id!AliasDecl] _recursiveAliases;
+    private SideTable!(Id!AliasDecl, bool) _recursiveAliases;
     /// The module being resolved, which is the one that sees its own private declarations.
     private string _currentModule;
 
     private Target _target;
     private string[string] _nativeLibraries;
-    private const(TypeParam)[][Id!FunctionDecl] _hiddenParams;
-    private Id!TypeParam[Id!TypeExpr] _sugarParams;
-    private const(TypeParam)[][Id!FunctionDecl] _resultFloors;
-    private const(TypeParam)[][Id!Expr] _lambdaFloors;
-    private const(TypeParam)[][Id!VarDecl] _bindingFloors;
-    private Id!FunctionDecl[][Id!FunctionDecl] _boundFunctions;
-    private Requirement[Id!FunctionDecl] _requirements;
+    private SideTable!(Id!FunctionDecl, const(TypeParam)[]) _hiddenParams;
+    private SideTable!(Id!TypeExpr, Id!TypeParam) _sugarParams;
+    private SideTable!(Id!FunctionDecl, const(TypeParam)[]) _resultFloors;
+    private SideTable!(Id!Expr, const(TypeParam)[]) _lambdaFloors;
+    private SideTable!(Id!VarDecl, const(TypeParam)[]) _bindingFloors;
+    private SideTable!(Id!FunctionDecl, Id!FunctionDecl[]) _boundFunctions;
+    private SideTable!(Id!FunctionDecl, Requirement) _requirements;
     private Forward[][string][string] _forwards;
-    private Id!AliasDecl[Id!Expr] _aliasedInstances;
+    private SideTable!(Id!Expr, Id!AliasDecl) _aliasedInstances;
     /// Where the nodes resolution makes up get their IDs.
     private NodeIds _ids;
 
-    this(Collector collector, Target target)
+    this(Collector collector, Target target, NodeIds ids)
     {
         _collector = collector;
         _target = target;
+        _ids = ids;
     }
 
     Resolution resolveProgram(const Program program)
     {
-        // The program's own source of IDs, which is there for passes that make nodes: no node here
-        // changes, and the ones made are new.
-        _ids = cast(NodeIds) program.ids;
         // Sorted so diagnostics come out in the same order every run.
         auto modules = program.sortedModules;
         foreach (mod; modules)

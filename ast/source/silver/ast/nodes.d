@@ -7,7 +7,7 @@ import silver.ast.span;
 
 import silver.ast.id;
 
-/// The node kinds that get IDs. One NodeIds is shared by every module in a Program.
+/// The node kinds that get IDs. Each module has its own NodeIds, made with the module's key.
 alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt, TypeDecl, Field, ConstDecl, Pattern, AliasDecl,
     TypeParam, InterfaceDecl);
 

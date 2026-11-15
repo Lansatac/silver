@@ -4,68 +4,70 @@ module silver.sema.typing;
 import silver.ast;
 import silver.sema.constant : ConstValue;
 import silver.sema.resolve : SymbolId;
+import silver.sema.table : SideTable;
 import silver.sema.type;
+import silver.sema.table : SideTable;
 
 package struct Typing
 {
     TypeTable types;
-    Type[Id!Expr] exprTypes;
-    Type[SymbolId] symbolTypes;
-    FieldInfo[][Id!TypeDecl] fields;
-    size_t[Id!Expr] fieldIndexes;
-    size_t[][][Id!Expr] updatePaths;
-    ConstValue[Id!ConstDecl] constants;
+    SideTable!(Id!Expr, Type) exprTypes;
+    SideTable!(SymbolId, Type) symbolTypes;
+    SideTable!(Id!TypeDecl, FieldInfo[]) fields;
+    SideTable!(Id!Expr, size_t) fieldIndexes;
+    SideTable!(Id!Expr, size_t[][]) updatePaths;
+    SideTable!(Id!ConstDecl, ConstValue) constants;
     /// Where a value becomes an option, by the option type it's wrapped into.
-    Type[Id!Expr] promotions;
+    SideTable!(Id!Expr, Type) promotions;
     /// For each use of a generic function, by the expression naming it, what its type parameters stand
     /// for, in terms of the type parameters of the function the use is in.
-    Type[][Id!Expr] typeArguments;
+    SideTable!(Id!Expr, Type[]) typeArguments;
     /// For each use of a function with bounds, by the expression naming it, the function found for
     /// each function its bounds declare, in the order of `Resolution.boundFunctions`.
-    Witness[][Id!Expr] witnesses;
+    SideTable!(Id!Expr, Witness[]) witnesses;
     /// For a use inside a generic function of a function that others ask more than, the ones
     /// that could stand in for it there, most demanding first. Each holds only where the
     /// instance's answers to the queries it depends on are there.
-    Witness[][Id!Expr] alternatives;
+    SideTable!(Id!Expr, Witness[]) alternatives;
     /// What each generic function asks of its type parameters beyond its bounds, worked out from
     /// its body. Each query's witnesses follow its bounds' among those of each use of it.
-    Query[][Id!FunctionDecl] queries;
+    SideTable!(Id!FunctionDecl, Query[]) queries;
     /// What each bound of a type parameter names, in the order written. One that couldn't be
     /// resolved is there too, and isn't `valid`.
-    Bound[][Id!TypeParam] bounds;
-    const(Expr)[][Id!Expr] concatOperands;
-    const(CallExpr)*[Id!Expr] methodCalls;
-    Id!FunctionDecl[Id!Expr] methodCallees;
+    SideTable!(Id!TypeParam, Bound[]) bounds;
+    SideTable!(Id!Expr, const(Expr)[]) concatOperands;
+    SideTable!(Id!Expr, const(CallExpr)*) methodCalls;
+    SideTable!(Id!Expr, Id!FunctionDecl) methodCallees;
     /// For a `for` over something other than an array or `a..b`, the functions it calls, by the `for`.
-    LoopFunctions[Id!Expr] loops;
+    SideTable!(Id!Expr, LoopFunctions) loops;
     /// For each indexing of something other than an array, the functions it calls, by the indexing.
-    IndexFunctions[Id!Expr] indexing;
+    SideTable!(Id!Expr, IndexFunctions) indexing;
     /// For each overloaded name, the function chosen, by the name's expression.
-    SymbolId[Id!Expr] chosenSymbols;
+    SideTable!(Id!Expr, SymbolId) chosenSymbols;
     /// For each call of an overloaded name, the function chosen, by the call.
-    Id!FunctionDecl[Id!Expr] chosenCallees;
+    SideTable!(Id!Expr, Id!FunctionDecl) chosenCallees;
     /// The functions that share their name with another of their module.
-    bool[Id!FunctionDecl] overloaded;
-    Type[Id!TypeDecl] nominalTypes;
+    SideTable!(Id!FunctionDecl, bool) overloaded;
+    SideTable!(Id!TypeDecl, Type) nominalTypes;
     /// What each sum's values can be, in declaration order.
-    Type[][Id!TypeDecl] members;
+    SideTable!(Id!TypeDecl, Type[]) members;
     /// For a construction that produces its owner, the member it builds on the way.
-    Type[Id!Expr] constructedMembers;
-    Type[Id!Pattern] patternSubjects;
-    size_t[Id!Pattern] patternMembers;
+    SideTable!(Id!Expr, Type) constructedMembers;
+    SideTable!(Id!Pattern, Type) patternSubjects;
+    SideTable!(Id!Pattern, size_t) patternMembers;
     /// For a pattern on an error list that reaches through a declared sum the list names, which
     /// member that sum is, and the list. Its `patternSubjects` entry is the sum.
-    size_t[Id!Pattern] patternsThrough;
-    Type[Id!Pattern] patternListSubjects;
-    Id!TypeDecl[Id!Pattern] patternConstructors;
+    SideTable!(Id!Pattern, size_t) patternsThrough;
+    SideTable!(Id!Pattern, Type) patternListSubjects;
+    SideTable!(Id!Pattern, Id!TypeDecl) patternConstructors;
     /// What the invariant of each type that has one gives when it doesn't hold, in terms of the
     /// type's own parameters.
-    Type[Id!TypeDecl] invariantErrors;
+    SideTable!(Id!TypeDecl, Type) invariantErrors;
     /// The fields each invariant's condition names, which change only through `with`.
-    string[][Id!TypeDecl] invariantMentions;
+    SideTable!(Id!TypeDecl, string[]) invariantMentions;
     /// For a `with` that checks invariants, the place of each value it checks, as field indexes
     /// from the whole value, longest first. The empty path is the whole value.
-    size_t[][][Id!Expr] withChecks;
+    SideTable!(Id!Expr, size_t[][]) withChecks;
 }
 
 struct FieldInfo { string name; Type type; }

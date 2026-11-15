@@ -143,12 +143,13 @@ private struct Floored
 
 private final class TypeChecker
 {
-    this(const Resolution resolutions, Collector collector)
+    this(const Resolution resolutions, Collector collector, NodeIds ids)
     {
         _types = new TypeTable();
         _typing.types = _types;
         _collector = collector;
         _resolutions = resolutions;
+        _ids = ids;
         _declarer = new Declarer(_types, &_typing, resolutions, collector);
     }
 
@@ -196,8 +197,6 @@ private final class TypeChecker
 
     Typing checkProgram(const Program program)
     {
-        // As resolution does: new IDs only add to what's taken.
-        _ids = cast(NodeIds) program.ids;
         auto programModules = program.sortedModules;
 
         // phase 1: all declared types; phase 2: all signatures; phase 3: all bodies
@@ -6461,8 +6460,8 @@ private final class TypeChecker
 
 }
 
-package Typing checkTypes(const ref Program program, const ref Resolution resolution, Collector collector)
+package Typing checkTypes(const ref Program program, const ref Resolution resolution, Collector collector, NodeIds ids)
 {
-    auto typeChecker = new TypeChecker(resolution, collector);
+    auto typeChecker = new TypeChecker(resolution, collector, ids);
     return typeChecker.checkProgram(program);
 }

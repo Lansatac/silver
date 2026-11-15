@@ -99,13 +99,12 @@ version (unittest)
     {
         Program program;
         program.sources = new SourceMap;
-        program.ids = new NodeIds;
         foreach (name, source; sources)
         {
             auto file = name ~ ".ag";
             program.sources.add(file, source);
             program.modules[name] = new Module;
-            *program.modules[name] = parse(source, name, program.ids, file);
+            *program.modules[name] = parse(source, name, new NodeIds(ModuleKey.of(name, source)), file);
         }
         return program;
     }

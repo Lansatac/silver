@@ -1252,7 +1252,6 @@ unittest
         }
         Program program;
         program.sources = context.sources;
-        program.ids = ids;
         program.modules["main"] = m;
         analyze(program, context.collector);
 
