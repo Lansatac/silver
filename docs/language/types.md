@@ -44,7 +44,7 @@ A conversion is implicit only if it works for every value, keeps the value's mea
 
 `==` and `!=` work on any two values of one type. Options, arrays, tuples and declared types are compared structurally. Two `Ref`s are equal when they're the same cell (see [Shared references](refs.md)), and function values are compared as described below.
 
-A type's equality belongs to the type. Its own module can replace the structural one by writing an `opEquals`, and the printed form by writing an `opString` (see [operator functions](functions.md#operator-functions)). A function in another module can't change what `==` means for it, and generic code comparing a value uses the same equality as everyone else. A comparison with another meaning, such as "equal ignoring case", is an ordinary function, passed where it's needed.
+A type's equality belongs to the type. Its own module can replace the structural one by writing an `opEquals`, with an `opHash` to match, and the printed form by writing an `opString` (see [operator functions](functions.md#operator-functions)). A function in another module can't change what `==` means for it, and generic code comparing a value uses the same equality as everyone else. A comparison with another meaning, such as "equal ignoring case", is an ordinary function, passed where it's needed.
 
 ### Function values
 

@@ -76,22 +76,15 @@ A slice keeps its whole underlying storage alive.
 
 ## Maps
 
-Maps share the bracket syntax, with `:` between key and value:
-
-```silver
-["a": 1, "b": 2]
-[:]               // empty
-```
+Maps share the bracket syntax, with `:` between key and value, as in `["a": 1]`. See [Maps](maps.md).
 
 ## Open questions
 
 - A form of indexing that returns `T?`, as a second prelude function beside `at`.
 - Whether `mutable` arguments work on an element.
 - Pre-sizing an array before appending, and making one of `n` copies of a value. Leaning towards the range form (a repeating range collected into an array) once ranges exist, rather than an array function now.
-- The semantics of maps.
 
 ## Current implementation
 
-- Map literals parse, but are rejected.
 - `xs[i] = v` copies the whole array every time, even when nothing else holds it.
 - `length` is built into the compiler, so it can only be called, as `length(xs)` or `xs.length()`, and not used as a function value.

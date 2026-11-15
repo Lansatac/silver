@@ -193,7 +193,24 @@ def opSlice<T>(w: Window<T>, from: Int, to: Int): Window<T> =>
 - A slice with a bound left out uses `length`: `x[a..]` is `opSlice(x, a, length(x))`, with `x` evaluated once, and `x[..b]` is `opSlice(x, 0, b)`. The 0 is an `Int`.
 - For an array the syntax is built in, and an index is an `Int`. The prelude's `opIndex`, `opIndexAssign` and `opSlice` for arrays do the same where a function is wanted. `x[i]` on an array never calls a module's own.
 
-`opIndex`, `opIndexAssign` and `opSlice` are ordinary functions, chosen as any call is, so a module can write them for a type it didn't declare. `opEquals`, `opCompare` and `opString` belong to the type: every type has an `opEquals` and an `opString` already, and only the type's own module can write one to replace it, or write an `opCompare`.
+`opIndex`, `opIndexAssign` and `opSlice` are ordinary functions, chosen as any call is, so a module can write them for a type it didn't declare. `opEquals`, `opHash`, `opCompare` and `opString` belong to the type: every type has an `opEquals`, an `opHash` and an `opString` already, and only the type's own module can write one to replace it, or write an `opCompare`.
+
+### Equality and hashing
+
+`opHash(x): UInt64` is the hash a [map](maps.md) uses for its keys. Values that are equal have to hash alike, so a type that replaces `opEquals` replaces `opHash` too, and writing one without the other is an error.
+
+```silver
+def opEquals<K, V>(a: Map<K, V>, b: Map<K, V>): Bool {
+    if length(a) != length(b) { return false }
+    for (k, v) in a {
+        if b[k] != Some(v) { return false }
+    }
+    true
+}
+def opHash<K, V>(m: Map<K, V>): UInt64 => ...      // combines the entries in any order
+```
+
+Structural equality is right for nearly every type. These functions are for a type whose fields can differ for values that mean the same thing, such as a collection whose layout depends on the order it was built in. A comparison that ignores part of a value, such as positions in source or the case of a name, is an ordinary function, passed where it's needed, and not a replacement for `==`.
 
 A function that's useful to call by name keeps a plain name, even where syntax uses it: `length` and `next`, which `for` calls.
 
@@ -208,7 +225,7 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 
 - A nested function can call itself and those declared before it, but not one declared after it.
 - Function values aren't comparable yet.
-- Of the operator functions, `opIndex`, `opIndexAssign` and `opSlice` are available. `opEquals`, `opCompare` and `opString` aren't, so `==` and printing are always the structural ones, and `<` works only on numbers and strings.
+- Of the operator functions, `opIndex`, `opIndexAssign` and `opSlice` are available. `opEquals`, `opHash`, `opCompare` and `opString` aren't, so `==` and printing are always the structural ones, and `<` works only on numbers and strings.
 - Only module-level functions can be overloaded. Two nested `def`s of one name in a block are an error.
 - When more than one candidate is left, an `if`, `match` or block is typed before any is chosen, even when its values are all literals, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.
 - A method call's receiver needs a type of its own, so `None.f()` and `[].f()` are errors. An integer literal receiver adapts, as in `(200).f()` with `f(x: UInt8)`.
