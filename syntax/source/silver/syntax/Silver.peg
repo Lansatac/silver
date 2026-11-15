@@ -285,7 +285,13 @@ Silver:
     FORWARD             <- Kword("forward")
     UNDERSCORE          <- Kword("_")
 
-    Keyword             <- VAL / MUTABLE / DEF / TYPE / NATIVE / INTRINSIC / PRIVATE / WHILE / FOR / BREAK / CONTINUE / IF / ELSE / TRUE / FALSE / RETURN / IMPORT / MODULE / IN / MATCH / ALIAS / INTERFACE / WITH / INVARIANT / UNDERSCORE
+    # The same words as the rules above, as literals: it's tried at every identifier, and a rule per
+    # word is many times slower. Longer words come first, or `in` would stop `interface` matching.
+    Keyword             <- ( "intrinsic" / "interface" / "invariant" / "continue" / "mutable" / "private"
+                           / "native" / "return" / "import" / "module" / "while" / "break" / "false"
+                           / "match" / "alias" / "type" / "else" / "true" / "with" / "val" / "def"
+                           / "for" / "if" / "in" / "_"
+                           ) !IdentChar
     IdentChar           <- [a-zA-Z0-9_]
     Identifier          <- !Keyword ValueName
 
@@ -293,10 +299,10 @@ Silver:
     ValueName           <~ [a-z_] IdentChar*
     TypeName            <~ [A-Z] IdentChar*
 
-    Spacing             <- :(' ' / '\t' / Comment)*
+    Spacing             <- :([ \t]+ / Comment)*
 
     # Line comments stop before the newline so it still acts as a separator.
     # Block comments nest, and any newlines inside them are not separators.
-    Comment             <- LineComment / BlockComment
+    Comment             <- &'/' (LineComment / BlockComment)
     LineComment         <- "//" (!eol .)*
     BlockComment        <- "/*" (BlockComment / !"*/" .)* "*/"
