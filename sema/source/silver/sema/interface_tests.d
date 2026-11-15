@@ -274,12 +274,34 @@ def conv<T: A & B>(x: T): T => x
     auto message = analyzed(declared ~ "def main(): Unit {\n val v: Box? = mk(1)\n}")
         .onlyMessage(DiagnosticCode.NoMatchingOverload);
     message.should.contain("`Box` isn't one");
-    message.should.contain("argument 1 can't be `Box`");
+    message.should.contain("argument 1 can't be `Box`, which the expected type gives `T`");
     // Each fails on the literal, and a `[Box]` isn't an `A`, so the first isn't chosen without the expected type.
     message = analyzed(declared ~ "def main(): Unit {\n val q: [Box] = conv(1)\n}")
         .onlyMessage(DiagnosticCode.NoMatchingOverload);
     message.should.contain("argument 1 can't be `Box`");
     message.should.contain("argument 1 can't be `[Box]`");
+}
+
+@("a function that fails on an argument whatever the expected type is doesn't keep the others from being chosen without it")
+unittest
+{
+    enum declared = `
+interface A { def a(x: Self): Int }
+interface B { def b(x: Self): Int }
+type Box(n: Int)
+def a(x: Int): Int => 1
+def b(x: Int): Int => 1
+def a(x: Box): Int => 1
+def a(x: [Box]): Int => 1
+def b(x: [Box]): Int => 1
+def conv<T: A>(x: T): [T] => [x]
+def conv<T: A & B>(x: T): T => x
+`;
+    // Each fails only on the literal, so the choice is made without the expected type, and the
+    // literal is the error against the one chosen, with or without a function that takes a `Bool`.
+    enum call = "def main(): Unit {\n val q: [Box] = conv(1)\n}";
+    analyzed(declared ~ call).onlyMessage(DiagnosticCode.TypeMismatch);
+    analyzed(declared ~ "def conv(x: Bool): Int => 0\n" ~ call).onlyMessage(DiagnosticCode.TypeMismatch);
 }
 
 @("two functions whose bounds ask for different things are duplicates")

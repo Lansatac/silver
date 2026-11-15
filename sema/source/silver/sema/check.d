@@ -3,7 +3,7 @@ module silver.sema.check;
 import std.algorithm;
 import std.array;
 import std.conv;
-import std.range : enumerate, iota, repeat;
+import std.range : iota, repeat;
 import std.sumtype;
 import std.string;
 
@@ -2901,9 +2901,10 @@ private final class TypeChecker
         Fit[] fits;
         /// Why it doesn't fit, or null when it does.
         string problem;
-        /// Whether what doesn't fit is an argument, against what the expected type binds while the
-        /// bounds hold for it.
+        /// Whether what doesn't fit is an argument, against what the expected type binds.
         bool againstExpected;
+        /// Whether the bounds fail for what the expected type binds.
+        bool boundsAgainstExpected;
 
         bool fitsAll() const => problem is null;
     }
@@ -2948,12 +2949,11 @@ private final class TypeChecker
             return tried;
         }
         auto tried = fitAll(expected);
-        // When every function that got this far fails only because what the expected type binds
-        // doesn't suit an argument, the choice is made without it, so the argument is reported
-        // against the chosen function, as for a lone one. One its bounds ruled out stays out.
-        auto pastArity = groups.joiner.map!(t => t.fitsAll).array;
-        auto reached = tried.joiner.array.enumerate.filter!(p => pastArity[p.index]).map!(p => p.value);
-        if (!reached.any!(t => t.fitsAll) && reached.all!(t => t.againstExpected)) tried = fitAll(Type.init);
+        // When what the expected type binds leaves nothing fitting the arguments, the choice is made
+        // without it, so the argument is reported against the chosen function, as for a lone one.
+        // Not when it broke a function's bounds, since that would bring the function back.
+        if (!tried.joiner.any!(t => t.fitsAll) && tried.joiner.any!(t => t.againstExpected)
+            && !tried.joiner.any!(t => t.boundsAgainstExpected)) tried = fitAll(Type.init);
         groups = tried;
         // An argument whose type is already an error fits anything, so it would only add to it.
         auto reportable = !typed.any!(t => t != Type.init && _types.mentionsError(t));
@@ -3107,18 +3107,22 @@ private final class TypeChecker
         if (conformance.failure is null && params.any!(p => p.id !in bound))
         {
             settleResult(trial.func, false);
+            auto open = params.filter!(p => p.id !in bound).array;
             bindExpected(signatureOf(trial.func).ret, expected, params, bound);
+            auto fromExpected = open.filter!(p => p.id in bound).array;
             // What the expected type binds has to suit the arguments that adapt, as it does once
             // this function is chosen. It only says whether they fit, not how well.
-            // When the bounds fail for it too, the function is ruled out whatever the arguments are.
             foreach (i; 0 .. call.args.length)
             {
                 if (!byShape(i)) continue;
                 auto param = _types.substitute(signature.params[i], bound);
                 if (fitAt(i, param) == Fit.none)
                 {
-                    trial.problem = misfit(i, param);
-                    trial.againstExpected = conformanceOf(trial.func, bound, site).failure is null;
+                    auto given = fromExpected.filter!(p => _types.mentionsParameter(signature.params[i], p.id)).array;
+                    trial.problem = misfit(i, param)
+                        ~ (given.length == 1 ? ", which the expected type gives `%s`".format(given[0].name) : "");
+                    trial.againstExpected = true;
+                    trial.boundsAgainstExpected = conformanceOf(trial.func, bound, site).failure !is null;
                     return;
                 }
             }
@@ -3127,6 +3131,7 @@ private final class TypeChecker
                 if (typed[i] == Type.init && isIntLiteral(arg)) bindParams(signature.params[i], _types.int_, params, bound);
             }
             conformance = conformanceOf(trial.func, bound, site);
+            trial.boundsAgainstExpected = conformance.failure !is null && fromExpected.length > 0;
         }
         if (conformance.failure !is null) trial.problem = conformance.failure.replace("\n", "\n    ");
     }
