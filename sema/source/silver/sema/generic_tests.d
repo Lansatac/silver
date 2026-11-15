@@ -371,6 +371,120 @@ def ok<U>(xs: [U]): Bool {
 }`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("W", 2));
 }
 
+@("a constructor used as a value builds the instance it returns, not one its parameters mention")
+unittest
+{
+    analyzedModule(`
+type Bad
+type W<T>(fixed: W<Int>?, items: [T]) invariant ok(items) else Bad
+def ok<U>(xs: [U]): Bool {
+    if length(xs) > 0 { return true }
+    val mk: (W<Int>?, [[U]]) -> W<[U]> ! Bad = W
+    match mk(None, [xs]) {
+        Ok(_) => true
+        Error(_) => false
+    }
+}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("W", 5));
+    analyzedModule(`
+type Bad
+type W<T>(items: [T]) invariant ok(items) else Bad
+def ok<U>(xs: [U]): Bool {
+    if length(xs) > 0 { return true }
+    val mk: ([[U]]) -> W<[U]> ! Bad = W
+    match mk([xs]) {
+        Ok(_) => true
+        Error(_) => false
+    }
+}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("W", 3));
+}
+
+@("a `with` that a type's invariant checks needs the invariant at the instance it changes")
+unittest
+{
+    analyzedModule(`
+type Bad
+type W<T>(items: [T], n: Int) invariant ok(items, n) else Bad
+type Holder<T>(w: W<[T]>?)
+def ok<U>(xs: [U], n: Int): Bool => n > 0 || poke(Holder<U>(None))
+def poke<U>(h: Holder<U>): Bool => match h.w {
+    None => false
+    Some(w) => match w with (n = 0) {
+        Ok(_) => true
+        Error(_) => false
+    }
+}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("w with", 1));
+}
+
+@("the invariant of a member a generic sum declares inline is needed at the sum's arguments it mentions")
+unittest
+{
+    analyzedModule(`
+type Bad
+type S<A, B> = M(b: [B]) invariant (ok(b)) else (Bad) | Stop(a: A)
+def ok<U>(xs: [U]): Bool {
+    if length(xs) > 0 { return true }
+    val s: S<Int, [U]> ! Bad = M([xs])
+    match s {
+        Ok(_) => true
+        Error(_) => false
+    }
+}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("M([xs])", 1));
+    // Growing only the parameter the member doesn't mention needs no larger invariant.
+    analyzedModule(`
+type Bad
+type S<A, B> = M(b: [B]) invariant (ok(b)) else (Bad) | Stop(a: A)
+def ok<U>(xs: [U]): Bool => true
+def grows<A>(a: A, n: Int): Int {
+    if n == 0 { return 0 }
+    val s: S<[A], Int> ! Bad = M([1])
+    grows(a, n - 1)
+}`).shouldHaveNoDiagnostics();
+}
+
+@("an error list grows when it holds a type parameter inside another member")
+unittest
+{
+    analyzedModule(`
+type Box<T>(v: T)
+def grows<E>(r: Int ! E, n: Int): Int {
+    if n == 0 { return 0 }
+    val o: Int ! E | Box<E> = r
+    grows(o, n - 1)
+}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("grows(o", 1));
+}
+
+@("growth through a loop's indexing is found however deep the loop's type and wherever the loop is")
+unittest
+{
+    enum base = `
+interface Steps<T> { def next(r: Self): (T, Self)? }
+interface Counted { def size(r: Self): Int }
+type Doubled<R>(source: R)
+def next<R: Steps<Int>>(d: Doubled<R>): (Int, Doubled<R>)? {
+    val (item, rest) = next(d.source)?
+    (item * 2, Doubled(rest))
+}
+def size<R: Counted>(d: Doubled<R>): Int => size(d.source)
+def length<R: Steps<Int> & Counted>(d: Doubled<R>): Int => count(d) + size(d.source)
+def opIndex<R: Steps<Int> & Counted>(d: Doubled<R>, i: Int): Int => i
+`;
+    analyzedModule(base ~ `
+def count<R: Steps<Int>>(r: R): Int {
+    mutable val k = 0
+    for _ in Doubled(Doubled(r)) { k += 1 }
+    k
+}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("count", 1));
+    analyzedModule(base ~ `
+def count<R: Steps<Int>>(r: R): Int {
+    val f = (x: R) => {
+        mutable val k = 0
+        for _ in Doubled(x) { k += 1 }
+        k
+    }
+    f(r)
+}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("count", 1));
+}
+
 @("a method call's receiver is its first argument for inference, and isn't converted")
 unittest
 {

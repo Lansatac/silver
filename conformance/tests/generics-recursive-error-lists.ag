@@ -9,6 +9,27 @@ def tries<E>(r: Int ! E, n: Int): Int ! E | Oops {
     tries(widened, n - 1)
 }
 
+// Two functions, each adding its own error to the other's.
+def f<E>(r: Int ! E, n: Int): Int ! E | Oops | Other {
+    if n == 0 { return r? }
+    val w: Int ! E | Oops = r
+    g(w, n - 1)
+}
+
+def g<X>(r: Int ! X, n: Int): Int ! X | Oops | Other {
+    if n == 0 { return r? }
+    val w: Int ! X | Other = r
+    f(w, n - 1)
+}
+
+// Two parameters, each merged into the other.
+def h<A, B>(a: Int ! A, b: Int ! B, n: Int): Int ! A | B {
+    if n == 0 { return a? }
+    val both: Int ! A | B = a
+    val swapped: Int ! B | A = b
+    h(both, swapped, n - 1)
+}
+
 def main(): Unit {
     val start: Int ! Other = 5
     match tries(start, 3) {
@@ -20,5 +41,15 @@ def main(): Unit {
         Ok(v) => printl(v)
         Error(Other(code)) => printl("other {code}")
         Error(Oops(code)) => printl("oops {code}")
+    }
+    val other: Int ! Other = 7
+    val oops: Int ! Oops = 8
+    match f(other, 3) {
+        Ok(v) => printl(v)
+        Error(_) => printl("error")
+    }
+    match h(other, oops, 3) {
+        Ok(v) => printl(v)
+        Error(_) => printl("error")
     }
 }

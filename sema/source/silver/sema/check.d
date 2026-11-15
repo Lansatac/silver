@@ -441,18 +441,19 @@ private final class TypeChecker
         _invariantUses ~= use;
     }
 
-    /// The type arguments of the instance of `decl` in `type`, for the type parameters of its
-    /// invariant's functions, or null if there's none. A member a sum declares inline is built as
-    /// the sum, and has the sum's parameters it mentions.
+    /// The type arguments of the instance of `decl` that `type` builds, for the type parameters of
+    /// its invariant's functions, or null if there's none. `type` is the instance, what a
+    /// construction gives, or a constructor's function type, so only the success side of what it
+    /// returns is the instance: a parameter can hold others. A member a sum declares inline is
+    /// built as the sum, and has the sum's parameters it mentions.
     private const(Type)[] argumentsOf(Type type, const TypeDecl decl)
     {
+        type = _types[type].match!((const FunctionData f) => f.ret, _ => type);
+        type = _types[type].match!((const ErrorUnionData u) => u.success, _ => type);
         auto owner = _declarer.ownerOf(decl.id);
         auto sought = owner !is null && decl.inheritsParams ? _types[*owner].match!((const NominalData n) => n.decl, _ => decl.id)
             : decl.id;
-        const(Type)[] found;
-        eachNominal(_types, type, (Type _, const NominalData n) {
-            if (found is null && n.decl == sought && n.args.length > 0) found = n.args;
-        });
+        auto found = _types[type].match!((const NominalData n) => n.decl == sought ? n.args : null, _ => null);
         if (found is null || sought == decl.id) return found;
         auto sumParams = _resolutions.declarations.types[sought].typeParams;
         const(Type)[] args;

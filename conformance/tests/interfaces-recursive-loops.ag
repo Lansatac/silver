@@ -1,0 +1,30 @@
+// A loop in a generic function indexes where the instance's type has `length` and `opIndex`.
+// Here the `length` it finds doesn't need a larger instance, so the instances are finite.
+interface Steps<T> { def next(r: Self): (T, Self)? }
+interface Counted { def size(r: Self): Int }
+
+def next(xs: [Int]): (Int, [Int])? => if xs.length() == 0 => None else (xs[0], xs[1..])
+def size(xs: [Int]): Int => xs.length()
+
+type Doubled<R>(source: R)
+
+def next<R: Steps<Int>>(d: Doubled<R>): (Int, Doubled<R>)? {
+    val (item, rest) = next(d.source)?
+    (item * 2, Doubled(rest))
+}
+def size<R: Counted>(d: Doubled<R>): Int => size(d.source)
+def length<R: Steps<Int> & Counted>(d: Doubled<R>): Int => size(d.source)
+def opIndex<R: Steps<Int> & Counted>(d: Doubled<R>, i: Int): Int => i
+
+def count<R: Steps<Int>>(r: R): Int {
+    mutable val k = 0
+    for _ in Doubled(r) { k += 1 }
+    k
+}
+
+def twice<R: Steps<Int>>(r: R): Int => count(Doubled(r))
+
+def main(): Unit {
+    printl(count([1, 2]))
+    printl(twice([1, 2, 3]))
+}
