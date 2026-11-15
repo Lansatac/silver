@@ -306,6 +306,7 @@ private final class TypeChecker
         }
 
         _declarer.checkInhabited(programModules);
+        _declarer.rejectGrowingTypes(programModules);
         answerQueries();
         rejectGrowingCalls();
 

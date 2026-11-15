@@ -1,0 +1,7 @@
+// Each instance of `Grow` holds one at a larger type, so it would need endlessly many.
+type Grow<T> = More(rest: Grow<(T, T)>, head: T) | Stop
+
+def main(): Unit {
+    val g: Grow<Int> = Stop
+    printl(g)
+}

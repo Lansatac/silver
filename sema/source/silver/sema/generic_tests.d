@@ -306,6 +306,21 @@ def fixed<T>(x: T, n: Int): Int => if n == 0 => 0 else fixed([1], n - 1)`).shoul
         .shouldReport(DiagnosticCode.PolymorphicRecursion, At("g", 1));
 }
 
+@("a generic type can hold itself at its type parameters passed along or swapped, but not at ones that grow")
+unittest
+{
+    analyzedModule(`
+type List<T> = Cons(head: T, rest: List<T>) | Nil
+type Tree<T>(kids: [Tree<T>], value: T)
+type Flip<A, B>(next: Flip<B, A>?, value: A)
+type Fixed<T>(next: Fixed<Int>?, value: T)`).shouldHaveNoDiagnostics();
+    analyzedModule("type Grow<T> = More(rest: Grow<(T, T)>, head: T) | Stop")
+        .shouldReport(DiagnosticCode.PolymorphicRecursion, At("Grow", 2));
+    analyzedModule("type Nest<T>(next: Nest<[T]>?)").shouldReport(DiagnosticCode.PolymorphicRecursion, At("Nest", 2));
+    analyzedModule("type A<T>(b: B<[T]>?)\ntype B<U>(a: A<U>?)").shouldReport(DiagnosticCode.PolymorphicRecursion, At("B", 1));
+    analyzedModule("type F<T>(f: (T) -> F<[T]>?)").shouldReport(DiagnosticCode.PolymorphicRecursion, At("(T)", 1));
+}
+
 @("a method call's receiver is its first argument for inference, and isn't converted")
 unittest
 {

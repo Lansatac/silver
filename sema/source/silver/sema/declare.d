@@ -9,6 +9,7 @@ import std.sumtype;
 import std.string;
 
 import silver.ast;
+import silver.sema.recursion;
 import silver.sema.resolve;
 import silver.sema.type;
 import silver.sema.typing;
@@ -683,6 +684,56 @@ package final class Declarer
         }
     }
 
+
+    /// Reports each generic type that holds an instance of itself at ever larger type arguments,
+    /// in a field or as a member, directly or through other types.
+    package void rejectGrowingTypes(M)(M modules)
+    {
+        Use!(Id!TypeDecl)[] uses;
+        const(TypeDecl)[] ordered;
+        foreach (mod; modules)
+        {
+            foreach (decl; mod.declarations)
+            {
+                decl.kind.match!((const TypeDecl t) { ordered ~= t; }, (_) {});
+            }
+        }
+        const(TypeDecl)*[Id!TypeDecl] decls;
+        foreach (ref decl; ordered) decls[decl.id] = &decl;
+        foreach (decl; ordered)
+        {
+            if (decl.typeParams.length == 0) continue;
+            // A member declared inline has its sum's type parameters, so it's named as the sum.
+            Id!TypeDecl from = decl.id;
+            if (auto owner = decl.inheritsParams ? decl.id in _owners : null)
+            {
+                from = _types[*owner].match!((const NominalData n) => n.decl, _ => decl.id);
+            }
+            void holds(Type type, Span span)
+            {
+                eachNominal(_types, type, (Type _, const NominalData n) {
+                    if (n.args.length > 0) uses ~= Use!(Id!TypeDecl)(from, n.decl, n.args, span);
+                });
+            }
+            if (decl.members.length > 0)
+            {
+                foreach (member; _typing.members.get(decl.id, null)) holds(member, decl.nameSpan);
+                continue;
+            }
+            auto fields = _typing.fields.get(decl.id, null);
+            foreach (i, field; fields) holds(field.type, i < decl.fields.length ? decl.fields[i].type.span : decl.nameSpan);
+        }
+
+        const(TypeParam)[] paramsOf(Id!TypeDecl d) => d in decls ? decls[d].typeParams : null;
+        string instance(Id!TypeDecl d, const(Type)[] args) => "`%s`".format(_types.describe(_types.nominal(d, decls[d].name, args)));
+        for (auto cycle = growingCycle(uses, &paramsOf, _types); cycle !is null; cycle = growingCycle(uses, &paramsOf, _types))
+        {
+            _collector.reportError(DiagnosticCode.PolymorphicRecursion, cycle[0].span,
+                "`%s` can't be compiled, as it would need endlessly many types, each holding a larger one: %-(%s, then %), and so on"
+                    .format(decls[cycle[0].from].name, instancesAround(cycle, &paramsOf, _types, &instance)));
+            uses = uses.filter!(u => !cycle.canFind!(c => c.from == u.from)).array;
+        }
+    }
 
     /// What the sum `type` can be, with its type arguments filled in.
     package const(Type)[] membersOf(Type type)

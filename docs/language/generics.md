@@ -134,6 +134,14 @@ def grow<T>(x: T): Unit => grow([x])        // error: `grow<T>`, then `grow<[T]>
 
 The same goes for the functions a call finds for a bound, as the instances they're compiled at come from the call.
 
+A generic type is the same: it can hold itself, in a field or as a member, directly or through other types, only at type arguments that don't grow. One that holds a larger instance of itself would need endlessly many types, so it's an error at the type that grows, whether or not anything uses it.
+
+```silver
+type List<T> = Cons(head: T, rest: List<T>) | Nil         // fine
+type Flip<A, B>(next: Flip<B, A>?, value: A)               // fine
+type Grow<T> = More(rest: Grow<(T, T)>, head: T) | Stop    // error: `Grow<T>`, then `Grow<(T, T)>`, then ...
+```
+
 ## Open questions
 
 - Ordering a type parameter's values, which waits on `Ord`. See [Interfaces](interfaces.md#open-questions).
