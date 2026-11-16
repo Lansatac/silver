@@ -304,6 +304,82 @@ def conv<T: A & B>(x: T): T => x
     analyzed(declared ~ "def conv(x: Bool): Int => 0\n" ~ call).onlyMessage(DiagnosticCode.TypeMismatch);
 }
 
+@("a bound only a lambda's result would decide leaves functions that differ in their bounds tied, and asks for its result type")
+unittest
+{
+    enum declared = `
+interface A { def a(x: Self): Int }
+interface B { def b(x: Self): Int }
+def a(x: Int): Int => 1
+def a(x: Float): Int => 1
+def name(n: Int): String => "n"
+def ap<T>(x: Int, g: (Int) -> T): Int => 1
+def ap<T: A>(x: Int, g: (Int) -> T): String => "a"
+def bq<T: A>(x: Int, g: (Int) -> T): Int => 1
+def bq<T: A & B>(x: Int, g: (Int) -> T): String => "b"
+`;
+    analyzed(declared ~ "def main(): Unit {\n val p = ap(1, n => \"s\")\n}")
+        .onlyMessage(DiagnosticCode.AmbiguousOverload).should.contain("write its result type");
+    analyzed(declared ~ "def main(): Unit {\n val p = ap(1, n => n + 1)\n}").onlyMessage(DiagnosticCode.AmbiguousOverload);
+    analyzed(declared ~ "def main(): Unit {\n val p = bq(1, n => n)\n}").onlyMessage(DiagnosticCode.AmbiguousOverload);
+    // An annotated lambda, or a named function, has a type of its own, so its result decides.
+    auto a = analyzed(declared ~ "def main(): Unit {\n val p = ap(1, (n): String => \"s\")\n val q = ap(2, (n: Int): Int => n)\n"
+        ~ " val r = ap(3, name)\n val s = 3.ap((n): Int => n)\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType(`ap(1, (n): String => "s")`, "Int");
+    a.shouldHaveType("ap(2, (n: Int): Int => n)", "String");
+    a.shouldHaveType("ap(3, name)", "Int");
+    a.shouldHaveType("3.ap((n): Int => n)", "String");
+    // With `bq`, only the second's bounds would fail for an `Int`, and only the first's hold for a `String`.
+    analyzed(declared ~ "def main(): Unit {\n val p = bq(1, (n): String => \"s\")\n}")
+        .onlyMessage(DiagnosticCode.NoMatchingOverload).should.contain("`String` isn't one");
+}
+
+@("what a lambda's result would decide stays undecided for the rest of the choice, as the reviewer's cases show")
+unittest
+{
+    enum declared = `
+interface A { def a(x: Self): Int }
+def a(x: Float): Int => 1
+def a(x: Int?): Int => 1
+def f<T, U>(g: (Int) -> T, h: (T) -> U, x: T): Int => 1
+def f<T, U: A>(g: (Int) -> T, h: (T) -> U, x: T): String => "a"
+def k<T, U>(xs: [T], y: T, g: (T) -> U): Int => 1
+def k<T, U: A>(xs: [T], y: T, g: (T) -> U): String => "a"
+def ap<T, U>(x: T, g: (T) -> U): Int => 1
+def ap<T, U: A>(x: T, g: (T) -> U): String => "a"
+`;
+    // An earlier lambda's result binds `T` for the call, so the literal doesn't decide it here either.
+    analyzed(declared ~ "def main(): Unit {\n val p = f(n => 1.5, t => t, 1)\n}").onlyMessage(DiagnosticCode.AmbiguousOverload);
+    analyzed(declared ~ "def main(): Unit {\n val q = k([Some(1), None], 2, t => t)\n}").onlyMessage(DiagnosticCode.AmbiguousOverload);
+    analyzed(declared ~ "def main(): Unit {\n val p = ap(3, t => \"s\")\n}").onlyMessage(DiagnosticCode.AmbiguousOverload);
+    analyzed(declared ~ "def main(): Unit {\n val q = 3.ap(t => \"s\")\n}").onlyMessage(DiagnosticCode.AmbiguousOverload);
+    // Written out, the results decide.
+    auto a = analyzed(declared ~ "def main(): Unit {\n val p = f((n): Float => 1.5, (t): Float => t, 1)\n"
+        ~ " val q = k([Some(1), None], 2, (t): Int? => t)\n val r = ap(3, (t): String => \"s\")\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("f((n): Float => 1.5, (t): Float => t, 1)", "String");
+    a.shouldHaveType("k([Some(1), None], 2, (t): Int? => t)", "String");
+    a.shouldHaveType(`ap(3, (t): String => "s")`, "Int");
+}
+
+@("a lambda isn't typed for the current module's functions when an imported one would give it other parameters")
+unittest
+{
+    enum lib = "module lib\ndef ap<T>(x: Int, g: (String) -> T): Int => 1\n";
+    enum declared = `import lib
+interface A { def a(x: Self): Int }
+interface B { def b(x: Self): Int }
+def a(x: Int): Int => 1
+def ap<T: A>(x: Int, g: (Int) -> T): Int => 1
+def ap<T: A & B>(x: Int, g: (Int) -> T): Int => 1
+`;
+    // Nothing says the lambda's parameter is an `Int`, so no message should say it is one.
+    auto a = analyzed(declared ~ "def main(): Unit {\n val p = ap(1, s => \"x\")\n}", ["lib.ag": lib]);
+    a.collector.diagnostics.length.should.equal(1);
+    a.collector.diagnostics[0].message.should.not.contain("(Int) -> String");
+}
+
 @("two functions whose bounds ask for different things are duplicates")
 unittest
 {

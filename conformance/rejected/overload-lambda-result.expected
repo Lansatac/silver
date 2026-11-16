@@ -1,0 +1,1 @@
+T0034: This call fits more than one `ap`: `ap<T>(Int, (Int) -> T)` and `ap<T: A>(Int, (Int) -> T)`, which differ in their bounds, and only what a lambda here returns says which hold; write its result type, as in `(x): Int => ...`

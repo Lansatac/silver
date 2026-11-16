@@ -2995,6 +2995,8 @@ private final class TypeChecker
         bool againstExpected;
         /// Whether the bounds fail for what the expected type binds.
         bool boundsAgainstExpected;
+        /// Whether a bound is undecided because only a lambda's result would say what its type is.
+        bool awaitsLambda;
 
         bool fitsAll() const => problem is null;
     }
@@ -3214,6 +3216,7 @@ private final class TypeChecker
             }
         }
         auto conformance = binding.conformance;
+        trial.awaitsLambda = conformance.pending && binding.undecided.length > 0;
         if (conformance.failure is null) return;
         trial.problem = conformance.failure.replace("\n", "\n    ");
         trial.boundsAgainstExpected = !binding.failedEarly && binding.fromExpected.length > 0;
@@ -3481,7 +3484,15 @@ private final class TypeChecker
         auto winners = trials.filter!(t => trials.all!(u => u.func == t.func || beats(t, u))).array;
         if (winners.length == 1) return winners[0].func;
         if (!reportable) return Id!FunctionDecl.init;
-        auto tied = trials.filter!(t => !trials.any!(u => beats(u, t))).map!(t => "`" ~ overloadLabel(t.func) ~ "`").array;
+        auto unbeaten = trials.filter!(t => !trials.any!(u => beats(u, t))).array;
+        auto tied = unbeaten.map!(t => "`" ~ overloadLabel(t.func) ~ "`").array;
+        if (unbeaten.any!(t => t.awaitsLambda))
+        {
+            _collector.reportError(DiagnosticCode.AmbiguousOverload, span,
+                ("This call fits more than one `%s`: %s, which differ in their bounds, and only what a lambda here returns "
+                    ~ "says which hold; write its result type, as in `(x): Int => ...`").format(spelled, tied.join(" and ")));
+            return Id!FunctionDecl.init;
+        }
         _collector.reportError(DiagnosticCode.AmbiguousOverload, span,
             "This call fits more than one `%s` equally well: %s; convert an argument, or annotate it, to choose one"
                 .format(spelled, tied.join(" and ")));
@@ -3504,7 +3515,8 @@ private final class TypeChecker
         if (!aGeneric) return false;
         auto aTakes = accepts(a.func, b.func), bTakes = accepts(b.func, a.func);
         if (aTakes != bTakes) return bTakes;
-        return asksForMore(a.func, b.func);
+        // Bounds that only a lambda's result would decide can't say the function fits better.
+        return asksForMore(a.func, b.func) && !a.awaitsLambda;
     }
 
     /// Whether `a` and `b` take the same parameters and `a`'s bounds require every function `b`'s
@@ -4816,6 +4828,11 @@ private final class TypeChecker
             {
                 types ~= param.annotated ? quietlyResolved(param.type) : expectation.params[j];
                 mutables ~= param.mutable;
+            }
+            if (lambda.returnType !is null && (arg.id in _resolutions.lambdaFloors) is null)
+            {
+                bind(i, _types.function_(types, quietlyResolved(*lambda.returnType), mutables));
+                return;
             }
             _types[signature.params[i]].match!(
                 (const FunctionData f) {
