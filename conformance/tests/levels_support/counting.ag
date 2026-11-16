@@ -1,0 +1,11 @@
+module levels_support.counting
+
+forward import forward_support.ranges
+forward import levels_support.tally
+
+// Its own `count` and `Square` beside what it forwards: the function is one more overload, so
+// `Tally` still has the `count` that makes it `Counted`, and the type hides the sum's member.
+type Bin(k: Int)
+type Square(width: Int)
+
+def count(b: Bin): Int => b.k

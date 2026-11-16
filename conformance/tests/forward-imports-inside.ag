@@ -1,0 +1,8 @@
+// A forwarding module ranks what it forwards as one group, as its importers do.
+import forward_support.together
+
+def main(): Unit {
+    printl(firsts())
+    printl(first([1, 2]))
+    printl(first(Bag(6)))
+}

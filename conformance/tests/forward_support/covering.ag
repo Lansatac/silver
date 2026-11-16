@@ -1,0 +1,9 @@
+module forward_support.covering
+
+forward import forward_support.arrays
+
+// These hide what `arrays` has by their names, and its `first` stays an overload beside this one.
+val limit: Int = 10
+val unlisted: String = "covering.unlisted"
+type Stack(depth: Int)
+def first(text: String): String => "covering.first {text}"

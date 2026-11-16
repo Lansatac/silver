@@ -42,6 +42,8 @@ enum DiagnosticCode : string
     InterfaceIsNotAType = "S0026",
     /// A type named where a bound wants an interface.
     NotAnInterface = "S0027",
+    /// A cycle of forward imports that never settles on what a module passes on by a name.
+    UnsettledForwardCycle = "S0028",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",

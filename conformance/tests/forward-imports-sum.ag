@@ -1,0 +1,12 @@
+// Forwarding a sum forwards its members.
+import forward_support.shapes
+
+def main(): Unit {
+    printl(describe(unit()))
+    printl(describe(Circle(2)))
+    val shape: Shape = forward_support.shapes.Square(3)
+    printl(match shape {
+        Circle(r) => r
+        Square(s) => s
+    })
+}

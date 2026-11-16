@@ -1,0 +1,6 @@
+module forward_support.parcel
+
+type Parcel(weight: Int)
+
+def size(p: Parcel): Int => p.weight
+def unwrap(p: Parcel): Int => p.weight

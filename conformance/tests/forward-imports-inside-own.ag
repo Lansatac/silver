@@ -1,0 +1,8 @@
+// A forwarding module's own function of a name doesn't split what its forwards bring by that name
+// into separate groups inside it.
+import forward_support.togetherown
+
+def main(): Unit {
+    printl(firsts())
+    printl(first("y"))
+}

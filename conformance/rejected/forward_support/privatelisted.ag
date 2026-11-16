@@ -1,0 +1,5 @@
+module forward_support.privatelisted
+
+forward import forward_support.one : same, limit
+
+private val limit: Int = 9

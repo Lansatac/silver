@@ -1,0 +1,3 @@
+module forward_support.swing2f
+
+def pick(x: Int): String => "f"

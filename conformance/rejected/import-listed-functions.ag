@@ -1,0 +1,7 @@
+// Two imports listing functions of the same parameters from different modules are a duplicate.
+import levels_support.far : describe
+import levels_support.near : describe
+
+def main(): Unit {
+    printl(describe("s"))
+}

@@ -1,0 +1,6 @@
+// A qualified call that blanket forwards make ambiguous: the advice qualifies by the declaring module alone.
+import forward_support.blanket
+
+def main(): Unit {
+    printl(forward_support.blanket.same(1))
+}

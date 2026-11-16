@@ -1,0 +1,6 @@
+module levels_support.hider
+
+forward import levels_support.far
+
+// Takes what `far`'s does, so its importers get this one instead.
+def onlyFar(): String => "hider"

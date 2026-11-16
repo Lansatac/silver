@@ -1,0 +1,15 @@
+// What a forwarding module passes on under a name is what the name means in it.
+import levels_support.kit
+import levels_support.counting
+
+def main(): Unit {
+    printl(origin)
+    printl(describe(1))
+    printl(describe("s"))
+    printl(onlyFar())
+    printl(total(Tally(2)))
+    printl(total(Bin(3)))
+    printl(Square(4).width)
+    val shape: Shape = Circle(5)
+    printl(describe(shape))
+}

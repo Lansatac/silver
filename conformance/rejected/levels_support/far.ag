@@ -1,0 +1,7 @@
+module levels_support.far
+
+val origin: Int = 1
+type Point(far: Int)
+def describe(x: Int): String => "far Int"
+def describe(x: String): String => "far String"
+def onlyFar(): String => "far"

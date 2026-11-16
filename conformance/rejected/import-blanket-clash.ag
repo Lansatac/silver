@@ -1,0 +1,8 @@
+// Two imports that bring every name are ambiguous only where a name they share is used.
+import levels_support.far
+import levels_support.near
+
+def main(): Unit {
+    printl(onlyFar())
+    printl(origin)
+}

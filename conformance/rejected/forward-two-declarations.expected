@@ -1,1 +1,1 @@
-S0003: 'limit' would be forwarded from both 'forward_support.one' and 'forward_support.two', which declare different things by that name; list the names to forward from one of them
+S0003: 'limit' would be forwarded from both 'forward_support.one' and 'forward_support.two', which declare different things by that name; forward it from only one of them

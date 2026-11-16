@@ -1,0 +1,7 @@
+// Inside a forwarding module, what it forwards comes from an import, so it ties with another
+// import's function as it does when the module declares no function of that name.
+import forward_support.inside
+
+def main(): Unit {
+    printl(call())
+}

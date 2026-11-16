@@ -126,6 +126,10 @@ package struct Resolution
     /// `alias IntBox = Box<Int>`, by the alias: `resolutions` has the type, and the alias its
     /// type arguments.
     SideTable!(Id!Expr, Id!AliasDecl) aliasedInstances;
+    /// Each module's `forward import`s, in order.
+    ForwardImport[][string] forwardImports;
+    /// Each name each module's imports and forwards list, in order.
+    ListedImport[][string] listedImports;
 
     /// The type parameters of `func`: those it declares, then its hidden ones.
     const(TypeParam)[] typeParamsOf(Id!FunctionDecl func) const
@@ -142,7 +146,8 @@ package struct Resolution
         {
             if (!isFunction(*symbol)) return Candidates.init;
         }
-        return grouped(own.functionsNamed(name), own.modulesProviding(name).array, m => broughtFunctions(m, name));
+        auto forwarded = forwardedGroup(forwardsOf(from, name), own, name, m => publicFunctions(m, name));
+        return grouped(from, own.functionsNamed(name), forwarded, own.modulesProviding(name).array, m => broughtFunctions(m, name));
     }
 
     /// The functions named `name` that the module `m` declares and lets other modules see.
@@ -175,34 +180,73 @@ package struct Forward
 {
     string origin;
     Span span;
+    /// Whether that `forward import` lists the name, or a sum it carries the name as a member of.
+    bool listed;
 }
 
-/// `own`, then the functions each of `imports` brings that aren't among them, a group per import.
-/// An import that brings nothing another doesn't is left out, so imports that lead to the same
-/// functions count once.
-private Candidates grouped(Id!FunctionDecl[] own, const(string)[] imports,
+/// A `forward import`: the module, and the names it lists, which are none for a blanket one.
+package struct ForwardImport
+{
+    string target;
+    const(string)[] names;
+    Span span;
+}
+
+/// A name an import or forward lists.
+package struct ListedImport
+{
+    string target;
+    string name;
+    Span span;
+    bool forward;
+}
+
+/// Something importing a module brings, and the module declaring it.
+private struct Brought(Symbol)
+{
+    Symbol symbol;
+    string owner;
+}
+
+/// The functions a module forwards as one name, which it ranks as one group as its importers do,
+/// and the forward import that a message names them by.
+private struct ForwardedGroup
+{
+    Id!FunctionDecl[] functions;
+    string source;
+}
+
+/// What `forwards`, a module's forwards of `name`, bring it as functions, as `publicFunctions` of
+/// each declaring module gives them. `moduleScope` is the module's.
+private ForwardedGroup forwardedGroup(const(Forward)[] forwards, const Scope moduleScope, string name,
+    scope Id!FunctionDecl[] delegate(string) publicFunctions)
+{
+    ForwardedGroup group;
+    foreach (forward; forwards) group.functions ~= publicFunctions(forward.origin);
+    auto sources = moduleScope.forwardsProviding(name);
+    if (!sources.empty) group.source = sources.front;
+    return group;
+}
+
+/// `own`, then the functions the module forwards and those each of `imports` brings that aren't
+/// among them, a group each. The checker leaves out a group that brings nothing another doesn't, once
+/// it knows what each import hides, so imports that lead to the same functions count once.
+private Candidates grouped(string current, Id!FunctionDecl[] own, ForwardedGroup forwarded, const(string)[] imports,
     scope Id!FunctionDecl[] delegate(string) brought)
 {
     Id!FunctionDecl[][] groups;
-    string[] sources;
-    foreach (m; imports)
+    string[] sources, exporters;
+    void add(Id!FunctionDecl[] functions, string source, string exporter)
     {
-        auto group = brought(m).filter!(f => !own.canFind(f)).array;
-        if (group.length == 0) continue;
+        auto group = functions.filter!(f => !own.canFind(f)).array;
+        if (group.length == 0) return;
         groups ~= group;
-        sources ~= m;
+        sources ~= source;
+        exporters ~= exporter;
     }
-    bool covered(size_t i)
-    {
-        foreach (j, other; groups)
-        {
-            if (j == i || !groups[i].all!(f => other.canFind(f))) continue;
-            if (groups[i].length < other.length || j < i) return true;
-        }
-        return false;
-    }
-    auto kept = groups.length.iota.filter!(i => !covered(i)).array;
-    return Candidates(own ~ kept.map!(i => groups[i]).array, [string.init] ~ kept.map!(i => sources[i]).array);
+    add(forwarded.functions, forwarded.source, current);
+    foreach (m; imports) add(brought(m), m, m);
+    return Candidates(own ~ groups, [string.init] ~ sources, [string.init] ~ exporters, current);
 }
 
 /// A function that a bound supplies inside the generic function `owner`: the interface's function
@@ -241,8 +285,23 @@ package struct Candidates
     Id!FunctionDecl[][] groups;
     /// The import that brought each group, where that's known. The first group has none.
     string[] sources;
+    /// The module whose exports each group is, so the checker can leave out what a nearer function
+    /// there hides: one it imports, or the module itself for what it forwards. Empty for none.
+    string[] exporters;
+    /// The module whose scope found them, for a plain name, whose imports' levels hide farther
+    /// functions the same way.
+    string scopeModule;
 
-    size_t count() const => groups.map!(g => g.length).sum;
+    /// How many different functions there are, since imports can lead to the same ones.
+    size_t count() const
+    {
+        const(Id!FunctionDecl)[] seen;
+        foreach (f; groups.joiner)
+        {
+            if (!seen.canFind(f)) seen ~= f;
+        }
+        return seen.length;
+    }
 }
 
 /// Resolves every name in `program`, reporting problems to `collector`.
@@ -261,6 +320,8 @@ package struct ModuleAccess
     string name;
     bool everyName;
     const(string)[] names;
+    /// Whether one of them is a `forward import`.
+    bool forwards;
 
     bool provides(string member) const
     {
@@ -319,10 +380,43 @@ package final class Scope
         return _importedModules;
     }
 
+    /// Each imported module, with which of its names are given unqualified.
+    const(ModuleAccess)[] imports() const
+    {
+        return _imports;
+    }
+
     /// The imported modules a bare `name` can come from.
     auto modulesProviding(string name) const
     {
         return _imports.filter!(i => i.provides(name)).map!(i => i.name);
+    }
+
+    /// The imported modules a bare `name` can come from, nearest first: those whose imports list
+    /// it, then those whose imports bring every name.
+    const(string)[][] modulesProvidingByLevel(string name) const
+    {
+        auto listing = _imports.filter!(i => i.names.canFind(name)).map!(i => i.name).array;
+        auto blanket = _imports.filter!(i => i.everyName && !i.names.canFind(name)).map!(i => i.name).array;
+        return [listing, blanket];
+    }
+
+    /// The modules this one forward imports that a bare `name` can come from.
+    auto forwardsProviding(string name) const
+    {
+        return _imports.filter!(i => i.forwards && i.provides(name)).map!(i => i.name);
+    }
+
+    /// Has the imports of `m` give `names` unqualified too.
+    void provide(string m, const(string)[] names)
+    {
+        if (names.length == 0) return;
+        auto imports = _imports.dup;
+        foreach (ref access; imports)
+        {
+            if (access.name == m) access.names ~= names;
+        }
+        _imports = imports;
     }
 
     /// Every name declared here, as a value or as a type. One that's both is there twice.
@@ -469,6 +563,8 @@ private final class NameResolver
     private SideTable!(Id!FunctionDecl, Requirement) _requirements;
     private Forward[][string][string] _forwards;
     private SideTable!(Id!Expr, Id!AliasDecl) _aliasedInstances;
+    private ForwardImport[][string] _forwardImports;
+    private ListedImport[][string] _listedImports;
     /// Where the nodes resolution makes up get their IDs.
     private NodeIds _ids;
 
@@ -490,7 +586,13 @@ private final class NameResolver
         forwardNames(modules);
         foreach (mod; modules)
         {
+            provideCarriedMembers(mod);
             reportForwardClashes(mod.name);
+        }
+        keepExported();
+        foreach (mod; modules)
+        {
+            reportListedClashes(mod);
         }
         // First, so that what uses an alias can see what it stands for.
         foreach (mod; modules)
@@ -507,16 +609,20 @@ private final class NameResolver
         }
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
             _operatorLookups, _declarations, _nativeLibraries, cast(const(Scope)[string]) _moduleScopes, _hiddenParams, _sugarParams,
-            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances);
+            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances, _forwardImports, _listedImports);
     }
 
     /// Works out what every module forwards. A blanket forward passes on what its module forwards
-    /// too, so this repeats until nothing is added, which is also what ends a cycle of them.
+    /// too, so this works it out again from the last result until that's what it gives, which is
+    /// also what ends a cycle of them. Each pass reads what a target gives by `exportOrigins`, so
+    /// a target's own nearer declarations hide what it forwards from farther away.
     private void forwardNames(R)(R modules)
     {
-        for (auto changed = true; changed;)
+        Forward[][string][string] previous;
+        foreach (pass; 0 .. 2 * modules.length + 2)
         {
-            changed = false;
+            auto first = pass == 0;
+            Forward[][string][string] next;
             foreach (mod; modules)
             {
                 foreach (decl; mod.declarations)
@@ -525,35 +631,187 @@ private final class NameResolver
                         (const ImportStmt forward) {
                             auto target = forward.path.join(".");
                             if (!forward.forward || target !in _moduleScopes) return;
+                            if (first) _forwardImports[mod.name] ~= ForwardImport(target, forward.names.map!(n => n.name).array, decl.span);
                             foreach (selected; forward.names)
                             {
-                                if (forwardName(mod.name, target, selected.name, selected.span)) changed = true;
+                                forwardName(next, mod.name, target, selected.name, selected.span, true);
+                                foreach (member; carriedMembers(target, selected.name))
+                                {
+                                    forwardName(next, mod.name, member.origin, member.name, selected.span, true);
+                                }
                             }
                             if (forward.names.length > 0) return;
                             foreach (name; publicNames(target))
                             {
-                                if (forwardName(mod.name, target, name, decl.span)) changed = true;
+                                forwardName(next, mod.name, target, name, decl.span, false);
                             }
                         },
                         (_) {},
                     );
                 }
             }
+            auto settled = sameForwards(next, _forwards);
+            previous = _forwards;
+            _forwards = next;
+            if (settled) return;
+        }
+        reportUnsettled(previous);
+    }
+
+    /// Reports each name that a module passes on differently in the last two passes of a cycle
+    /// of forwards that never settled, at a forward of it. Only the forwarding modules can fix it.
+    private void reportUnsettled(Forward[][string][string] previous)
+    {
+        foreach (m; _forwards.keys.sort)
+        {
+            foreach (name; _forwards[m].keys.sort)
+            {
+                auto now = exportOrigins(m, name).sort.array;
+                auto then = _forwards;
+                _forwards = previous;
+                auto before = exportOrigins(m, name).sort.array;
+                _forwards = then;
+                if (now == before) continue;
+                _collector.reportError(DiagnosticCode.UnsettledForwardCycle, _forwards[m][name][0].span,
+                    ("what '%s' passes on as '%s' depends on what a cycle of forwards gives it back, which never "
+                        ~ "settles; forward '%s' through only one side of the cycle").format(m, name, name));
+            }
         }
     }
 
-    /// Has `from` forward what `target` gives its importers as `name`. False if that adds nothing.
-    private bool forwardName(string from, string target, string name, Span span)
+    private static bool sameForwards(const Forward[][string][string] a, const Forward[][string][string] b)
     {
-        auto origins = (declaresPublic(target, name) ? [target] : []) ~ forwardsOf(target, name).map!(f => f.origin).array;
-        bool added;
-        foreach (origin; origins)
+        if (a.length != b.length) return false;
+        foreach (m, names; a)
         {
-            if (origin == from || forwardsOf(from, name).canFind!(f => f.origin == origin)) continue;
-            _forwards.require(from).require(name) ~= Forward(origin, span);
-            added = true;
+            auto other = m in b;
+            if (other is null || names.length != other.length) return false;
+            foreach (name, forwards; names)
+            {
+                auto those = name in *other;
+                if (those is null || forwards.length != those.length) return false;
+                if (!forwards.all!(f => (*those).canFind!(g => g.origin == f.origin && g.listed == f.listed))) return false;
+            }
         }
-        return added;
+        return true;
+    }
+
+    /// Has `from` forward, in `into`, what `target` gives its importers as `name`.
+    private void forwardName(ref Forward[][string][string] into, string from, string target, string name, Span span, bool listed)
+    {
+        foreach (origin; exportOrigins(target, name))
+        {
+            if (origin == from) continue;
+            auto forwards = &into.require(from).require(name);
+            auto existing = (*forwards).countUntil!(f => f.origin == origin);
+            if (existing < 0)
+            {
+                *forwards ~= Forward(origin, span, listed);
+            }
+            else if (listed && !(*forwards)[existing].listed)
+            {
+                (*forwards)[existing] = Forward(origin, span, true);
+            }
+        }
+    }
+
+    /// The modules declaring what importing `m` brings as `name`, by what the name means in `m`:
+    /// its own public declarations, then what it forwards by listing the name, then what its
+    /// blanket forwards bring. The nearest of those that has the name decides; a constant or type
+    /// there hides everything farther, and functions there merge with functions from every level.
+    private string[] exportOrigins(string m, string name)
+    {
+        auto ownFunctions = _moduleScopes[m].functionsNamed(name).any!(f => isPublic(SymbolId(f)));
+        auto ownOther = declaresPublic(m, name) && !ownFunctions;
+        if (ownOther) return [m];
+        auto forwards = forwardsOf(m, name);
+        string[] functionOrigins = forwards.filter!(f => hasPublicFunctions(f.origin, name)).map!(f => f.origin.idup).array;
+        if (ownFunctions) return [m] ~ functionOrigins;
+        if (forwards.length == 0) return null;
+        auto nearest = forwards.any!(f => f.listed);
+        auto atNearest = forwards.filter!(f => f.listed == nearest).array;
+        if (atNearest.any!(f => !hasPublicFunctions(f.origin, name))) return atNearest.map!(f => f.origin.idup).array;
+        return functionOrigins;
+    }
+
+    private bool hasPublicFunctions(string m, string name)
+    {
+        return _moduleScopes[m].functionsNamed(name).any!(f => isPublic(SymbolId(f)));
+    }
+
+    /// Keeps of what each module forwards only what it gives its importers, once what it gives
+    /// that's an error has been reported.
+    private void keepExported()
+    {
+        Forward[][string][string] kept;
+        foreach (m, names; _forwards)
+        {
+            foreach (name, forwards; names)
+            {
+                auto origins = exportOrigins(m, name);
+                auto exported = forwards.filter!(f => origins.canFind(f.origin)).array;
+                if (exported.length > 0) kept.require(m)[name] = exported;
+            }
+        }
+        _forwards = kept;
+    }
+
+    /// A member of a sum that a forward carries with it, and the module that gives it.
+    private static struct Carried
+    {
+        string origin;
+        string name;
+    }
+
+    /// The members that forwarding `name` from `target` carries, when it's a sum: those written
+    /// as a plain name that the sum's module gives its importers.
+    private Carried[] carriedMembers(string target, string name)
+    {
+        auto type = publicType(target, name);
+        if (type is null) return null;
+        auto sum = (*type).match!((const Id!TypeDecl t) => t, _ => Id!TypeDecl.init);
+        if (!sum.isValid) return null;
+        auto origin = _declarations.typeModules[sum];
+        Carried[] carried;
+        foreach (member; _declarations.types[sum].members)
+        {
+            auto named = member.type.kind.match!((const NamedType n) => n.path.length == 1 ? n.path[0] : null, _ => null);
+            if (named is null) continue;
+            if (declaresPublic(origin, named) || forwardsOf(origin, named).length > 0) carried ~= Carried(origin, named);
+        }
+        return carried;
+    }
+
+    /// The type importing `m` brings as `name`, whichever module is being resolved.
+    private const(TypeSymbol)* publicType(string m, string name)
+    {
+        auto symbol = _moduleScopes[m].resolveLocalType(name);
+        if (symbol !is null && isPublic(*symbol)) return symbol;
+        foreach (forward; forwardsOf(m, name))
+        {
+            auto forwarded = _moduleScopes[forward.origin].resolveLocalType(name);
+            if (forwarded !is null && isPublic(*forwarded)) return forwarded;
+        }
+        return null;
+    }
+
+    /// Lets `mod` see unqualified the members its selective forwards carry, as its importers do.
+    private void provideCarriedMembers(const Module mod)
+    {
+        foreach (decl; mod.declarations)
+        {
+            decl.kind.match!(
+                (const ImportStmt forward) {
+                    auto target = forward.path.join(".");
+                    if (!forward.forward || target !in _moduleScopes) return;
+                    foreach (selected; forward.names)
+                    {
+                        _moduleScopes[mod.name].provide(target, carriedMembers(target, selected.name).map!(c => c.name).array);
+                    }
+                },
+                (_) {},
+            );
+        }
     }
 
     private const(Forward)[] forwardsOf(string m, string name)
@@ -583,7 +841,7 @@ private final class NameResolver
     }
 
     /// Reports each name `m` forwards that its importers couldn't use: one that's also a different
-    /// declaration of `m`'s own, or that two of its forwards bring as different declarations.
+    /// declaration of `m`'s own, or that two of its forwards listing it bring as different declarations.
     /// Functions of one name are overloads wherever they're from, so those are left to the checker.
     private void reportForwardClashes(string m)
     {
@@ -591,14 +849,19 @@ private final class NameResolver
         {
             string origin;
             Span span;
+            bool listed = true;
         }
 
         foreach (name; _forwards.get(m, null).keys.sort)
         {
-            auto brought = (declaresPublic(m, name) ? [Brought(m)] : []) ~ _forwards[m][name].map!(f => Brought(f.origin, f.span)).array;
+            auto brought = (declaresPublic(m, name) ? [Brought(m)] : [])
+                ~ _forwards[m][name].map!(f => Brought(f.origin, f.span, f.listed)).array;
             foreach (i, later; brought)
             {
-                auto clash = brought[0 .. i].find!(earlier => differ(earlier.origin, later.origin, name));
+                // What a blanket forward brings is hidden by the module's own declaration and by what
+                // a forward lists, and clashes with another blanket forward's only where it's used.
+                auto clash = brought[0 .. i].find!(earlier => earlier.listed && later.listed
+                    && differ(earlier.origin, later.origin, name));
                 if (clash.empty) continue;
                 auto earlier = clash.front.origin;
                 if (earlier == m)
@@ -611,11 +874,94 @@ private final class NameResolver
                 {
                     _collector.reportError(DiagnosticCode.AmbiguousName, later.span,
                         ("'%s' would be forwarded from both '%s' and '%s', which declare different things by that name; "
-                            ~ "list the names to forward from one of them").format(name, earlier, later.origin));
+                            ~ "forward it from only one of them").format(name, earlier, later.origin));
                 }
                 break;
             }
         }
+    }
+
+    /// Reports each name that two of `mod`'s imports list for different declarations, which the
+    /// module asked for both of. Two forwards that do are reported with what it forwards.
+    private void reportListedClashes(const Module mod)
+    {
+        static struct Listing
+        {
+            string target;
+            Span span;
+            bool forward;
+        }
+
+        _currentModule = mod.name;
+        Listing[][string] listings;
+        foreach (decl; mod.declarations)
+        {
+            decl.kind.match!(
+                (const ImportStmt importStmt) {
+                    auto target = importStmt.path.join(".");
+                    if (target !in _moduleScopes) return;
+                    foreach (selected; importStmt.names)
+                    {
+                        listings[selected.name] ~= Listing(target, selected.span, importStmt.forward);
+                        _listedImports[mod.name] ~= ListedImport(target, selected.name, selected.span, importStmt.forward);
+                    }
+                },
+                (_) {},
+            );
+        }
+        foreach (name; listings.keys.sort)
+        {
+            auto listed = listings[name];
+            // An import or forward listing a name the module declares, of any visibility, asks for both.
+            // A forward's against a public declaration was reported with what it forwards.
+            foreach (listing; listed.filter!(l => !l.forward || !declaresPublic(mod.name, name)))
+            {
+                if (!ownDiffers(mod.name, listing.target, name)) continue;
+                _collector.reportError(DiagnosticCode.DuplicateDeclaration, listing.span,
+                    "'%s' from '%s' can't be %s, since this module declares a '%s' of its own"
+                        .format(name, listing.target, listing.forward ? "forwarded" : "imported by name", name));
+            }
+            foreach (i, later; listed)
+            {
+                auto clash = listed[0 .. i].find!(earlier => earlier.target != later.target
+                    && !(earlier.forward && later.forward) && exportsDiffer(earlier.target, later.target, name));
+                if (clash.empty) continue;
+                _collector.reportError(DiagnosticCode.AmbiguousName, later.span,
+                    ("'%s' is listed in imports of both '%s' and '%s', which give different things by that name; "
+                        ~ "list it in only one of them").format(name, clash.front.target, later.target));
+                break;
+            }
+        }
+    }
+
+    /// Whether `m`'s own declaration of `name`, of any visibility, and what importing `target`
+    /// gives by it can't both be what the name means: they're not all functions.
+    private bool ownDiffers(string m, string target, string name)
+    {
+        auto moduleScope = _moduleScopes[m];
+        auto ownFunctions = moduleScope.functionsNamed(name).length > 0;
+        auto ownValue = moduleScope.resolveLocal(name);
+        auto ownOther = (ownValue !is null && !isFunction(*ownValue)) || moduleScope.resolveLocalType(name) !is null;
+        if (!ownFunctions && !ownOther) return false;
+        auto brought = visibleSymbols(target, name);
+        auto bringsOther = brought.any!(b => !isFunction(b.symbol)) || visibleTypes(target, name).length > 0;
+        // What a cycle of forwards brings back is the same declaration.
+        if (brought.all!(b => b.owner == m) && visibleTypes(target, name).all!(t => t.owner == m)) return false;
+        return ownOther ? brought.length > 0 || bringsOther : bringsOther;
+    }
+
+    /// Whether what importing `a` gives as `name` and what importing `b` does can't both be what
+    /// the name means: they're not all functions, and not the same declarations.
+    private bool exportsDiffer(string a, string b, string name)
+    {
+        auto symbolsA = visibleSymbols(a, name), symbolsB = visibleSymbols(b, name);
+        auto valuesA = symbolsA.filter!(s => !isFunction(s.symbol)).map!(s => s.symbol).array;
+        auto valuesB = symbolsB.filter!(s => !isFunction(s.symbol)).map!(s => s.symbol).array;
+        auto functionsA = symbolsA.any!(s => isFunction(s.symbol)), functionsB = symbolsB.any!(s => isFunction(s.symbol));
+        if (valuesA.length > 0 && valuesB.length > 0 && !valuesA.all!(v => valuesB.canFind(v))) return true;
+        if ((valuesA.length > 0 && functionsB) || (valuesB.length > 0 && functionsA)) return true;
+        auto typesA = visibleTypes(a, name).map!(t => t.symbol).array, typesB = visibleTypes(b, name).map!(t => t.symbol).array;
+        return typesA.length > 0 && typesB.length > 0 && !typesA.all!(t => typesB.canFind(t));
     }
 
     /// Whether the public `name` of module `a` and that of module `b` can't both be what one module
@@ -662,6 +1008,7 @@ private final class NameResolver
                         index = imports.length - 1;
                     }
                     auto access = &imports[index];
+                    if (importStmt.forward) access.forwards = true;
                     if (importStmt.names.length > 0)
                     {
                         access.names ~= importStmt.names.map!(n => n.name).array;
@@ -1168,16 +1515,28 @@ private final class NameResolver
     /// resolved can see it: the first visible function, for a name of functions.
     private const(SymbolId)* visibleSymbol(string m, string name)
     {
-        auto functions = visibleFunctions(m, name);
-        if (functions.length > 0) return new SymbolId(functions[0]);
+        auto found = visibleSymbols(m, name);
+        return found.length == 0 ? null : &[found[0].symbol][0];
+    }
+
+    /// The different things importing `m` brings as `name` that the module being resolved can
+    /// see, with the module declaring each. Functions are overloads of each other, so they're one.
+    /// A declaration of `m`'s own hides what it forwards, which clashes at the `forward import`;
+    /// more than one is what `m` forwards clashing, which a use of the name reports.
+    private Brought!SymbolId[] visibleSymbols(string m, string name)
+    {
         auto symbol = _moduleScopes[m].resolveLocal(name);
-        if (symbol !is null && !isFunction(*symbol) && isVisible(*symbol, m)) return symbol;
+        if (symbol !is null && !isFunction(*symbol) && isVisible(*symbol, m)) return [Brought!SymbolId(*symbol, m)];
+        Brought!SymbolId[] found;
+        auto functions = visibleFunctions(m, name);
+        if (functions.length > 0) found ~= Brought!SymbolId(SymbolId(functions[0]), _declarations.functionModules[functions[0]]);
         foreach (forward; forwardsOf(m, name))
         {
             auto forwarded = _moduleScopes[forward.origin].resolveLocal(name);
-            if (forwarded !is null && !isFunction(*forwarded) && isPublic(*forwarded)) return forwarded;
+            if (forwarded is null || isFunction(*forwarded) || !isPublic(*forwarded)) continue;
+            if (!found.canFind!(b => b.symbol == *forwarded)) found ~= Brought!SymbolId(*forwarded, forward.origin);
         }
-        return null;
+        return found;
     }
 
     /// The functions named `name` in module `m` that the module being resolved can see, then
@@ -1202,14 +1561,23 @@ private final class NameResolver
 
     private const(TypeSymbol)* visibleType(string m, string name)
     {
+        auto found = visibleTypes(m, name);
+        return found.length == 0 ? null : &[found[0].symbol][0];
+    }
+
+    /// The different types importing `m` brings as `name`, as `visibleSymbols` finds values.
+    private Brought!TypeSymbol[] visibleTypes(string m, string name)
+    {
         auto symbol = _moduleScopes[m].resolveLocalType(name);
-        if (symbol !is null && isVisible(*symbol, m)) return symbol;
+        if (symbol !is null && isVisible(*symbol, m)) return [Brought!TypeSymbol(*symbol, m)];
+        Brought!TypeSymbol[] found;
         foreach (forward; forwardsOf(m, name))
         {
             auto forwarded = _moduleScopes[forward.origin].resolveLocalType(name);
-            if (forwarded !is null && isPublic(*forwarded)) return forwarded;
+            if (forwarded is null || !isPublic(*forwarded)) continue;
+            if (!found.canFind!(b => b.symbol == *forwarded)) found ~= Brought!TypeSymbol(*forwarded, forward.origin);
         }
-        return null;
+        return found;
     }
 
     /// Reports each private type that the resolved `type` mentions, which `where` would expose.
@@ -1312,18 +1680,35 @@ private final class NameResolver
                     resolvedType = current.resolveType(name);
                     if (resolvedType is null)
                     {
-                        auto owners = current.modulesProviding(name)
-                            .filter!(m => visibleType(m, name) !is null)
-                            .array;
-                        // One type reached through two imports is one type.
-                        if (owners.map!(m => *visibleType(m, name)).array.uniq.walkLength > 1)
+                        Brought!TypeSymbol[] found;
+                        string[] vias;
+                        bool listed;
+                        // An import that lists the name beats one that brings every name.
+                        foreach (level, modules; current.modulesProvidingByLevel(name))
                         {
-                            _collector.reportError(DiagnosticCode.AmbiguousName, type.span, ambiguityMessage(name, owners));
+                            foreach (m; modules)
+                            {
+                                foreach (brought; visibleTypes(m, name))
+                                {
+                                    // One type reached through two imports is one type.
+                                    if (found.canFind!(b => b.symbol == brought.symbol)) continue;
+                                    found ~= brought;
+                                    vias ~= m;
+                                }
+                            }
+                            listed = level == 0;
+                            if (found.length > 0) break;
+                        }
+                        // Two listed imports of different types were reported at the second.
+                        if (found.length > 1 && !(listed && vias.dup.sort.uniq.walkLength == vias.length))
+                        {
+                            _collector.reportError(DiagnosticCode.AmbiguousName, type.span,
+                                ambiguityMessage(name, found.map!(b => b.owner).array, vias));
                             return;
                         }
-                        if (owners.length > 0)
+                        if (found.length > 0)
                         {
-                            resolvedType = visibleType(owners[0], name);
+                            resolvedType = &[found[0].symbol][0];
                         }
                     }
                 }
@@ -1332,6 +1717,13 @@ private final class NameResolver
                     auto moduleName = named.path[0 .. $ - 1].join(".");
                     if (current.importedModules.canFind(moduleName))
                     {
+                        auto found = visibleTypes(moduleName, name);
+                        if (found.length > 1)
+                        {
+                            _collector.reportError(DiagnosticCode.AmbiguousName, type.span,
+                                ambiguityMessage(name, found.map!(b => b.owner).array, found.map!(b => moduleName).array));
+                            return;
+                        }
                         resolvedType = visibleType(moduleName, name);
                         if (resolvedType is null && _moduleScopes[moduleName].resolveLocalType(name) !is null)
                         {
@@ -1937,15 +2329,18 @@ private final class NameResolver
         if (auto symbol = scopeTable.resolveInModule(name))
         {
             if (!isFunction(*symbol)) return Candidates.init;
-            own ~= visibleFunctions(_currentModule, name);
+            own ~= _moduleScopes[_currentModule].functionsNamed(name);
         }
         return candidatesFor(name, own, scopeTable);
     }
 
-    /// This module's functions `own` named `name`, then a group per imported module.
+    /// This module's functions `own` named `name`, then those it forwards, then a group per
+    /// imported module.
     private Candidates candidatesFor(string name, Id!FunctionDecl[] own, const Scope scopeTable)
     {
-        return grouped(own, scopeTable.modulesProviding(name).array, m => visibleFunctions(m, name));
+        auto forwarded = forwardedGroup(forwardsOf(_currentModule, name), scopeTable, name,
+            m => _moduleScopes[m].functionsNamed(name).filter!(f => isPublic(SymbolId(f))).array);
+        return grouped(_currentModule, own, forwarded, scopeTable.modulesProviding(name).array, m => visibleFunctions(m, name));
     }
 
     /// Resolves an identifier or a member access chain, which may start with a module path.
@@ -1979,7 +2374,7 @@ private final class NameResolver
             // imported functions of the name are tried when none of this module's fits.
             if (isFunction(*local))
             {
-                auto own = supplied ~ visibleFunctions(_currentModule, name);
+                auto own = supplied ~ _moduleScopes[_currentModule].functionsNamed(name);
                 return recordFunctions(expr, name, candidatesFor(name, own, scopeTable));
             }
             recordCapture(*local, name, expr.span, scopeTable);
@@ -1987,28 +2382,39 @@ private final class NameResolver
         }
         if (supplied.length > 0) return recordFunctions(expr, name, candidatesFor(name, supplied, scopeTable));
 
-        const(SymbolId)[] found;
-        string[] owners;
-        foreach (m; scopeTable.modulesProviding(name))
+        Brought!SymbolId[] found;
+        string[] vias;
+        bool listed;
+        // An import that lists the name beats one that brings every name.
+        foreach (level, modules; scopeTable.modulesProvidingByLevel(name))
         {
-            if (auto symbol = visibleSymbol(m, name))
+            foreach (m; modules)
             {
-                found ~= *symbol;
-                owners ~= m;
+                foreach (brought; visibleSymbols(m, name))
+                {
+                    // One declaration reached through two imports is one declaration.
+                    if (found.canFind!(b => b.symbol == brought.symbol)) continue;
+                    found ~= brought;
+                    vias ~= m;
+                }
             }
+            listed = level == 0;
+            if (found.length > 0) break;
         }
-        if (found.length > 0 && found.all!(f => isFunction(f)))
+        if (found.length > 0 && found.all!(f => isFunction(f.symbol)))
         {
             return recordFunctions(expr, name, candidatesFor(name, null, scopeTable));
         }
-        // One declaration reached through two imports is one declaration.
-        if (found.length > 0 && found.all!(f => f == found[0]))
+        // Two listed imports of different declarations were reported at the second.
+        if (found.length == 1 || (listed && vias.dup.sort.uniq.walkLength == vias.length))
         {
-            return recordValue(expr, name, found[0]);
+            auto value = found.find!(f => !isFunction(f.symbol));
+            return recordValue(expr, name, value.empty ? found[0].symbol : value.front.symbol);
         }
         if (found.length > 1)
         {
-            _collector.reportError(DiagnosticCode.AmbiguousName, expr.span, ambiguityMessage(name, owners));
+            _collector.reportError(DiagnosticCode.AmbiguousName, expr.span,
+                ambiguityMessage(name, found.map!(b => b.owner).array, vias));
             return Path(Path.Kind.Error);
         }
 
@@ -2022,11 +2428,19 @@ private final class NameResolver
         return Path(Path.Kind.Error);
     }
 
-    /// The error for a bare `name` that more than one of `owners` provides.
-    private static string ambiguityMessage(string name, const string[] owners)
+    /// The error for a bare `name` that declarations in each of `owners` provide, each through the
+    /// import of the same place in `vias`. One import bringing two is a clash in what it forwards,
+    /// which qualifying by that import doesn't settle.
+    private static string ambiguityMessage(string name, const string[] owners, const string[] vias)
     {
-        return "'%s' is defined in more than one imported module (%s); qualify it, e.g. '%s.%s'"
-            .format(name, owners.join(", "), owners[0], name);
+        if (vias.dup.sort.uniq.walkLength == vias.length)
+        {
+            return "'%s' is defined in more than one imported module (%s); qualify it, e.g. '%s.%s'"
+                .format(name, vias.join(", "), vias[0], name);
+        }
+        auto labels = owners.length.iota.map!(i => owners[i] == vias[i] ? owners[i] : owners[i] ~ " through " ~ vias[i]);
+        return "'%s' is defined in more than one module (%-(%s, %)); import the one you mean and qualify it, e.g. '%s.%s'"
+            .format(name, labels, owners[0], name);
     }
 
     /// Records that `expr` names `symbol`. An alias stands for its type, so the name of a product
@@ -2120,11 +2534,19 @@ private final class NameResolver
             {
                 return *modulePath(expr, nested, scopeTable);
             }
+            auto brought = visibleSymbols(object.name, access.member);
+            if (brought.length > 1 && !brought.all!(b => isFunction(b.symbol)))
+            {
+                _collector.reportError(DiagnosticCode.AmbiguousName, expr.span, ambiguityMessage(access.member,
+                    brought.map!(b => b.owner).array, brought.map!(b => object.name).array));
+                return Path(Path.Kind.Error);
+            }
             if (auto symbol = visibleSymbol(object.name, access.member))
             {
                 if (isFunction(*symbol))
                 {
-                    return recordFunctions(expr, access.member, Candidates([visibleFunctions(object.name, access.member)]));
+                    return recordFunctions(expr, access.member, Candidates([visibleFunctions(object.name, access.member)], null,
+                        [object.name == _currentModule ? string.init : object.name]));
                 }
                 return recordValue(expr, access.member, *symbol);
             }

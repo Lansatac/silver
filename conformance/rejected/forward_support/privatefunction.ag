@@ -1,0 +1,5 @@
+module forward_support.privatefunction
+
+forward import forward_support.one : same
+
+private def same(z: Int): Int => 3

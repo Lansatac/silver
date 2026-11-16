@@ -1,0 +1,13 @@
+// A forwarding module's own constants and types hide what its blanket forward brings by those
+// names, and its own functions are overloads beside the forwarded ones.
+import forward_support.covering
+
+def main(): Unit {
+    printl(limit)
+    printl(forward_support.covering.limit)
+    printl(unlisted)
+    printl(Stack(2).depth)
+    printl(first("x"))
+    printl(first([4]))
+    printl(forward_support.covering.first([5]))
+}

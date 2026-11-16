@@ -1,0 +1,5 @@
+module levels_support.near
+
+val origin: Int = 2
+type Point(near: Int)
+def describe(x: Int): String => "near Int"

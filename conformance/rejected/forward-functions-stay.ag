@@ -1,0 +1,6 @@
+// Forwarding a type doesn't forward the functions of its module.
+import forward_support.sumonly
+
+def main(): Unit {
+    printl(unwrap(Parcel(1)))
+}

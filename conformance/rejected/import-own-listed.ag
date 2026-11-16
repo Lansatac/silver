@@ -1,0 +1,8 @@
+// A module's own declaration and an import that lists its name are a duplicate.
+import levels_support.far : origin
+
+val origin: Int = 3
+
+def main(): Unit {
+    printl(origin)
+}

@@ -1,0 +1,6 @@
+// A name two blanket forwards bring as different declarations is ambiguous where it's used.
+import forward_support.blanket
+
+def main(): Unit {
+    printl(limit)
+}

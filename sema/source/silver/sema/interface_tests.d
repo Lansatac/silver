@@ -617,7 +617,7 @@ unittest
     auto message = analyzed("import json\nimport foo : Foo\ndef main(): Unit {\n    val a = encode(Foo(1))\n}",
         ["json.ag": json, "foo.ag": foo]).onlyMessage(DiagnosticCode.UnsatisfiedBound);
     message.should.contain("no `toJson` in scope takes `Foo`");
-    message.should.contain("`foo` has a `toJson(Foo)` that would fit; import it to use that one");
+    message.should.contain("`foo` has a `toJson(Foo)` that would fit; list it in the import of `foo` to use that one");
 }
 
 @("two imported modules that fit a bound equally well are an error")

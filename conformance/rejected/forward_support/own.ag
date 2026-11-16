@@ -1,5 +1,5 @@
 module forward_support.own
 
-forward import forward_support.one
+forward import forward_support.one : same, limit
 
 val limit: Int = 9

@@ -1,0 +1,8 @@
+module levels_support.kit
+
+// Forwarded to importers as the same imports would be here: the listed forward beats the blanket one.
+forward import levels_support.far
+forward import levels_support.near : origin, describe
+
+// Takes what `far`'s does, so it hides that one from importers.
+def onlyFar(): String => "kit"

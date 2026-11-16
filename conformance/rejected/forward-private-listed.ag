@@ -1,0 +1,6 @@
+// A private declaration and a forward listing its name are a duplicate, as with a plain import.
+import forward_support.privatelisted
+
+def main(): Unit {
+    printl(same(1))
+}

@@ -1,0 +1,14 @@
+// An import that lists a name beats one that brings every name. For constants and types the
+// nearer one hides the farther; functions merge, and a nearer one hides a farther one only when
+// it takes the same parameters.
+import levels_support.far
+import levels_support.near : origin, Point, describe
+
+def main(): Unit {
+    printl(origin)
+    printl(Point(3).near)
+    printl(describe(1))
+    printl(describe("s"))
+    printl(onlyFar())
+    printl(levels_support.far.origin)
+}

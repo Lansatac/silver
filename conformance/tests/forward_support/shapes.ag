@@ -1,0 +1,6 @@
+module forward_support.shapes
+
+forward import forward_support.ranges : Shape, describe
+
+// The members come with the sum, here as for importers.
+def unit(): Shape => Square(1)

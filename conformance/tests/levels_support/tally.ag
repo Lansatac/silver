@@ -1,0 +1,5 @@
+module levels_support.tally
+
+type Tally(n: Int)
+
+def count(t: Tally): Int => t.n

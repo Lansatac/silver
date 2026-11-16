@@ -1,0 +1,8 @@
+// A forwarding module's private declarations hide what its blanket forward brings inside it, and not from its importers.
+import forward_support.hiding
+
+def main(): Unit {
+    printl(inside())
+    printl(unlisted())
+    printl(limit)
+}

@@ -1,0 +1,1 @@
+S0028: what 'forward_support.swinga' passes on as 'x' depends on what a cycle of forwards gives it back, which never settles; forward 'x' through only one side of the cycle

@@ -1,0 +1,8 @@
+// `hider` gives its own `onlyFar()` in place of `far`'s. Importing `far` beside it brings `far`'s at
+// the same level, so the two are ambiguous at the call, as for any two blanket imports.
+import levels_support.hider
+import levels_support.far
+
+def main(): Unit {
+    printl(onlyFar())
+}

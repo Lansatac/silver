@@ -1,0 +1,9 @@
+module forward_support.hiding
+
+forward import forward_support.arrays
+
+// Private declarations hide what the blanket forward brings inside this module; importers get the forwarded ones.
+private def unlisted(): String => "hiding.unlisted"
+private val limit: Int = 99
+
+def inside(): String => "{unlisted()} {limit}"

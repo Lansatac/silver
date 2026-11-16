@@ -1,0 +1,5 @@
+module cycle_support.z
+
+forward import cycle_support.y
+
+def who(x: Int): String => "z"

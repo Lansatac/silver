@@ -1,0 +1,10 @@
+// Names that two blanket forwards share clash only where they're used.
+import forward_support.blankets
+import forward_support.other
+
+def main(): Unit {
+    printl(greet())
+    printl(first([2, 3]))
+    printl(forward_support.other.limit)
+    printl(forward_support.other.unlisted())
+}

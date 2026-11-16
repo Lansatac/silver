@@ -1,0 +1,1 @@
+S0028: what 'forward_support.swing2a' passes on as 'pick' depends on what a cycle of forwards gives it back, which never settles; forward 'pick' through only one side of the cycle

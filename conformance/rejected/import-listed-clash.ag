@@ -1,0 +1,7 @@
+// Two imports that list one name for different declarations are an error at the second.
+import levels_support.far : origin
+import levels_support.near : origin
+
+def main(): Unit {
+    printl(1)
+}

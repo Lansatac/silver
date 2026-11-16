@@ -168,10 +168,19 @@ unittest
     analyzed("import own\ndef main(): Unit => ()", files)
         .shouldReport(DiagnosticCode.DuplicateDeclaration, At("limit", 1, "own"));
 
-    files["hides.ag"] = "module hides\nforward import a : limit\nprivate val limit: Int = 9";
+    files["hides.ag"] = "module hides\nforward import a\nprivate val limit: Int = 9";
+    files["lists.ag"] = "module lists\nforward import a : limit\nprivate val limit: Int = 9";
+    analyzed("import lists\ndef main(): Unit => ()", files).shouldReport(DiagnosticCode.DuplicateDeclaration, At("limit", 1, "lists"));
     auto hides = analyzed("import hides\ndef main(): Unit => printl(limit)", files);
     hides.shouldHaveNoDiagnostics();
     hides.shouldResolve(At("limit", 1), At("limit", 1, "a"));
+
+    // A blanket forward brings everything else, so the module's own declaration hides it.
+    files["covers.ag"] = "module covers\nforward import a\nval limit: Int = 9\ntype P(y: Int)";
+    auto covers = analyzed("import covers\ndef main(): Unit => printl(limit + covers.limit + P(1).y + f())", files);
+    covers.shouldHaveNoDiagnostics();
+    covers.shouldResolve(At("limit", 1), At("limit", 1, "covers"));
+    covers.shouldResolve(At("limit", 2), At("limit", 1, "covers"));
 }
 
 @("a name forwarded from two modules that declare different things is reported")
@@ -190,14 +199,36 @@ unittest
         "a.ag": "module a\ndef same(x: Int): Int => 1",
         "b.ag": "module b\ndef same(y: Int): Int => 2",
         "two.ag": "module two\nforward import a : same\nforward import b : same",
-        "own.ag": "module own\nforward import a\ndef same(z: Int): Int => 3",
+        "own.ag": "module own\nforward import a : same\ndef same(z: Int): Int => 3",
     ];
     auto two = analyzed("import two\ndef main(): Unit => ()", files);
     two.shouldReport(DiagnosticCode.DuplicateOverload, At("same", 2, "two"));
     assert(two.collector.errors.front.message.canFind("`b.same(Int)` can't be forwarded: `a.same(Int)`"));
 
     auto own = analyzed("import own\ndef main(): Unit => ()", files);
-    own.shouldReport(DiagnosticCode.DuplicateOverload, At("forward", 1, "own"));
+    own.shouldReport(DiagnosticCode.DuplicateOverload, At("same", 1, "own"));
+
+    // One a blanket forward brings is hidden instead, by the nearer function of the same parameters.
+    files["covers.ag"] = "module covers\nforward import a\ndef same(z: Int): Int => 3";
+    files["listing.ag"] = "module listing\nforward import a\nforward import b : same";
+    auto covers = analyzed("import covers\ndef main(): Unit => printl(same(1))", files);
+    covers.shouldHaveNoDiagnostics();
+    covers.shouldCall(At("same", 1), At("same", 1, "covers"));
+    auto listing = analyzed("import listing\ndef main(): Unit => printl(same(1))", files);
+    listing.shouldHaveNoDiagnostics();
+    listing.shouldCall(At("same", 1), At("same", 1, "b"));
+}
+
+@("a forwarding module's own function of a name leaves what its forwards bring by it as overloads")
+unittest
+{
+    auto files = [
+        "steps.ag": "module steps\ninterface Steps { def next(self: Self): Int }\ntype Count(n: Int)\n"
+            ~ "def next(c: Count): Int => c.n\ndef total<R: Steps>(r: R): Int => next(r)",
+        "fac.ag": "module fac\nforward import steps\ntype Twice(n: Int)\ndef next(t: Twice): Int => t.n * 2",
+    ];
+    analyzed("import fac\ndef main(): Unit => printl(total(Count(3)) + total(Twice(1)) + next(Count(1)))", files)
+        .shouldHaveNoDiagnostics();
 }
 
 @("forwarded functions that differ only in bounds neither includes are reported")
@@ -208,12 +239,72 @@ unittest
         "a.ag": "module a\nimport i\ndef get<T: A>(x: T): Int => 1",
         "b.ag": "module b\nimport i\ndef get<T: B>(x: T): Int => 2",
         "more.ag": "module more\nimport i\ndef get<T: A & B>(x: T): Int => 3",
-        "two.ag": "module two\nforward import a\nforward import b",
-        "ladder.ag": "module ladder\nforward import a\nforward import more",
+        "two.ag": "module two\nforward import a : get\nforward import b : get",
+        "ladder.ag": "module ladder\nforward import a : get\nforward import more : get",
     ];
     analyzed("import two\ndef main(): Unit => ()", files)
-        .shouldReport(DiagnosticCode.DuplicateOverload, At("forward", 2, "two"));
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("get", 2, "two"));
     analyzed("import ladder\ndef main(): Unit => ()", files).shouldHaveNoDiagnostics();
+}
+
+@("what two blanket forwards bring as one name clashes only where it's used")
+unittest
+{
+    auto files = [
+        "a.ag": "module a\ndef same(x: Int): Int => 1\nval limit: Int = 1\ntype T(x: Int)\ndef onlyA(): Int => 1",
+        "b.ag": "module b\ndef same(y: Int): Int => 2\nval limit: Int = 2\ntype T(y: Int)",
+        "two.ag": "module two\nforward import a\nforward import b",
+        "mixed.ag": "module mixed\nforward import a : limit\nforward import b",
+    ];
+    analyzed("import two\ndef main(): Unit => printl(onlyA())", files).shouldHaveNoDiagnostics();
+    analyzed("import mixed\ndef main(): Unit => ()", files).shouldHaveNoDiagnostics();
+
+    auto value = analyzed("import two\ndef main(): Unit => printl(limit)", files);
+    value.shouldReport(DiagnosticCode.AmbiguousName, At("limit", 1));
+    assert(value.collector.errors.front.message.canFind("(a through two, b through two)"));
+    analyzed("import two\ndef main(): Unit => printl(two.limit)", files).shouldReport(DiagnosticCode.AmbiguousName, At("two", 2));
+    auto mixed = analyzed("import mixed\ndef main(): Unit => printl(limit)", files);
+    mixed.shouldHaveNoDiagnostics();
+    mixed.shouldResolve(At("limit", 1), At("limit", 1, "a"));
+    analyzed("import two\ndef f(t: T): Int => 1\ndef main(): Unit => ()", files)
+        .shouldReport(DiagnosticCode.AmbiguousName, At("T", 1));
+
+    auto call = analyzed("import two\ndef main(): Unit => printl(same(1))", files);
+    call.shouldReport(DiagnosticCode.AmbiguousName, At("same", 1));
+    assert(call.collector.errors.front.message.canFind("`a.same(Int)` and `b.same(Int)`"));
+}
+
+@("inside a forwarding module, what it forwards is ranked as one group after its own functions")
+unittest
+{
+    auto files = [
+        "a.ag": "module a\ndef pick(x: Int): Int => 1",
+        "b.ag": "module b\ndef pick<T>(x: T): Int => 2",
+        "c.ag": "module c\ndef pick(x: Int): Int => 3",
+        "both.ag": "module both\nforward import a\nforward import b\ndef pick(x: String): Int => 4\ndef use(): Int => pick(1) + pick(true) + pick(\"s\")",
+        "tie.ag": "module tie\nforward import a\nimport c\ndef pick(x: String): Int => 4\ndef use(): Int => pick(1)",
+    ];
+    auto a = analyzed("import both\ndef main(): Unit => printl(use())", files);
+    a.shouldHaveNoDiagnostics();
+    a.shouldCall(At("pick", 2, "both"), At("pick", 1, "a"));
+    a.shouldCall(At("pick", 3, "both"), At("pick", 1, "b"));
+    a.shouldCall(At("pick", 4, "both"), At("pick", 1, "both"));
+
+    auto tie = analyzed("import tie\ndef main(): Unit => printl(use())", files);
+    tie.shouldReport(DiagnosticCode.AmbiguousName, At("pick", 2, "tie"));
+    assert(tie.collector.errors.front.message.canFind("(a, c)"));
+}
+
+@("forwarding a sum forwards its members, and not its module's functions")
+unittest
+{
+    auto files = [
+        "s.ag": "module s\ntype Shape = Circle(r: Int) | Square(n: Int)\ndef area(s: Shape): Int => 1",
+        "f.ag": "module f\nforward import s : Shape\ndef unit(): Shape => Square(1)",
+    ];
+    analyzed("import f\ndef main(): Unit {\n    val a: Shape = Circle(1)\n    val b: f.Shape = f.Square(2)\n}", files)
+        .shouldHaveNoDiagnostics();
+    analyzed("import f\ndef main(): Unit => printl(area(Circle(1)))", files).shouldReport(DiagnosticCode.UnknownName, At("area", 1));
 }
 
 @("`forward` is an ordinary name anywhere but before `import`")

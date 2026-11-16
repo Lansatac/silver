@@ -1,0 +1,6 @@
+module forward_support.other
+
+// Shares `limit` and `unlisted` with `arrays`.
+val limit: Int = 4
+def unlisted(): String => "other.unlisted"
+def greet(): String => "other.greet"

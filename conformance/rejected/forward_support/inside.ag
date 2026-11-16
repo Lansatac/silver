@@ -1,0 +1,9 @@
+module forward_support.inside
+
+forward import forward_support.one
+import forward_support.two
+
+// Not an overload that fits `same(1)`, so it mustn't change how that call is chosen.
+def same(text: String): Int => 3
+
+def call(): Int => same(1)

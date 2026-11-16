@@ -1,0 +1,6 @@
+// A private function and a listed forward of one with the same parameters are a duplicate.
+import forward_support.privatefunction
+
+def main(): Unit {
+    printl(1)
+}

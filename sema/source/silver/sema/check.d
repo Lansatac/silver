@@ -177,6 +177,8 @@ private final class TypeChecker
     /// The functions bounds supply that an earlier bound of the same function supplies already,
     /// by the earlier one.
     private Id!FunctionDecl[Id!FunctionDecl] _repeatedBounds;
+    /// What `exportedFunctions` has worked out, by name and then module.
+    private const(Id!FunctionDecl)[][string][string] _exported;
     /// How many elements `placePath` has named, so each is a place of its own.
     private size_t _elementPlaces;
     /// The types with an invariant whose `else` hasn't been typed yet, and whether it's being typed.
@@ -301,6 +303,7 @@ private final class TypeChecker
         {
             checkOverloads(mod);
             checkForwardedOverloads(mod.name);
+            checkListedOverloads(mod.name);
         }
 
         foreach (mod; programModules)
@@ -664,14 +667,164 @@ private final class TypeChecker
         }
     }
 
-    /// `candidates` without the functions a bound supplies that another bound supplies already.
+    /// `candidates` without the functions a bound supplies that another bound supplies already,
+    /// and without those a nearer function of the same parameters hides.
     private const(Candidates) distinct(const Candidates candidates)
     {
-        if (_repeatedBounds.length == 0 || !candidates.groups.joiner.any!(f => (f in _repeatedBounds) !is null)) return candidates;
+        auto unhidden = unshadowed(candidates);
+        if (_repeatedBounds.length == 0 || !unhidden.groups.joiner.any!(f => (f in _repeatedBounds) !is null)) return unhidden;
         Candidates kept;
-        foreach (group; candidates.groups) kept.groups ~= group.filter!(f => f !in _repeatedBounds).array.dup;
-        kept.sources = candidates.sources.dup;
+        foreach (group; unhidden.groups) kept.groups ~= group.filter!(f => f !in _repeatedBounds).array.dup;
+        kept.sources = unhidden.sources.dup;
+        kept.exporters = unhidden.exporters.dup;
+        kept.scopeModule = unhidden.scopeModule;
         return kept;
+    }
+
+    /// `candidates` without what a nearer function hides: in each group, what its module doesn't
+    /// give, and among a scope's imports, what one at a nearer level does with the same parameters.
+    private const(Candidates) unshadowed(const Candidates candidates)
+    {
+        auto all = candidates.groups.joiner;
+        if (all.empty) return candidates;
+        if (candidates.exporters.all!(e => e.length == 0) && candidates.scopeModule.length == 0) return uncovered(cast(Candidates) candidates);
+        auto name = _resolutions.declarations.functions[all.front].name;
+        const(Id!FunctionDecl)[] inScope = candidates.scopeModule.length > 0 ? scopeFunctions(candidates.scopeModule, name) : null;
+        Candidates kept;
+        foreach (i, group; candidates.groups)
+        {
+            auto exporter = i < candidates.exporters.length ? candidates.exporters[i] : null;
+            const(Id!FunctionDecl)[] exported = exporter.length > 0 ? exportedFunctions(exporter, name) : null;
+            kept.groups ~= group.filter!(f => (exporter.length == 0 || exported.canFind(f))
+                && (i == 0 || inScope is null || inScope.canFind(f))).array.dup;
+        }
+        kept.sources = candidates.sources.dup;
+        kept.exporters = candidates.exporters.dup;
+        kept.scopeModule = candidates.scopeModule;
+        return uncovered(kept);
+    }
+
+    /// `candidates` without each imported group that brings nothing another does, so imports that
+    /// lead to the same functions count once, and without empty ones. It comes after what imports
+    /// hide is left out, so a module hiding a function can't take another import's place.
+    private static Candidates uncovered(Candidates candidates)
+    {
+        auto groups = candidates.groups;
+        bool covered(size_t i)
+        {
+            if (groups[i].length == 0) return true;
+            foreach (j, other; groups[1 .. $])
+            {
+                if (j + 1 == i || !groups[i].all!(f => other.canFind(f))) continue;
+                if (groups[i].length < other.length || j + 1 < i) return true;
+            }
+            return false;
+        }
+        auto kept = iota(1, groups.length).filter!(i => !covered(i)).array;
+        Candidates result;
+        result.groups = [groups[0]] ~ kept.map!(i => groups[i]).array;
+        string at(const string[] names, size_t i) => i < names.length ? names[i] : null;
+        result.sources = [at(candidates.sources, 0)] ~ kept.map!(i => at(candidates.sources, i)).array;
+        result.exporters = [at(candidates.exporters, 0)] ~ kept.map!(i => at(candidates.exporters, i)).array;
+        result.scopeModule = candidates.scopeModule;
+        return result;
+    }
+
+    /// A function a module reaches, at how near it is: 0 for its own, 1 through an import or
+    /// forward that lists its name, 2 through one that brings every name.
+    private static struct Leveled
+    {
+        Id!FunctionDecl func;
+        int level;
+    }
+
+    /// The functions named `name` that importing `m` brings: its own public ones and those it
+    /// forwards, without any a nearer one of the same parameters hides.
+    private const(Id!FunctionDecl)[] exportedFunctions(string m, string name)
+    {
+        auto byModule = name in _exported;
+        if (byModule is null)
+        {
+            _exported[name] = exportTable(name);
+            byModule = name in _exported;
+        }
+        return (*byModule).get(m, null);
+    }
+
+    /// What every module exports as functions named `name`. Each round works out every module's
+    /// from what the last round gave, so the order modules are checked in never changes it. A
+    /// cycle of forwards that doesn't settle is reported at a forward of each module it unsettles.
+    private const(Id!FunctionDecl)[][string] exportTable(string name)
+    {
+        auto modules = _resolutions.moduleScopes.keys.sort.array;
+        const(Id!FunctionDecl)[][string] current, previous;
+        foreach (m; modules) current[m] = _resolutions.publicFunctions(m, name);
+        foreach (_; 0 .. modules.length + 2)
+        {
+            const(Id!FunctionDecl)[][string] next;
+            foreach (m; modules)
+            {
+                auto entries = _resolutions.publicFunctions(m, name).map!(f => Leveled(f, 0)).array;
+                foreach (forward; _resolutions.forwardImports.get(m, null))
+                {
+                    if (forward.names.length > 0 && !forward.names.canFind(name)) continue;
+                    foreach (f; current.get(forward.target, null)) entries ~= Leveled(f, forward.names.length > 0 ? 1 : 2);
+                }
+                next[m] = nearest(entries);
+            }
+            if (modules.all!(m => sameSet(next[m], current[m]))) return next;
+            previous = current;
+            current = next;
+        }
+        foreach (m; modules.filter!(m => !sameSet(current[m], previous.get(m, null))))
+        {
+            auto forwards = _resolutions.forwardImports.get(m, null).find!(f => f.names.length == 0 || f.names.canFind(name));
+            if (forwards.empty) continue;
+            _collector.reportError(DiagnosticCode.UnsettledForwardCycle, forwards.front.span,
+                ("what '%s' passes on as '%s' depends on what a cycle of forwards gives it back, which never settles; "
+                    ~ "forward '%s' through only one side of the cycle").format(m, name, name));
+        }
+        return current;
+    }
+
+    private static bool sameSet(const(Id!FunctionDecl)[] a, const(Id!FunctionDecl)[] b)
+    {
+        return a.length == b.length && a.all!(f => b.canFind(f));
+    }
+
+    /// The functions named `name` that a plain name finds in `m`, apart from those of its bounds:
+    /// its own, then what each import brings, without any a nearer one of the same parameters hides.
+    private const(Id!FunctionDecl)[] scopeFunctions(string m, string name)
+    {
+        auto entries = _resolutions.moduleScopes[m].functionsNamed(name).map!(f => Leveled(f, 0)).array;
+        foreach (access; _resolutions.moduleScopes[m].imports)
+        {
+            auto level = access.names.canFind(name) ? 1 : access.everyName ? 2 : 0;
+            if (level == 0) continue;
+            foreach (f; exportedFunctions(access.name, name)) entries ~= Leveled(f, level);
+        }
+        return nearest(entries);
+    }
+
+    /// The functions of `entries`, each at the nearest level it's found at, without those that a
+    /// function at a nearer level hides by taking the same parameters.
+    private Id!FunctionDecl[] nearest(Leveled[] entries)
+    {
+        Leveled[] each;
+        foreach (entry; entries)
+        {
+            auto at = each.countUntil!(e => e.func == entry.func);
+            if (at < 0) each ~= entry;
+            else if (entry.level < each[at].level) each[at].level = entry.level;
+        }
+        return each.filter!(e => !each.any!(n => n.level < e.level && sameOverload(n.func, e.func)))
+            .map!(e => e.func).array;
+    }
+
+    /// Whether `a` and `b` couldn't be overloads in one module.
+    private bool sameOverload(Id!FunctionDecl a, Id!FunctionDecl b)
+    {
+        return sameParameters(a, b) && !asksForMore(a, b) && !asksForMore(b, a);
     }
 
     private void checkConstant(const ConstDecl constant, string moduleName)
@@ -3151,6 +3304,13 @@ private final class TypeChecker
         return names;
     }
 
+    /// Whether `functions` are declared in more than one module, so a message has to say which.
+    private bool acrossModules(R)(R functions)
+    {
+        auto homes = functions.map!(f => _resolutions.declarations.functionModules.get(f, null).idup).array;
+        return homes.sort.uniq.array.length > 1;
+    }
+
     private bool fitsExactly(const Trial trial)
     {
         return trial.fits.all!(f => f == Fit.exact) && !isGenericFunction(trial.func);
@@ -3540,6 +3700,16 @@ private final class TypeChecker
                     .format(spelled, tied.join(" and ")));
             return Id!FunctionDecl.init;
         }
+        // Functions of different modules tie where a blanket forward brings them together.
+        auto homes = unbeaten.map!(t => _resolutions.declarations.functionModules.get(t.func, null).idup).array.sort.uniq.array;
+        if (homes.length > 1 && !homes.canFind(null) && !unbeaten.any!(t => (t.func in _resolutions.requirements) !is null))
+        {
+            _collector.reportError(DiagnosticCode.AmbiguousName, span,
+                ("This call fits a `%s` of more than one module (%-(%s, %)) equally well: %s; import the one you mean "
+                    ~ "and qualify it, as in `%s.%s(...)`").format(spelled, homes,
+                    unbeaten.map!(t => "`" ~ overloadLabel(t.func, true) ~ "`").join(" and "), homes[0], _resolutions.declarations.functions[unbeaten[0].func].name));
+            return Id!FunctionDecl.init;
+        }
         _collector.reportError(DiagnosticCode.AmbiguousOverload, span,
             "This call fits more than one `%s` equally well: %s; convert an argument, or annotate it, to choose one"
                 .format(spelled, tied.join(" and ")));
@@ -3718,7 +3888,8 @@ private final class TypeChecker
         if (fits.length > 1) fits = fits.filter!(f => !fits.any!(g => asksForMore(g, f))).array;
         if (fits.length != 1)
         {
-            auto all = candidates.groups.joiner.map!(f => "`" ~ overloadLabel(f) ~ "`").array;
+            auto across = acrossModules(candidates.groups.joiner);
+            auto all = candidates.groups.joiner.map!(f => "`" ~ overloadLabel(f, across) ~ "`").array;
             _collector.reportError(fits.length == 0 ? DiagnosticCode.NoMatchingOverload : DiagnosticCode.AmbiguousOverload,
                 name.span, "%s `%s` is a `%s`; there are %s".format(fits.length == 0 ? "No" : "More than one", spelled,
                     _types.describe(expected), all.join(", ")));
@@ -3784,20 +3955,59 @@ private final class TypeChecker
     }
 
     /// Reports each function the module `m` forwards that takes the same parameters as one of its
-    /// own or one forwarded before it, since its importers choose among them all as one module's.
+    /// own, or as one an earlier forward listing the name brings when this one lists it too, since
+    /// its importers choose among them all as one module's. Other forwards clash at a call.
     private void checkForwardedOverloads(string m)
     {
         auto forwarded = m in _resolutions.forwards;
         if (forwarded is null) return;
         foreach (name; (*forwarded).keys.sort)
         {
-            auto seen = _resolutions.publicFunctions(m, name);
+            // Works out what it exports, which reports a cycle of forwards that doesn't settle.
+            exportedFunctions(m, name);
+            auto own = _resolutions.publicFunctions(m, name);
+            Id!FunctionDecl[] listed;
             foreach (forward; (*forwarded)[name])
             {
                 auto brought = _resolutions.publicFunctions(forward.origin, name);
-                reportForwardedDuplicate(m, seen, brought, forward);
-                seen ~= brought;
+                if (!forward.listed) continue;
+                reportForwardedDuplicate(m, own ~ listed, brought, forward);
+                listed ~= brought;
             }
+        }
+    }
+
+    /// Reports each function an import or forward lists that takes the same parameters as one of
+    /// the module's own, and each one an import lists that does what one an earlier listing brings
+    /// does, since the module asked for both. Two forwards that do are reported with what it forwards.
+    private void checkListedOverloads(string m)
+    {
+        const(ListedImport)[] earlier;
+        foreach (listing; _resolutions.listedImports.get(m, null))
+        {
+            auto brought = exportedFunctions(listing.target, listing.name);
+            scope (exit) earlier ~= listing;
+            if (brought.length == 0) continue;
+            string clash;
+            // A forward's against the module's public functions was reported with what it forwards.
+            foreach (own; _resolutions.moduleScopes[m].functionsNamed(listing.name))
+            {
+                if (listing.forward && !_resolutions.declarations.functions[own].isPrivate) continue;
+                if (brought.any!(f => sameOverload(own, f))) clash = "this module's `%s`".format(overloadLabel(own));
+                if (clash !is null) break;
+            }
+            foreach (other; earlier.filter!(e => e.name == listing.name && e.target != listing.target && !(e.forward && listing.forward)))
+            {
+                if (clash !is null) break;
+                foreach (f; exportedFunctions(other.target, listing.name))
+                {
+                    if (brought.canFind!(g => g != f && sameOverload(f, g))) clash = "`%s`, listed too,".format(overloadLabel(f, true));
+                    if (clash !is null) break;
+                }
+            }
+            if (clash is null) continue;
+            _collector.reportError(DiagnosticCode.DuplicateOverload, listing.span,
+                "`%s` from `%s` can't be listed: %s takes the same parameter types".format(listing.name, listing.target, clash));
         }
     }
 
@@ -4400,7 +4610,7 @@ private final class TypeChecker
             {
                 foreach (tried; group) lines ~= "\n    %s %s".format(overloadLabel(tried.trial.func, g > 0), tried.trial.problem);
             }
-            result.failure = "no `%s` in scope takes %s%s%s".format(name, arguments(), lines.join, importHint(name, wanted, known, candidates));
+            result.failure = "no `%s` in scope takes %s%s%s".format(name, arguments(), lines.join, importHint(name, wanted, known, candidates, site.module_));
             return onlyAlternatives(result);
         }
         // With an argument unknown, ranking the ones that are known could choose by half a call.
@@ -4412,7 +4622,9 @@ private final class TypeChecker
         auto winners = pool.filter!(t => pool.all!(u => u.trial.func == t.trial.func || beats(t.trial, u.trial))).array;
         if (winners.length != 1)
         {
-            auto tied = pool.filter!(t => !pool.any!(u => beats(u.trial, t.trial))).map!(t => "`" ~ overloadLabel(t.trial.func) ~ "`").array;
+            auto unbeaten = pool.filter!(t => !pool.any!(u => beats(u.trial, t.trial))).map!(t => t.trial.func).array;
+            auto across = acrossModules(unbeaten);
+            auto tied = unbeaten.map!(f => "`" ~ overloadLabel(f, across) ~ "`").array;
             result.failure = "more than one `%s` takes %s equally well: %-(%s and %)".format(name, arguments(), tied);
             result.ambiguous = true;
             return result;
@@ -4438,12 +4650,12 @@ private final class TypeChecker
         }
         if (found.groups.length == 0) return Candidates([supplied]);
         found.groups[0] = supplied ~ found.groups[0];
-        return found;
+        return cast(Candidates) unshadowed(found);
     }
 
     /// What to say when no function in scope fits and the module that declares one of the
     /// arguments' types has one that would, since importing it is all that's missing.
-    private string importHint(string name, const FunctionData wanted, const(bool)[] known, const Candidates seen)
+    private string importHint(string name, const FunctionData wanted, const(bool)[] known, const Candidates seen, string from)
     {
         foreach (type; wanted.params)
         {
@@ -4463,7 +4675,15 @@ private final class TypeChecker
                 }
                 auto fits = wanted.params.length.iota.all!(i => !known[i] || signature.isMutable(i) == wanted.isMutable(i)
                     && typedFit(wanted.params[i], _types.substitute(signature.params[i], binding), params, wanted.isMutable(i)) != Fit.none);
-                if (fits) return "\n    `%s` has a `%s` that would fit; import it to use that one".format(home, overloadLabel(f));
+                if (!fits) continue;
+                // An import that brings it already is one that doesn't list it.
+                auto via = _resolutions.moduleScopes[from].importedModules.find!(m => _resolutions.broughtFunctions(m, name).canFind(f));
+                if (!via.empty)
+                {
+                    return "\n    `%s` has a `%s` that would fit; list it in the import of `%s` to use that one"
+                        .format(via.front, overloadLabel(f), via.front);
+                }
+                return "\n    `%s` has a `%s` that would fit; import it to use that one".format(home, overloadLabel(f));
             }
         }
         return null;

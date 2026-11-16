@@ -1,0 +1,6 @@
+// Functions that two blanket forwards bring with the same parameters are ambiguous where they're called.
+import forward_support.blanket
+
+def main(): Unit {
+    printl(same(1))
+}

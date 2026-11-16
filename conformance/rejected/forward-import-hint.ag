@@ -1,0 +1,6 @@
+// A hint names the import that has the missing function, rather than the module declaring it.
+import forward_support.kit : measure, Parcel
+
+def main(): Unit {
+    printl(measure(Parcel(2)))
+}

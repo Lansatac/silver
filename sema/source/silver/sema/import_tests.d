@@ -98,9 +98,12 @@ def main(): Unit => ()", files);
     selected.shouldResolve(At("shared", 2), At("shared", 1, "b"));
 
     auto both = analyzed("import a : T\nimport b : T\ndef f(t: T): Int => 1\ndef main(): Unit => ()", files);
-    both.shouldReport(DiagnosticCode.AmbiguousName, At("T", 3));
-    analyzed("import a : T\nimport b : T\ndef f(t: b.T): Int => 1\ndef main(): Unit => ()", files)
-        .shouldHaveNoDiagnostics();
+    // Listing one name in two imports asks for both, so it's an error at the second.
+    both.shouldReport(DiagnosticCode.AmbiguousName, At("T", 2));
+
+    // A listed name beats what an import of every name brings.
+    auto listed = analyzed("import a\nimport b : T\ndef f(t: T): Int => 1\ndef main(): Unit => ()", files);
+    listed.shouldHaveNoDiagnostics();
 }
 
 @("selected functions of one name from two modules overload")
@@ -116,10 +119,12 @@ unittest
     a.shouldCall(At("show", 4), At("show", 1, "b"));
 }
 
-@("a module's own declaration beats a selectively imported one")
+@("a module's own declaration and an import listing its name are a duplicate")
 unittest
 {
-    auto a = analyzed("import lib : limit\nval limit: Int = 9\ndef main(): Unit => printl(limit)", library);
+    analyzed("import lib : limit\nval limit: Int = 9\ndef main(): Unit => printl(limit)", library)
+        .shouldReport(DiagnosticCode.DuplicateDeclaration, At("limit", 1));
+    auto a = analyzed("import lib\nval limit: Int = 9\ndef main(): Unit => printl(limit)", library);
     a.shouldHaveNoDiagnostics();
-    a.shouldResolve("limit", 3, 2);
+    a.shouldResolve("limit", 2, 1);
 }

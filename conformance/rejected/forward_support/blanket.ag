@@ -1,0 +1,5 @@
+module forward_support.blanket
+
+// `one` and `two` share names, which is an error only where one of them is used.
+forward import forward_support.one
+forward import forward_support.two

@@ -1,4 +1,4 @@
-// A module can't forward a name it declares as something else.
+// A module can't list a name to forward that it declares as something else.
 import forward_support.own
 
 def main(): Unit {

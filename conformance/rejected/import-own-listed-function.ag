@@ -1,0 +1,9 @@
+// A listed function taking the same parameters as one of the module's own is a duplicate; one
+// taking others is an overload.
+import levels_support.far : describe
+
+def describe(x: Int): String => "own"
+
+def main(): Unit {
+    printl(describe("s"))
+}
