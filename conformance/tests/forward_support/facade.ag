@@ -1,6 +1,6 @@
 module forward_support.facade
 
-forward import forward_support.arrays : first, Stack, length, opIndex, limit
+forward import forward_support.arrays : first, Stack, length, opIndex, next, limit
 forward import forward_support.ranges
 
 type Pile(height: Int)

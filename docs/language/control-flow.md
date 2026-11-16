@@ -152,4 +152,4 @@ None.
 
 ## Current implementation
 
-- A type with a `length` and an `opIndex` and no `next` is still looped over, by index.
+- The error for a type with a `length` and an `opIndex` but no `next` suggests `iterate()`, which isn't built yet.

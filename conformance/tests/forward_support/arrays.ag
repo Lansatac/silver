@@ -6,6 +6,7 @@ type Stack(items: [Int])
 
 def length(s: Stack): Int => length(s.items)
 def opIndex(s: Stack, index: Int): Int => s.items[index] * 10
+def next(s: Stack): (Int, Stack)? => if length(s.items) == 0 => None else Some((s.items[0] * 10, Stack(s.items[1..])))
 
 val limit: Int = 3
 

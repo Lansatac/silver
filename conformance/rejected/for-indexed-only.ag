@@ -1,0 +1,9 @@
+// A `length` and an `opIndex` without a `next` don't make a type loopable.
+
+type A(x: Int)
+def length(a: A): Int => 1
+def opIndex(a: A, index: Int): Int => 1
+
+def main(): Unit {
+    for x in A(1) { printl(x) }
+}

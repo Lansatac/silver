@@ -2156,15 +2156,33 @@ unittest
 {
     auto a = analyzed("type A(x: Int)\n"
         ~ "def length(a: A): Int => 1\ndef opIndex(a: A, index: Int): String => \"\"\n"
-        ~ "def next(a: A): (Bool, A)? => None\n"
+        ~ "def next(a: A): (String, A)? => None\n"
         ~ "type B(x: Int)\ndef opIndex(b: B, index: Int): String => \"\"\ndef next(b: B): (Bool, B)? => None\n"
         ~ "type W<T>(items: [T])\ndef length<T>(w: W<T>): Int => 0\ndef opIndex<T>(w: W<T>, index: Int): T => w.items[index]\n"
+        ~ "def next<T>(w: W<T>): (T, W<T>)? => None\n"
         ~ "def main(): Unit {\n    for one in A(1) { print(one) }\n    for two in B(1) { print(two) }\n"
         ~ "    for three in W([1.5]) { print(three) }\n    print([1].at(0))\n}");
     a.shouldHaveNoDiagnostics();
     a.shouldHaveType("one", 2, "String");
     a.shouldHaveType("two", 2, "Bool");
     a.shouldHaveType("three", 2, "Float");
+}
+
+@("a for needs a next, so a type with only a length and an opIndex isn't looped over")
+unittest
+{
+    enum source = "type A(x: Int)\ndef length(a: A): Int => 1\ndef opIndex(a: A, index: Int): Int => 1\n";
+    analyzed(source ~ "def main(): Unit {\n    for x in A(1) { }\n}").shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
+    analyzed(source ~ "def next(a: A): (Int, A)? => None\ndef main(): Unit {\n    for x in A(1) { }\n}").shouldHaveNoDiagnostics();
+}
+
+@("a for by index still needs a next that steps the type, with the element type opIndex gives")
+unittest
+{
+    enum source = "type A(x: Int)\ndef length(a: A): Int => 1\ndef opIndex(a: A, index: Int): Int => 1\n";
+    enum main = "def main(): Unit {\n    for x in A(1) { }\n}";
+    analyzed(source ~ "def next(a: A): (Int, A) => (1, a)\n" ~ main).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
+    analyzed(source ~ "def next(a: A): (String, A)? => None\n" ~ main).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
 }
 
 @("the length and opIndex a for uses take exactly the value and an Int, and length returns an Int")

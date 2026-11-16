@@ -238,6 +238,7 @@ unittest
 type Stack(items: [Int])
 def length(s: Stack): Int => length(s.items)
 def opIndex(s: Stack, i: Int): Int => s.items[i]
+def next(s: Stack): (Int, Stack)? => None
 def main(): Unit {
     mutable val xs = [1, 2]
     xs ~= [3]

@@ -1,0 +1,1 @@
+T0005: `for` needs a `next` for `A`: a `length` and an `opIndex` alone don't make it loopable; write a `next`, or loop over `iterate()` of it

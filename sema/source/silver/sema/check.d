@@ -5621,7 +5621,7 @@ private final class TypeChecker
     }
 
     /// The element type of what a `for` loops over, which isn't `a..b`: an array, or a value that
-    /// `length` and `opIndex`, or `next`, loop over.
+    /// `next` takes.
     private Type synthesizeForValue(const Expr for_, const Expr iterable, BodyContext ctx)
     {
         auto type = _declarer.requireTyped(synthesize(iterable, ctx), iterable.span);
@@ -5630,7 +5630,7 @@ private final class TypeChecker
         auto element = loopElement(for_, iterable, type, ctx);
         if (element != Type.init) return element;
         _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span,
-            "`for` needs an array, a range, or a value that `length` and `opIndex`, or `next`, take; got `%s`"
+            "`for` needs an array, a range, or a value that `next` takes; got `%s`"
                 .format(_types.describe(type)));
         return _types.error;
     }
@@ -5650,15 +5650,16 @@ private final class TypeChecker
     }
 
     /// What `for` yields from a `type` that isn't an array, with the functions calls at the loop
-    /// would choose. When a `length(r): Int` and an `opIndex(r, i: Int): T` both take a `type`, it
-    /// loops by index, and otherwise steps with a `next(r): (T, type)?`. Each has to take exactly
-    /// `type`, and `T` is the element type. `Type.init` when neither way is there.
+    /// would choose. There has to be a `next(r): (T, type)?`. When a `length(r): Int` and an
+    /// `opIndex(r, i: Int): T` both take a `type` as well, it loops by index, and otherwise steps.
+    /// Each has to take exactly `type`, and `T` is the element type. `Type.init` when neither way is there.
     private Type loopElement(const Expr for_, const Expr iterable, Type type, BodyContext ctx)
     {
         auto index = placeholder(iterable.span);
         auto length = syntaxFunction(for_, iterable.span, "length", "`for`", [iterable], [type], ctx, false);
         auto at = syntaxFunction(for_, iterable.span, "opIndex", "`for`", [iterable, index], [type, _types.int_], ctx, false);
-        if (length.failed || at.failed) return _types.error;
+        auto next = syntaxFunction(for_, iterable.span, "next", "`for`", [iterable], [type], ctx, false);
+        if (length.failed || at.failed || next.failed) return _types.error;
         if (length.found && at.found)
         {
             if (!takesExactly("length", length, [type], iterable.span)
@@ -5673,6 +5674,15 @@ private final class TypeChecker
                         .format(_types.describe(type), describeUse("length", length), _types.describe(length.signature.ret)));
                 return _types.error;
             }
+            if (!next.found)
+            {
+                _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span,
+                    ("`for` needs a `next` for `%s`: a `length` and an `opIndex` alone don't make it loopable; "
+                        ~ "write a `next`, or loop over `iterate()` of it").format(_types.describe(type)));
+                return _types.error;
+            }
+            if (!takesExactly("next", next, [type], iterable.span)) return _types.error;
+            if (stepParts(next, type, at.signature.ret, iterable.span).length != 2) return _types.error;
             _typing.loops[for_.id] = LoopFunctions(length.use, at.use);
             auto loopId = for_.id;
             noteSyntaxUse(ctx.site, iterable.span, length, () => &_typing.loops[loopId].length);
@@ -5680,20 +5690,10 @@ private final class TypeChecker
             return at.signature.ret;
         }
 
-        auto next = syntaxFunction(for_, iterable.span, "next", "`for`", [iterable], [type], ctx, false);
-        if (next.failed) return _types.error;
         if (!next.found) return Type.init;
         if (!takesExactly("next", next, [type], iterable.span)) return _types.error;
-        auto result = next.signature.ret;
-        auto step = _types.isOption(result) ? _types.optionInner(result) : Type.init;
-        auto parts = step != Type.init && _types.isTuple(step) ? _types.tupleElements(step) : null;
-        if (parts.length != 2 || parts[1] != type)
-        {
-            _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span,
-                "`for` steps `%s` with a `next` that returns `(T, %s)?`, but `%s` returns `%s`"
-                    .format(_types.describe(type), _types.describe(type), describeUse("next", next), _types.describe(result)));
-            return _types.error;
-        }
+        auto parts = stepParts(next, type, Type.init, iterable.span);
+        if (parts.length != 2) return _types.error;
         _typing.loops[for_.id] = LoopFunctions(FunctionUse.init, FunctionUse.init, next.use);
         auto loopId = for_.id;
         noteSyntaxUse(ctx.site, iterable.span, next, () => &_typing.loops[loopId].next);
@@ -5703,6 +5703,21 @@ private final class TypeChecker
             _steppedLoops[$ - 1].site.unsettled = null;
         }
         return parts[0];
+    }
+
+    /// The element and rest of what `next` returns for a `type`, which has to be `(T, type)?`, with
+    /// `T` the `element` when that's given. Empty, after reporting it, when it isn't.
+    private immutable(Type)[] stepParts(SyntaxUse next, Type type, Type element, Span span)
+    {
+        auto result = next.signature.ret;
+        auto step = _types.isOption(result) ? _types.optionInner(result) : Type.init;
+        auto parts = step != Type.init && _types.isTuple(step) ? _types.tupleElements(step) : null;
+        if (parts.length == 2 && parts[1] == type && (element == Type.init || parts[0] == element)) return parts;
+        _collector.reportError(DiagnosticCode.InvalidOperand, span,
+            "`for` steps `%s` with a `next` that returns `(%s, %s)?`, but `%s` returns `%s`".format(_types.describe(type),
+                element == Type.init ? "T" : _types.describe(element), _types.describe(type),
+                describeUse("next", next), _types.describe(result)));
+        return null;
     }
 
     /// The function `name` that `syntax` at `at` calls with `args`, chosen as a call is from the
