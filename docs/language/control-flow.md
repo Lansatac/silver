@@ -120,7 +120,7 @@ There are no labels.
 
 ## Panics
 
-A panic stops the program with a message. Integer overflow, an out-of-range index, a failed conversion and recursion too deep for the stack all panic, and `panic(message: String): Never` panics explicitly:
+A panic stops the program with a message. Integer overflow, an out-of-range index, a failed conversion and recursion too deep for the stack, and running out of memory (`panic: Out of memory`) all panic, and `panic(message: String): Never` panics explicitly:
 
 ```silver
 val result = if isValid => compute() else panic("invalid state")
@@ -144,7 +144,7 @@ count(100000000, 0)     // compiled: panics with Stack overflow; with -O: 100000
 f(0)                    // compiled: panics with Stack overflow; with -O: Integer overflow, from n + 1
 ```
 
-Nothing else differs with `-O`: a program that stays within the stack either way does the same thing.
+Otherwise `-O` is meant to change only speed: a program that stays within the stack either way does the same thing. The one known exception is a gap in how an optimized program's memory is collected, which is a defect to be fixed, not behaviour to rely on.
 
 ## Open questions
 

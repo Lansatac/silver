@@ -42,7 +42,7 @@ version (Windows)
     private extern (C) int _setmode(int descriptor, int mode) nothrow @nogc;
 }
 
-extern (C) nothrow:
+extern (C) nothrow @nogc:
 
 /// Starts running tests. `jump` returns to the guard of the running test.
 void silver_test_start(Jump jump)

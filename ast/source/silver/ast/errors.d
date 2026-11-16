@@ -134,6 +134,8 @@ enum DiagnosticCode : string
     StackOverflow = "R0009",
     /// A `Ref` used from inside its own `update`.
     RefInUpdate = "R0010",
+    /// The program needed more memory than there is.
+    OutOfMemory = "R0011",
 
     /// Something the implementation doesn't handle yet, or a broken invariant.
     InternalError = "I0001",

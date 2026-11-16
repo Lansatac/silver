@@ -4,13 +4,14 @@
 /// Every integer type widens to `int` or `uint` first.
 module silver.runtime.io;
 
+import core.exception : OutOfMemoryError;
 import std.conv : to;
 import std.stdio : readln, stdout;
 
 import silver.runtime.buffer : newString;
 import silver.runtime.format : floatText;
 import silver.runtime.memory : SavedRegisters, silver_save_registers;
-import silver.runtime.panic : panic;
+import silver.runtime.panic : outOfMemory, panic;
 import silver.runtime.testing : testing, testOutput;
 
 extern (C) nothrow:
@@ -50,6 +51,10 @@ bool silver_read(const(char)** data, size_t* length)
         newString(line, data, length);
         return line.length > 0;
     }
+    catch (OutOfMemoryError)
+    {
+        outOfMemory();
+    }
     catch (Exception e)
     {
         panic("couldn't read input: " ~ e.msg);
@@ -70,6 +75,10 @@ private void output(lazy const(char)[] text, bool newline)
         }
         stdout.write(text);
         if (newline) stdout.write('\n');
+    }
+    catch (OutOfMemoryError)
+    {
+        outOfMemory();
     }
     catch (Exception e)
     {

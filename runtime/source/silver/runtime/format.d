@@ -3,11 +3,12 @@
 /// copied into a buffer (see `silver.runtime.buffer`), since every String on the heap must be in one.
 module silver.runtime.format;
 
+import core.exception : OutOfMemoryError;
 import std.conv : to;
 
 import silver.runtime.buffer : newString, silver_array_append;
 import silver.runtime.memory : SavedRegisters, silver_save_registers;
-import silver.runtime.panic : panic;
+import silver.runtime.panic : outOfMemory, panic;
 
 /// D would show a NaN's sign bit, which means nothing.
 package string floatText(double value)
@@ -68,6 +69,10 @@ private void format(T)(T value, const(char)** data, size_t* length)
     {
         static if (is(T == double)) newString(floatText(value), data, length);
         else newString(value.to!string, data, length);
+    }
+    catch (OutOfMemoryError)
+    {
+        outOfMemory();
     }
     catch (Exception e)
     {

@@ -1,9 +1,10 @@
 /// The runtime's natives for `std.time`. `std.math`'s natives bind libm directly.
 module silver.runtime.numeric;
 
+import core.exception : OutOfMemoryError;
 import std.datetime.systime : Clock;
 import silver.runtime.memory : SavedRegisters, silver_save_registers;
-import silver.runtime.panic : panic;
+import silver.runtime.panic : outOfMemory, panic;
 
 extern (C) nothrow:
 
@@ -15,6 +16,10 @@ long silver_nowNanos()
     try
     {
         return (Clock.currStdTime - 621_355_968_000_000_000L) * 100;
+    }
+    catch (OutOfMemoryError)
+    {
+        outOfMemory();
     }
     catch (Exception e)
     {

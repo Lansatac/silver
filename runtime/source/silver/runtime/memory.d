@@ -9,7 +9,9 @@
 /// `SavedRegisters`: see "What the collector can see" in `notes/runtime.md`.
 module silver.runtime.memory;
 
+import core.exception : OutOfMemoryError;
 import core.memory : GC;
+import silver.runtime.panic : outOfMemory;
 
 version (Win64) version (X86_64) version = CalleeSavedVectorRegisters;
 
@@ -64,7 +66,16 @@ GC.BlkInfo collectable(size_t size, uint attributes) nothrow
 {
     SavedRegisters saved = void;
     silver_save_registers(&saved);
-    return GC.qalloc(size, attributes);
+    try
+    {
+        auto block = GC.qalloc(size, attributes);
+        if (block.base is null) outOfMemory();
+        return block;
+    }
+    catch (OutOfMemoryError)
+    {
+        outOfMemory();
+    }
 }
 
 /// `size` bytes for an object of fixed size, which no pointer walks along: see `buffer` for what

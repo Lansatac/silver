@@ -14,8 +14,9 @@
 /// applied, and the two sides would silently disagree. A String is returned through two
 /// out-pointers, for the same reason.
 ///
-/// D exceptions mustn't unwind through Silver frames, which have no unwind info, so every
-/// `extern(C)` function is `nothrow` and turns failures into `silver_panic`.
+/// D exceptions mustn't unwind through Silver frames, which are `nounwind` whatever table they have,
+/// so every `extern(C)` function is `nothrow` and turns failures, running out of memory among them,
+/// into `silver_panic`.
 module silver.runtime.entry;
 
 /// Generated code's entry point, which runs the program's `main`.

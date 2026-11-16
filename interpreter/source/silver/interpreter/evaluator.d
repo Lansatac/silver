@@ -1,5 +1,6 @@
 module silver.interpreter.evaluator;
 
+import core.exception : OutOfMemoryError;
 import std.conv : to;
 import std.format : format;
 import std.meta : AliasSeq;
@@ -77,6 +78,10 @@ final class Evaluator
         {
             _failures ~= stop.msg;
         }
+        catch (OutOfMemoryError)
+        {
+            run.panic = new Diagnostic(DiagnosticCode.OutOfMemory, _program.functions[test.function_].body.span, "Out of memory");
+        }
         // Anything else is a fault in the interpreter, which can still be reported against the test.
         catch (Throwable fault)
         {
@@ -96,6 +101,10 @@ final class Evaluator
         catch (CodedException error)
         {
             throw new RuntimeError(Diagnostic(error.code, _program.functions[_program.entryPoint].body.span, error.msg));
+        }
+        catch (OutOfMemoryError)
+        {
+            throw new RuntimeError(Diagnostic(DiagnosticCode.OutOfMemory, _program.functions[_program.entryPoint].body.span, "Out of memory"));
         }
     }
 

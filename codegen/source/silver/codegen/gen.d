@@ -298,7 +298,7 @@ private final class Generator
     private string emitEntry()
     {
         if (_program.entryPoint == size_t.max) return emitTestEntry();
-        return "define void @silver_main() {\n.entry:\n  call void %s()\n  ret void\n}\n".format(mangled(_program.entryPoint));
+        return "define void @silver_main() #0 {\n.entry:\n  call void %s()\n  ret void\n}\n".format(mangled(_program.entryPoint));
     }
 
     /// `silver_main` for running the tests: each runs through a guard, which a panic in it or `?`
@@ -315,9 +315,9 @@ private final class Generator
         foreach (name; ["silver_test_start", "silver_test_begin", "silver_test_end"]) _usedRuntime[name] = true;
 
         auto text = "@silver.test.jump = internal global [5 x ptr] zeroinitializer\n\n"
-            ~ "define private void @silver.test.escape() noinline {\n.entry:\n"
+            ~ "define private void @silver.test.escape() #0 noinline {\n.entry:\n"
             ~ "  call void @llvm.eh.sjlj.longjmp(ptr @silver.test.jump)\n  unreachable\n}\n\n"
-            ~ "define private void @silver.test.guard(ptr %test) noinline {\n.entry:\n"
+            ~ "define private void @silver.test.guard(ptr %test) #0 noinline {\n.entry:\n"
             ~ "  %frame = call ptr @llvm.frameaddress.p0(i32 0)\n"
             ~ "  store ptr %frame, ptr @silver.test.jump\n"
             ~ "  %stack = call ptr @llvm.stacksave.p0()\n"
@@ -326,7 +326,7 @@ private final class Generator
             ~ "  %jumped = call i32 @llvm.eh.sjlj.setjmp(ptr @silver.test.jump)\n"
             ~ "  %fresh = icmp eq i32 %jumped, 0\n"
             ~ "  br i1 %fresh, label %run, label %done\nrun:\n  call void %test()\n  br label %done\ndone:\n  ret void\n}\n\n"
-            ~ "define void @silver_main() {\n.entry:\n  call void @silver_test_start(ptr @silver.test.escape)\n";
+            ~ "define void @silver_main() #0 {\n.entry:\n  call void @silver_test_start(ptr @silver.test.escape)\n";
         foreach (i, test; _program.tests)
         {
             text ~= ("  %%begin.%1$s = call i1 @silver_test_begin(i64 %1$s)\n"
@@ -1282,7 +1282,7 @@ private final class Generator
         auto name = "@silver.panics.guard.%s".format(_panicsGuards.length);
         _panicsGuards[returned] = name;
         foreach (used; ["silver_panics_enter", "silver_panics_leave"]) _usedRuntime[used] = true;
-        _thunkDefinitions ~= "define private i1 %s(ptr %%code, ptr %%env) noinline {\n.entry:\n".format(name)
+        _thunkDefinitions ~= "define private i1 %s(ptr %%code, ptr %%env) #0 noinline {\n.entry:\n".format(name)
             ~ "  call void @silver_panics_enter(ptr @silver.test.jump)\n"
             ~ "  %frame = call ptr @llvm.frameaddress.p0(i32 0)\n"
             ~ "  store ptr %frame, ptr @silver.test.jump\n"

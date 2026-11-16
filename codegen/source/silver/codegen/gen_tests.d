@@ -608,6 +608,18 @@ unittest
     plain.output.startsWith("20\npanic: ").should.equal(true);
     optimized.should.equal(plain);
 }
+// Review 6 (silver-23b.9): with -O, `main.main` and whatever else is inlined into `silver_main` take
+// its attributes, and LLVM infers `nounwind` for it without `uwtable`, so the outermost frames get no
+// unwind table. A D Error from the runtime (out of memory) then aborts with "uncaught exception reached
+// top of stack" (status 134), where unoptimized it reaches Thread.join (status 139 there today).
+@("silver_main, which an optimized program's main is inlined into, keeps an unwind table")
+unittest
+{
+    auto ir = generateSource("def main(): Unit {\n    printl(1)\n}");
+    ir.should.contain("attributes #0 = { nounwind uwtable }");
+    ir.should.contain("define void @silver_main() #0 {");
+}
+
 // LLVM knows the C library's functions by name, and would work out `pow(2.0, 10.0)` itself or call
 // `exp2` for `pow(2.0, x)`, neither of which rounds as the library's `pow` does.
 @("a native is an opaque call when optimized, whatever C library function it's named like")

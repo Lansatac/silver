@@ -48,3 +48,9 @@ noreturn panic(string message) nothrow
     silver_save_registers(&saved);
     silver_panic(null, message.toStringz);
 }
+
+/// The collector couldn't get memory. A fixed message, since nothing can be allocated to build one.
+noreturn outOfMemory() nothrow @nogc
+{
+    silver_panic(null, "Out of memory");
+}

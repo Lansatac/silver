@@ -26,5 +26,15 @@
 		"silver:testing": "*"
 	},
 	"targetType": "executable",
+	"configurations": [
+		{ "name": "application" },
+		{
+			"name": "unittest",
+			"targetName": "silver-test-application",
+			"dependencies": {
+				"fluent-asserts": "~>2.1"
+			}
+		}
+	],
 	"lflags-windows": ["/STACK:67108864"]
 }
