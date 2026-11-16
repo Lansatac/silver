@@ -1,0 +1,17 @@
+// A lambda typed while an overload is chosen gets the parameter types the chosen function would
+// give it, which an earlier lambda's result or a literal with no default type can decide.
+
+interface A { def fa(v: Self): Int }
+def fa(x: Float): Int => 1
+def fa(x: Int?): Int => 2
+
+def f<T, U>(g: (Int) -> T, h: (T) -> U, x: T): String { printl("f: anything"); "{h(x)}" }
+def f<T, U: A>(g: (Int) -> T, h: (T) -> U, x: T): String { printl("f: A"); "{h(x)}" }
+
+def k<T, U>(xs: [T], y: T, g: (T) -> U): String { printl("k: anything"); "{g(y)}" }
+def k<T, U: A>(xs: [T], y: T, g: (T) -> U): String { printl("k: A"); "{g(y)}" }
+
+def main(): Unit {
+    printl(f(n => 1.5, t => t, 1))
+    printl(k([Some(1), None], 2, t => t))
+}

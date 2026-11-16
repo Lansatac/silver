@@ -304,7 +304,7 @@ def conv<T: A & B>(x: T): T => x
     analyzed(declared ~ "def conv(x: Bool): Int => 0\n" ~ call).onlyMessage(DiagnosticCode.TypeMismatch);
 }
 
-@("a bound only a lambda's result would decide leaves functions that differ in their bounds tied, and asks for its result type")
+@("a lambda whose result decides the bounds of tied functions is typed once, unless they would type it differently")
 unittest
 {
     enum declared = `
@@ -318,10 +318,19 @@ def ap<T: A>(x: Int, g: (Int) -> T): String => "a"
 def bq<T: A>(x: Int, g: (Int) -> T): Int => 1
 def bq<T: A & B>(x: Int, g: (Int) -> T): String => "b"
 `;
-    analyzed(declared ~ "def main(): Unit {\n val p = ap(1, n => \"s\")\n}")
-        .onlyMessage(DiagnosticCode.AmbiguousOverload).should.contain("write its result type");
-    analyzed(declared ~ "def main(): Unit {\n val p = ap(1, n => n + 1)\n}").onlyMessage(DiagnosticCode.AmbiguousOverload);
-    analyzed(declared ~ "def main(): Unit {\n val p = bq(1, n => n)\n}").onlyMessage(DiagnosticCode.AmbiguousOverload);
+    // The tied functions give the lambda the same parameter types, so it's typed once and its result decides.
+    auto once = analyzed(declared ~ "def main(): Unit {\n val p = ap(1, n => \"s\")\n val q = ap(2, n => n + 1)\n"
+        ~ " val r = bq(3, n => n)\n}");
+    once.shouldHaveNoDiagnostics();
+    once.shouldHaveType(`ap(1, n => "s")`, "Int");
+    once.shouldHaveType("ap(2, n => n + 1)", "String");
+    once.shouldHaveType("bq(3, n => n)", "Int");
+    // A lambda that's wrong is reported once, and not as the call.
+    analyzed(declared ~ "def main(): Unit {\n val p = ap(1, n => n ~ \"x\")\n}").onlyMessage(DiagnosticCode.InvalidOperand);
+    // Functions that would give the lambda different parameter types can't type it once.
+    analyzed(declared ~ "def cq<T: A>(g: (Int) -> T): Int => 1\ndef cq<T: A>(g: (String) -> T): Int => 1\n"
+        ~ "def main(): Unit {\n val p = cq(n => 1)\n}")
+        .onlyMessage(DiagnosticCode.AmbiguousOverload).should.contain("annotate it");
     // An annotated lambda, or a named function, has a type of its own, so its result decides.
     auto a = analyzed(declared ~ "def main(): Unit {\n val p = ap(1, (n): String => \"s\")\n val q = ap(2, (n: Int): Int => n)\n"
         ~ " val r = ap(3, name)\n val s = 3.ap((n): Int => n)\n}");
@@ -335,7 +344,7 @@ def bq<T: A & B>(x: Int, g: (Int) -> T): String => "b"
         .onlyMessage(DiagnosticCode.NoMatchingOverload).should.contain("`String` isn't one");
 }
 
-@("what a lambda's result would decide stays undecided for the rest of the choice, as the reviewer's cases show")
+@("a lambda typed once gets the parameter types the chosen function gives it")
 unittest
 {
     enum declared = `
@@ -349,11 +358,15 @@ def k<T, U: A>(xs: [T], y: T, g: (T) -> U): String => "a"
 def ap<T, U>(x: T, g: (T) -> U): Int => 1
 def ap<T, U: A>(x: T, g: (T) -> U): String => "a"
 `;
-    // An earlier lambda's result binds `T` for the call, so the literal doesn't decide it here either.
-    analyzed(declared ~ "def main(): Unit {\n val p = f(n => 1.5, t => t, 1)\n}").onlyMessage(DiagnosticCode.AmbiguousOverload);
-    analyzed(declared ~ "def main(): Unit {\n val q = k([Some(1), None], 2, t => t)\n}").onlyMessage(DiagnosticCode.AmbiguousOverload);
-    analyzed(declared ~ "def main(): Unit {\n val p = ap(3, t => \"s\")\n}").onlyMessage(DiagnosticCode.AmbiguousOverload);
-    analyzed(declared ~ "def main(): Unit {\n val q = 3.ap(t => \"s\")\n}").onlyMessage(DiagnosticCode.AmbiguousOverload);
+    // An earlier lambda's result binds `T` before the literal does, as it would for a lone function,
+    // and each lambda typed once gives the next its parameter.
+    auto once = analyzed(declared ~ "def main(): Unit {\n val p = f(n => 1.5, t => t, 1)\n val q = k([Some(1), None], 2, t => t)\n"
+        ~ " val r = ap(3, t => \"s\")\n val s = 3.ap(t => \"s\")\n}");
+    once.shouldHaveNoDiagnostics();
+    once.shouldHaveType("f(n => 1.5, t => t, 1)", "String");
+    once.shouldHaveType("k([Some(1), None], 2, t => t)", "String");
+    once.shouldHaveType(`ap(3, t => "s")`, "Int");
+    once.shouldHaveType(`3.ap(t => "s")`, "Int");
     // Written out, the results decide.
     auto a = analyzed(declared ~ "def main(): Unit {\n val p = f((n): Float => 1.5, (t): Float => t, 1)\n"
         ~ " val q = k([Some(1), None], 2, (t): Int? => t)\n val r = ap(3, (t): String => \"s\")\n}");
@@ -1099,4 +1112,45 @@ def busy<T>(x: T): String => count(x)
 def main(): Unit => ()");
     a.shouldHaveNoDiagnostics();
     a.queriesAt(At("busy", 1)).length.should.equal(0);
+}
+
+@("review: choosing an overload doesn't work out the result of a candidate it doesn't choose")
+unittest
+{
+    // `h(Int)` is chosen; settling `h(Int?)`'s result during the trial reached `f`, still being worked out.
+    analyzedModule(ranges ~ "def f(n: Int): Range<Int> {
+    val xs: [Int] = h(n)
+    xs
+}
+def h(x: Int): [Int] => [x]
+def h(x: Int?): Range<Int> => f(1)").shouldHaveNoDiagnostics();
+}
+
+@("review: a literal binds before a lambda during choice, whatever their order")
+unittest
+{
+    enum declared = `
+interface A { def a(x: Self): Int }
+def a(x: Int): Int => 1
+def ap<T>(x: Int, g: (Int) -> T, y: T): Int => 1
+def ap<T: A>(x: Int, g: (Int) -> T, y: T): String => "a"
+`;
+    // The literal `2` gives `T = Int` at step 4 before the lambda's turn, so the bound is decided.
+    auto a = analyzed(declared ~ "def main(): Unit {\n val p = ap(1, n => n, 2)\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("ap(1, n => n, 2)", "String");
+}
+
+@("review: a bound left open by something other than a lambda isn't blamed on the lambda")
+unittest
+{
+    // `T` is open because of `[]`, and annotating the lambda doesn't change that.
+    analyzed(`
+interface A { def a(x: Self): Int }
+def a(x: Int): Int => 1
+def f<T, U>(xs: [T], g: (Int) -> U): Int => 1
+def f<T: A, U>(xs: [T], g: (Int) -> U): String => "a"
+def main(): Unit {
+ val p = f([], n => 1)
+}`).onlyMessage(DiagnosticCode.UntypedEmptyArray);
 }

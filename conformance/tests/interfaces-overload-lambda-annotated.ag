@@ -1,0 +1,35 @@
+// Of functions that differ in their bounds, a lambda with its result written has a type of its
+// own, which decides which bounds hold, and the expected type can decide them before the lambda.
+
+interface A { def fa(v: Self): Int }
+def fa(x: Int): Int => 1
+def fa(x: [Int]): Int => 1
+
+def ap<T>(x: Int, g: (Int) -> T): String { printl("ap: anything"); "{g(x)}" }
+def ap<T: A>(x: Int, g: (Int) -> T): String { printl("ap: A"); "{g(x)}" }
+
+def name(n: Int): String => "n{n}"
+
+def each<T, U>(xs: [T], f: (T) -> U): [U] { printl("each: anything"); [] }
+def each<T, U: A>(xs: [T], f: (T) -> U): [U] { printl("each: A"); [] }
+
+def make<T>(x: Int, g: (Int) -> T): T { printl("make: anything"); g(x) }
+def make<T: A>(x: Int, g: (Int) -> T): T { printl("make: A"); g(x) }
+
+def opt<T>(x: Int, g: (Int) -> T?): Int { printl("opt: anything"); 0 }
+def opt<T: A>(x: Int, g: (Int) -> T?): Int { printl("opt: A"); 0 }
+
+def main(): Unit {
+    printl(ap(1, (n): String => "s"))
+    printl(ap(1, (n: Int): Int => n + 1))
+    printl(ap(1, name))
+    printl(3.ap((n): Int => n * 2))
+    printl(length(each([1, 2], (x): Int => x + 1)))
+    printl(length(each(["a"], (s): String => s ~ "!")))
+    val m: [Int] = make(1, n => [])
+    printl(m)
+    val k: Int = make(1, n => n)
+    printl(k)
+    printl(opt(1, (n): Int? => 3))
+    printl(opt(1, (n): String? => "x"))
+}

@@ -1,8 +1,9 @@
-// Functions that differ in their bounds, where only a lambda's result would say which hold, are tied.
+// Tied functions that would give a lambda different parameter types can't type it once, so a
+// bound only its result would decide leaves the call ambiguous.
 interface A { def fa(v: Self): Int }
 def fa(x: Int): Int => 1
-def ap<T>(x: Int, g: (Int) -> T): String { printl("ap: anything"); "{g(x)}" }
-def ap<T: A>(x: Int, g: (Int) -> T): String { printl("ap: A"); "{g(x)}" }
+def ap<T: A>(g: (Int) -> T): String => "int"
+def ap<T: A>(g: (String) -> T): String => "string"
 def main(): Unit {
-    printl(ap(1, n => "s"))
+    printl(ap(n => 1))
 }

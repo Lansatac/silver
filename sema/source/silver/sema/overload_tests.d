@@ -440,3 +440,13 @@ unittest
     a.shouldCall(At("call", 3), At("call", 1));
     a.shouldResolve(At("show", 4), At("show", 1));
 }
+
+@("review: injection binds nothing during choice either, so a generic sum parameter doesn't fit a member")
+unittest
+{
+    // `Box<Int>` against `W<T>` binds nothing, so the generic doesn't fit; `Box<Int>?` does in one step.
+    auto a = analyzedWith("type Box<T>(value: T)\ntype W<T> = :Box<T> | :String\n"
+        ~ "def g<T>(w: W<T>): Int => 1\ndef g(b: Box<Int>?): String => \"s\"", "    val r = g(Box(1))");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("g(Box(1))", "String");
+}

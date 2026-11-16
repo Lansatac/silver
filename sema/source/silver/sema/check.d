@@ -2997,6 +2997,8 @@ private final class TypeChecker
         bool boundsAgainstExpected;
         /// Whether a bound is undecided because only a lambda's result would say what its type is.
         bool awaitsLambda;
+        /// The lambdas whose results were left undecided, with what each would be typed against.
+        LambdaTurn[] turns;
 
         bool fitsAll() const => problem is null;
     }
@@ -3040,19 +3042,28 @@ private final class TypeChecker
             }
             return tried;
         }
-        auto tried = fitAll(expected);
-        // When what the expected type binds leaves nothing fitting the arguments, the choice is made
-        // without it, so the argument is reported against the chosen function, as for a lone one.
-        // Not when it broke a function's bounds, since that would bring the function back.
-        if (!tried.joiner.any!(t => t.fitsAll) && tried.joiner.any!(t => t.againstExpected)
-            && !tried.joiner.any!(t => t.boundsAgainstExpected)) tried = fitAll(Type.init);
-        groups = tried;
+        auto arity = groups;
+        Trial[] own;
+        const(Trial[])[] imported;
+        while (true)
+        {
+            groups = arity;
+            auto tried = fitAll(expected);
+            // When what the expected type binds leaves nothing fitting the arguments, the choice is made
+            // without it, so the argument is reported against the chosen function, as for a lone one.
+            // Not when it broke a function's bounds, since that would bring the function back.
+            if (!tried.joiner.any!(t => t.fitsAll) && tried.joiner.any!(t => t.againstExpected)
+                && !tried.joiner.any!(t => t.boundsAgainstExpected)) tried = fitAll(Type.init);
+            groups = tried;
+            own = groups[0].filter!(t => t.fitsAll).array;
+            imported = own.length > 0 ? null : rankedImports(groups[1 .. $].map!(g => g.filter!(t => t.fitsAll).array).array);
+            auto pool = own.length > 0 ? cast(const(Trial)[]) own : imported.length == 1 ? imported[0] : null;
+            if (!typeAwaitedLambdas(pool, groups.joiner.filter!(t => t.fitsAll).array, call, typed, ctx)) break;
+        }
         // An argument whose type is already an error fits anything, so it would only add to it.
         auto reportable = !typed.any!(t => t != Type.init && _types.mentionsError(t));
 
-        auto own = groups[0].filter!(t => t.fitsAll).array;
         if (own.length > 0) return bestTrial(own, name.span, spelled, reportable);
-        auto imported = rankedImports(groups[1 .. $].map!(g => g.filter!(t => t.fitsAll).array).array);
         if (imported.length == 1) return bestTrial(imported[0], name.span, spelled, reportable);
         if (imported.length > 1)
         {
@@ -3061,6 +3072,32 @@ private final class TypeChecker
         }
         if (reportable) reportNoOverload(name.span, spelled, groups);
         return Id!FunctionDecl.init;
+    }
+
+    /// Types, once, the lambdas whose results the functions of `pool` that are tied wait on, when
+    /// those functions differ only in their bounds and every function that fits, `fitting`, would
+    /// type the lambdas alike. Each then has a type of its own, in `typed`, and its result decides
+    /// the bounds when the choice is made again. Whether it typed any.
+    private bool typeAwaitedLambdas(const(Trial)[] pool, const(Trial)[] fitting, const CallExpr call, Type[] typed,
+        BodyContext ctx)
+    {
+        if (pool.length < 2 || pool.any!(t => pool.all!(u => u.func == t.func || beats(t, u)))) return false;
+        auto tied = pool.filter!(t => !pool.any!(u => beats(u, t))).array;
+        if (!tied.any!(t => t.awaitsLambda)) return false;
+        auto turns = tied[0].turns;
+        bool alike(const(LambdaTurn)[] other) => other.length == turns.length && other.length.iota.all!(k =>
+            other[k].arg == turns[k].arg && other[k].expectation == turns[k].expectation && other[k].optional == turns[k].optional);
+        bool boundsOnly(Id!FunctionDecl a, Id!FunctionDecl b) => requiresAll(a, b) || requiresAll(b, a);
+        if (turns.length == 0 || !fitting.all!(t => alike(t.turns))
+            || !tied.all!(t => tied.all!(u => u.func == t.func || boundsOnly(t.func, u.func)))) return false;
+        foreach (turn; turns)
+        {
+            auto arg = call.args[turn.arg];
+            auto lambda = arg.kind.match!((const Lambda l) => l, (_) => Lambda.init);
+            auto expectation = turn.expectation;
+            typed[turn.arg] = typeLambda(arg, lambda, &expectation, ctx.site, turn.optional);
+        }
+        return true;
     }
 
     /// The fitting trials of the imported modules that have any, a list per module, narrowed to
@@ -3152,13 +3189,12 @@ private final class TypeChecker
             Binding binding;
             foreach (i, type; written) binding.bound[params[i].id] = type;
             binding.typed = typed.dup;
-            auto result = signature.ret;
-            if (against != Type.init)
-            {
-                settleResult(trial.func, false);
-                result = signatureOf(trial.func).ret;
-            }
-            bindCall(binding, signature, result, params, trial.func, call, against, ctx, true);
+            // A result worked out from the body isn't worked out for a trial, which records nothing,
+            // so until it's known the expected type binds nothing.
+            auto unsettled = (trial.func in _resolutions.resultFloors) !is null
+                && _resultStates.get(trial.func, ResultState.waiting) != ResultState.settled;
+            if (unsettled) against = Type.init;
+            bindCall(binding, signature, signatureOf(trial.func).ret, params, trial.func, call, against, ctx, true);
             binding.conformance = conformanceOf(trial.func, binding.bound, ctx.site);
             return binding;
         }
@@ -3200,23 +3236,34 @@ private final class TypeChecker
         }
 
         auto binding = plain;
-        if (expected != Type.init && !plain.failedEarly)
+        auto withExpected = expected != Type.init && !plain.failedEarly;
+        if (withExpected) binding = bindAgainst(expected);
+        // Every argument has to fit what's bound in the end. A promotion into a sum binds nothing,
+        // so a parameter that still mentions a type parameter takes no member of a sum here.
+        Fit finalFit(size_t i, Type param) => byShape(i) ? shapeFit(call.args[i], param, params)
+            : typedFit(typed[i], param, params, call.isMutable(i), false);
+        foreach (i; 0 .. call.args.length)
         {
-            binding = bindAgainst(expected);
-            foreach (i; 0 .. call.args.length)
+            auto param = _types.substitute(signature.params[i], binding.bound);
+            if (finalFit(i, param) != Fit.none) continue;
+            auto plainParam = _types.substitute(signature.params[i], plain.bound);
+            if (!withExpected || finalFit(i, plainParam) == Fit.none)
             {
-                auto param = _types.substitute(signature.params[i], binding.bound);
-                if (fitAt(i, param) != Fit.none) continue;
-                auto given = binding.fromExpected.filter!(p => _types.mentionsParameter(signature.params[i], p)).array;
-                trial.problem = misfit(i, param) ~ (given.length == 1
-                    ? ", which the expected type gives `%s`".format(_resolutions.declarations.typeParams[given[0]].name) : "");
-                trial.againstExpected = true;
-                trial.boundsAgainstExpected = binding.conformance.failure !is null;
+                trial.problem = misfit(i, plainParam);
                 return;
             }
+            auto given = binding.fromExpected.filter!(p => _types.mentionsParameter(signature.params[i], p)).array;
+            trial.problem = misfit(i, param) ~ (given.length == 1
+                ? ", which the expected type gives `%s`".format(_resolutions.declarations.typeParams[given[0]].name) : "");
+            trial.againstExpected = true;
+            trial.boundsAgainstExpected = binding.conformance.failure !is null;
+            return;
         }
         auto conformance = binding.conformance;
-        trial.awaitsLambda = conformance.pending && binding.undecided.length > 0;
+        // Undecided only when a bound is on what a lambda's result would decide.
+        trial.awaitsLambda = conformance.pending
+            && binding.undecided.any!(p => _typing.bounds.get(p, null).length > 0);
+        trial.turns = binding.turns;
         if (conformance.failure is null) return;
         trial.problem = conformance.failure.replace("\n", "\n    ");
         trial.boundsAgainstExpected = !binding.failedEarly && binding.fromExpected.length > 0;
@@ -3224,10 +3271,10 @@ private final class TypeChecker
 
     /// How well an argument of type `actual` fits `param`, which may still mention some of the
     /// candidate's own `params`.
-    private Fit typedFit(Type actual, Type param, const(TypeParam)[] params, bool mutable)
+    private Fit typedFit(Type actual, Type param, const(TypeParam)[] params, bool mutable, bool injects = true)
     {
         if (actual == _types.error || actual == _types.never || _types.mentionsError(param)) return Fit.exact;
-        if (mentionsAny(param, params)) return couldBe(param, actual, params) ? Fit.exact : Fit.none;
+        if (mentionsAny(param, params)) return couldBe(param, actual, params, injects) ? Fit.exact : Fit.none;
         if (actual == param) return Fit.exact;
         if (mutable) return Fit.none;
         return Fit.promoted(fitSteps(actual, param));
@@ -3239,37 +3286,37 @@ private final class TypeChecker
     }
 
     /// Whether `declared`, in which any of `params` could be any type, could take a value of `actual`.
-    private bool couldBe(Type declared, Type actual, const(TypeParam)[] params)
+    private bool couldBe(Type declared, Type actual, const(TypeParam)[] params, bool injects = true)
     {
         if (actual == _types.error || actual == _types.never) return true;
         if (!mentionsAny(declared, params)) return isAssignable(actual, declared);
         auto data = _types[actual];
         return _types[declared].match!(
             (const TypeParamData _) => true,
-            (const OptionData o) => (_types.isOption(actual) && couldBe(o.inner, _types.optionInner(actual), params))
-                || couldBe(o.inner, actual, params),
-            (const ErrorUnionData u) => (_types.isErrorUnion(actual) && couldBe(u.success, _types.successOf(actual), params)
-                    && couldBe(u.error, _types.errorOf(actual), params))
-                || (_types.isFailure(actual) && couldBe(u.error, _types.errorOf(actual), params))
-                || couldBe(u.success, actual, params),
+            (const OptionData o) => (_types.isOption(actual) && couldBe(o.inner, _types.optionInner(actual), params, injects))
+                || couldBe(o.inner, actual, params, injects),
+            (const ErrorUnionData u) => (_types.isErrorUnion(actual) && couldBe(u.success, _types.successOf(actual), params, injects)
+                    && couldBe(u.error, _types.errorOf(actual), params, injects))
+                || (_types.isFailure(actual) && couldBe(u.error, _types.errorOf(actual), params, injects))
+                || couldBe(u.success, actual, params, injects),
             (const ErrorListData _) => true,
             (const ArrayData a) => actual == _types.emptyArray
-                || _types.isArray(actual) && couldBe(a.element, _types.arrayElement(actual), params),
+                || _types.isArray(actual) && couldBe(a.element, _types.arrayElement(actual), params, injects),
             (const TupleData t) => data.match!(
                 (const TupleData u) => u.elements.length == t.elements.length
-                    && t.elements.length.iota.all!(i => couldBe(t.elements[i], u.elements[i], params)),
+                    && t.elements.length.iota.all!(i => couldBe(t.elements[i], u.elements[i], params, injects)),
                 _ => false,
             ),
             (const FunctionData f) => data.match!(
                 (const FunctionData g) => g.params.length == f.params.length && g.mutables == f.mutables
-                    && f.params.length.iota.all!(i => couldBe(f.params[i], g.params[i], params))
-                    && couldBe(f.ret, g.ret, params),
+                    && f.params.length.iota.all!(i => couldBe(f.params[i], g.params[i], params, injects))
+                    && couldBe(f.ret, g.ret, params, injects),
                 _ => false,
             ),
             (const NominalData n) => data.match!(
                 (const NominalData m) => m.decl == n.decl
-                    ? n.args.length.iota.all!(i => couldBe(n.args[i], m.args[i], params))
-                    : _typing.members.get(n.decl, null).any!(member => declOf(member) == m.decl),
+                    ? n.args.length.iota.all!(i => couldBe(n.args[i], m.args[i], params, injects))
+                    : injects && _typing.members.get(n.decl, null).any!(member => declOf(member) == m.decl),
                 _ => false,
             ),
             _ => false,
@@ -3489,8 +3536,9 @@ private final class TypeChecker
         if (unbeaten.any!(t => t.awaitsLambda))
         {
             _collector.reportError(DiagnosticCode.AmbiguousOverload, span,
-                ("This call fits more than one `%s`: %s, which differ in their bounds, and only what a lambda here returns "
-                    ~ "says which hold; write its result type, as in `(x): Int => ...`").format(spelled, tied.join(" and ")));
+                ("This call fits more than one `%s`: %s, and only what a lambda here returns would say which bounds hold, "
+                    ~ "but they'd give the lambda different types; annotate it, as in `(x: Int): Int => ...`")
+                    .format(spelled, tied.join(" and ")));
             return Id!FunctionDecl.init;
         }
         _collector.reportError(DiagnosticCode.AmbiguousOverload, span,
@@ -4777,6 +4825,16 @@ private final class TypeChecker
         Id!TypeParam[] fromExpected;
         /// In a trial, the type parameters only a lambda's result would decide, which stay unbound.
         Id!TypeParam[] undecided;
+        /// In a trial, each lambda whose result was left undecided, with what it would be typed against.
+        LambdaTurn[] turns;
+    }
+
+    /// A lambda argument a trial would have typed: its place, and what it's typed against.
+    private struct LambdaTurn
+    {
+        size_t arg;
+        FunctionData expectation;
+        bool optional;
     }
 
     /// Binds `params`, the type parameters of a call of a function with `signature` and `result`,
@@ -4840,6 +4898,11 @@ private final class TypeChecker
                 },
                 (_) {},
             );
+            if (expectation !is null)
+            {
+                auto optional = expectation.ret == Type.init && _types.isOption(signatureOf(signature.params[i]).ret);
+                b.turns ~= LambdaTurn(i, *expectation, optional);
+            }
             undecide(signature.params[i]);
         }
 

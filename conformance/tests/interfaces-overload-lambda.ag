@@ -1,5 +1,6 @@
-// Of functions that differ in their bounds, a lambda's result decides which holds only when it's
-// written out, or when something else, such as the expected type, says what it is.
+// A lambda whose result decides a bounded type parameter is typed once, when every function the
+// call could choose gives its parameters the same types and leaves its result open, so the bound
+// is checked for that result while one is chosen.
 
 interface A { def fa(v: Self): Int }
 def fa(x: Int): Int => 1
@@ -10,26 +11,43 @@ def ap<T: A>(x: Int, g: (Int) -> T): String { printl("ap: A"); "{g(x)}" }
 
 def name(n: Int): String => "n{n}"
 
+// The lambda's parameter comes from another argument.
 def each<T, U>(xs: [T], f: (T) -> U): [U] { printl("each: anything"); [] }
 def each<T, U: A>(xs: [T], f: (T) -> U): [U] { printl("each: A"); [] }
 
+// The expected type says what the result is, so the lambda is checked against it.
 def make<T>(x: Int, g: (Int) -> T): T { printl("make: anything"); g(x) }
 def make<T: A>(x: Int, g: (Int) -> T): T { printl("make: A"); g(x) }
 
+// A lambda typed once gives the next one its parameter.
+def two<T, U>(x: Int, f: (Int) -> T, g: (T) -> U): Int { printl("two: anything"); 0 }
+def two<T, U: A>(x: Int, f: (Int) -> T, g: (T) -> U): Int { printl("two: A"); 0 }
+
+// The parameter's result is an option, so the lambda's is promoted to one.
 def opt<T>(x: Int, g: (Int) -> T?): Int { printl("opt: anything"); 0 }
 def opt<T: A>(x: Int, g: (Int) -> T?): Int { printl("opt: A"); 0 }
 
 def main(): Unit {
-    printl(ap(1, (n): String => "s"))
-    printl(ap(1, (n: Int): Int => n + 1))
+    printl(ap(1, n => "s"))
+    printl(ap(1, n => n + 1))
+    printl(ap(1, (n: Int): String => "s"))
+    printl(ap(2, n => [n]))
     printl(ap(1, name))
-    printl(3.ap((n): Int => n * 2))
-    printl(length(each([1, 2], (x): Int => x + 1)))
-    printl(length(each(["a"], (s): String => s ~ "!")))
+    printl(3.ap(n => n * 2))
+    printl(3.ap(n => "t{n}"))
+
+    printl(length(each([1, 2], x => x + 1)))
+    printl(length(each(["a"], s => s ~ "!")))
+
     val m: [Int] = make(1, n => [])
     printl(m)
     val k: Int = make(1, n => n)
     printl(k)
-    printl(opt(1, (n): Int? => 3))
-    printl(opt(1, (n): String? => "x"))
+    printl(make(1, n => "x"))
+
+    printl(two(1, n => "s", s => s ~ "!"))
+    printl(two(1, n => "s", s => 3))
+    printl(opt(1, n => 3))
+    printl(opt(1, n => "x"))
+    printl(ap(1, n => { val d = n * 2; "v{d}" }))
 }
