@@ -140,14 +140,20 @@ A call chooses among the functions of its name like this:
 2. Each argument that has a type of its own is typed, once. Some arguments' types depend on where they go, and those are compared with each candidate's parameter by their shape instead: literals, `None`, `[]`, lambdas without their result type written, names of generic or overloaded functions, arrays, tuples and `Some`s made only of these, and `if`s, `match`es and blocks whose values are all of these. An arm that can't finish, because it ends in `return`, `break`, `continue` or `tail`, has no value to count, and a block's earlier statements don't count. Such an `if` fits a parameter as well as its worst-fitting value does. They're checked against the chosen function's parameters afterwards. A lambda fits a function parameter that takes as many parameters as it does, with the types it annotates.
 3. Each generic candidate's type parameters are bound as a call of it alone would bind them, by [inference](generics.md#inference), in a trial that records nothing, so the choice and the call can't disagree. An argument compared by its shape binds what it would be given on its own, so `[Some(1), None]` binds as an `[Int?]`, and a lambda binds what its annotations say. The expected type binds too, and the arguments and bounds have to suit what it binds, but it never makes one candidate better than another.
 4. A candidate fits when every argument [fits](types.md#steps) its parameter, and costs the number of steps that takes, per argument. A candidate that fits every argument beats another if it costs no more for each argument and less for one, so with `type Held = :Box<Int> | :Box<String>`, `g(Box(1))` calls `g(b: Box<Int>?)`, one step, rather than `g(h: Held?)`, two. When two fit every argument equally well, a function that isn't generic beats a generic one, and a generic function beats another that takes everything it takes, as `f<T>(x: [T])` beats `f<T>(x: T)`. Last, of two generic functions with the same parameter types, the one whose [bounds](interfaces.md#bounds) ask for more beats the other, when its bounds are known to hold.
-5. A bound whose type only a lambda's result would decide is undecided while the choice is made. When candidates that differ only in their bounds are still tied because of one, the call is an error that asks for the lambda's result type:
+5. A bound whose type only a lambda's result would decide is undecided while the choice is made. When the candidates still tied differ only in their bounds because of one, and every candidate that fits would give the lambda the same parameter types, the lambda is typed once with those, and the choice is made again with its result. Where the candidates would type it differently, the call is an error that asks for the lambda to be annotated:
 
    ```silver
    def ap<T>(x: Int, g: (Int) -> T): String => ...
    def ap<T: Json>(x: Int, g: (Int) -> T): String => ...
 
-   ap(1, n => "s")                // error: write the lambda's result type
-   ap(1, (n): String => "s")      // the first, when a String isn't a Json
+   ap(1, n => "s")                // the first, when a String isn't a Json
+   ap(1, n => n + 1)              // the second, when an Int is one
+
+   def each<T: Json>(g: (Int) -> T): String => ...
+   def each<T: Json>(g: (String) -> T): String => ...
+
+   each(x => 1)                   // error: annotate the lambda
+   each((x: Int): Int => 1)       // the first
    ```
 6. If no candidate fits, or more than one fits better than all the others, the call is an error. When nothing fits only because of what the expected type bound, the choice is made again without it, and the argument is then an error against the one chosen, as it would be with no overloads.
 
