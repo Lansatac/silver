@@ -70,7 +70,7 @@ val bad: Int ! ParseError = Error(BadDigit(2))
 - `Ok(x)` and `Error(e)` are reserved names, like `Some` and `None`. Each needs a type from context, so `val x = Error(Empty)` is an error.
 - `Error(e)` checks `e` against the error side, so a type in a list, or a member of a sum, is accepted.
 - An error is always written with `Error`. An `E` doesn't promote into `T ! E`, so every place a function fails is visible.
-- A value that's one of the errors and could also become the success, as an `Oops` against `H2 ! Oops` with `type H2 = :Oops | :Int`, is an error rather than silently a success. It's written `Ok(Oops(1))` or `Error(Oops(1))`, whichever is meant.
+- A value that's one of the errors and could also become the success, as an `Oops` against `H2 ! Oops` with `type H2 = :Oops | :Int`, is an error rather than silently a success, since it could reach the error union by two routes (see [steps](types.md#steps)). It's written `Ok(Oops(1))` or `Error(Oops(1))`, whichever is meant.
 - An error union prints as `Ok(42)` or `Error(BadDigit(2))`, and compares structurally with `==`. When one side of `==` is an error union, the other is checked against it, so `parseInt("7") == 7` and `parseInt("x") == Error(BadDigit(0))` both work.
 
 ## Using an error union

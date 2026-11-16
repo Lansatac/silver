@@ -36,6 +36,25 @@ Values do not convert implicitly, with a small number of exceptions called *prom
 
 Expected types flow through assignments, arguments, returns, `if` arms, block values, constructor fields and collection elements. A number literal adapts to its expected type in the same way (see [Numbers](numbers.md)).
 
+### Steps
+
+Each promotion is a *step*, and a value fits where a type is expected in some number of them. `S` fits `S` in none. Wrapping in an option, wrapping in an error union, widening an error union and making a member its sum are one step each, and so is a literal taking a type other than its default. Steps add up through layers, outermost last:
+
+```silver
+type Box(value: Int)
+type Held = :Box | :String
+
+val n = 3
+val a: Int? = n            // 1 step
+val b: (Int?)? = 1         // 2: two layers
+val c: Held? = Box(7)      // 2: into the sum, then the option
+val d: UInt8? = 1          // 2: the literal takes UInt8, then the option
+```
+
+This one relation is what checking, [inference](generics.md#inference) and [overload choice](functions.md#overloading) all ask. Checking only needs to know that a value fits; overload choice prefers the function an argument reaches in fewer steps.
+
+A value whose type could reach the expected type by two different routes doesn't fit, and is an error. The one case is a value that's one of an error union's errors and could also become its success, as an `Oops` against `H2 ! Oops` with `type H2 = :Oops | :Int`; it's written `Ok(...)` or `Error(...)` (see [Errors](errors.md#values)).
+
 Containers do not promote their contents once they are values. A *literal* checks each element against the expected element type, so `val xs: [Int?] = [1, None]` works, but a value of type `[Int]` is not a `[Int?]`. An empty `[]` and `None` have no type of their own that a binding can take, so they need an expected type.
 
 A conversion is implicit only if it works for every value, keeps the value's meaning, and can't fail at runtime. Anything else is written out, as in `UInt8(x)`. There are no user-defined implicit conversions.

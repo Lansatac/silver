@@ -130,16 +130,26 @@ describe([true])   // describe<T>([T])
 
 - Two `def`s of one name in a scope are allowed when their parameter types differ. A different return type doesn't make them differ, and neither does `mutable` alone, an alias of the same type, or other names for the type parameters.
 - A local or parameter holding a function wins outright and isn't overloaded.
-- The type a call is expected to have never chooses, since functions aren't overloaded on their return type.
+- The type a call is expected to have never makes one function better than another, since functions aren't overloaded on their return type. What it gives a type parameter has to suit the arguments, though, so it can rule a function out.
 - A [bound](interfaces.md#bounds) makes two functions differ only when one asks for everything the other does and more; the one that asks for more then beats the other where both fit. A function whose bound the arguments' types don't satisfy doesn't fit a call, so the choice goes on among the others; see [Interfaces](interfaces.md#a-failed-bound-doesnt-fit).
 - Inside a function with a bound, the functions the bound supplies are among the current module's.
 
 A call chooses among the functions of its name like this:
 
 1. Only those taking as many arguments are candidates, and as many type arguments when some are written. If that leaves one, it's called as a function with no overloads would be.
-2. Each argument that has a type of its own is typed, once. Some arguments' types depend on where they go, and those are compared with each candidate's parameter by their shape instead: literals, `None`, `[]`, lambdas, names of generic or overloaded functions, arrays, tuples and `Some`s made only of these, and `if`s, `match`es and blocks whose values are all of these. An arm that can't finish, because it ends in `return`, `break`, `continue` or `tail`, has no value to count, and a block's earlier statements don't count. Such an `if` fits a parameter as well as its worst-fitting value does. They're checked against the chosen function's parameters afterwards. A lambda fits a function parameter that takes as many parameters as it does, with the types it annotates.
-3. An argument fits its parameter exactly, or by a conversion: promotion to an option, becoming a member of a sum, or a literal taking a type other than its default. A candidate that fits every argument beats another if it fits each argument at least as well and one of them better. When two fit every argument equally well, a function that isn't generic beats a generic one, and a generic function beats another that takes everything it takes, as `f<T>(x: [T])` beats `f<T>(x: T)`. Last, of two generic functions with the same parameter types, the one whose [bounds](interfaces.md#bounds) ask for more beats the other.
-4. If no candidate fits, or more than one fits better than all the others, the call is an error.
+2. Each argument that has a type of its own is typed, once. Some arguments' types depend on where they go, and those are compared with each candidate's parameter by their shape instead: literals, `None`, `[]`, lambdas without their result type written, names of generic or overloaded functions, arrays, tuples and `Some`s made only of these, and `if`s, `match`es and blocks whose values are all of these. An arm that can't finish, because it ends in `return`, `break`, `continue` or `tail`, has no value to count, and a block's earlier statements don't count. Such an `if` fits a parameter as well as its worst-fitting value does. They're checked against the chosen function's parameters afterwards. A lambda fits a function parameter that takes as many parameters as it does, with the types it annotates.
+3. Each generic candidate's type parameters are bound as a call of it alone would bind them, by [inference](generics.md#inference), in a trial that records nothing, so the choice and the call can't disagree. An argument compared by its shape binds what it would be given on its own, so `[Some(1), None]` binds as an `[Int?]`, and a lambda binds what its annotations say. The expected type binds too, and the arguments and bounds have to suit what it binds, but it never makes one candidate better than another.
+4. A candidate fits when every argument [fits](types.md#steps) its parameter, and costs the number of steps that takes, per argument. A candidate that fits every argument beats another if it costs no more for each argument and less for one, so with `type Held = :Box<Int> | :Box<String>`, `g(Box(1))` calls `g(b: Box<Int>?)`, one step, rather than `g(h: Held?)`, two. When two fit every argument equally well, a function that isn't generic beats a generic one, and a generic function beats another that takes everything it takes, as `f<T>(x: [T])` beats `f<T>(x: T)`. Last, of two generic functions with the same parameter types, the one whose [bounds](interfaces.md#bounds) ask for more beats the other, when its bounds are known to hold.
+5. A bound whose type only a lambda's result would decide is undecided while the choice is made. When candidates that differ only in their bounds are still tied because of one, the call is an error that asks for the lambda's result type:
+
+   ```silver
+   def ap<T>(x: Int, g: (Int) -> T): String => ...
+   def ap<T: Json>(x: Int, g: (Int) -> T): String => ...
+
+   ap(1, n => "s")                // error: write the lambda's result type
+   ap(1, (n): String => "s")      // the first, when a String isn't a Json
+   ```
+6. If no candidate fits, or more than one fits better than all the others, the call is an error. When nothing fits only because of what the expected type bound, the choice is made again without it, and the argument is then an error against the one chosen, as it would be with no overloads.
 
 The current module's functions come first. Imported functions are only tried when none of the current module's fits, and then the choice is made within one imported module. A module with a function that fits every argument exactly and isn't generic beats the other modules, whose functions would need a conversion or are generic. Otherwise only one imported module's functions may fit: if functions from two modules fit equally well, the call is ambiguous, and qualifying it resolves that. A module here is what one import brings, so the functions a module [forwards](modules.md#forwarding) are ranked with its own.
 
@@ -227,6 +237,7 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 - Of the operator functions, `opIndex`, `opIndexAssign` and `opSlice` are available. `opEquals`, `opHash`, `opCompare` and `opString` aren't, so `==` and printing are always the structural ones, and `<` works only on numbers and strings.
 - Only module-level functions can be overloaded. Two nested `def`s of one name in a block are an error.
 - When more than one candidate is left, an `if`, `match` or block is typed before any is chosen, even when its values are all literals, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.
+- Of the arguments compared by their shape, `None` and `[]` count one step wherever they go.
 - A method call's receiver needs a type of its own, so `None.f()` and `[].f()` are errors. An integer literal receiver adapts, as in `(200).f()` with `f(x: UInt8)`.
 - Two native functions of one name in a module have to bind different C symbols, and two intrinsics can't share a name.
 - A `mutable` first parameter is rejected for a method call. A later `mutable` argument is fine.

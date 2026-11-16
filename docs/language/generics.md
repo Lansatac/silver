@@ -89,16 +89,24 @@ val wrap = IntBox                       // (Int) -> Box<Int>
 
 ### Inference
 
+A type parameter is bound by matching an argument's type against its parameter's type structurally: `[Int]` against `[T]` gives `T = Int`, and `(Int, String)` against `(A, B)` gives both. The one allowance is that an option or error-union layer on the parameter may be peeled off, since a value promotes into it:
+
+- `A` against `T?` gives `T = A`, unless `A` is an option.
+- `A` against `T ! E` gives `T = A`.
+- A promotion into a sum never binds. With `type W<T> = :Box<T> | Empty`, a `Box<Int>` against `W<T>` binds nothing, so `g(Box(1))` for `g<T>(w: W<T>)` is an error. `g<Int>(Box(1))` works, and so does a binding with a type first, as in `val w: W<Int> = Box(1)`.
+
 When type arguments aren't written, each type parameter is found from the call alone, in this order:
 
-1. The arguments that have a type of their own, left to right. An argument of type `A` where `T?` is expected gives `T = A`, unless `A` is an option.
+1. The arguments that have a type of their own, left to right.
 2. The bounds whose type is known by now. The function found for a bound says what its interface's own type arguments are, as with `R: Range<T>`; see [Interface parameters](interfaces.md#interface-parameters).
-3. The expected type, where there is one, for any parameter still unknown. It's matched against the return type.
+3. The expected type, where there is one, for any parameter still unknown. It's matched against the return type, peeling an option or error-union layer off the return type in the same way, and the layer `!` or `?` removes is part of it (see [Errors](errors.md#whats-expected-of-the-operand)).
 4. The remaining arguments: integer literals, lambdas, `None` and `[]`. A literal whose type is still open takes its default type. A lambda needs its parameter types to be known by now, or annotated, and its body then gives its return type. When the parameter returns an option, as in `(S) -> (T, S)?`, that return type is an option too, so a body ending in `(a, b)` returns `Some((a, b))`, just as it would if the type were written out.
 
 The first thing that determines a parameter decides it. There is no search for a common type, so `pair(1, 2.0)` with `pair<T>(a: T, b: T)` is a type mismatch at the second argument.
 
-Once the parameters are known, every argument is checked against its parameter type in the ordinary way, so literals adapt and values promote:
+[Overload choice](functions.md#overloading) binds each candidate in this same order, as a trial that records nothing, so the function chosen is bound as the call then binds it.
+
+Once the parameters are known, every argument is checked against its parameter type with the ordinary [fit](types.md#steps), so literals adapt and values promote there, and only there:
 
 ```silver
 def larger<T>(a: T, b: T, less: (T, T) -> Bool): T => if less(a, b) => b else a
