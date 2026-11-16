@@ -181,8 +181,15 @@ final class TypeTable
     /// so it isn't part of the type's identity.
     Type nominal(const(Id!TypeDecl) decl, string name, const(Type)[] args = null)
     {
-        _nominalNames[decl] = name;
+        if (decl !in _nominalNames) _nominalNames[decl] = name;
         return registerTypeData(TypeData(NominalData(decl, args.idup)));
+    }
+
+    /// Has `describe` call the type `decl` declares `name` from now on, as in `prelude.Interval`
+    /// where a module declares an `Interval` of its own.
+    void rename(const(Id!TypeDecl) decl, string name)
+    {
+        _nominalNames[decl] = name;
     }
 
     /// The type a type parameter stands for inside the declaration it belongs to, about which

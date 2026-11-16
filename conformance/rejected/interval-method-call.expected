@@ -1,0 +1,1 @@
+T0001: Type `Int` is not assignable to type `Interval<Int>`; `a..b.squared(...)` calls `squared` on `b`, so to call it on the range, write `(a..b).squared(...)`

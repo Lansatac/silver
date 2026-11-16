@@ -1,0 +1,11 @@
+// A sub-interval of an interval too long for an `Int` length is still in range.
+def main(): Unit {
+    val low = -9223372036854775807 - 1
+    val wide = low..9223372036854775807
+    printl(wide[0..2])
+    printl(wide[1..1])
+
+    val zero: UInt = 0
+    val all = zero..18446744073709551615
+    printl(all[1..3])
+}

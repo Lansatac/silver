@@ -164,6 +164,12 @@ final class Analysis
         return null;
     }
 
+    /// Whether the `for` loop `for_` is over an `Interval` value, which it loops over as over `a..b`.
+    bool isIntervalLoop(Id!Expr for_) const
+    {
+        return (for_ in _typing.intervalLoops) !is null;
+    }
+
     /// The functions the `for` loop `for_` calls, or null if it loops over an array or `a..b`.
     const(LoopFunctions)* loopOf(Id!Expr for_) const
     {

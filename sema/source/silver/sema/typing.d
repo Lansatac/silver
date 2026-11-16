@@ -40,6 +40,8 @@ package struct Typing
     SideTable!(Id!Expr, Id!FunctionDecl) methodCallees;
     /// For a `for` over something other than an array or `a..b`, the functions it calls, by the `for`.
     SideTable!(Id!Expr, LoopFunctions) loops;
+    /// The `for`s over an `Interval` value, which loop over its bounds as `for` over `a..b` does.
+    SideTable!(Id!Expr, bool) intervalLoops;
     /// For each indexing of something other than an array, the functions it calls, by the indexing.
     SideTable!(Id!Expr, IndexFunctions) indexing;
     /// For each overloaded name, the function chosen, by the name's expression.
@@ -150,7 +152,7 @@ struct LoopFunctions
 }
 
 /// The functions `x[i]` calls when `x` isn't an array. Any of them can be missing: `read` is
-/// `opIndex`, or `opSlice` for `x[a..b]`; `write` is `opIndexAssign`, for an assignment to it or
+/// `opIndex`, which `x[a..b]` calls too; `write` is `opIndexAssign`, for an assignment to it or
 /// through it; `length` gives a slice its left-out end.
 struct IndexFunctions
 {

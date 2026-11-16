@@ -1,0 +1,6 @@
+def main(): Unit {
+    val low: UInt8 = 0
+    val r = low..3
+    printl(r[0])
+    printl(r[-1])
+}

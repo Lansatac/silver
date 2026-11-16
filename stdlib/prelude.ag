@@ -9,15 +9,14 @@ intrinsic def read(): String?
 intrinsic def length<T>(values: [T]): Int
 // The element at `index`, as `values[index]` reads it.
 def at<T>(values: [T], index: Int): T => values[index]
-// What `values[index]`, `values[index] = value` and `values[from..to]` mean, for where a function
-// is wanted. The syntax is built in for arrays, so it never calls these.
+// What `values[index]` and `values[index] = value` mean, for where a function is wanted. The
+// syntax is built in for arrays, so it never calls these.
 def opIndex<T>(values: [T], index: Int): T => values[index]
 def opIndexAssign<T>(values: [T], index: Int, value: T): [T] {
     mutable val changed = values
     changed[index] = value
     changed
 }
-def opSlice<T>(values: [T], from: Int, to: Int): [T] => values[from..to]
 // The bytes of `text`, which the array shares with it.
 intrinsic def bytes(text: String): [UInt8]
 // `data` as a String, for a caller that knows it's UTF-8.
@@ -55,3 +54,155 @@ intrinsic def expect(condition: Bool, message: String): Unit
 intrinsic def panics<T>(work: () -> T): String?
 // Says which type is meant to a function that takes no value of it, as in `fromJson(Of<Point>, text)`.
 type Of<T>
+
+// What `a..b` builds outside a slice or a `for`: the integers from `from` up to but not including
+// `to`, none when `from` isn't below `to`. The compiler finds this type here by name.
+type Interval<T>(from: T, to: T)
+// `values[r]`, and `values[a..b]` where a function is wanted, which panics as that slice does.
+def opIndex<T>(values: [T], r: Interval<Int>): [T] => values[r.from..r.to]
+// An interval's functions, once for each integer type, since a bound can't ask for an integer yet.
+// `holds(r, n)` says whether `r` has at least `n` integers without needing `length(r)` to fit an `Int`.
+def length(r: Interval<Int>): Int => if r.from < r.to => r.to - r.from else 0
+def opIndex(r: Interval<Int>, index: Int): Int {
+    if index < 0 || index >= length(r) {
+        panic("Index is out of range")
+    }
+    r.from + index
+}
+private def holds(r: Interval<Int>, count: Int): Bool =>
+    if r.from >= r.to => count == 0 else if r.from < 0 => r.from + count <= r.to else count <= r.to - r.from
+def opIndex(r: Interval<Int>, part: Interval<Int>): Interval<Int> {
+    if part.from < 0 || part.from > part.to || !holds(r, part.to) {
+        panic("Slice is out of range")
+    }
+    Interval(r.from + part.from, r.from + part.to)
+}
+def next(r: Interval<Int>): (Int, Interval<Int>)? => if r.from < r.to => (r.from, r with (from = r.from + 1)) else None
+def nextBack(r: Interval<Int>): (Int, Interval<Int>)? => if r.from < r.to => (r.to - 1, r with (to = r.to - 1)) else None
+def contains(r: Interval<Int>, value: Int): Bool => value >= r.from && value < r.to
+def length(r: Interval<Int8>): Int => if r.from < r.to => Int(r.to) - Int(r.from) else 0
+def opIndex(r: Interval<Int8>, index: Int): Int8 {
+    if index < 0 || index >= length(r) {
+        panic("Index is out of range")
+    }
+    Int8(Int(r.from) + index)
+}
+private def holds(r: Interval<Int8>, count: Int): Bool =>
+    count <= length(r)
+def opIndex(r: Interval<Int8>, part: Interval<Int>): Interval<Int8> {
+    if part.from < 0 || part.from > part.to || !holds(r, part.to) {
+        panic("Slice is out of range")
+    }
+    Interval(Int8(Int(r.from) + part.from), Int8(Int(r.from) + part.to))
+}
+def next(r: Interval<Int8>): (Int8, Interval<Int8>)? => if r.from < r.to => (r.from, r with (from = r.from + 1)) else None
+def nextBack(r: Interval<Int8>): (Int8, Interval<Int8>)? => if r.from < r.to => (r.to - 1, r with (to = r.to - 1)) else None
+def contains(r: Interval<Int8>, value: Int8): Bool => value >= r.from && value < r.to
+def length(r: Interval<Int16>): Int => if r.from < r.to => Int(r.to) - Int(r.from) else 0
+def opIndex(r: Interval<Int16>, index: Int): Int16 {
+    if index < 0 || index >= length(r) {
+        panic("Index is out of range")
+    }
+    Int16(Int(r.from) + index)
+}
+private def holds(r: Interval<Int16>, count: Int): Bool =>
+    count <= length(r)
+def opIndex(r: Interval<Int16>, part: Interval<Int>): Interval<Int16> {
+    if part.from < 0 || part.from > part.to || !holds(r, part.to) {
+        panic("Slice is out of range")
+    }
+    Interval(Int16(Int(r.from) + part.from), Int16(Int(r.from) + part.to))
+}
+def next(r: Interval<Int16>): (Int16, Interval<Int16>)? => if r.from < r.to => (r.from, r with (from = r.from + 1)) else None
+def nextBack(r: Interval<Int16>): (Int16, Interval<Int16>)? => if r.from < r.to => (r.to - 1, r with (to = r.to - 1)) else None
+def contains(r: Interval<Int16>, value: Int16): Bool => value >= r.from && value < r.to
+def length(r: Interval<Int32>): Int => if r.from < r.to => Int(r.to) - Int(r.from) else 0
+def opIndex(r: Interval<Int32>, index: Int): Int32 {
+    if index < 0 || index >= length(r) {
+        panic("Index is out of range")
+    }
+    Int32(Int(r.from) + index)
+}
+private def holds(r: Interval<Int32>, count: Int): Bool =>
+    count <= length(r)
+def opIndex(r: Interval<Int32>, part: Interval<Int>): Interval<Int32> {
+    if part.from < 0 || part.from > part.to || !holds(r, part.to) {
+        panic("Slice is out of range")
+    }
+    Interval(Int32(Int(r.from) + part.from), Int32(Int(r.from) + part.to))
+}
+def next(r: Interval<Int32>): (Int32, Interval<Int32>)? => if r.from < r.to => (r.from, r with (from = r.from + 1)) else None
+def nextBack(r: Interval<Int32>): (Int32, Interval<Int32>)? => if r.from < r.to => (r.to - 1, r with (to = r.to - 1)) else None
+def contains(r: Interval<Int32>, value: Int32): Bool => value >= r.from && value < r.to
+def length(r: Interval<UInt>): Int => if r.from < r.to => Int(r.to - r.from) else 0
+def opIndex(r: Interval<UInt>, index: Int): UInt {
+    if index < 0 || index >= length(r) {
+        panic("Index is out of range")
+    }
+    r.from + UInt(index)
+}
+private def holds(r: Interval<UInt>, count: Int): Bool =>
+    if r.from >= r.to => count == 0 else UInt(count) <= r.to - r.from
+def opIndex(r: Interval<UInt>, part: Interval<Int>): Interval<UInt> {
+    if part.from < 0 || part.from > part.to || !holds(r, part.to) {
+        panic("Slice is out of range")
+    }
+    Interval(r.from + UInt(part.from), r.from + UInt(part.to))
+}
+def next(r: Interval<UInt>): (UInt, Interval<UInt>)? => if r.from < r.to => (r.from, r with (from = r.from + 1)) else None
+def nextBack(r: Interval<UInt>): (UInt, Interval<UInt>)? => if r.from < r.to => (r.to - 1, r with (to = r.to - 1)) else None
+def contains(r: Interval<UInt>, value: UInt): Bool => value >= r.from && value < r.to
+def length(r: Interval<UInt8>): Int => if r.from < r.to => Int(r.to) - Int(r.from) else 0
+def opIndex(r: Interval<UInt8>, index: Int): UInt8 {
+    if index < 0 || index >= length(r) {
+        panic("Index is out of range")
+    }
+    UInt8(Int(r.from) + index)
+}
+private def holds(r: Interval<UInt8>, count: Int): Bool =>
+    count <= length(r)
+def opIndex(r: Interval<UInt8>, part: Interval<Int>): Interval<UInt8> {
+    if part.from < 0 || part.from > part.to || !holds(r, part.to) {
+        panic("Slice is out of range")
+    }
+    Interval(UInt8(Int(r.from) + part.from), UInt8(Int(r.from) + part.to))
+}
+def next(r: Interval<UInt8>): (UInt8, Interval<UInt8>)? => if r.from < r.to => (r.from, r with (from = r.from + 1)) else None
+def nextBack(r: Interval<UInt8>): (UInt8, Interval<UInt8>)? => if r.from < r.to => (r.to - 1, r with (to = r.to - 1)) else None
+def contains(r: Interval<UInt8>, value: UInt8): Bool => value >= r.from && value < r.to
+def length(r: Interval<UInt16>): Int => if r.from < r.to => Int(r.to) - Int(r.from) else 0
+def opIndex(r: Interval<UInt16>, index: Int): UInt16 {
+    if index < 0 || index >= length(r) {
+        panic("Index is out of range")
+    }
+    UInt16(Int(r.from) + index)
+}
+private def holds(r: Interval<UInt16>, count: Int): Bool =>
+    count <= length(r)
+def opIndex(r: Interval<UInt16>, part: Interval<Int>): Interval<UInt16> {
+    if part.from < 0 || part.from > part.to || !holds(r, part.to) {
+        panic("Slice is out of range")
+    }
+    Interval(UInt16(Int(r.from) + part.from), UInt16(Int(r.from) + part.to))
+}
+def next(r: Interval<UInt16>): (UInt16, Interval<UInt16>)? => if r.from < r.to => (r.from, r with (from = r.from + 1)) else None
+def nextBack(r: Interval<UInt16>): (UInt16, Interval<UInt16>)? => if r.from < r.to => (r.to - 1, r with (to = r.to - 1)) else None
+def contains(r: Interval<UInt16>, value: UInt16): Bool => value >= r.from && value < r.to
+def length(r: Interval<UInt32>): Int => if r.from < r.to => Int(r.to) - Int(r.from) else 0
+def opIndex(r: Interval<UInt32>, index: Int): UInt32 {
+    if index < 0 || index >= length(r) {
+        panic("Index is out of range")
+    }
+    UInt32(Int(r.from) + index)
+}
+private def holds(r: Interval<UInt32>, count: Int): Bool =>
+    count <= length(r)
+def opIndex(r: Interval<UInt32>, part: Interval<Int>): Interval<UInt32> {
+    if part.from < 0 || part.from > part.to || !holds(r, part.to) {
+        panic("Slice is out of range")
+    }
+    Interval(UInt32(Int(r.from) + part.from), UInt32(Int(r.from) + part.to))
+}
+def next(r: Interval<UInt32>): (UInt32, Interval<UInt32>)? => if r.from < r.to => (r.from, r with (from = r.from + 1)) else None
+def nextBack(r: Interval<UInt32>): (UInt32, Interval<UInt32>)? => if r.from < r.to => (r.to - 1, r with (to = r.to - 1)) else None
+def contains(r: Interval<UInt32>, value: UInt32): Bool => value >= r.from && value < r.to

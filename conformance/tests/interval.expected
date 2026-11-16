@@ -1,0 +1,22 @@
+Interval(2, 6)
+4
+2
+5
+true
+true
+false
+8
+true
+true
+2345
+Some((2, Interval(3, 6)))
+Some((5, Interval(2, 5)))
+None
+None
+0
+false
+start
+end
+2
+2
+-3

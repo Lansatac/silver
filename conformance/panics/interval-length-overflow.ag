@@ -1,0 +1,7 @@
+// An interval can hold more integers than an `Int` length can count.
+def main(): Unit {
+    val low = -9223372036854775807 - 1
+    val r = low..9223372036854775807
+    printl(r.contains(0))
+    printl(length(r))
+}

@@ -1,0 +1,50 @@
+// An interval is a value like any other, and works where a range does.
+interface Steps<T> {
+    def next(range: Self): (T, Self)?
+}
+
+def total<R: Steps<Int>>(range: R): Int {
+    mutable val sum = 0
+    for x in range {
+        sum += x
+    }
+    sum
+}
+
+def evens(r: Interval<Int>): [Int] {
+    mutable val found: [Int] = []
+    for i in r {
+        if i % 2 == 0 {
+            found ~= [i]
+        }
+    }
+    found
+}
+
+def half(n: Int): Interval<Int> => 0..n / 2
+
+def main(): Unit {
+    val xs = [10, 20, 30, 40, 50]
+    val middle = 1..4
+    printl(xs[middle])
+    printl(xs[0..0])
+    printl(xs[half(5)])
+
+    printl(total(1..5))
+    printl(evens(0..9))
+    printl(half(7))
+
+    val pieces = [0..2, 2..5]
+    printl(pieces)
+    for piece in pieces {
+        printl(xs[piece])
+    }
+    val maybe: Interval<Int>? = Some(1..3)
+    printl(maybe)
+    printl((0..2, "pair"))
+    printl((0..2) with (to = 9))
+
+    // A method call needs the range in parentheses.
+    printl((0..10).contains(9))
+    printl(0..[1, 2].length())
+}

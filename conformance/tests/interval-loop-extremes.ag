@@ -1,0 +1,25 @@
+// A `for` over an interval bound to a name gives the elements `for` over `a..b` does,
+// even when the interval holds more integers than an `Int` length can count.
+def main(): Unit {
+    val low = -9223372036854775807 - 1
+    for i in low..9223372036854775807 {
+        if i > low + 1 { break }
+        printl(i)
+    }
+    val wide = low..9223372036854775807
+    for i in wide {
+        if i > low + 1 { break }
+        printl(i)
+    }
+
+    val zero: UInt = 0
+    for u in zero..18446744073709551615 {
+        if u > 1 { break }
+        printl(u)
+    }
+    val all = zero..18446744073709551615
+    for u in all {
+        if u > 1 { break }
+        printl(u)
+    }
+}

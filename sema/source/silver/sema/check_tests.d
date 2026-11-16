@@ -5,6 +5,7 @@ module silver.sema.check_tests;
 version (unittest):
 
 import core.exception : AssertError;
+import fluent.asserts;
 import std.format : format;
 import std.sumtype : get, has, match;
 
@@ -1894,7 +1895,7 @@ unittest
     analyzedMain(`print([1][.."a"])`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
     analyzedMain(`print("abc"[1..])`).shouldReport(DiagnosticCode.InvalidOperand, At(`"abc"`, 1));
     analyzedMain(`print("abc"[0])`).shouldReport(DiagnosticCode.InvalidOperand, At(`"abc"`, 1));
-    analyzedMain(`print(length("abc"))`).shouldReport(DiagnosticCode.TypeMismatch, At(`"abc"`, 1));
+    analyzedMain(`print(length("abc"))`).shouldReport(DiagnosticCode.NoMatchingOverload, At("length", 1));
 }
 
 @("an element of a mutable val or mutable param can be assigned, checked against the element type")
@@ -2243,8 +2244,89 @@ unittest
     for i in a..b { }`).shouldReport(DiagnosticCode.TypeMismatch, At("a..b", 1));
     analyzedMain(`val a: UInt8 = 1
     for i in a..300 { }`).shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
-    analyzedMain(`val r = 0..3`).shouldReport(DiagnosticCode.NotSupportedYet, At("0..3", 1));
-    analyzedMain(`for i in { 0..3 } { }`).shouldReport(DiagnosticCode.NotSupportedYet, At("0..3", 1));
+}
+
+@("a..b as a value is an Interval of its bounds' integer type, which a literal adapts to")
+unittest
+{
+    auto a = analyzedMain(`val small: UInt8 = 3
+    val r = 0..3
+    val s = small..10
+    val t: Interval<UInt16> = 1..2
+    val u: Interval<Int>? = 0..1
+    val v = { 0..3 }
+    for i in v { print(i) }
+    for j in s { print(j) }
+    val n = length(r) + r[0]
+    val m = r.contains(2) && s.contains(4) && r == 0..3`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldTypeEveryExpression();
+    a.shouldDeclareType(At("r", 1), "Interval<Int>");
+    a.shouldDeclareType(At("s", 1), "Interval<UInt8>");
+    a.shouldDeclareType(At("t", 1), "Interval<UInt16>");
+    a.shouldHaveType("i", 2, "Int");
+    a.shouldHaveType("j", 2, "UInt8");
+
+    analyzedMain(`val r = 0.0..1.0`).shouldReport(DiagnosticCode.InvalidOperand, At("0.0..1.0", 1));
+    analyzedMain(`val r = 'a'..'e'`).shouldReport(DiagnosticCode.InvalidOperand, At("'a'..'e'", 1));
+    analyzedMain(`val a: Int8 = 1
+    val b: Int16 = 2
+    val r = a..b`).shouldReport(DiagnosticCode.TypeMismatch, At("a..b", 1));
+    analyzedMain(`val r: Interval<UInt8> = 0..300`).shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
+    analyzedMain(`val r: Interval<UInt8> = 0..length([1])`).shouldReport(DiagnosticCode.TypeMismatch, At("length([1])", 1));
+}
+
+@("a method call written after a..b is on its end, and an error in it says to parenthesize the range")
+unittest
+{
+    analyzedMain(`val r = 0..10.contains(3)`).onlyMessage(DiagnosticCode.NoMatchingOverload)
+        .should.endWith("\n`a..b.contains(...)` calls `contains` on `b`, so to call it on the range, write `(a..b).contains(...)`");
+    analyzedMain(`for i in 0..10.missing() { }`).onlyMessage(DiagnosticCode.UnknownMember)
+        .should.endWith("; `a..b.missing(...)` calls `missing` on `b`, so to call it on the range, write `(a..b).missing(...)`");
+    analyzedMain(`val r = (0..10).contains(3)`).shouldHaveNoDiagnostics();
+    analyzedMain(`val r = 0..[1, 2].length()`).shouldHaveNoDiagnostics();
+}
+
+@("an array indexed by an Interval<Int> calls the prelude's opIndex, and by anything else but an Int is an error")
+unittest
+{
+    auto a = analyzedMain(`val xs = [1, 2, 3]
+    val r = 0..2
+    val some = xs[r]`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("some", 1), "[Int]");
+
+    analyzedMain(`val small: UInt8 = 1
+    val r = small..2
+    print([1][r])`).onlyMessage(DiagnosticCode.TypeMismatch)
+        .should.equal("An array index is an `Int`, not `Interval<UInt8>`; an array is sliced by an `Interval<Int>`");
+}
+
+@("assigning through an array indexed by an Interval<Int> is one error, without the slicing hint")
+unittest
+{
+    import std.algorithm.searching : canFind;
+
+    foreach (code; [`mutable val xs = [1, 2, 3]
+    val r = 0..2
+    xs[r] = [9, 9]`, `mutable val xs = [1, 2, 3]
+    val r = 0..2
+    xs[r] += [9]`])
+    {
+        auto diagnostics = analyzedMain(code).collector.diagnostics;
+        assert(diagnostics.length == 1, format("%s", diagnostics));
+        assert(!diagnostics[0].message.canFind("an array is sliced by an `Interval<Int>`"), diagnostics[0].message);
+    }
+}
+
+@("the a..b method hint is only for an error in the call itself, not in its arguments")
+unittest
+{
+    import std.algorithm.searching : canFind;
+
+    auto message = analyzedMain(`val xs = [1, 2]
+    val r = 0..xs.at(1 + true)`).collector.diagnostics[0].message;
+    assert(!message.canFind("calls `at` on `b`"), message);
 }
 
 @("break and continue need the body of a loop, and have type Never")
@@ -2564,7 +2646,7 @@ unittest
     analyzed("def f(x: Int): Int => x\ndef main(): Unit {\n    mutable val r = 1\n    _ = f(mutable r)\n}")
         .shouldReport(DiagnosticCode.MutabilityMismatch, At("r", 2));
     analyzedMain("mutable val r = 1\n    _ = Int8(mutable r)").shouldReport(DiagnosticCode.MutabilityMismatch, At("r", 2));
-    analyzedMain("mutable val r = [1]\n    _ = length(mutable r)").shouldReport(DiagnosticCode.MutabilityMismatch, At("r", 2));
+    analyzedMain("mutable val r = [1]\n    _ = length(mutable r)").shouldReport(DiagnosticCode.NoMatchingOverload, At("length", 1));
     analyzedWithTypes("mutable val r = 1\n    _ = Point(mutable r, 2)").shouldReport(DiagnosticCode.MutabilityMismatch, At("r", 2));
 }
 
@@ -2802,7 +2884,7 @@ unittest
 unittest
 {
     analyzedMain("    val r = [1].length()").shouldHaveNoDiagnostics();
-    analyzedMain("    val qq = 1\n    val r = qq.length()").shouldReport(DiagnosticCode.TypeMismatch, At("qq", 2));
+    analyzedMain("    val qq = 1\n    val r = qq.length()").shouldReport(DiagnosticCode.NoMatchingOverload, At("qq", 2));
 }
 
 private enum sums = "type Peg = Literal(text: String) | Sequence(parts: [Peg]) | Empty\n"

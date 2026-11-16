@@ -1,0 +1,9 @@
+// A literal interval compared with a typed one takes its type, as `i == 2` and `P(i, i) == P(2, 2)` do.
+def main(): Unit {
+    val r: Interval<Int16> = 0..3
+    printl(r == 0..3)
+    printl(0..3 == r)
+    printl(r != 0..4)
+    val low: UInt8 = 250
+    printl(low..255 == 250..255)
+}

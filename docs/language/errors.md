@@ -192,7 +192,7 @@ val b = factorial(count - used)?         // the caller doesn't, and passes it on
 val c = factorial(count - used) ?? 1     // or chooses a value
 ```
 
-The exceptions are the operations the language itself defines as panicking. An arithmetic operator inside a library function behaves as it does anywhere, and so do the functions that are those operations by another name: `at`, `opIndex`, `opIndexAssign` and `opSlice` in the prelude, and `powInt` in `std.math`, which is exponentiation without a symbol. Using a `Ref` from inside its own `update` is a misuse of the cell, and panics too. `panic` and `assert` are there to panic.
+The exceptions are the operations the language itself defines as panicking. An arithmetic operator inside a library function behaves as it does anywhere, and so do the functions that are those operations by another name: `at`, `opIndex` and `opIndexAssign` in the prelude, and `powInt` in `std.math`, which is exponentiation without a symbol. Using a `Ref` from inside its own `update` is a misuse of the cell, and panics too. `panic` and `assert` are there to panic.
 
 ## main
 

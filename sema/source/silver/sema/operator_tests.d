@@ -11,10 +11,10 @@ private enum window = "type W<T>(items: [T])
 def length<T>(w: W<T>): Int => length(w.items)
 def opIndex<T>(w: W<T>, index: Int): T => w.items[index]
 def opIndexAssign<T>(w: W<T>, index: Int, value: T): W<T> => W(w.items.opIndexAssign(index, value))
-def opSlice<T>(w: W<T>, from: Int, to: Int): W<T> => W(w.items[from..to])
+def opIndex<T>(w: W<T>, part: Interval<Int>): W<T> => W(w.items[part])
 ";
 
-@("x[i], x[a..b] and x[i] = v call opIndex, opSlice and opIndexAssign, typed by what they return and take")
+@("x[i], x[a..b] and x[i] = v call opIndex, opIndex with an Interval and opIndexAssign, typed by what they return and take")
 unittest
 {
     auto a = analyzed(window ~ "def main(): Unit {
@@ -62,14 +62,14 @@ unittest
 {
     enum point = "type P(x: Int)\n";
     analyzed(point ~ "def main(): Unit => print(P(1)[0])").shouldReport(DiagnosticCode.InvalidOperand, At("P(1)", 1));
-    analyzed(point ~ "def main(): Unit => print(P(1)[0..1])").shouldReport(DiagnosticCode.InvalidOperand, At("P(1)", 1));
-    analyzed(point ~ "def opSlice(p: P, from: Int, to: Int): P => p\ndef main(): Unit => print(P(1)[0..])")
+    analyzed(point ~ "def main(): Unit => print(P(1)[0..1])").shouldReport(DiagnosticCode.InvalidOperand, At("P(1)[0..1]", 1));
+    analyzed(point ~ "def opIndex(p: P, r: Interval<Int>): P => p\ndef main(): Unit => print(P(1)[0..])")
         .shouldReport(DiagnosticCode.InvalidOperand, At("P(1)", 1));
     analyzed(point ~ "def opIndex(p: P, i: Int): Int => 1\ndef main(): Unit {\n    mutable val p = P(1)\n    p[0] = 2\n}")
         .shouldReport(DiagnosticCode.InvalidOperand, At("p[0]", 1));
 }
 
-@("opIndexAssign has to take and return the value assigned back to, and a left-out bound has to fit opSlice exactly")
+@("opIndexAssign has to take and return the value assigned back to, and a slice with a left-out bound has to fit opIndex exactly")
 unittest
 {
     enum point = "type P(x: Int)\n";
@@ -78,11 +78,11 @@ unittest
         .shouldReport(DiagnosticCode.TypeMismatch, At("p[0]", 1));
     analyzed(point ~ "def opIndexAssign(p: P?, i: Int, v: Int): P => P(v)\n" ~ main)
         .shouldReport(DiagnosticCode.TypeMismatch, At("p[0]", 1));
-    analyzed(point ~ "def opSlice(p: P, from: UInt8, to: UInt8): P => p\ndef main(): Unit => print(P(1)[..2])")
-        .shouldReport(DiagnosticCode.NoMatchingOverload, At("P(1)[..2]", 1));
-    analyzed(point ~ "def opSlice(p: P, from: Int?, to: Int): P => p\ndef main(): Unit => print(P(1)[..2])")
+    analyzed(point ~ "def opIndex(p: P, r: Interval<UInt8>): P => p\ndef main(): Unit => print(P(1)[..2])")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("P(1)[..2]", 1));
+    analyzed(point ~ "def opIndex(p: P, r: Interval<Int>?): P => p\ndef main(): Unit => print(P(1)[..2])")
         .shouldReport(DiagnosticCode.TypeMismatch, At("P(1)[..2]", 1));
-    analyzed(point ~ "def length(p: P): Int => 1\ndef opSlice(p: P, from: Int, to: Int?): P => p\n"
+    analyzed(point ~ "def length(p: P): Int => 1\ndef opIndex(p: P, r: Interval<Int>?): P => p\n"
         ~ "def main(): Unit => print(P(1)[0..])").shouldReport(DiagnosticCode.TypeMismatch, At("P(1)[0..]", 1));
 }
 
@@ -133,6 +133,6 @@ unittest
 unittest
 {
     analyzed("def main(): Unit {\n    mutable val xs = [1, 2]\n    print(opIndex(xs, 0) + xs.opIndex(1))\n"
-        ~ "    xs = xs.opIndexAssign(0, 3)\n    print(xs.opSlice(0, 1))\n}").shouldHaveNoDiagnostics();
-    analyzed("def main(): Unit {\n    val i: UInt8 = 0\n    print(opIndex([1], i))\n}").shouldReport(DiagnosticCode.TypeMismatch, At("i", 2));
+        ~ "    xs = xs.opIndexAssign(0, 3)\n    print(xs.opIndex(0..1))\n}").shouldHaveNoDiagnostics();
+    analyzed("def main(): Unit {\n    val i: UInt8 = 0\n    print(opIndex([1], i))\n}").shouldReport(DiagnosticCode.NoMatchingOverload, At("opIndex", 1));
 }

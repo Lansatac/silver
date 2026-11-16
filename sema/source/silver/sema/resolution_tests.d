@@ -217,6 +217,17 @@ void shouldHaveNoDiagnostics(const Analyzed a, string file = __FILE__, size_t li
     }
 }
 
+/// The message of the only diagnostic, which has to be `code`.
+string onlyMessage(const Analyzed a, DiagnosticCode code, string file = __FILE__, size_t line = __LINE__)
+{
+    auto diagnostics = a.collector.diagnostics;
+    if (diagnostics.length != 1 || diagnostics[0].code != code)
+    {
+        throw new AssertError(format("Expected only %s, got %s", code, diagnostics), file, line);
+    }
+    return diagnostics[0].message;
+}
+
 /// Asserts that the only diagnostic is `code`, starting at `where`.
 void shouldReport(const Analyzed a, DiagnosticCode code, At where,
     string file = __FILE__, size_t line = __LINE__)

@@ -66,7 +66,7 @@ The iterable is evaluated once, before the loop. The loop variable is immutable,
 
 The loop variable can be a tuple pattern, which takes each element apart as `val` would: `for (name, count) in [("a", 1), ("b", 2)] { ... }`. The pattern is names, `_`, and tuples of those, and it binds only in the body. An element of the wrong shape is an error, as it would be for `val (name, count) = element`.
 
-A range is half-open. One whose start isn't below its end is empty, and a range ending at a type's maximum doesn't overflow.
+A range is half-open. One whose start isn't below its end is empty, and a range ending at a type's maximum doesn't overflow. `for i in a..b` loops over the bounds directly, and so does a `for` over an [`Interval`](arrays.md#ranges) held in a name: it never calls the interval's `length`, `opIndex` or `next`, so the two give the same elements.
 
 ### Looping over a value of your own
 

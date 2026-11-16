@@ -1,6 +1,6 @@
 # Proposal: ranges
 
-**Status: designed, mostly not built.** The protocol, sources with state, `for`, `a..b` as a value, laziness, interface names as types and the library's shape are decided. `for` and interface names as types, in a parameter, a result and a binding, are implemented. What's left open is listed at the end and marked where it comes up. It builds on [generics](../language/generics.md) and on the [interfaces proposal](interfaces.md), and it changes parts of that proposal; see "What this changes in the interfaces proposal".
+**Status: designed, mostly not built.** The protocol, sources with state, `for`, `a..b` as a value, laziness, interface names as types and the library's shape are decided. `for`, `a..b` as a value, and interface names as types, in a parameter, a result and a binding, are implemented. What's left open is listed at the end and marked where it comes up. It builds on [generics](../language/generics.md) and on the [interfaces proposal](interfaces.md), and it changes parts of that proposal; see "What this changes in the interfaces proposal".
 
 Each point below is marked:
 
@@ -120,6 +120,8 @@ A type with a `length` and an `opIndex` but no `next` isn't looped over (decided
 
 ## `a..b` as a value (decided)
 
+Implemented, except equality by elements: see [Arrays](../language/arrays.md#ranges). `map` and `array()` below wait for the library.
+
 Outside a slice and a `for`, `a..b` builds an `Interval`, a product in the prelude that the compiler knows by name, the way it knows `Some`:
 
 ```silver
@@ -139,12 +141,14 @@ squares.array()                       // [4, 9, 16, 25]
 
 - **The name** is `Interval`, since `Range<T>` is the interface.
 - **The bounds** are of any one integer type, with a literal adapting to the other bound, as in a `for`. So `low..255` with a `UInt8` is an `Interval<UInt8>`, and whatever a `for` can loop over can be bound to a name first. A `Char` isn't a bound.
-- **It has** a `length` and an `opIndex`, so it's indexed and a `for` over it loops by index, a `next`, and `contains`. Its length is an `Int`.
+- **It has** a `length`, an `opIndex` by position and one by sub-interval, a `next`, a `nextBack`, and `contains`. Its length is an `Int`. A `for` over one loops over its bounds as `for i in a..b` does, so it gives the same elements even when the length wouldn't fit an `Int`.
+- **Equal by elements.** Two intervals are equal when they hold the same integers, so all empty intervals are equal, with an `opHash` to match.
 - **Bounds the wrong way round are empty.** `5..0` has length 0 and loops no times, as `for i in 5..0` does. It isn't a panic.
-- **Slicing with one works.** `xs[r]` is `opIndex(xs, r)`, and arrays have an `opIndex` that takes an `Interval<Int>` and panics as the slice would. `xs[a..b]` written out is still `opSlice(xs, a, b)`, which builds no value.
+- **Slicing is indexing by an interval** (decided). `x[a..b]` is `opIndex(x, a..b)`, `x[a..]` is `opIndex(x, a..length(x))` with `x` evaluated once, and `x[..b]` is `opIndex(x, 0..b)`. There is no `opSlice`. A type is sliced by writing an `opIndex` that takes an interval, and one without can't be sliced. `x[a..b] = v` is `x = opIndexAssign(x, a..b, v)`, as with a held interval. Arrays keep their built-in slice, and `xs[r]` slices too.
 - **A method call needs parentheses**, since `0..10.map(f)` is `0..(10.map(f))`.
 - `for i in a..b` keeps its own loop, which behaves the same.
-- **Considered**: `x[a..b]` as `opIndex(x, a..b)`, with no `opSlice`. It's one rule, but `xs[a..]` would then need a second type for an interval with no end.
+- **Considered**: keeping `opSlice(x, a, b)` for the written form beside `opIndex(x, r)` for a held interval. A type could then be sliced one way and not the other, or the two could disagree. The open forms need no type of their own, since `length(x)` supplies the missing end.
+- **Not yet**: `a..b` over a type that isn't an integer, as a range query on a sorted map. It can come later with a value type of its own that isn't a range.
 - **Left out of the first version**: `a..` and `..b` as values, an inclusive form, and a step in the syntax. `enumerate()` covers numbering elements, and `step(n)` and `reversed()` can be library adapters.
 - **Open**: what an `Interval` prints as. Today a product prints as `Interval(2, 6)`.
 

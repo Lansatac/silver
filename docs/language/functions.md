@@ -183,7 +183,8 @@ Syntax that isn't a call means a call to a function whose name starts with `op`.
 | --- | --- |
 | `x[i]` | `opIndex(x, i)` |
 | `x[i] = v` | `x = opIndexAssign(x, i, v)` |
-| `x[a..b]` | `opSlice(x, a, b)` |
+| `x[a..b]` | `opIndex(x, a..b)` |
+| `x[a..b] = v` | `x = opIndexAssign(x, a..b, v)` |
 | `a == b`, `a != b` | `opEquals(a, b)` |
 | `a < b`, `<=`, `>`, `>=` | `opCompare(a, b)` |
 | printing, `String(x)`, a string hole | `opString(x)` |
@@ -198,18 +199,20 @@ def opIndexAssign<T>(w: Window<T>, index: Int, value: T): Window<T> {
     items[w.from + index] = value
     w with (items = items)
 }
-def opSlice<T>(w: Window<T>, from: Int, to: Int): Window<T> =>
-    Window(w.items, w.from + from, w.from + to)
+def opIndex<T>(w: Window<T>, part: Interval<Int>): Window<T> =>
+    Window(w.items, w.from + part.from, w.from + part.to)
 ```
 
 - The result of `x[i]` and of `x[a..b]` is whatever the function returns.
 - `opIndexAssign` returns the changed value, which is assigned back, so it takes and returns the type of `x`. An assignment through several steps is built from the inside out: `grid[y][x] = v` means `grid = opIndexAssign(grid, y, opIndexAssign(grid[y], x, v))`. A field can be a step too, so `game.board[i] = v` gives `game` a new `board`.
 - Each index on the way is evaluated once, from the root out, then `v`, and only then is the place read and written.
 - `x[i] += 1` reads with `opIndex` and writes with `opIndexAssign`, so both have to take `i` as one type. Each step on the way is read once, so `grid[y][x] += 1` calls `opIndex(grid, y)` once.
-- A slice with a bound left out uses `length`: `x[a..]` is `opSlice(x, a, length(x))`, with `x` evaluated once, and `x[..b]` is `opSlice(x, 0, b)`. The 0 is an `Int`.
-- For an array the syntax is built in, and an index is an `Int`. The prelude's `opIndex`, `opIndexAssign` and `opSlice` for arrays do the same where a function is wanted. `x[i]` on an array never calls a module's own.
+- Slicing is indexing by an [`Interval`](arrays.md#ranges), so a type is sliced by writing an `opIndex` that takes one, and a slice is assigned to through an `opIndexAssign` that takes one, in every form: `x[a..b] = v` and a held `x[r] = v` mean the same. A type without one can't be sliced, and `x[a..b]` on it is an error that says so. Two literal bounds take the interval type the function asks for, as a literal argument does, so `x[0..2]` passes an `Interval<UInt8>` to an `opIndex` that takes one; otherwise `a..b` is typed as it is anywhere.
+- A slice with a bound left out uses `length`: `x[a..]` is `opIndex(x, a..length(x))`, with `x` evaluated once, and `x[..b]` is `opIndex(x, 0..b)`. The `opIndex` has to take that interval's type exactly. `length` returns an `Int`, so in `x[a..]` the start is an `Int` too.
+- An `opIndex` whose index is a type parameter takes an interval as any other key: for a `Table<K, V>` with `K` an `Interval<Int>`, `t[9..11]` looks up the key `9..11`.
+- For an array the syntax is built in, and an integer index is an `Int`. The prelude's `opIndex` and `opIndexAssign` for arrays do the same where a function is wanted, and its `opIndex` that takes an `Interval<Int>` slices. `x[i]` on an array with an integer index, and `x[a..b]` written out, never call a module's own. With an index of another type, `x[i]` calls `opIndex(x, i)`, as for any type.
 
-`opIndex`, `opIndexAssign` and `opSlice` are ordinary functions, chosen as any call is, so a module can write them for a type it didn't declare. `opEquals`, `opHash`, `opCompare` and `opString` belong to the type: every type has an `opEquals`, an `opHash` and an `opString` already, and only the type's own module can write one to replace it, or write an `opCompare`.
+`opIndex` and `opIndexAssign` are ordinary functions, chosen as any call is, so a module can write them for a type it didn't declare. `opEquals`, `opHash`, `opCompare` and `opString` belong to the type: every type has an `opEquals`, an `opHash` and an `opString` already, and only the type's own module can write one to replace it, or write an `opCompare`.
 
 ### Equality and hashing
 
@@ -240,7 +243,7 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 ## Current implementation
 
 - A nested function can call itself and those declared before it, but not one declared after it.
-- Of the operator functions, `opIndex`, `opIndexAssign` and `opSlice` are available. `opEquals`, `opHash`, `opCompare` and `opString` aren't, so `==` and printing are always the structural ones, and `<` works only on numbers and strings.
+- Of the operator functions, `opIndex` and `opIndexAssign` are available. `opEquals`, `opHash`, `opCompare` and `opString` aren't, so `==` and printing are always the structural ones, and `<` works only on numbers and strings.
 - Only module-level functions can be overloaded. Two nested `def`s of one name in a block are an error.
 - When more than one candidate is left, an `if`, `match` or block is typed before any is chosen, even when its values are all literals, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.
 - Of the arguments compared by their shape, `None` and `[]` count one step wherever they go.

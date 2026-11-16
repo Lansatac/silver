@@ -94,7 +94,7 @@ package struct Resolution
     /// chooses, so these have no entry in `resolutions`.
     SideTable!(Id!Expr, Candidates) overloads;
     /// For each `for` and each `x[i]`, by name, the functions that calls of `length`, `opIndex`,
-    /// `opIndexAssign`, `opSlice` and `next` there would choose from, since that syntax means calls
+    /// `opIndexAssign` and `next` there would choose from, since that syntax means calls
     /// of them on anything but an array or `a..b`.
     SideTable!(Id!Expr, Candidates[string]) operatorLookups;
     Declarations declarations;
@@ -2193,7 +2193,7 @@ private final class NameResolver
                 }
             },
             (const IndexExpr index) {
-                recordOperators(expr, ["opIndex", "opIndexAssign", "opSlice", "length"], scopeTable);
+                recordOperators(expr, ["opIndex", "opIndexAssign", "length"], scopeTable);
                 resolveExpr(*index.object, scopeTable);
                 resolveExpr(*index.index, scopeTable);
             },

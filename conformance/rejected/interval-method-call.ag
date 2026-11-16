@@ -1,0 +1,12 @@
+// `0..10.squared()` is `0..(10.squared())`.
+def squared(r: Interval<Int>): [Int] {
+    mutable val result: [Int] = []
+    for i in r {
+        result ~= [i * i]
+    }
+    result
+}
+
+def main(): Unit {
+    printl(0..10.squared())
+}

@@ -689,7 +689,8 @@ private final class Lowering
             (const ast.MatchExpr match_) => lowerMatch(match_, type, span),
             (const ast.Lambda lambda) => lowerLambda(e, lambda, type),
             (const ast.MapLiteral _) => notLowered!Expr("a map"),
-            (const ast.RangeExpr _) => notLowered!Expr("a range outside a slice or `for`"),
+            // Outside a slice or a `for`, `a..b` builds an `Interval`.
+            (const ast.RangeExpr range) => construct(type, [lowerExpr(*range.start), lowerExpr(*range.end)], span),
         );
     }
 
@@ -1160,7 +1161,7 @@ private final class Lowering
         return field(object, _analysis.fieldIndexOf(e.id), type);
     }
 
-    /// `x[i]` or `x[a..b]`: built in for an array, and otherwise a call of `opIndex` or `opSlice`.
+    /// `x[i]` or `x[a..b]`: built in for an array, and otherwise a call of `opIndex`.
     private Expr lowerIndex(const ast.Expr e, const ast.IndexExpr index, Type type, Span span)
     {
         auto array = lowerExpr(*index.object);
@@ -1181,18 +1182,31 @@ private final class Lowering
         return Expr(type, span, ExprKind(Index(boxed(array), boxed(lowerExpr(*index.index)))));
     }
 
-    /// `opIndex(x, i)`, or `opSlice(x, a, b)`, where a left-out `a` is 0 and a left-out `b` is
+    /// `opIndex(x, i)`, where `x[a..b]` passes `a..b`, a left-out `a` is 0 and a left-out `b` is
     /// `length(x)`, with `x` evaluated once.
     private Expr lowerIndexCall(const IndexFunctions functions, const ast.IndexExpr index, Expr object, Type type, Span span)
     {
-        auto range = ast.asRange(index.index);
-        if (range is null) return callUse(functions.read, [object, lowerExpr(*index.index)], span);
-        auto start = range.start is null ? intLiteral(types.int_, 0, span) : lowerExpr(*range.start);
-        if (range.end !is null) return callUse(functions.read, [object, start, lowerExpr(*range.end)], span);
+        if (!isOpenSlice(index)) return callUse(functions.read, [object, lowerExpr(*index.index)], span);
         auto held = temp("sliced", object.type);
-        auto end = callUse(functions.length, [use(held, span)], span);
-        auto slice = callUse(functions.read, [use(held, span), start, end], span);
+        auto slice = callUse(functions.read, [use(held, span), openInterval(index, use(held, span), functions, span)], span);
         return Expr(type, span, ExprKind(Block([let(held, object)], boxed(slice))));
+    }
+
+    /// Whether `index` is `x[a..]` or `x[..b]` with nothing holding its interval already.
+    private bool isOpenSlice(const ast.IndexExpr index)
+    {
+        auto range = ast.asRange(index.index);
+        return range !is null && (range.start is null || range.end is null) && index.index.id !in _lowered;
+    }
+
+    /// The interval `x[a..]` or `x[..b]` means, ending at the `length` of `object`.
+    private Expr openInterval(const ast.IndexExpr index, Expr object, const IndexFunctions functions, Span span)
+    {
+        auto range = ast.asRange(index.index);
+        auto interval = _analysis.typeOf(index.index.id);
+        auto start = range.start is null ? intLiteral(fieldTypes(interval)[0], 0, span) : lowerExpr(*range.start);
+        auto end = range.end is null ? callUse(functions.length, [object], span) : lowerExpr(*range.end);
+        return construct(interval, [start, end], span);
     }
 
     /// `object with (a.b = v, ...)`: a copy of the object, with the updates applied in order.
@@ -1447,7 +1461,10 @@ private final class Lowering
             (const ast.MemberAccess access) => holdIndices(*access.object, statements, held),
             (const ast.IndexExpr index) {
                 holdIndices(*index.object, statements, held);
-                auto lowered = lowerExpr(*index.index);
+                auto functions = _analysis.indexingOf(place.id);
+                auto lowered = functions !is null && isOpenSlice(index)
+                    ? openInterval(index, lowerExpr(*index.object), *functions, index.index.span)
+                    : lowerExpr(*index.index);
                 auto local = temp("index", lowered.type);
                 statements ~= let(local, lowered);
                 _lowered[index.index.id] = use(local, index.index.span);
@@ -1636,6 +1653,14 @@ private final class Lowering
     private Expr lowerFor(const ast.Expr e, const ast.ForExpr for_, Span span)
     {
         auto range = ast.asRange(&for_.binding.value);
+        if (range is null && _analysis.isIntervalLoop(e.id))
+        {
+            auto source = lowerExpr(for_.binding.value);
+            auto held = temp("interval", source.type);
+            auto bound = _analysis.typeOf(for_.binding.id);
+            return lowerForBounds(for_, [let(held, source)], field(use(held, span), 0, bound),
+                field(use(held, span), 1, bound), span);
+        }
         if (range is null)
         {
             auto functions = _analysis.loopOf(e.id);
@@ -1656,9 +1681,13 @@ private final class Lowering
             }
             return lowerForStepped(for_, functions.next, span);
         }
-        auto start = lowerExpr(*range.start);
-        auto end = lowerExpr(*range.end);
+        return lowerForBounds(for_, null, lowerExpr(*range.start), lowerExpr(*range.end), span);
+    }
 
+    /// `for x in a..b`, or over an `Interval`, after `before`: steps from `start` while below `end`,
+    /// both evaluated once, so an end at the type's maximum doesn't overflow.
+    private Expr lowerForBounds(const ast.ForExpr for_, Stmt[] before, Expr start, Expr end, Span span)
+    {
         auto type = _analysis.typeOf(for_.binding.id);
 
         auto next = temp("next", type, true);
@@ -1668,7 +1697,7 @@ private final class Lowering
         _locals[SymbolId(for_.binding.id)] = bindingVar;
         auto label = newLabel();
         auto forBody = loopBody(*for_.body, label);
-        return block(span, [
+        return block(span, before ~ [
             let(next, start),
             let(last, end),
             eval(loop(boxed(block(span, [

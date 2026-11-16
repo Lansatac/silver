@@ -1,0 +1,40 @@
+// `x[a..b]` is `opIndex(x, a..b)`: `x[a..]` ends at `length(x)`, with `x` evaluated once, and `x[..b]` starts at 0.
+type Row(cells: [String])
+
+def length(r: Row): Int => length(r.cells)
+def opIndex(r: Row, part: Interval<Int>): Row => Row(r.cells[part])
+
+// A key that happens to be an interval is looked up, not sliced.
+type Table<K, V>(keys: [K], values: [V])
+
+def opIndex<K, V>(t: Table<K, V>, key: K): V? {
+    for i in 0..length(t.keys) {
+        if t.keys[i] == key {
+            return t.values[i]
+        }
+    }
+    None
+}
+
+def row(): Row {
+    printl("row")
+    Row(["a", "b", "c", "d"])
+}
+
+def main(): Unit {
+    printl(row()[1..3])
+    printl(row()[2..])
+    printl(row()[..1])
+
+    // An interval's sub-intervals count from its start.
+    val r = 10..20
+    printl(r[2..5])
+    printl(r[3..])
+    printl(r[..0])
+    val low: UInt8 = 250
+    printl((low..255)[1..4])
+
+    val ages = Table([9..11, 0..3], ["nine", "zero"])
+    printl(ages[9..11])
+    printl(ages[1..2])
+}

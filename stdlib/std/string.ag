@@ -326,7 +326,7 @@ test "strings built at runtime are searched like literals" {
 }
 
 test "each question works as a function value" {
-    val checks = [contains, startsWith, endsWith]
+    val checks: [(String, String) -> Bool] = [contains, startsWith, endsWith]
     mutable val passed = 0
     for check in checks {
         if check("aba", "a") {

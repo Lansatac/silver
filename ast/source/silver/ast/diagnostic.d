@@ -84,6 +84,22 @@ class Collector
     {
         return !warnings().empty;
     }
+
+    /// Adds `hint` to the first error reported once there were `count` diagnostics that `which`
+    /// accepts, if there is one: after a `;` when the message is one line, and as a line of its
+    /// own when it's more. Whether there was one.
+    bool amendFirstErrorSince(size_t count, string hint, scope bool delegate(const Diagnostic) which = null)
+    {
+        import std.string : indexOf;
+
+        foreach (ref diagnostic; _diagnostics[count .. $])
+        {
+            if (diagnostic.severity != Severity.Error || (which !is null && !which(diagnostic))) continue;
+            diagnostic.message ~= (diagnostic.message.indexOf('\n') < 0 ? "; " : "\n") ~ hint;
+            return true;
+        }
+        return false;
+    }
 }
 
 @("Collector starts empty")
@@ -117,6 +133,25 @@ unittest
     assert(collector.diagnostics == [Diagnostic(DiagnosticCode.UnknownName, Span("a.ag", 0, 1), "unused", Severity.Warning)]);
     assert(collector.hasWarnings);
     assert(!collector.hasErrors);
+}
+
+@("Collector adds a hint to the first error since a count")
+unittest
+{
+    import std.algorithm : equal, map;
+
+    auto collector = new Collector;
+    collector.reportError(DiagnosticCode.UnknownName, Span("a.ag", 0, 1), "before");
+    collector.reportWarning(DiagnosticCode.UnknownName, Span("a.ag", 0, 1), "unused");
+    collector.reportError(DiagnosticCode.UnknownName, Span("a.ag", 0, 1), "first\n    detail");
+    collector.reportError(DiagnosticCode.UnknownName, Span("a.ag", 0, 1), "second");
+    assert(collector.amendFirstErrorSince(1, "hint"));
+    assert(collector.amendFirstErrorSince(3, "hint"));
+    assert(!collector.amendFirstErrorSince(4, "hint"));
+    assert(!collector.amendFirstErrorSince(0, "hint", (const Diagnostic d) => d.message == "none"));
+
+    assert(collector.diagnostics.map!(d => d.message)
+        .equal(["before", "unused", "first\n    detail\nhint", "second; hint"]));
 }
 
 @("Collector keeps report order and filters errors from warnings")

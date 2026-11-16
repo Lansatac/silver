@@ -1,0 +1,1 @@
+T0005: `Row` can't be sliced: `x[a..b]` is `opIndex(x, a..b)`, and no `opIndex` here takes `Row` and `Interval<Int>`

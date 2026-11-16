@@ -25,7 +25,7 @@ These documents describe the language as designed. Where the implementation does
 | [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented |
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
 | [Errors](language/errors.md) | `T ! E`, `?` and `!` on errors, what panics, `main` | Implemented, except `read()` returning an error |
-| [Arrays](language/arrays.md) | Arrays, slices, concatenation | Implemented, except that element assignment always copies |
+| [Arrays](language/arrays.md) | Arrays, slices, concatenation, `a..b` as an `Interval` | Implemented, except that element assignment always copies |
 | [Maps](language/maps.md) | `[K: V]`, lookup and update, insertion order, keys | Designed, not implemented |
 | [Strings](language/strings.md) | Text, interpolation, characters, cutting, `std.string` | Partial: `read()` doesn't check for UTF-8; no raw or multi-line strings |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
@@ -42,5 +42,4 @@ These documents describe the language as designed. Where the implementation does
 These areas are expected but have no settled design, so the documents mention them only where they affect another feature:
 
 - Compile-time evaluation
-- Ranges as values
 - Program arguments and exit codes

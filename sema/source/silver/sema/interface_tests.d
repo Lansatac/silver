@@ -48,20 +48,6 @@ private Analyzed analyzedModule(string source)
     return analyzed(source ~ "\ndef main(): Unit => ()");
 }
 
-/// The message of the only diagnostic, which has to be `code`.
-private string onlyMessage(const Analyzed a, DiagnosticCode code, string file = __FILE__, size_t line = __LINE__)
-{
-    import core.exception : AssertError;
-    import std.format : format;
-
-    auto diagnostics = a.collector.diagnostics;
-    if (diagnostics.length != 1 || diagnostics[0].code != code)
-    {
-        throw new AssertError(format("Expected only %s, got %s", code, diagnostics), file, line);
-    }
-    return diagnostics[0].message;
-}
-
 // Declarations
 
 @("an interface declares functions over Self and its own type parameters")

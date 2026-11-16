@@ -493,7 +493,7 @@ unittest
     a.shouldDeclareType(At("qf", 1), "Int?");
     a.shouldDeclareType(At("qg", 1), "Int");
     analyzedGeneric("    val xs = [1]\n    val p = xs.pushed(2)").shouldReport(DiagnosticCode.TypeMismatch, At("xs", 2));
-    analyzedGeneric("    val qq = 1\n    val r = qq.length()").shouldReport(DiagnosticCode.TypeMismatch, At("qq", 2));
+    analyzedGeneric("    val qq = 1\n    val r = qq.length()").shouldReport(DiagnosticCode.NoMatchingOverload, At("qq", 2));
 }
 
 @("a mutable argument has to be exactly its parameter's type once the type arguments are known")
@@ -502,13 +502,13 @@ unittest
     analyzedGeneric("    mutable val s: Int8 = 1\n    _ = exchange(mutable s, 2)").shouldHaveNoDiagnostics();
     analyzedGeneric("    val v: Int8 = 1\n    mutable val o: Int8? = None\n    setTo(v, mutable o)")
         .shouldReport(DiagnosticCode.TypeMismatch, At("o", 2));
-    analyzedGeneric("    mutable val r = [1]\n    _ = length(mutable r)").shouldReport(DiagnosticCode.MutabilityMismatch, At("r", 2));
+    analyzedGeneric("    mutable val r = [1]\n    _ = length(mutable r)").shouldReport(DiagnosticCode.NoMatchingOverload, At("length(mutable r)", 1));
 }
 
 @("an intrinsic is a value like any function, unless it takes an Any")
 unittest
 {
-    analyzedGeneric("    val qf = length<Int>").shouldHaveNoDiagnostics();
+    analyzedGeneric("    val qf: ([Int]) -> Int = length<Int>").shouldHaveNoDiagnostics();
     analyzedGeneric("    val qf: ([Bool]) -> Int = length").shouldHaveNoDiagnostics();
     analyzedGeneric("    val qf = printl").shouldReport(DiagnosticCode.NotSupportedYet, At("printl", 1));
 }

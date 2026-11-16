@@ -1,0 +1,4 @@
+def main(): Unit {
+    val r = 0.5..2.5
+    printl(r)
+}

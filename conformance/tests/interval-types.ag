@@ -1,0 +1,40 @@
+def main(): Unit {
+    // The bounds are of one integer type, and a literal takes the type of the other bound.
+    val low: UInt8 = 250
+    val bytes = low..255
+    printl(length(bytes))
+    printl(bytes[4])
+    printl(bytes.contains(255))
+    for b in bytes {
+        print(b)
+        print(" ")
+    }
+    printl("")
+
+    // Against an expected interval, both literals take its type.
+    val small: Interval<UInt16> = 0..3
+    printl(small[2])
+    printl(next(small))
+
+    // Every value of a narrow type fits, and so does its length.
+    val first: Int8 = -128
+    val all = first..127
+    printl(length(all))
+    printl(all[0])
+    printl(all[254])
+    printl(nextBack(all))
+
+    // An interval ending at a type's maximum doesn't overflow.
+    val top: UInt = 18446744073709551615
+    val high = (top - 3)..top
+    printl(length(high))
+    printl(high[2])
+    printl(high.contains(top))
+    for x in high {
+        printl(x)
+    }
+
+    val wide: Int32 = -2147483648
+    printl(length(wide..(wide + 2)))
+    printl((wide..(wide + 2))[1])
+}

@@ -1,0 +1,45 @@
+def noisy(name: String, value: Int): Int {
+    printl(name)
+    value
+}
+
+def main(): Unit {
+    val r = 2..6
+    printl(r)
+    printl(length(r))
+    printl(r[0])
+    printl(r[3])
+    printl(r.contains(2))
+    printl(r.contains(5))
+    printl(r.contains(6))
+    printl(r.from + r.to)
+    printl(r == 2..6)
+    printl(r != 2..7)
+    for i in r {
+        print(i)
+    }
+    printl("")
+
+    // Stepping from either end gives the element and the rest.
+    printl(next(r))
+    printl(nextBack(r))
+    printl(next(3..3))
+    printl(nextBack(3..3))
+
+    // Bounds the wrong way round are empty, as a `for` over them is.
+    val backwards = 5..0
+    printl(length(backwards))
+    printl(backwards.contains(3))
+    for i in backwards {
+        printl("never")
+    }
+
+    // Bounds are evaluated once, start first.
+    val evaluated = noisy("start", 1)..noisy("end", 3)
+    printl(length(evaluated))
+
+    // Negative bounds.
+    val n = -3
+    printl(length(n..-1))
+    printl((n..-1)[0])
+}

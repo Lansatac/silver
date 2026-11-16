@@ -1,0 +1,34 @@
+// Every written form of a slice of a non-array is assigned through `opIndexAssign`, and a slice
+// with literal bounds takes the interval type its `opIndex` asks for.
+type Cells(items: [Int])
+
+def length(c: Cells): Int => length(c.items)
+def opIndex(c: Cells, part: Interval<Int>): Cells => Cells(c.items[part])
+def opIndexAssign(c: Cells, part: Interval<Int>, value: Cells): Cells =>
+    Cells(c.items[..part.from] ~ value.items ~ c.items[part.to..])
+
+type Bytes(data: [UInt8])
+
+def length(b: Bytes): Int => length(b.data)
+def opIndex(b: Bytes, part: Interval<UInt8>): Bytes => Bytes(b.data[Int(part.from)..Int(part.to)])
+
+def pick(name: String, n: Int): Int {
+    printl(name)
+    n
+}
+
+def main(): Unit {
+    mutable val c = Cells([1, 2, 3, 4])
+    c[pick("a", 1)..] = Cells([9])
+    printl(c)
+    c[..pick("b", 1)] = Cells([7, 7])
+    printl(c)
+    mutable val cs = [Cells([1, 2, 3])]
+    cs[0][1..2] = Cells([5, 5])
+    printl(cs)
+
+    val b = Bytes([1, 2, 3, 4])
+    printl(b[0..2])
+    val one: UInt8 = 1
+    printl(b[..one])
+}

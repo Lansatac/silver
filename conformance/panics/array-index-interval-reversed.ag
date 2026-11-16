@@ -1,0 +1,7 @@
+// An empty interval slices as its bounds would, so the wrong way round panics.
+def main(): Unit {
+    val xs = [1, 2, 3]
+    val r = 2..1
+    printl(length(r))
+    printl(xs[r])
+}

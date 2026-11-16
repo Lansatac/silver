@@ -1,0 +1,11 @@
+// `x[a..b]` is `opIndex(x, a..b)`, so a type indexed only by an `Int` can't be sliced.
+type Row(cells: [String])
+
+def length(r: Row): Int => length(r.cells)
+def opIndex(r: Row, index: Int): String => r.cells[index]
+
+def main(): Unit {
+    val row = Row(["a", "b", "c"])
+    printl(row[1])
+    printl(row[1..])
+}

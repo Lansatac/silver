@@ -1,0 +1,13 @@
+// `x[a..]` ends at `length(x)`, an `Int`, so a type sliced by another integer type can't take it.
+type Bytes(data: [UInt8])
+
+def length(b: Bytes): Int => length(b.data)
+def opIndex(b: Bytes, part: Interval<UInt8>): Bytes => Bytes(b.data[Int(part.from)..Int(part.to)])
+
+def main(): Unit {
+    val b = Bytes([1, 2, 3, 4])
+    val one: UInt8 = 1
+    printl(b[0..2])
+    printl(b[..one])
+    printl(b[one..])
+}

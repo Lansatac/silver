@@ -217,6 +217,7 @@ private final class TypeChecker
                 );
             }
         }
+        qualifyShadowedInterval();
 
         // Before anything that can name one, and even if nothing does, so a bad target is reported.
         foreach (mod; programModules)
@@ -1720,7 +1721,9 @@ private final class TypeChecker
                 return true;
             },
             (const IndexExpr index) {
-                if (use == "assigned to" && asRange(index.index) is null) return checkAssignable(*index.object, use);
+                auto arraySlice = asRange(index.index) !is null
+                    && _types.isArray(_typing.exprTypes.get(index.object.id, _types.error));
+                if (use == "assigned to" && !arraySlice) return checkAssignable(*index.object, use);
                 _collector.reportError(DiagnosticCode.InvalidAssignmentTarget, target.span, use == "assigned to"
                     ? "A slice can't be assigned to; assign its elements, as `xs[i] = v`"
                     : "An element can't be %s; pass the whole value, or copy the element into a `mutable val`".format(use));
@@ -1763,6 +1766,19 @@ private final class TypeChecker
         return false;
     }
 
+    /// The `v` of `x op= v`, whose `x` was already reported, so reading it again isn't.
+    private void checkCompoundOperand(const Expr value, BodyContext ctx)
+    {
+        _typing.exprTypes[value.id] = _types.error;
+        value.kind.match!(
+            (const BinaryExpr binary) {
+                _typing.exprTypes[binary.left.id] = _types.error;
+                checkArgument(*binary.right, _types.error, ctx);
+            },
+            (_) {},
+        );
+    }
+
     /// `target = value`, where the target is a place. An element of anything but an array is
     /// written with `opIndexAssign`, and so is each such element the place is inside, from the
     /// inside out, so `grid[y][x] = v` is `grid = opIndexAssign(grid, y, opIndexAssign(grid[y], x, v))`.
@@ -1773,6 +1789,7 @@ private final class TypeChecker
         auto assignable = type != _types.error && checkAssignable(target);
         auto written = true;
         if (type == Type.init) written = writeIndexed(target, &assign.value, Type.init, false, ctx);
+        else if (type == _types.error && assign.compound) checkCompoundOperand(assign.value, ctx);
         else check(assign.value, type, ctx);
         if (assignable && written) writeAround(target, ctx);
         if (assign.compound && written) checkCompoundIndices(target, assign.value);
@@ -1784,19 +1801,38 @@ private final class TypeChecker
     private Type targetType(const Expr target, BodyContext ctx)
     {
         auto index = target.kind.match!((ref const IndexExpr i) => &i, _ => null);
-        if (index is null || asRange(index.index) !is null) return synthesize(target, ctx);
+        if (index is null) return synthesize(target, ctx);
+        auto range = asRange(index.index);
         auto objectType = _declarer.requireTyped(synthesize(*index.object, ctx), index.object.span);
         _typing.exprTypes[index.object.id] = objectType;
         Type type;
         if (objectType == _types.error || objectType == _types.never)
         {
-            checkArgument(*index.index, _types.error, ctx);
+            if (range is null) checkArgument(*index.index, _types.error, ctx);
+            if (range !is null && range.start !is null) checkArgument(*range.start, _types.error, ctx);
+            if (range !is null && range.end !is null) checkArgument(*range.end, _types.error, ctx);
+            if (range !is null) _typing.exprTypes[index.index.id] = _types.error;
             type = _types.error;
+        }
+        else if (range !is null && _types.isArray(objectType))
+        {
+            // An array's slice is a view, which `checkAssignable` reports.
+            if (range.start !is null) checkIndex(*range.start, ctx);
+            if (range.end !is null) checkIndex(*range.end, ctx);
+            _typing.exprTypes[index.index.id] = objectType;
+            type = objectType;
         }
         else if (_types.isArray(objectType))
         {
-            checkIndex(*index.index, ctx);
             type = _types.arrayElement(objectType);
+            auto indexType = isIntLiteral(*index.index) ? check(*index.index, _types.int_, ctx) : synthesize(*index.index, ctx);
+            if (isInterval(indexType))
+            {
+                _collector.reportError(DiagnosticCode.InvalidAssignmentTarget, target.span,
+                    "A slice can't be assigned to; assign its elements, as `xs[i] = v`");
+                type = _types.error;
+            }
+            else requireIndex(*index.index, indexType);
         }
         else
         {
@@ -1816,8 +1852,22 @@ private final class TypeChecker
         auto index = target.kind.match!((ref const IndexExpr i) => &i, (_) => null);
         auto objectType = _typing.exprTypes.get(index.object.id, _types.error);
         auto given = placeholder(target.span);
-        auto indexType = indexRead ? argumentType(*index.index) : Type.init;
-        const(Expr)[] args = [given, indexRead ? given : *index.index, value is null ? given : *value];
+        // `x[a..] = v` and `x[..b] = v` pass the interval they mean, as reading them does.
+        auto range = asRange(index.index);
+        auto open = range !is null && (range.start is null || range.end is null);
+        auto exact = false;
+        if (open && !indexRead)
+        {
+            if (openSliceInterval(target, *index, *range, objectType, ctx) == _types.error)
+            {
+                if (value !is null) checkArgument(*value, _types.error, ctx);
+                _typing.exprTypes[target.id] = _types.error;
+                return false;
+            }
+            exact = true;
+        }
+        auto indexType = indexRead || exact ? argumentType(*index.index) : Type.init;
+        const(Expr)[] args = [given, indexRead || exact ? given : *index.index, value is null ? given : *value];
         Type[] typed = [objectType, indexType, value is null ? type : Type.init];
         auto write = syntaxFunction(target, target.span, "opIndexAssign", "`x[i] = v`", args, typed, ctx);
         if (!write.found)
@@ -1831,6 +1881,11 @@ private final class TypeChecker
         {
             problem = "`x[i] = v` assigns what `opIndexAssign` returns back to `x`, so it has to take and return `%s`, but `%s` doesn't"
                 .format(_types.describe(objectType), describeUse("opIndexAssign", write));
+        }
+        else if (exact && params[1] != indexType)
+        {
+            problem = "`x[a..] = v` and `x[..b] = v` pass `opIndexAssign` an `%s`, but `%s` takes `%s`"
+                .format(_types.describe(indexType), describeUse("opIndexAssign", write), _types.describe(params[1]));
         }
         else if (indexRead && params[1] != indexType)
         {
@@ -2145,7 +2200,7 @@ private final class TypeChecker
             (const ArrayLiteral literal) => synthesizeArrayLiteral(literal, ctx),
             (const MapLiteral literal) => synthesizeMapLiteral(literal, expr.span, ctx),
             (const IndexExpr index) => synthesizeIndex(expr, index, ctx),
-            (const RangeExpr range) => synthesizeBareRange(range, expr.span, ctx),
+            (const RangeExpr range) => synthesizeBareRange(expr, range, ctx),
             (const TupleLiteral literal) => _declarer.tupleOf(literal.elements.map!(e => _declarer.requireTyped(synthesize(e, ctx), e.span)).array),
             (const MatchExpr match_) => synthesizeMatch(match_, expr.span, ctx),
             (const Lambda lambda) => typeLambda(expr, lambda, null, ctx.site),
@@ -2185,15 +2240,15 @@ private final class TypeChecker
         return _types.error;
     }
 
-    /// `x[i]`, or `x[a..b]`, whose range is part of the slice rather than a value. An array's are
-    /// built in; anything else's call `opIndex` or `opSlice`.
+    /// `x[i]`, or `x[a..b]`. An array's are built in, with the range of a slice part of it rather
+    /// than a value; anything else's call `opIndex`.
     private Type synthesizeIndex(const Expr expr, const IndexExpr index, BodyContext ctx)
     {
         auto objectType = _declarer.requireTyped(synthesize(*index.object, ctx), index.object.span);
         auto range = asRange(index.index);
-        if (range !is null) _typing.exprTypes[index.index.id] = objectType;
         if (objectType == _types.error || objectType == _types.never)
         {
+            if (range !is null) _typing.exprTypes[index.index.id] = _types.error;
             if (range is null) checkArgument(*index.index, _types.error, ctx);
             if (range !is null && range.start !is null) checkArgument(*range.start, _types.error, ctx);
             if (range !is null && range.end !is null) checkArgument(*range.end, _types.error, ctx);
@@ -2201,11 +2256,8 @@ private final class TypeChecker
         }
         if (_types.isArray(objectType))
         {
-            if (range is null)
-            {
-                checkIndex(*index.index, ctx);
-                return _types.arrayElement(objectType);
-            }
+            if (range is null) return arrayIndexed(expr, index, objectType, ctx);
+            _typing.exprTypes[index.index.id] = objectType;
             if (range.start !is null) checkIndex(*range.start, ctx);
             if (range.end !is null) checkIndex(*range.end, ctx);
             return objectType;
@@ -2219,49 +2271,129 @@ private final class TypeChecker
         return read.signature.ret;
     }
 
-    /// `x[a..b]` on something other than an array, which is `opSlice(x, a, b)`. A left-out `a` is
-    /// 0, and a left-out `b` is `length(x)`, with `x` evaluated once.
+    /// `x[a..b]` on something other than an array, which is `opIndex(x, a..b)`. `x[a..]` is
+    /// `opIndex(x, a..length(x))`, with `x` evaluated once, and `x[..b]` is `opIndex(x, 0..b)`.
     private Type sliceIndexed(const Expr expr, const IndexExpr index, const RangeExpr range, Type objectType,
         BodyContext ctx)
     {
-        auto left = placeholder(expr.span);
-        Type end;
-        if (range.end is null)
+        auto open = range.start is null || range.end is null;
+        // Two literals are fitted by their shape, so they take the interval type an `opIndex` asks for.
+        auto shaped = !open && isShaped(*index.index);
+        auto interval = shaped ? Type.init
+            : open ? openSliceInterval(expr, index, range, objectType, ctx)
+            : synthesize(*index.index, ctx);
+        if (interval == _types.error || interval == _types.never) return _types.error;
+
+        auto given = placeholder(index.index.span);
+        auto args = [*index.object, open ? given : *index.index];
+        auto slice = syntaxFunction(expr, expr.span, "opIndex", "`x[a..b]`", args, [objectType, interval], ctx, false);
+        if (slice.failed) return _types.error;
+        if (!slice.found)
         {
-            auto length = syntaxFunction(expr, expr.span, "length", "`x[a..]`", [*index.object], [objectType], ctx);
-            if (!length.found)
-            {
-                if (range.start !is null) checkArgument(*range.start, _types.error, ctx);
-                return _types.error;
-            }
-            _typing.indexing.require(expr.id).length = length.use;
-            auto lengthOf = expr.id;
-            noteSyntaxUse(ctx.site, expr.span, length, () => &_typing.indexing[lengthOf].length);
-            end = length.signature.ret;
-        }
-        auto args = [*index.object, range.start is null ? left : *range.start, range.end is null ? left : *range.end];
-        Type[] typed = [objectType, range.start is null ? _types.int_ : Type.init, end];
-        auto slice = syntaxFunction(expr, expr.span, "opSlice", "`x[a..b]`", args, typed, ctx);
-        if (!slice.found) return _types.error;
-        auto params = slice.signature.params;
-        if (range.start is null && params[1] != _types.int_)
-        {
-            _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
-                "`x[..b]` passes `opSlice` an `Int` 0 to start at, but `%s` takes `%s`"
-                    .format(describeUse("opSlice", slice), _types.describe(params[1])));
+            if (shaped) checkArgument(*index.index, _types.error, ctx);
+            auto passed = shaped ? intervalOf(_types.int_, expr.span) : interval;
+            _collector.reportError(DiagnosticCode.InvalidOperand, expr.span,
+                "`%s` can't be sliced: `x[a..b]` is `opIndex(x, a..b)`, and no `opIndex` here takes `%s` and `%s`"
+                    .format(_types.describe(objectType), _types.describe(objectType), _types.describe(passed)));
             return _types.error;
         }
-        if (range.end is null && params[2] != end)
+        if (open && slice.signature.params[1] != interval)
         {
             _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
-                "`x[a..]` passes `opSlice` the `%s` that `length` returns to end at, but `%s` takes `%s`"
-                    .format(_types.describe(end), describeUse("opSlice", slice), _types.describe(params[2])));
+                "`x[a..]` and `x[..b]` pass `opIndex` an `%s`, but `%s` takes `%s`"
+                    .format(_types.describe(interval), describeUse("opIndex", slice), _types.describe(slice.signature.params[1])));
             return _types.error;
         }
         _typing.indexing.require(expr.id).read = slice.use;
         auto sliced = expr.id;
         noteSyntaxUse(ctx.site, expr.span, slice, () => &_typing.indexing[sliced].read);
         return slice.signature.ret;
+    }
+
+    /// The `Interval` that `x[a..]` or `x[..b]` at `at` passes, recording the `length` that gives
+    /// `x[a..]` its end, or `error` once reported.
+    private Type openSliceInterval(const Expr at, const IndexExpr index, const RangeExpr range, Type objectType,
+        BodyContext ctx)
+    {
+        Type interval;
+        if (range.end is null)
+        {
+            auto length = syntaxFunction(at, at.span, "length", "`x[a..]`", [*index.object], [objectType], ctx);
+            if (!length.found)
+            {
+                checkArgument(*range.start, _types.error, ctx);
+                interval = _types.error;
+            }
+            else
+            {
+                _typing.indexing.require(at.id).length = length.use;
+                auto lengthOf = at.id;
+                noteSyntaxUse(ctx.site, at.span, length, () => &_typing.indexing[lengthOf].length);
+                auto end = length.signature.ret;
+                auto start = isIntLiteral(*range.start) && _types.isInteger(end)
+                    ? check(*range.start, end, ctx)
+                    : synthesize(*range.start, ctx);
+                if (_types.isInteger(start) && _types.isInteger(end) && start != end)
+                {
+                    _collector.reportError(DiagnosticCode.TypeMismatch, range.start.span,
+                        "`x[a..]` ends at `length(x)`, which is `%s`, so `a` has to be `%s` too, not `%s`"
+                            .format(_types.describe(end), _types.describe(end), _types.describe(start)));
+                    interval = _types.error;
+                }
+                else interval = openInterval(start, end, index.index.span);
+            }
+        }
+        else
+        {
+            auto end = rangeEnd(*range.end, synthesize(*range.end, ctx));
+            interval = openInterval(_types.isInteger(end) ? end : _types.int_, end, index.index.span);
+        }
+        _typing.exprTypes[index.index.id] = interval;
+        return interval;
+    }
+
+    /// The `Interval` that `x[a..]` or `x[..b]` passes, with bounds of types `start` and `end`.
+    private Type openInterval(Type start, Type end, Span span)
+    {
+        auto type = join(start, end, span, "Range bounds");
+        if (type == _types.error || type == _types.never) return type;
+        if (!_types.isInteger(type))
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, span,
+                "`a..b` needs integer bounds, got `%s`".format(_types.describe(type)));
+            return _types.error;
+        }
+        return intervalOf(type, span);
+    }
+
+    /// `xs[i]` on an array: built in for an `Int`, and otherwise `opIndex(xs, i)` when one takes
+    /// what `i` is, as the prelude's does an `Interval<Int>`.
+    private Type arrayIndexed(const Expr expr, const IndexExpr index, Type objectType, BodyContext ctx)
+    {
+        auto element = _types.arrayElement(objectType);
+        if (isIntLiteral(*index.index))
+        {
+            check(*index.index, _types.int_, ctx);
+            return element;
+        }
+        auto type = synthesize(*index.index, ctx);
+        if (_types.isInteger(type) || type == _types.error || type == _types.never)
+        {
+            requireIndex(*index.index, type);
+            return element;
+        }
+        auto read = syntaxFunction(expr, expr.span, "opIndex", "`x[i]`", [*index.object, *index.index], [objectType, type],
+            ctx, false);
+        if (read.failed) return _types.error;
+        if (!read.found)
+        {
+            requireIndex(*index.index, type);
+            return _types.error;
+        }
+        _typing.indexing.require(expr.id).read = read.use;
+        auto readOf = expr.id;
+        noteSyntaxUse(ctx.site, expr.span, read, () => &_typing.indexing[readOf].read);
+        return read.signature.ret;
     }
 
     /// An array's index or slice bound, which is an `Int`.
@@ -2272,11 +2404,17 @@ private final class TypeChecker
             check(expr, _types.int_, ctx);
             return;
         }
-        auto type = synthesize(expr, ctx);
+        requireIndex(expr, synthesize(expr, ctx));
+    }
+
+    /// Reports `expr`, of type `type`, unless it's an `Int` and so can index an array.
+    private void requireIndex(const Expr expr, Type type)
+    {
         if (type == _types.int_ || type == _types.error || type == _types.never) return;
+        auto interval = isInterval(type) ? "; an array is sliced by an `Interval<Int>`" : "";
         _collector.reportError(DiagnosticCode.TypeMismatch, expr.span, _types.isInteger(type)
             ? "An array index is an `Int`, not `%s`; convert it with `Int(...)`".format(_types.describe(type))
-            : "An array index is an `Int`, not `%s`".format(_types.describe(type)));
+            : "An array index is an `Int`, not `%s`%s".format(_types.describe(type), interval));
     }
 
     /// An argument that syntax passes with no expression of its own, such as the 0 a left-out
@@ -2286,12 +2424,67 @@ private final class TypeChecker
         return Expr(Id!Expr.init, span, ExprKind(Identifier(discardName)));
     }
 
-    private Type synthesizeBareRange(const RangeExpr range, Span span, BodyContext ctx)
+    /// `a..b` outside a slice or a `for`, which builds an `Interval` of its bounds' type.
+    private Type synthesizeBareRange(const Expr expr, const RangeExpr range, BodyContext ctx)
     {
-        synthesize(*range.start, ctx);
-        synthesize(*range.end, ctx);
-        _collector.reportError(DiagnosticCode.NotSupportedYet, span, "A range can only slice an array or be looped over by `for` for now");
-        return _types.error;
+        auto element = rangeBounds(expr, range, "`a..b` needs integer bounds", ctx);
+        return element == _types.error || element == _types.never ? element : intervalOf(element, expr.span);
+    }
+
+    /// `a..b` checked against `expected`, an `Interval` of an integer type, which the bounds are
+    /// checked against so that literals adapt to it.
+    private Type checkBareRange(const Expr expr, const RangeExpr range, Type expected, BodyContext ctx)
+    {
+        auto element = _types.nominalArgs(expected)[0];
+        check(*range.start, element, ctx);
+        rangeEnd(*range.end, check(*range.end, element, ctx));
+        _typing.exprTypes[expr.id] = expected;
+        return expected;
+    }
+
+    /// The prelude's `Interval`, which `a..b` builds, or an invalid ID when there's no prelude.
+    private Id!TypeDecl intervalDecl()
+    {
+        auto prelude = "prelude" in _resolutions.moduleScopes;
+        auto symbol = prelude is null ? null : (*prelude).resolveLocalType("Interval");
+        if (symbol is null) return Id!TypeDecl.init;
+        return (*symbol).match!((const Id!TypeDecl decl) => decl, _ => Id!TypeDecl.init);
+    }
+
+    /// Names the prelude's `Interval` in full when a module declares one of its own, so an error
+    /// that mentions both tells them apart.
+    private void qualifyShadowedInterval()
+    {
+        auto prelude = intervalDecl();
+        if (!prelude.isValid) return;
+        foreach (name, moduleScope; _resolutions.moduleScopes)
+        {
+            auto symbol = moduleScope.resolveLocalType("Interval");
+            auto own = symbol is null ? Id!TypeDecl.init : (*symbol).match!((const Id!TypeDecl d) => d, _ => Id!TypeDecl.init);
+            if (own.isValid && own != prelude)
+            {
+                _types.rename(prelude, "prelude.Interval");
+                return;
+            }
+        }
+    }
+
+    private bool isInterval(Type type)
+    {
+        auto decl = intervalDecl();
+        return decl.isValid && _types[type].match!((const NominalData nominal) => nominal.decl == decl, _ => false);
+    }
+
+    private Type intervalOf(Type element, Span span)
+    {
+        auto decl = intervalDecl();
+        if (!decl.isValid)
+        {
+            _collector.reportError(DiagnosticCode.UnknownType, span,
+                "`a..b` builds an `Interval`, which the prelude declares, and there's no prelude");
+            return _types.error;
+        }
+        return _types.nominal(decl, "Interval", [element]);
     }
 
     /// The type of a name used as a value, reporting the declarations that have none.
@@ -2860,11 +3053,11 @@ private final class TypeChecker
     }
 
     /// Synthesizes both sides of `==` or `!=`. A side written as `Some`, `None` or an array is
-    /// checked against the other one, whichever side it's on, so `x == Some(1)` adapts the literal.
+    /// Synthesizes both sides of `==` or `!=`. A side written as `Some`, `None`, an array or `a..b` is
     private void synthesizeCompared(const BinaryExpr binary, out Type leftType, out Type rightType, BodyContext ctx)
     {
         bool takesType(const Expr expr) => isOptionSyntax(expr) || isErrorUnionSyntax(expr) || isArraySyntax(expr)
-            || isTupleLiteral(expr) || genericUse(expr).found;
+            || isTupleLiteral(expr) || asRange(&expr) !is null || genericUse(expr).found;
         bool givesType(Type type) => _types.isOption(type) || _types.isErrorUnion(type) || _types.isArray(type) || _types.isTuple(type)
             || declOf(type).isValid;
 
@@ -3516,6 +3709,8 @@ private final class TypeChecker
             (const ArrayLiteral literal) => literal.elements.all!(e => isShaped(e)),
             (const TupleLiteral literal) => literal.elements.all!(e => isShaped(e)),
             (const SomeExpr some) => isShaped(*some.value),
+            (const RangeExpr range) => range.start !is null && range.end !is null
+                && isIntLiteral(*range.start) && isIntLiteral(*range.end),
             _ => false,
         );
     }
@@ -3629,6 +3824,14 @@ private final class TypeChecker
             (const OkExpr ok) {
                 if (bare) return Fit.converted;
                 return _types.isErrorUnion(param) ? Fit.exact : Fit.none;
+            },
+            // `a..b` of two literals fits an interval of any integer type, as each literal would.
+            (const RangeExpr range) {
+                if (bare) return Fit.exact;
+                return inOption((Type t) => isInterval(t)
+                    ? min(shapeFit(*range.start, _types.nominalArgs(t)[0], params),
+                        shapeFit(*range.end, _types.nominalArgs(t)[0], params))
+                    : Fit.none);
             },
             _ => literalType(arg) != Type.init ? typedFit(literalType(arg), param, params, false)
                 : assert(0, "only an argument that isShaped is fitted by its shape"),
@@ -5847,6 +6050,12 @@ private final class TypeChecker
         auto type = _declarer.requireTyped(synthesize(iterable, ctx), iterable.span);
         if (_types.isArray(type)) return _types.arrayElement(type);
         if (type == _types.error || type == _types.never) return type;
+        // The one the compiler builds for `a..b`, looped over as `a..b` is, which never needs its length.
+        if (isInterval(type) && _types.isInteger(_types.nominalArgs(type)[0]))
+        {
+            _typing.intervalLoops[for_.id] = true;
+            return _types.nominalArgs(type)[0];
+        }
         auto element = loopElement(for_, iterable, type, ctx);
         if (element != Type.init) return element;
         _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span,
@@ -6098,8 +6307,17 @@ private final class TypeChecker
     /// Only integers count, and a literal takes the type of the number beside it.
     private Type synthesizeForRange(const Expr expr, const RangeExpr range, BodyContext ctx)
     {
+        auto type = rangeBounds(expr, range, "`for` needs a range of integers", ctx);
+        _typing.exprTypes[expr.id] = type;
+        return type;
+    }
+
+    /// The one integer type of the bounds of `a..b`, where a literal takes the type of the number
+    /// beside it. `problem` begins the error for bounds that aren't integers.
+    private Type rangeBounds(const Expr expr, const RangeExpr range, string problem, BodyContext ctx)
+    {
         auto startType = synthesize(*range.start, ctx);
-        auto endType = synthesize(*range.end, ctx);
+        auto endType = rangeEnd(*range.end, synthesize(*range.end, ctx));
         if (_types.isInteger(startType) && isIntLiteral(*range.end) && !isIntLiteral(*range.start))
         {
             endType = adaptLiteral(*range.end, startType);
@@ -6113,11 +6331,35 @@ private final class TypeChecker
         if (type != _types.error && type != _types.never && !_types.isInteger(type))
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, expr.span,
-                "`for` needs a range of integers, got `%s`".format(_types.describe(type)));
+                "%s, got `%s`".format(problem, _types.describe(type)));
             type = _types.error;
         }
-        _typing.exprTypes[expr.id] = type;
         return type;
+    }
+
+    /// The type `typed` gives the end of `a..b`. A method call written after a range is part of
+    /// its end, since `0..10.map(f)` is `0..(10.map(f))`, so an error about the call itself, and
+    /// not about something inside its receiver or arguments, says so.
+    private Type rangeEnd(const Expr end, lazy Type typed)
+    {
+        auto reported = _collector.diagnostics.length;
+        auto type = typed;
+        auto call = end.kind.match!((ref const CallExpr c) => &c, _ => null);
+        auto access = call is null ? null : (*call.callee).kind.match!((ref const MemberAccess a) => &a, _ => null);
+        if (access is null || isModulePath(*access.object)) return type;
+
+        bool inside(Span span, Span part) => span.start >= part.start && span.end <= part.end;
+        bool aboutCall(const Diagnostic d)
+        {
+            auto receiver = access.object.span;
+            if (inside(d.span, receiver) && d.span != receiver) return false;
+            return !call.args.any!(a => inside(d.span, a.span));
+        }
+        auto method = access.member;
+        auto hint = "`a..b.%s(...)` calls `%s` on `b`, so to call it on the range, write `(a..b).%s(...)`";
+        // Reported once, as the call, and not again as a bound.
+        auto amended = _collector.amendFirstErrorSince(reported, hint.format(method, method, method), &aboutCall);
+        return amended ? _types.error : type;
     }
 
     /// `break` and `continue` act on the loop whose body holds them, so a condition or what a
@@ -6315,6 +6557,21 @@ private final class TypeChecker
         if (isMethod || unwraps || genericUse(expr).found || isOverloadedUse(expr))
         {
             return coerce(expr, synthesizeExact(expr, ctx, expected), expected);
+        }
+        if (auto range = asRange(&expr))
+        {
+            // Also through `?` and `!`, as a number literal adapts through them.
+            auto inner = expected;
+            while (_types.isOption(inner) || _types.isErrorUnion(inner))
+            {
+                inner = _types.isOption(inner) ? _types.optionInner(inner) : _types.successOf(inner);
+            }
+            if (isInterval(inner) && _types.isInteger(_types.nominalArgs(inner)[0]))
+            {
+                checkBareRange(expr, *range, inner, ctx);
+                if (inner != expected) _typing.promotions[expr.id] = expected;
+                return expected;
+            }
         }
         auto constructed = constructedDecl(expr);
         if (auto owner = _declarer.ownerOf(constructed))

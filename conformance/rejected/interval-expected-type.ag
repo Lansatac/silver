@@ -1,0 +1,6 @@
+// Against an expected interval, a bound that isn't a literal keeps its own type.
+def main(): Unit {
+    val n = 10
+    val r: Interval<UInt8> = 0..n
+    printl(r)
+}

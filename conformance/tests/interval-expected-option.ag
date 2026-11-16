@@ -1,0 +1,10 @@
+// An expected option of an interval adapts the literals, as an expected `UInt8?` adapts `5`.
+def narrow(): Interval<UInt8>? => 0..3
+
+def main(): Unit {
+    val n: UInt8? = 5
+    printl(n)
+    val r: Interval<UInt8>? = 0..10
+    printl(r)
+    printl(narrow())
+}
