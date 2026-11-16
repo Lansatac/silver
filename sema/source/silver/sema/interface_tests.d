@@ -1154,3 +1154,15 @@ def main(): Unit {
  val p = f([], n => 1)
 }`).onlyMessage(DiagnosticCode.UntypedEmptyArray);
 }
+
+@("review: what the expected type rules out doesn't depend on whether a candidate's result was worked out yet")
+unittest
+{
+    enum gen = "def g<T>(x: T): Range<T> => [x]\n";
+    enum plain = "def g(x: Int?): [String] => []\n";
+    enum use = "def use(): Unit {\n    val s: [String] = g(1)\n}\n";
+    // A trial doesn't work out `g<T>`'s result, and `Range<T>` gives `[String]` nothing to bind, so
+    // the expected type never rules it out: it wins on steps either way, and its result is the error.
+    analyzedModule(ranges ~ plain ~ gen ~ use).onlyMessage(DiagnosticCode.TypeMismatch);
+    analyzedModule(ranges ~ plain ~ use ~ gen).onlyMessage(DiagnosticCode.TypeMismatch);
+}

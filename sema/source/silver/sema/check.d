@@ -3189,11 +3189,10 @@ private final class TypeChecker
             Binding binding;
             foreach (i, type; written) binding.bound[params[i].id] = type;
             binding.typed = typed.dup;
-            // A result worked out from the body isn't worked out for a trial, which records nothing,
-            // so until it's known the expected type binds nothing.
-            auto unsettled = (trial.func in _resolutions.resultFloors) !is null
-                && _resultStates.get(trial.func, ResultState.waiting) != ResultState.settled;
-            if (unsettled) against = Type.init;
+            // A trial records nothing, so it doesn't work out a result from the body. A result written
+            // as an interface name then says nothing the expected type could bind, whether or not
+            // it's been worked out elsewhere, so the choice doesn't depend on the order of checking.
+            if ((trial.func in _resolutions.resultFloors) !is null) against = Type.init;
             bindCall(binding, signature, signatureOf(trial.func).ret, params, trial.func, call, against, ctx, true);
             binding.conformance = conformanceOf(trial.func, binding.bound, ctx.site);
             return binding;
