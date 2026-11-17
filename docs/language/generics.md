@@ -98,7 +98,7 @@ A type parameter is bound by matching an argument's type against its parameter's
 When type arguments aren't written, each type parameter is found from the call alone, in this order:
 
 1. The arguments that have a type of their own, left to right.
-2. The bounds whose type is known by now. The function found for a bound says what its interface's own type arguments are, as with `R: Range<T>`; see [Interface parameters](interfaces.md#interface-parameters).
+2. The bounds whose type is known by now. The type's conformance says what its interface's own type arguments are, as with `R: Range<T>`; see [Interface parameters](interfaces.md#interface-parameters).
 3. The expected type, where there is one, for any parameter still unknown. It's matched against the return type, peeling an option or error-union layer off the return type in the same way, and the layer `!` or `?` removes is part of it (see [Errors](errors.md#whats-expected-of-the-operand)).
 4. The remaining arguments, integer literals, lambdas, `None` and `[]`, left to right in the order they're written, each when its turn comes. A literal whose type is still open takes its default type. A lambda needs its parameter types to be known by now, or annotated, and its body then gives its return type. When the parameter returns an option, as in `(S) -> (T, S)?`, that return type is an option too, so a body ending in `(a, b)` returns `Some((a, b))`, just as it would if the type were written out.
 
@@ -149,16 +149,9 @@ def tries<E>(r: Int ! E, n: Int): Int ! E | Oops {
 }
 ```
 
-The same goes for everything else an instance needs at types that come from it: the functions a call finds for a bound, the `length` and `opIndex` a `for` loops by index with where the type has them, and the invariant of a type it builds or changes with `with`, as in `def ok<U>(xs: [U])` building a `W<[U]>` whose invariant calls `ok` again.
+The same goes for everything else an instance needs at types that come from it: the functions of the conformances that meet its bounds, the `next`, `length` and `opIndex` a `for` loops with, and the invariant of a type it builds or changes with `with`, as in `def ok<U>(xs: [U])` building a `W<[U]>` whose invariant calls `ok` again.
 
-A bound's alternatives are counted conservatively: every overload that could be chosen counts, whether or not the argument's type satisfies its bound, so the rule is read from declarations alone. This is rejected even though `[Int]` is never `Named`:
-
-```silver
-interface Named { def name(value: Self): String }
-def describe<T>(x: T): String => "plain"
-def describe<T: Named>(x: T): String => name(x) ~ ", then " ~ wrapped([x])
-def wrapped<T>(x: T): String => describe(x)
-```
+Both branches of an [`if type`](interfaces.md#asking-whether-a-type-conforms) count, whichever an instance takes, so the rule is read from declarations alone.
 
 A generic type is the same: it can hold itself, in a field or as a member, directly or through other types, only at type arguments that don't grow. One that holds a larger instance of itself would need endlessly many types, so it's an error at the type that grows, whether or not anything uses it.
 
@@ -183,6 +176,7 @@ type Grow<T> = More(rest: Grow<(T, T)>, head: T) | Stop    // error: `Grow<T>`, 
 
 ## Current implementation
 
+- Bounds are met by a search and not by declared conformances: see [Interfaces](interfaces.md#current-implementation). Where two functions differ only in their bounds, every one that could be chosen counts toward the limit above.
 - Type arguments that don't grow without end can still nest only 64 deep. Past that the program doesn't compile, and the error shows the instances, or the type, that led there.
 - Inference treats two more kinds of argument as having no type of their own, as `None` does: a marker that a generic sum owns, such as `Nil`, and a generic function or constructor named without its type arguments. Each binds nothing, and is checked once the type arguments are known.
 - In step 1, an argument whose parameter type is already known when its turn comes is checked against it rather than given a type of its own, so with `f<T>(a: T, b: [T])`, `f(small, [1, 2])` adapts the literals to `small`'s type.

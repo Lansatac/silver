@@ -23,8 +23,8 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Types](language/types.md) | Built-in types, promotion, equality, printing | Mostly implemented |
 | [Numbers](language/numbers.md) | Numeric types, literals, operators, overflow, conversions | Implemented |
 | [Bindings](language/bindings.md) | `val`, `mutable val`, discards, shadowing, constants | Implemented |
-| [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading, operator functions | Partial: no tail calls, `opEquals`, `opCompare` or `opString` |
-| [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented |
+| [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading, operator functions | Partial: no tail calls, `opEquals`, `opCompare` or `opString`; bounds still take part in overloading |
+| [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented, except that `for` finds its functions by name and not by conformance |
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
 | [Errors](language/errors.md) | `T ! E`, `?` and `!` on errors, what panics, `main` | Implemented, except `read()` returning an error |
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, `a..b` as an `Interval` | Implemented, except that element assignment always copies |
@@ -33,9 +33,9 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, invariants, `match` | Implemented |
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
-| [Interfaces](language/interfaces.md) | Interfaces, bounds, conformance, interface names as parameter and result types and on bindings | Partial: no interface types as values, no `Ord`, no bounds on a type's parameters |
+| [Interfaces](language/interfaces.md) | Interfaces, declared conformance, bounds, `if type`, interface names as parameter and result types and on bindings | Partial: conformance is found by search, with no `conform`, `if type` or required interfaces; no interface types as values |
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
-| [Modules](language/modules.md) | Files, imports, forwarding, visibility | Partial: no renamed imports, and the prelude doesn't forward `std` modules yet |
+| [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: no packages or renamed imports, and the prelude doesn't forward `std` modules yet |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the standard library's natives |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, `panics`, the test runner | Partial: no companion files, `--filter` or `--format json` |
 

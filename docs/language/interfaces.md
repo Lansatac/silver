@@ -1,6 +1,6 @@
 # Interfaces
 
-An interface describes a shape: a set of function signatures. A type satisfies an interface by having those functions, and nothing declares that it does.
+An interface describes a shape: a set of function signatures. A type satisfies an interface when a `conform` declaration says so, and the functions that make it conform are ordinary functions.
 
 ```silver
 interface Json {
@@ -12,20 +12,26 @@ type Point(x: Int, y: Int)
 def toJson(value: Int): String => "{value}"
 def toJson(p: Point): String => "[{toJson(p.x)}, {toJson(p.y)}]"
 
+conform Int: Json
+conform Point: Json
+
 def encode<T: Json>(item: T): String => "<" ~ toJson(item) ~ ">"
 
 encode(1)              // <1>
 encode(Point(1, 2))    // <[1, 2]>
-encode("text")         // error: `String` isn't a `Json`
+encode("text")         // error: `String` isn't a `Json`; no conformance is declared
 ```
 
-The functions are looked for where the type is supplied, at the call, and not inside the generic function. So a module can make a type it didn't declare satisfy an interface by writing an ordinary function.
+The declaration stands apart from both the type and the interface, so a module can make a type it didn't declare satisfy an interface. Whether a type conforms is a fact looked up in a table. It doesn't depend on where the question is asked.
 
 ## Declaring an interface
 
 ```silver
-interface Indexed<T> {
+interface Sized {
     def length(value: Self): Int
+}
+
+interface Indexed<T>: Sized {
     def opIndex(value: Self, index: Int): T
 }
 ```
@@ -35,7 +41,79 @@ interface Indexed<T> {
 - Every function takes a `Self` somewhere in its parameters, because a function is found by what it's given. See [A type only in the result](#a-type-only-in-the-result).
 - Two functions can share a name when their parameter types differ.
 - An interface is declared at module level, can be `private`, and shares its module's names with types.
-- An interface can't require another. It doesn't need to for one to cover another: a type that's an `Indexed<T>` is a `Sized` too, when `Sized` declares the same `length`.
+
+### An interface that requires another
+
+An interface lists the interfaces it requires after its name, several joined with `&`. `Indexed<T>` above requires `Sized`.
+
+```silver
+conform [T]: Sized & Indexed<T>
+conform Grid: Indexed<Int>         // error: a `Grid` isn't a `Sized`
+
+def last<R: Indexed<T>, T>(r: R): T => r[length(r) - 1]
+```
+
+- A bound on it supplies the required interfaces' functions too, so `R: Indexed<T>` is also `R: Sized`.
+- Conforming to it needs a conformance to each interface it requires, on the same line or another. Requiring doesn't declare one: every conformance is one somebody wrote.
+- Two interfaces don't cover each other by declaring the same function.
+
+## Conformance
+
+```silver
+conform Countdown: Range<Int>
+conform Point: Json & Named
+conform [T]: Range<T> & Sized & Indexed<T>
+conform Mapped<R, T, U>: Range<U> when R: Range<T>
+conform Mapped<R, T, U>: Indexed<U> when R: Indexed<T>
+```
+
+A conformance is written at module level, in any module. It names a type, then the interfaces it satisfies, joined with `&`.
+
+- The type is a named type, a built-in one, or one of those with type parameters in its arguments, which the declaration introduces. A type parameter alone isn't a type to conform: `conform T: Sized when T: Indexed<U>` is an error.
+- For each function of the interface, with `Self` replaced, the function used is the one a call of that name with those argument types would choose where the declaration is written. So the functions have to be in scope there, as they would for the call.
+- The function is chosen by its arguments alone. Its result then has to be exactly the interface's, with no conversion, and `mutable` has to agree: a function that takes its parameter as `mutable` fits only an interface function that does.
+- A function that isn't found, or has the wrong result, is an error at the declaration, which names it.
+- The functions stay ordinary module-level functions. `c.next()` and `next(c)` mean what they always did, and one function can serve several interfaces.
+- An argument is promoted as in any call, so one function that takes a sum serves each member's conformance:
+
+  ```silver
+  type Shape = :Circle | :Square
+  def area(s: Shape): Int => ...
+
+  conform Circle: HasArea       // through area(Shape)
+  ```
+
+- A built-in type conforms by a declaration, like any other.
+- `conform` is reserved only at the top level, and `when` only in a conformance. Anywhere else each is an ordinary name.
+
+### Conditional conformance
+
+`when` gives the bounds the type's parameters need. A `Mapped<R, T, U>` is indexed when its source is, and a `Box<T>` is a `Json` when what it holds is:
+
+```silver
+def toJson<T: Json>(b: Box<T>): String => "box({toJson(b.value)})"
+conform Box<T>: Json when T: Json
+
+encode(Box(Point(1, 2)))      // Box<Point> is a Json because Point is
+encode(Box("text"))           // error: `Box<String>` is a `Json` only when `String` is
+```
+
+- A `when` bound is on one of the declaration's type parameters, and is written as any bound is.
+- The function found for the conformance can have bounds of its own. They have to follow from the `when` clause, which is checked at the declaration.
+
+### One conformance for a type and an interface
+
+Two declarations that could apply to the same type and interface are an error that names both, wherever in the program they are. That covers the same pattern written twice, and overlapping ones such as `conform [T]: Json when T: Json` beside `conform [Int]: Json`.
+
+- A parameter of the interface that's only in a result is part of the conformance, so an array is a `Range` of one element type: `conform [T]: Range<T>` and `conform [Int]: Range<String>` are two for one type and interface.
+- A parameter in an argument is part of what the conformance is for. With `interface Add<Rhs> { def add(a: Self, b: Rhs): Self }`, a `Vec` can be an `Add<Vec>` and an `Add<Float>`, each declared.
+
+### Who sees a conformance
+
+A conformance isn't a name. It isn't imported, forwarded or qualified, and every module of the program sees it.
+
+- It's never `private`. A private type can conform, and its values behave the same in generic code elsewhere. A conformance to a private interface is hidden already, since nothing outside can ask about it.
+- The functions it uses don't have to be visible where the type is used. A generic function is given the functions the conformance found.
 
 ## Bounds
 
@@ -48,111 +126,63 @@ def describe<T: Json & Named>(item: T): String => name(item) ~ " " ~ toJson(item
 
 A bound goes on a type parameter of a `def` at module level. A type's parameter can't have one, and neither can an interface's.
 
-Two functions with the same parameter types can differ in their bounds when one asks for everything the other does and more. Where both fit a call, the one that asks for more is chosen:
-
-```silver
-def count<R: Range<T>, T>(range: R): Int { ... }                    // steps to the end
-def count<R: Range<T> & Indexed<T>, T>(range: R): Int => length(range)
-
-count([1, 2, 3])        // the second
-count(Countdown(3))     // the first: a Countdown isn't Indexed
-```
-
-- A bound asks for its interface's functions, so `R: Indexed<T>` asks for more than `R: Sized` when `Sized` declares only `length`. A function with no bound asks for nothing.
-- Several can form a chain, each asking for more than the one before, and the one chosen is the one that asks for most of those that fit.
-- When neither asks for everything the other does, as `R: Range<T>` and `R: Indexed<T>`, the two are duplicates. So are two that differ only in their result.
-- A bound with a type written for its interface's parameter doesn't ask for the same function as one with a type parameter there, so `R: Range<Int> & Indexed<Int>` against `R: Range<T>` is a duplicate too.
-- A literal argument is taken as the type the call would give it, from the type the call is expected to have first and its default otherwise. With `twice<T: A>(x: T): T` and `twice<T: A & B>(x: T): T`, `twice(1)` is the first when an `Int` is an `A` and not a `B`, and `val f: Float = twice(1)` is the second when a `Float` is both.
-- A bound whose type only a lambda's result would decide is undecided while the function is chosen. When the functions it leaves tied would give the lambda the same parameter types, the lambda is typed once and its result decides: with `ap<T>(x: Int, g: (Int) -> T)` and `ap<T: A>(x: Int, g: (Int) -> T)`, `ap(1, n => "s")` is the first when a `String` isn't an `A`, and `ap(1, n => n + 1)` the second when an `Int` is one. When they'd type it differently, the call is an error that asks for the lambda to be annotated. A lambda with its result written, or a named function, has a type of its own. See [Overloading](functions.md#overloading).
-- What the expected type gives a type parameter has to suit the arguments as well as the bounds. With `conv<T: A>(x: T): [T]` and `conv<T: A & B>(x: T): T`, `val xs: [Int] = conv(1)` is the first even when an `[Int]` is both, since the second would need `1` to be an `[Int]`. When that leaves no function fitting and each fails only on an argument, the choice is made without the expected type, and the argument is then an error against the one chosen, as it would be with no overloads. When the expected type also breaks a function's bounds, the choice isn't made again, since that would bring the function back: `val q: [String] = conv(1)`, where a `[String]` isn't an `A`, is an error listing why each function doesn't fit.
-- The choice follows the real type, wherever the call is written. Inside `def total<R: Range<T>, T>(range: R)`, `count(range)` is the second function when `total` is called with an array and the first when it's called with a `Countdown`. See [capability queries](../proposals/interfaces.md#capability-queries). When the two return different types, the choice is made from what's known where the call is written.
+A bound is checked by looking the type up among the conformances. A function in scope with the right name doesn't make a type conform, and the error for a failed bound says when such a function exists and the `conform` line is all that's missing.
 
 ### Inside the function
 
-A bound supplies its interface's functions for its type parameter, and that's all that's known about the parameter. Each is an ordinary function of the current module, with `Self` replaced, so it's called by name or as a method, used as a value, and takes part in [overloading](functions.md#overloading):
+A bound supplies its interface's functions for its type parameter, and those of the interfaces it requires. That's all that's known about the parameter. Each is an ordinary function of the current module, with `Self` replaced, so it's called by name or as a method, used as a value, and takes part in [overloading](functions.md#overloading):
 
 ```silver
 def toJson<T: Json>(x: T?): String => match x {
     None => "null"
     Some(v) => toJson(v)        // the bound's toJson(T), which fits a T exactly, and not this function
 }
+conform T?: Json when T: Json
 ```
 
 - It isn't generic, so it beats a generic function that fits as well, and `toJson(1)` in the same body still reaches the other functions named `toJson`.
-- Two bounds that declare the same function supply one function.
-- `for` over a value of the type parameter uses the bound's `next`, or its `length` and `opIndex`.
+- Two bounds that supply the same function supply one function.
+- `for` over a value of the type parameter needs a bound of `Range`, and [loops](control-flow.md#for) as it does for any type.
+- A bound on a type built from the parameter is looked up with the function's own bounds as what's known. In `def twice<T: Json>(item: T): String => encode(item) ~ encode(Box(item))`, a `Box<T>` is a `Json` because `T` is.
 
-## Conformance
+### Choosing a function
 
-`T` satisfies an interface at a call when, for every function of the interface with `Self` replaced by `T`, a call of that name with those argument types would resolve there. The function that call would choose is the one used.
-
-- The search is the overloading rule, with nothing of its own: the current module's functions first, then one imported module's. Only module-level functions are candidates. `toJson(foo)` and `encode(foo)` always choose the same function, and one resolves exactly when the other does.
-- Nothing outside the caller's module and its imports is searched. Using a type with a bound needs the module holding its function imported, as calling the function does. When that's all that's missing, the error says so.
-- The function is chosen by its arguments alone. Its result then has to be exactly the interface's, with no conversion, or the bound fails and the error names the function.
-- An argument is promoted as in any call, so a function taking a sum makes each member conform:
-
-  ```silver
-  type Shape = :Circle | :Square
-  def area(s: Shape): Int => ...
-
-  def measure<T: HasArea>(shape: T): Int => area(shape)
-  measure(Circle(2))        // a Circle is a HasArea, through area(Shape)
-  ```
-
-- `mutable` has to agree: a function that takes its parameter as `mutable` fits only an interface function that does.
-- Two imported modules that fit equally well are an error. A bound has nothing to qualify, so the fix is a function in the current module that calls the one that's meant.
-- A built-in type conforms through functions in scope, like any other.
-
-### A function's own bounds
-
-A function found for a bound can have bounds itself, and they're searched from the same call. That is how a type conforms when what it holds does:
+A function is chosen by its arguments. Its bounds are checked afterwards, against the one chosen, and a bound that fails is an error at the call. Two functions with the same parameter types are duplicates, whatever their bounds.
 
 ```silver
-def toJson<T: Json>(b: Box<T>): String => "box({toJson(b.value)})"
+def put<T: Json>(x: T): String => ...
+def put<T>(x: T?): String => ...
 
-encode(Box(Point(1, 2)))      // Box<Point> is a Json because Point is
-encode(Box("text"))           // error: that toJson needs `String` to be a `Json`
+put(Point(1, 2))     // the first
+put(Some("text"))    // the second
+put("text")          // error: the first is chosen, and a `String` isn't a `Json`
 ```
 
-- A bound that needs itself fails. With only `toJson<T: Json>(x: T?)` in scope, an `Int` isn't a `Json`, since that function would need it to be one already.
-- A search that keeps needing the same interface of a larger type is given up after 32 steps, with an error of its own.
+So a missing `conform` line is an error, and never quietly chooses another function. A function for the types that can do more is one function that [asks](#asking-whether-a-type-conforms). See [Overloading](functions.md#overloading).
 
-### A failed bound doesn't fit
+## Asking whether a type conforms
 
-A function whose bound isn't satisfied doesn't fit a call, and the choice goes on among the others:
+Where code needs to know whether a type has a capability it doesn't require, it asks in the body with `if type`:
 
 ```silver
-def show<T: Json>(item: T): String => "json " ~ toJson(item)
-def show<T>(item: [T]): String => "{length(item)} values"
+def count<R: Range<T>, T>(r: R): Int =>
+    if type R: Sized => length(r)
+    else fold(r, 0, (n, item) => n + 1)
 
-show(20)              // show<T: Json>
-show([1.5, 2.5])      // show<T>([T]): a [Float] isn't a Json here
+def middle<R: Range<Int>>(r: R): Int? =>
+    if type R: Indexed<Int> => r[length(r) / 2]
+    else r.drop(count(r) / 2).first()
 ```
 
-When nothing fits, the error says which bound failed and why.
+- What follows `if type` is a bound, written as anywhere else: a type, `:`, and interfaces joined with `&`, as in `if type R: Sized & Indexed<T>`.
+- Inside the branch the bound holds, so every value of that type has the interfaces' functions. There's no new name.
+- It's decided when the function is compiled for a real type, by looking the type up. Nothing is written in the signature, and a caller passes nothing.
+- Both branches are checked, once, like the rest of a generic body. It's an expression, with `=>` and `else` or with blocks, as `if` is, and its branches give one type.
+- It asks about a type, so the type needs a name. A parameter written `r: Range<Int>` has a type that isn't written, and a function that asks about it names it: `<R: Range<Int>>(r: R)`.
+- It isn't a condition, and can't be joined to one with `&&`.
+- The two branches are expected to differ in speed and not in what they compute. Nothing checks that.
 
-### Inside a generic function
-
-A bound on the function's own type parameter is passed along. A bound on a type built from it is searched where the function is written, with the bound's functions as the ones for the parameter:
-
-```silver
-def twice<T: Json>(item: T): String => encode(item) ~ encode(Box(item))
-```
-
-`encode(item)` uses whatever `twice` was given for `T`. `Box<T>` is a `Json` through the `toJson` for `Box` that this module sees, not one in the module that calls `twice`.
-
-### Conformance belongs to the place, not the type
-
-Two modules can give one type different conformances, each with its own function. A generic function is compiled once for each, and uses the one from where it was called:
-
-```silver
-// app.ag
-def toJson(f: Foo): String => "foo#{f.id}"
-encode(foo)            // json:foo#7
-
-// pretty.ag, another module with its own toJson(f: Foo)
-encode(foo)            // json:Foo { id: 7 }
-```
+[`if val`](control-flow.md#if) asks about a value while the program runs, and doesn't ask about interfaces.
 
 ## Interface parameters
 
@@ -165,25 +195,25 @@ interface Range<T> {
 
 def collect<R: Range<T>, T>(range: R): [T] { ... }
 
-collect([1, 2, 3])        // T = Int, read off the next that takes an array
-collect(Countdown(3))     // T = Int, from next(c: Countdown)
+collect([1, 2, 3])        // T = Int, from conform [T]: Range<T>
+collect(Countdown(3))     // T = Int, from conform Countdown: Range<Int>
 ```
 
-A bound is solved as a call, with what's known at that point:
+A bound is looked up with what's known at that point:
 
-- **A parameter that's only in a result is whatever the function found returns.** Functions aren't overloaded on their result, so a type is a range of one element type in a given place. A `[String]` is a `Range<String>`, and passing one where a `Range<Int>` is wanted is an error that shows both results.
-- **A parameter in an argument takes part in choosing.** With `interface Add<Rhs> { def add(a: Self, b: Rhs): Self }`, a `Vec` with `add(Vec, Vec)` and `add(Vec, Float)` is both an `Add<Vec>` and an `Add<Float>`.
-- **A parameter in an argument that isn't known yet** is bound by the one function that fits the arguments that are. When more than one fits, something else has to say what it is.
+- **A parameter that's only in a result is what the conformance says.** A `[String]` is a `Range<String>`, and passing one where a `Range<Int>` is wanted is an error that shows both.
+- **A parameter in an argument is part of which conformance is meant.** A `Vec` that's an `Add<Vec>` and an `Add<Float>` satisfies `T: Add<Float>` by the second.
+- **A parameter in an argument that isn't known yet** is given by the type's one conformance to the interface. When it has several, something else has to say which is meant.
 
-In [inference](generics.md#inference), a bound is solved as soon as its type is known: after the arguments that have a type of their own, and before the expected type, literals and lambdas. So a lambda's parameter can come from a bound:
+In [inference](generics.md#inference), a bound is looked up as soon as its type is known: after the arguments that have a type of their own, and before the expected type, literals and lambdas. So a lambda's parameter can come from a bound:
 
 ```silver
 def map<R: Range<T>, T, U>(source: R, transform: (T) -> U): Mapped<R, T, U> => ...
 
-[1, 2, 3].map(x => x * 2)      // x is an Int, from the array's next
+[1, 2, 3].map(x => x * 2)      // x is an Int, from the array's conformance
 ```
 
-A literal doesn't adapt through a bound. With only `toJson(x: UInt8)` in scope, `toJson(1)` works, since the literal takes the parameter's type. `encode(1)` doesn't: the literal has its default type by the time the bound is looked into, and `Int` isn't a `Json`. `encode<UInt8>(1)` says which is meant.
+A literal doesn't adapt through a bound. With `toJson(x: UInt8)` and `conform UInt8: Json`, `toJson(1)` works, since the literal takes the parameter's type. `encode(1)` doesn't: the literal has its default type by the time the bound is looked up, and `Int` isn't a `Json`. `encode<UInt8>(1)` says which is meant.
 
 ## A type only in the result
 
@@ -194,6 +224,8 @@ interface FromText { def fromText(of: Of<Self>, text: String): Self? }
 
 def fromText(of: Of<Point>, text: String): Point? => ...
 def fromText(of: Of<Int>, text: String): Int? => ...
+conform Point: FromText
+conform Int: FromText
 
 // One generic function in front, which is what callers use.
 def fromText<T: FromText>(text: String): T? => fromText(Of<T>, text)
@@ -218,7 +250,7 @@ total(["a", "b"])          // error: a [String] is a Range<String>
 ```
 
 - The hidden parameter is never written at a call and doesn't count toward "all type arguments or none".
-- Each such parameter has a type of its own. To say two parameters have the same type, name it with a type parameter.
+- Each such parameter has a type of its own. To say two parameters have the same type, or to [ask](#asking-whether-a-type-conforms) about one, name it with a type parameter.
 - The argument needs a type of its own, so `total([])` is an error.
 - Several interfaces are joined with `&`, as in a bound, and the hidden parameter has every one: `def middle(items: Range<Int> & Indexed<Int>): Int` is `<S: Range<Int> & Indexed<Int>>(items: S)`.
 - Inside a parameter's type an interface name or `A & B` isn't a type, as in `items: [Json]` or `item: Json?`, and neither is the parameter of a lambda or nested `def`, which can't be generic. A type parameter with a bound says it.
@@ -239,7 +271,7 @@ def bad(xs: [Int]): Range<Int> => length(xs)    // error in bad: an Int isn't a 
 ```
 
 - The result's type is worked out from the body, once, in terms of the function's type parameters. Here it's `Mapped<R, Int, Int>`. It's the type callers see: they can name it, index it when it's indexed, and use the function as a value of that type.
-- The interface is what the author promises. A body whose type doesn't satisfy it is an error in that function, found as a [bound](#conformance) is, from where the function is written.
+- The interface is what the author promises. A body whose type doesn't satisfy it is an error in that function, looked up as a [bound](#bounds) is.
 - Several are joined with `&`, as in a bound: `def squares(xs: [Int]): Range<Int> & Indexed<Int>`. Adding a `filter` to that body is then an error there, and not in a caller that indexed the result. `?` binds tighter than `&`, so an option of the two is `(Range<Int> & Indexed<Int>)?`.
 - A caller can use more than was promised. If it does, a change to the body can break it, and the error is at the caller.
 - Everything the body returns has one type, as in any function. `if c => xs else xs.filter(f)` is a mismatch.
@@ -272,6 +304,7 @@ def bad(xs: [Int]): Range<Int> => length(xs)    // error in bad: an Int isn't a 
   ```silver
   private type Steps(from: Int)
   private def next(s: Steps): (Int, Steps)? => ...
+  conform Steps: Range<Int>
 
   def countdown(from: Int): Range<Int> => Steps(from)             // error: `Steps` is private
   def doubled(from: Int): Range<Int> => Steps(from).map(x => x * 2)   // error: a Mapped<Steps, Int, Int> holds one
@@ -306,24 +339,28 @@ current = current.filter(x => x > 2)              // error: current is an [Int]
 ## Open questions
 
 - A value whose type is only an interface, as in `[Json]`, which needs a runtime representation.
-- Asking whether a type satisfies an interface inside a generic function, as in `static if R: Sized`.
-- A bound on a type's own parameter, as in `type Set<T: Ord>`, which makes the conformance part of the type.
-- A way to name which function conforms, for a type two imports conform differently.
-- `Ord`, and what `opCompare` returns.
-- An interface requiring another, default bodies, and generic functions in an interface.
+- A bound on a type's own parameter, as in `type Set<T: Ord>`.
+- A conformance for every type that meets a bound, as `conform T: Sized when T: Indexed<U>`, and what wins where it overlaps another.
+- A field a type has only when a type argument conforms.
+- A form of `if type` with several arms, as `match type R { ... }`.
+- Generic functions in an interface.
+- Whether the functions can also be written inside the `conform` declaration.
 - A shorter way to write a function for a type only in the result, such as `def Point.fromText(text: String): Point?`.
 - Whether `Of` is the right name.
 
-See the [interfaces proposal](../proposals/interfaces.md) for the reasoning behind these rules and the alternatives considered, and the [ranges proposal](../proposals/ranges.md#an-interface-name-as-a-type-decided) for an interface name as a result type.
+Decided, and not part of the first version, each described in the [conformance proposal](../proposals/conformance.md): which [package](modules.md#packages) may declare a conformance, and a program's conformance for a library's type that only the program sees; functions of an interface with a default body; `Ord` as an ordinary interface; and a result type or annotation that restricts a value to the interface. The proposal also has the reasoning behind these rules and what was rejected. The [ranges proposal](../proposals/ranges.md#an-interface-name-as-a-type-decided) covers an interface name as a result type.
 
 ## Current implementation
 
-- Inside a type's invariant and its `else`, a call of a function that others differ from only in their bounds is chosen from what's known where it's written, and so is how a `for` there loops: the question isn't carried to where the type is built.
-- An answer that two imported modules give equally well is an error where the type becomes concrete, and it names the function that asked first, which can be one the call reaches rather than the one called.
-- A program that gives one type different answers in two places compiles a generic function once for each. An answer that isn't there shows as `none` in such an instance's name.
-- A program that gives one type two conformances compiles a generic function once for each. Such an instance's name, as a function value prints it, doesn't show which it is.
+Declared conformance isn't built. What's built is the design it replaces, described in the [interfaces proposal](../proposals/interfaces.md):
+
+- There's no `conform`. A type satisfies an interface where a call of each of its functions would resolve: in the module that supplies the type, among its own functions and its imports'. So writing the function is enough, using a type with a bound needs the module that holds its function imported, and two modules can give one type different conformances, each compiling its own instance of a generic function.
+- A function found for a bound can have bounds itself, searched from the same call, which is what `when` replaces. A search that keeps needing the same interface of a larger type is given up after 32 steps.
+- An interface can't require another. One covers another by declaring the same function.
+- There's no `if type`. Two functions with the same parameter types can differ in their bounds when one asks for everything the other does and more. The one that asks for more is chosen where both fit, and inside a generic function that follows the real type.
+- A function whose bound fails doesn't fit a call, and the choice goes on among the others. A bound only a lambda's result decides can be settled while the function is chosen.
+- A `for` finds `next`, `length` and `opIndex` by name where it's written, with no conformance.
 - Beside an interface name in a result type or an annotation, a literal has its default type, since nothing but the interface is there to say otherwise. `def f(xs: [Int]): (Float, Range<Int>) => (1, xs)` is a mismatch and `val a: Range<Float> = [1, 2]` is an `[Int]` that isn't a `Range<Float>`; `(1.0, xs)` and `[1.0, 2.0]` are how to write them, and the error says so. The errors of an error union aren't beside it in this sense: they're written out, and a literal in an `Error` adapts to them.
 - `Ok(None)` and `Ok([])` under an interface name are errors even where another branch says what the type is, since the `Ok` has to have a type of its own.
 - A private alias for a public type doesn't count as private in what a public function returns through an interface name, since the result's type is the type the alias names.
 - When two functions need each other's result, the error is at the result type of the one reached first, and doesn't name the other.
-- Everything else above is implemented.
