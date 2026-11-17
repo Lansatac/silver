@@ -722,7 +722,7 @@ unittest
     auto bare = analyzed("import lib\ndef main(): Unit => printl(1)", files);
     bare.shouldReport(DiagnosticCode.AmbiguousName, At("printl", 1));
 
-    auto qualified = analyzed("import lib\ndef main(): Unit => intrinsics.io.printl(1)", files);
+    auto qualified = analyzed("import lib\ndef main(): Unit => prelude.printl(1)", files);
     qualified.shouldResolve(At("printl", 1), At("printl", 1, "intrinsics.io"));
     qualified.shouldHaveNoDiagnostics();
 }
