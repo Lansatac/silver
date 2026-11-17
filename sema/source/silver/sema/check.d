@@ -2445,7 +2445,7 @@ private final class TypeChecker
     /// The prelude's `Interval`, which `a..b` builds, or an invalid ID when there's no prelude.
     private Id!TypeDecl intervalDecl()
     {
-        auto prelude = "prelude" in _resolutions.moduleScopes;
+        auto prelude = "intrinsics.interval" in _resolutions.moduleScopes;
         auto symbol = prelude is null ? null : (*prelude).resolveLocalType("Interval");
         if (symbol is null) return Id!TypeDecl.init;
         return (*symbol).match!((const Id!TypeDecl decl) => decl, _ => Id!TypeDecl.init);

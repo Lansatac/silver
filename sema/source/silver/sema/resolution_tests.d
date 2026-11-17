@@ -516,7 +516,7 @@ def main(): Unit => ()");
 unittest
 {
     auto a = analyzed("def main(): Unit => printl(1)");
-    a.shouldResolve(At("printl", 1), At("printl", 1, "prelude"));
+    a.shouldResolve(At("printl", 1), At("printl", 1, "intrinsics.io"));
     a.shouldHaveNoDiagnostics();
 }
 
@@ -722,8 +722,8 @@ unittest
     auto bare = analyzed("import lib\ndef main(): Unit => printl(1)", files);
     bare.shouldReport(DiagnosticCode.AmbiguousName, At("printl", 1));
 
-    auto qualified = analyzed("import lib\ndef main(): Unit => prelude.printl(1)", files);
-    qualified.shouldResolve(At("printl", 1), At("printl", 1, "prelude"));
+    auto qualified = analyzed("import lib\ndef main(): Unit => intrinsics.io.printl(1)", files);
+    qualified.shouldResolve(At("printl", 1), At("printl", 1, "intrinsics.io"));
     qualified.shouldHaveNoDiagnostics();
 }
 
@@ -731,7 +731,7 @@ unittest
 unittest
 {
     auto a = analyzed("import prelude\ndef main(): Unit => printl(1)");
-    a.shouldResolve(At("printl", 1), At("printl", 1, "prelude"));
+    a.shouldResolve(At("printl", 1), At("printl", 1, "intrinsics.io"));
     a.shouldHaveNoDiagnostics();
 }
 
@@ -949,7 +949,7 @@ def main(): Unit {
 }");
     a.shouldCall(At("twice", 2), At("twice", 1));
     a.shouldCall(At("pow", 1), At("pow", 1, "std.math"));
-    a.shouldCall(At("printl", 1), At("printl", 1, "prelude"));
+    a.shouldCall(At("printl", 1), At("printl", 1, "intrinsics.io"));
     a.shouldHaveNoDiagnostics();
 }
 

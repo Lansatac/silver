@@ -1185,7 +1185,11 @@ private final class NameResolver
 
     private static bool isStandardLibrary(string moduleName)
     {
-        return moduleName == preludeName || moduleName == "std" || moduleName.startsWith("std.");
+        return moduleName == preludeName
+        || moduleName == "std"
+        || moduleName.startsWith("std.")
+        || moduleName == "intrinsics"
+        || moduleName.startsWith("intrinsics.");
     }
 
     private void resolveAliases(string name, const Module mod)

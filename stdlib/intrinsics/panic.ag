@@ -1,0 +1,8 @@
+module intrinsics.panic
+
+// Stops the program with `message`, for what can't happen.
+intrinsic def panic(message: String): Never
+
+// Panics when `condition` is false, showing it and, for a comparison, both sides' values.
+intrinsic def assert(condition: Bool): Unit
+intrinsic def assert(condition: Bool, message: String): Unit

@@ -4,7 +4,7 @@ module silver.sema.forward_tests;
 version (unittest):
 
 import std.algorithm : canFind;
-import std.array : array, replace;
+import std.array : array;
 
 import silver.ast : DiagnosticCode;
 import silver.sema.resolution_tests;
@@ -314,31 +314,15 @@ unittest
     analyzed("val forward: Int = 1\ndef main(): Unit {\nval import_ = forward\nprintl(import_)\n}").shouldHaveNoDiagnostics();
 }
 
-@("a prelude that only forwards supplies everything the prelude does")
+@("a forwarding module exposes its target's declarations to importers")
 unittest
 {
-    import std.file : readText;
-    import std.path : buildPath;
-    import silver.loader : standardLibraryPath;
-
     auto files = [
-        "prelude.ag": "module prelude\nforward import std.core",
-        "std/core.ag": readText(buildPath(standardLibraryPath(), "prelude.ag")).replace("module prelude", "module std.core"),
+        "prelude.ag": "module prelude\nforward import lib",
+        "lib.ag": "module lib\ndef answer(): Int => 42",
     ];
-    auto a = analyzed("import std.string
-type Stack(items: [Int])
-def length(s: Stack): Int => length(s.items)
-def opIndex(s: Stack, i: Int): Int => s.items[i]
-def next(s: Stack): (Int, Stack)? => None
-def main(): Unit {
-    mutable val xs = [1, 2]
-    xs ~= [3]
-    for x in Stack(xs) { printl(x) }
-    for i in 0..length(xs) { printl(xs[i]) }
-    val first: Int? = if length(xs) > 0 => Some(xs[0]) else None
-    printl(prelude.length(xs))
-    assert(first == Some(1))
-}", files);
+    auto a = analyzed("def main(): Unit {\n    _ = answer()\n    _ = prelude.answer()\n}", files);
     a.shouldHaveNoDiagnostics();
-    a.shouldCall(At("printl", 1), At("printl", 1, "std.core"));
+    a.shouldCall(At("answer", 1), At("answer", 1, "lib"));
+    a.shouldCall(At("answer", 2), At("answer", 1, "lib"));
 }

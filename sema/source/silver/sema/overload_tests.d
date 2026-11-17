@@ -372,7 +372,7 @@ unittest
     auto a = analyzed("type Point(x: Int, y: Int)\ndef printl(p: Point): Unit => printl(\"({p.x}, {p.y})\")\n"
         ~ "def main(): Unit => printl(Point(1, 2))");
     a.shouldHaveNoDiagnostics();
-    a.shouldCall(At("printl", 2), At("printl", 1, "prelude"));
+    a.shouldCall(At("printl", 2), At("printl", 1, "intrinsics.io"));
     a.shouldCall(At("printl", 3), At("printl", 1));
 }
 

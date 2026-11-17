@@ -1,0 +1,7 @@
+module intrinsics.io
+
+intrinsic def print(value: Any): Unit
+intrinsic def printl(value: Any): Unit
+
+// Reads a line from input, including its newline, or `None` at the end of input.
+intrinsic def read(): String?
