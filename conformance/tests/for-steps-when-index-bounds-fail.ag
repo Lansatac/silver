@@ -1,5 +1,5 @@
-// Whether `count`'s loop indexes a `Doubled<R>` is a question for each instance, and the
-// `length` that answers it calls `count` at a larger type, so it would need endlessly many.
+// Inside `count`, `R` is only `Steps<Int>`, so the `length` and `opIndex` for a `Doubled<R>` fail
+// their bounds there and the loop steps with `next`, whatever type `count` is given.
 interface Steps<T> { def next(r: Self): (T, Self)? }
 interface Counted { def size(r: Self): Int }
 

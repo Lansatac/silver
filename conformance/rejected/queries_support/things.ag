@@ -1,3 +1,0 @@
-module queries_support.things
-
-type Thing(id: Int)

@@ -1,6 +1,6 @@
 # Proposal: declared conformance
 
-**Status: decided, nothing built. [The first version](#the-first-version) is a part of it, and the rest is deferred.** This replaces the conformance rules of the [interfaces proposal](interfaces.md), which still describes what's implemented: conformance found by a search at the call, overloads that differ only in their bounds, and capability queries. [Interfaces](../language/interfaces.md) describes the first version. Interfaces, bounds, interface parameters, `Of<T>`, and an interface name as a parameter type are kept. The [ranges proposal](ranges.md) is written against the rules this replaces, and [What changes for ranges](#what-changes-for-ranges) lists what it needs. The deferred parts depend on [packages](../language/modules.md#packages), and the first version doesn't.
+**Status: decided. [The first version](#the-first-version) is a part of it, and the rest is deferred. Of the first version, only [choosing a function](#choosing-a-function-decided) without its bounds is built.** This replaces the conformance rules of the [interfaces proposal](interfaces.md), which still describes how conformance is found: by a search at the call. [Interfaces](../language/interfaces.md) describes the first version. Interfaces, bounds, interface parameters, `Of<T>`, and an interface name as a parameter type are kept. The [ranges proposal](ranges.md) is written against the rules this replaces, and [What changes for ranges](#what-changes-for-ranges) lists what it needs. The deferred parts depend on [packages](../language/modules.md#packages), and the first version doesn't.
 
 ## Summary
 
@@ -191,7 +191,7 @@ put(Some("text"))    // the second
 put("text")          // error: the first is chosen, and a String isn't a Json
 ```
 
-Today `put("text")` is the second: the first is dropped when its bound fails, and `"text"` becomes a `String?`. So a missing `conform` line is now an error, where it would have chosen another function without one.
+Before this, `put("text")` was the second: the first was dropped when its bound failed, and `"text"` became a `String?`. So a missing `conform` line is now an error, where it would have chosen another function without one.
 
 What goes is one function stepping aside for another because its bound failed. A function for a closer shape with a bound, and a general one behind it, become one function that asks in its body:
 
@@ -279,7 +279,7 @@ The library can't have had an order for `Tag`, or this would be a duplicate, so 
 - **The functions written inside the declaration,** as `conform Countdown: Range<Int> { def next(c: Countdown) => ... }`. It says which function is meant with no lookup. It would make those functions different from ordinary ones, or have two ways to write one. It could be added as a second form.
 - **Conformances named and passed where wanted,** as `encode(foo using pretty)`. It brings back a second conformance for a type, and with it every question about which one a value was built with.
 - **Functions that differ only in bounds kept, chosen by the table.** With one answer per type the choice needs nothing carried, but choosing a function would still depend on bounds, and the same-result rule and the duplicates rule stay.
-- **A failed bound removes a function from the choice,** as today and as C++, D and Swift do. It keeps a general function behind a closer one with a bound. A missing conformance then chooses another function silently, and a bound only a lambda's result decides has to be settled during the choice.
+- **A failed bound removes a function from the choice,** as it used to and as C++, D and Swift do. It keeps a general function behind a closer one with a bound. A missing conformance then chooses another function silently, and a bound only a lambda's result decides has to be settled during the choice.
 - **A failed bound removes a function only when its type is known from the arguments.** It keeps the pair above and drops the lambda problem, with one more rule to learn and the same silent choice.
 - **Requiring an interface also declares it,** so `conform [T]: Indexed<T>` makes an array a `Sized`. Fewer lines, and a conformance nobody wrote that a written one can collide with.
 - **No requirements between interfaces,** with `Indexed` keeping a `length` of its own. An `Indexed` then isn't a `Sized` unless both are declared and both bounds are written.

@@ -211,28 +211,6 @@ final class Analysis
         return _typing.witnesses.get(name, null);
     }
 
-    /// For a use by `name` inside a generic function, the more demanding functions that stand in
-    /// for the one chosen in an instance whose answers they depend on are there, most demanding
-    /// first. Empty for most uses.
-    const(Witness)[] alternativesOf(Id!Expr name) const
-    {
-        return _typing.alternatives.get(name, null);
-    }
-
-    /// What the generic `func` asks of its type arguments beyond its bounds, as worked out from
-    /// its body and those of the functions it calls.
-    const(Query)[] queriesOf(Id!FunctionDecl func) const
-    {
-        return _typing.queries.get(func, null);
-    }
-
-    /// How many of an instance of `func`'s witnesses its bounds need, which are always there.
-    /// Those after them answer its queries, and any of them can be absent.
-    size_t boundWitnessCount(Id!FunctionDecl func) const
-    {
-        return _resolution.boundFunctions.get(func, null).length;
-    }
-
     /// For a function that a bound supplies inside a generic function, where its witness is among
     /// those of each instance of that function; null for any other function.
     const(size_t)* witnessIndexOf(Id!FunctionDecl func) const

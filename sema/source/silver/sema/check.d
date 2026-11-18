@@ -58,48 +58,14 @@ private struct BodyContext
     bool testBody;
 }
 
-/// A search made once every body is checked, for the queries generic functions ask and what
-/// answers them.
-private struct Deferral
-{
-    /// The module-level function the search is in, whose own type parameters a goal it can't
-    /// meet is asked of.
-    Id!FunctionDecl owner;
-    /// The function a query added now is first asked by.
-    Id!FunctionDecl asker;
-    /// Whether a function was given a query it didn't have.
-    bool changed;
-    /// The use the search is for, where an answer that's neither yes nor no is reported, when
-    /// `reporting`.
-    Span span;
-    bool reporting;
-}
-
-/// A use of a generic function from a body, whose witnesses are found again once every body is
-/// checked, with the answers to the function's queries and the functions that ask more than it.
+/// A use of a generic function from a body, with the witnesses checking found for it.
 private struct Reference
 {
     Site site;
     Span span;
     Id!FunctionDecl func;
     Type[] typeArgs;
-    /// What checking found for it, and once its queries are answered, what was kept.
     Witness[] witnesses;
-    /// The functions it was chosen from, which may ask more than it.
-    const(Id!FunctionDecl)[] siblings;
-    void delegate(Witness[] witnesses, Witness[] alternatives) store;
-    Witness[] alternatives;
-}
-
-/// A `for` in a generic function that steps, which loops by index where `length` and `opIndex`
-/// are found for the real type.
-private struct SteppedLoop
-{
-    Site site;
-    Span span;
-    Id!Expr for_;
-    Type iterable;
-    Type element;
 }
 
 /// A value of a type with an invariant built, or changed by a `with` the invariant checks, in a
@@ -187,16 +153,9 @@ private final class TypeChecker
     private ResultState[Id!FunctionDecl] _resultStates;
     /// Those found to need their own result type while it was being worked out.
     private bool[Id!FunctionDecl] _recursiveResults;
-    /// Every use of a generic function, for `answerQueries`.
+    /// Every use of a generic function, for `rejectGrowingCalls`.
     private Reference[] _references;
-    private SteppedLoop[] _steppedLoops;
     private InvariantUse[] _invariantUses;
-    /// For a name chosen from several functions, the ones of its group, which may ask more.
-    private const(Id!FunctionDecl)[][Id!Expr] _siblings;
-    /// What's been reported about answers, so a use searched again isn't reported twice.
-    private bool[string] _reportedAnswers;
-    /// The functions holding invariants and their `else`s, once `askerAt` has needed them.
-    private bool[Id!FunctionDecl] _invariantFunctions;
     /// For the type parameters a search makes up.
     private NodeIds _ids;
 
@@ -328,7 +287,6 @@ private final class TypeChecker
 
         _declarer.checkInhabited(programModules);
         _declarer.rejectGrowingTypes(programModules);
-        answerQueries();
         rejectGrowingCalls();
 
         foreach (literal; _intLiterals)
@@ -341,46 +299,6 @@ private final class TypeChecker
             _negatedLiterals, _collector, _literalConstructions);
 
         return _typing;
-    }
-
-    /// The function a use at `site` asks its questions of, if any. An invariant has no caller to
-    /// ask, so what it calls is chosen from what's known where it's written.
-    private Id!FunctionDecl askerAt(Site site)
-    {
-        if (_invariantFunctions is null)
-        {
-            foreach (decl; _resolutions.declarations.types.byValue)
-            {
-                _invariantFunctions[decl.invariantFunction] = true;
-                _invariantFunctions[decl.invariantError] = true;
-            }
-        }
-        return site.function_ in _invariantFunctions ? Id!FunctionDecl.init : site.function_;
-    }
-
-    /// Works out what each generic function asks of its callers, then finds again what each use
-    /// of a generic function needs, now with the answers to its queries and the functions that
-    /// ask more than the one chosen.
-    ///
-    /// A function's queries come from its own body and from the queries of what it calls, so
-    /// the uses in generic functions are searched until none gains another. Only then is
-    /// everything kept, so every use of a function has the same queries' answers.
-    private void answerQueries()
-    {
-        if (_collector.hasErrors) return;
-        bool generic(Site site) => askerAt(site).isValid && isGenericFunction(askerAt(site));
-        for (auto changed = true; changed;)
-        {
-            changed = false;
-            foreach (reference; _references)
-            {
-                if (generic(reference.site)) changed |= findAgain(reference, false);
-            }
-            foreach (loop; _steppedLoops) changed |= indexLoop(loop, false);
-        }
-        if (_typing.queries.length == 0) return;
-        foreach (ref reference; _references) findAgain(reference, true);
-        foreach (loop; _steppedLoops) indexLoop(loop, true);
     }
 
     /// Reports each generic function that needs an instance of itself at ever larger type
@@ -401,7 +319,6 @@ private final class TypeChecker
             {
                 add(from, w.func, w.typeArgs, span);
                 addWitnesses(from, w.witnesses, span);
-                addWitnesses(from, w.alternatives, span);
             }
         }
         bool generic(Id!FunctionDecl f) => f.isValid && isGenericFunction(f);
@@ -411,12 +328,6 @@ private final class TypeChecker
             if (!generic(from)) continue;
             add(from, reference.func, reference.typeArgs, reference.span);
             addWitnesses(from, reference.witnesses, reference.span);
-            addWitnesses(from, reference.alternatives, reference.span);
-        }
-        foreach (loop; _steppedLoops)
-        {
-            if (!generic(loop.site.function_)) continue;
-            if (auto functions = loop.for_ in _typing.loops) addWitnesses(loop.site.function_, functions.indexedIf, loop.span);
         }
         // An invariant's functions have the type's parameters, and each value built needs them at its own.
         foreach (use; _invariantUses)
@@ -501,126 +412,24 @@ private final class TypeChecker
         return given.length > 0 ? "%s with %-(%s and %)".format(text, given) : text;
     }
 
-    /// Searches for `reference`'s witnesses and alternatives again, keeping them when `keep`.
-    /// Whether a function was given a query.
-    private bool findAgain(ref Reference reference, bool keep)
-    {
-        auto defer = Deferral(askerAt(reference.site), askerAt(reference.site), false, reference.span, keep);
-        auto params = _resolutions.typeParamsOf(reference.func);
-        Substitution bound;
-        foreach (i, param; params) bound[param.id] = reference.typeArgs[i];
-        auto found = conformanceOf(reference.func, bound, reference.site, null, &defer);
-        auto witnesses = found.holds ? found.witnesses : reference.witnesses;
-
-        Witness[] rungs;
-        auto signature = signatureOf(reference.func);
-        foreach (sibling; reference.siblings)
-        {
-            if (sibling == reference.func || !asksForMore(sibling, reference.func)) continue;
-            settleResult(sibling);
-            auto theirs = signatureOf(sibling);
-            auto theirParams = _resolutions.typeParamsOf(sibling);
-            Substitution binding;
-            foreach (i, param; theirs.params) bindParams(param, _types.substitute(signature.params[i], bound), theirParams, binding);
-            // A function that turns out not to stand in for this one asks nothing of the caller.
-            auto owner = askerAt(reference.site);
-            auto asked = owner.isValid ? _typing.queries.get(owner, null).length : 0;
-            auto changed = defer.changed;
-            void rejected()
-            {
-                if (owner.isValid && owner in _typing.queries) _typing.queries[owner].length = asked;
-                if (asked == 0) _typing.queries.remove(owner);
-                defer.changed = changed;
-            }
-            auto fits = conformanceOf(sibling, binding, reference.site, null, &defer);
-            if (!fits.holds)
-            {
-                if (fits.ambiguous || fits.tooDeep) reportRung(sibling, fits, &defer);
-                rejected();
-                continue;
-            }
-            if (theirParams.any!(p => p.id !in binding)
-                || _types.substitute(theirs.ret, binding) != _types.substitute(signature.ret, bound))
-            {
-                rejected();
-                continue;
-            }
-            rungs ~= Witness(sibling, theirParams.map!(p => binding[p.id]).array, fits.witnesses);
-        }
-        rungs.sort!((a, b) => asksForMore(a.func, b.func));
-        if (keep)
-        {
-            reference.store(witnesses, rungs);
-            reference.witnesses = witnesses;
-            reference.alternatives = rungs;
-        }
-        return defer.changed;
-    }
-
-    /// Reports a function that asks more than the one a call chose, whose bounds the search
-    /// couldn't answer either way.
-    private void reportRung(Id!FunctionDecl rung, const Conformance fits, const Deferral* defer)
-    {
-        if (!defer.reporting) return;
-        auto message = "`%s` %s".format(overloadLabel(rung), fits.failure);
-        auto key = "%s:%s:%s".format(defer.span.start, defer.span.end, message);
-        if (key in _reportedAnswers) return;
-        _reportedAnswers[key] = true;
-        _collector.reportError(fits.tooDeep ? DiagnosticCode.BoundSearchTooDeep : DiagnosticCode.AmbiguousQuery, defer.span, message);
-    }
-
-    /// Looks for the `length` and `opIndex` a stepping `loop` would use to loop by index, keeping
-    /// them when `keep`. Whether a function was given a query.
-    private bool indexLoop(SteppedLoop loop, bool keep)
-    {
-        auto defer = Deferral(askerAt(loop.site), askerAt(loop.site), false, loop.span, keep);
-        auto requests = [
-            Request("length", _types.function_([loop.iterable], _types.int_)),
-            Request("opIndex", _types.function_([loop.iterable, _types.int_], loop.element)),
-        ];
-        Substitution none;
-        auto found = satisfy(Goal(Id!InterfaceDecl.init, loop.iterable, null), null, none, loop.site, null, &defer, requests);
-        if (keep && found.holds) _typing.loops[loop.for_].indexedIf = found.witnesses;
-        return defer.changed;
-    }
-
-    /// Notes a use of the generic `func` from `site`, for `answerQueries`.
-    private void noteUse(Site site, Span span, Id!FunctionDecl func, Type[] typeArgs, const(Witness)[] witnesses,
-        const(Id!FunctionDecl)[] siblings, void delegate(Witness[], Witness[]) store)
+    /// Notes a use of the generic `func` from `site`, for `rejectGrowingCalls`.
+    private void noteUse(Site site, Span span, Id!FunctionDecl func, const(Type)[] typeArgs, const(Witness)[] witnesses)
     {
         if (!func.isValid || !isGenericFunction(func)) return;
         site.unsettled = null;
-        _references ~= Reference(site, span, func, typeArgs, cast(Witness[]) witnesses, siblings, store);
+        _references ~= Reference(site, span, func, cast(Type[]) typeArgs, cast(Witness[]) witnesses);
     }
 
     /// Notes a use of a generic function by the name `g` is written with.
     private void noteNamed(Site site, const Generic g, const(Witness)[] witnesses)
     {
-        auto name = g.name;
-        noteUse(site, g.span, g.func, _typing.typeArguments[name], witnesses, _siblings.get(name, null), (w, a) {
-            if (w.length > 0) _typing.witnesses[name] = w;
-            if (a.length > 0) _typing.alternatives[name] = a;
-        });
+        noteUse(site, g.span, g.func, _typing.typeArguments[g.name], witnesses);
     }
 
-    /// Notes a function that syntax uses, as `noteUse` does; `place` says where it's kept.
-    private void noteSyntaxUse(Site site, Span span, const SyntaxUse use, FunctionUse* delegate() place)
+    /// Notes a function that syntax uses, as `noteUse` does.
+    private void noteSyntaxUse(Site site, Span span, const SyntaxUse use)
     {
-        noteUse(site, span, use.use.func, cast(Type[]) use.use.typeArgs, use.use.witnesses, use.siblings, (w, a) {
-            auto kept = place();
-            kept.witnesses = w;
-            kept.alternatives = a;
-        });
-    }
-
-    /// The functions of `candidates`' group that holds `chosen`.
-    private static const(Id!FunctionDecl)[] siblingsOf(const Candidates candidates, Id!FunctionDecl chosen)
-    {
-        foreach (group; candidates.groups)
-        {
-            if (group.canFind(chosen)) return group;
-        }
-        return null;
+        noteUse(site, span, use.use.func, use.use.typeArgs, use.use.witnesses);
     }
 
     private void declareConstant(const ConstDecl constant)
@@ -825,7 +634,7 @@ private final class TypeChecker
     /// Whether `a` and `b` couldn't be overloads in one module.
     private bool sameOverload(Id!FunctionDecl a, Id!FunctionDecl b)
     {
-        return sameParameters(a, b) && !asksForMore(a, b) && !asksForMore(b, a);
+        return sameParameters(a, b);
     }
 
     private void checkConstant(const ConstDecl constant, string moduleName)
@@ -1906,7 +1715,7 @@ private final class TypeChecker
         }
         _typing.indexing.require(target.id).write = write.use;
         auto written = target.id;
-        noteSyntaxUse(ctx.site, target.span, write, () => &_typing.indexing[written].write);
+        noteSyntaxUse(ctx.site, target.span, write);
         _typing.exprTypes[target.id] = params[2];
         return true;
     }
@@ -2267,7 +2076,7 @@ private final class TypeChecker
         if (!read.found) return _types.error;
         _typing.indexing.require(expr.id).read = read.use;
         auto readOf = expr.id;
-        noteSyntaxUse(ctx.site, expr.span, read, () => &_typing.indexing[readOf].read);
+        noteSyntaxUse(ctx.site, expr.span, read);
         return read.signature.ret;
     }
 
@@ -2306,7 +2115,7 @@ private final class TypeChecker
         }
         _typing.indexing.require(expr.id).read = slice.use;
         auto sliced = expr.id;
-        noteSyntaxUse(ctx.site, expr.span, slice, () => &_typing.indexing[sliced].read);
+        noteSyntaxUse(ctx.site, expr.span, slice);
         return slice.signature.ret;
     }
 
@@ -2328,7 +2137,7 @@ private final class TypeChecker
             {
                 _typing.indexing.require(at.id).length = length.use;
                 auto lengthOf = at.id;
-                noteSyntaxUse(ctx.site, at.span, length, () => &_typing.indexing[lengthOf].length);
+                noteSyntaxUse(ctx.site, at.span, length);
                 auto end = length.signature.ret;
                 auto start = isIntLiteral(*range.start) && _types.isInteger(end)
                     ? check(*range.start, end, ctx)
@@ -2392,7 +2201,7 @@ private final class TypeChecker
         }
         _typing.indexing.require(expr.id).read = read.use;
         auto readOf = expr.id;
-        noteSyntaxUse(ctx.site, expr.span, read, () => &_typing.indexing[readOf].read);
+        noteSyntaxUse(ctx.site, expr.span, read);
         return read.signature.ret;
     }
 
@@ -3277,7 +3086,6 @@ private final class TypeChecker
             }
             _typing.chosenSymbols[call.callee.id] = SymbolId(chosen);
             _typing.chosenCallees[expr.id] = chosen;
-            _siblings[call.callee.id] = siblingsOf(distinct(*candidates), chosen);
         }
         auto generic = genericUse(expr);
         if (generic.found) return applyGeneric(expr, generic, call, expected, ctx, typed);
@@ -3339,12 +3147,6 @@ private final class TypeChecker
         string problem;
         /// Whether what doesn't fit is an argument, against what the expected type binds.
         bool againstExpected;
-        /// Whether the bounds fail for what the expected type binds.
-        bool boundsAgainstExpected;
-        /// Whether a bound is undecided because only a lambda's result would say what its type is.
-        bool awaitsLambda;
-        /// The lambdas whose results were left undecided, with what each would be typed against.
-        LambdaTurn[] turns;
 
         bool fitsAll() const => problem is null;
     }
@@ -3388,24 +3190,13 @@ private final class TypeChecker
             }
             return tried;
         }
-        auto arity = groups;
-        Trial[] own;
-        const(Trial[])[] imported;
-        while (true)
-        {
-            groups = arity;
-            auto tried = fitAll(expected);
-            // When what the expected type binds leaves nothing fitting the arguments, the choice is made
-            // without it, so the argument is reported against the chosen function, as for a lone one.
-            // Not when it broke a function's bounds, since that would bring the function back.
-            if (!tried.joiner.any!(t => t.fitsAll) && tried.joiner.any!(t => t.againstExpected)
-                && !tried.joiner.any!(t => t.boundsAgainstExpected)) tried = fitAll(Type.init);
-            groups = tried;
-            own = groups[0].filter!(t => t.fitsAll).array;
-            imported = own.length > 0 ? null : rankedImports(groups[1 .. $].map!(g => g.filter!(t => t.fitsAll).array).array);
-            auto pool = own.length > 0 ? cast(const(Trial)[]) own : imported.length == 1 ? imported[0] : null;
-            if (!typeAwaitedLambdas(pool, groups.joiner.filter!(t => t.fitsAll).array, call, typed, ctx)) break;
-        }
+        auto tried = fitAll(expected);
+        // When what the expected type binds leaves nothing fitting the arguments, the choice is made
+        // without it, so the argument is reported against the chosen function, as for a lone one.
+        if (!tried.joiner.any!(t => t.fitsAll) && tried.joiner.any!(t => t.againstExpected)) tried = fitAll(Type.init);
+        groups = tried;
+        auto own = groups[0].filter!(t => t.fitsAll).array;
+        auto imported = own.length > 0 ? null : rankedImports(groups[1 .. $].map!(g => g.filter!(t => t.fitsAll).array).array);
         // An argument whose type is already an error fits anything, so it would only add to it.
         auto reportable = !typed.any!(t => t != Type.init && _types.mentionsError(t));
 
@@ -3418,32 +3209,6 @@ private final class TypeChecker
         }
         if (reportable) reportNoOverload(name.span, spelled, groups);
         return Id!FunctionDecl.init;
-    }
-
-    /// Types, once, the lambdas whose results the functions of `pool` that are tied wait on, when
-    /// those functions differ only in their bounds and every function that fits, `fitting`, would
-    /// type the lambdas alike. Each then has a type of its own, in `typed`, and its result decides
-    /// the bounds when the choice is made again. Whether it typed any.
-    private bool typeAwaitedLambdas(const(Trial)[] pool, const(Trial)[] fitting, const CallExpr call, Type[] typed,
-        BodyContext ctx)
-    {
-        if (pool.length < 2 || pool.any!(t => pool.all!(u => u.func == t.func || beats(t, u)))) return false;
-        auto tied = pool.filter!(t => !pool.any!(u => beats(u, t))).array;
-        if (!tied.any!(t => t.awaitsLambda)) return false;
-        auto turns = tied[0].turns;
-        bool alike(const(LambdaTurn)[] other) => other.length == turns.length && other.length.iota.all!(k =>
-            other[k].arg == turns[k].arg && other[k].expectation == turns[k].expectation && other[k].optional == turns[k].optional);
-        bool boundsOnly(Id!FunctionDecl a, Id!FunctionDecl b) => requiresAll(a, b) || requiresAll(b, a);
-        if (turns.length == 0 || !fitting.all!(t => alike(t.turns))
-            || !tied.all!(t => tied.all!(u => u.func == t.func || boundsOnly(t.func, u.func)))) return false;
-        foreach (turn; turns)
-        {
-            auto arg = call.args[turn.arg];
-            auto lambda = arg.kind.match!((const Lambda l) => l, (_) => Lambda.init);
-            auto expectation = turn.expectation;
-            typed[turn.arg] = typeLambda(arg, lambda, &expectation, ctx.site, turn.optional);
-        }
-        return true;
     }
 
     /// The fitting trials of the imported modules that have any, a list per module, narrowed to
@@ -3531,7 +3296,8 @@ private final class TypeChecker
     /// Fills in how well each argument fits `trial`'s function, or why one doesn't, binding its
     /// type parameters as a call of it alone would, in a trial that records nothing. How well an
     /// argument fits is read from what the arguments bind; the expected type, if any, binds too,
-    /// and the arguments and bounds have to suit what it binds, but it doesn't say how well.
+    /// and the arguments have to suit what it binds, but it doesn't say how well. Bounds are
+    /// checked once a function is chosen, so a failing one doesn't keep it from fitting.
     private void fitTrial(ref Trial trial, const CallExpr call, const(Type)[] typed, const(Type)[] written, bool hasReceiver,
         BodyContext ctx, Type expected)
     {
@@ -3547,7 +3313,8 @@ private final class TypeChecker
             // it's been worked out elsewhere, so the choice doesn't depend on the order of checking.
             if ((trial.func in _resolutions.resultFloors) !is null) against = Type.init;
             bindCall(binding, signature, signatureOf(trial.func).ret, params, trial.func, call, against, ctx, true);
-            binding.conformance = conformanceOf(trial.func, binding.bound, ctx.site);
+            // Bounds don't rule a function out, but one that holds binds what its interface says.
+            conformanceOf(trial.func, binding.bound, ctx.site);
             return binding;
         }
 
@@ -3588,7 +3355,7 @@ private final class TypeChecker
         }
 
         auto binding = plain;
-        auto withExpected = expected != Type.init && !plain.failedEarly;
+        auto withExpected = expected != Type.init;
         if (withExpected) binding = bindAgainst(expected);
         // Every argument has to fit what's bound in the end. A promotion into a sum binds nothing,
         // so a parameter that still mentions a type parameter takes no member of a sum here.
@@ -3608,17 +3375,8 @@ private final class TypeChecker
             trial.problem = misfit(i, param) ~ (given.length == 1
                 ? ", which the expected type gives `%s`".format(_resolutions.declarations.typeParams[given[0]].name) : "");
             trial.againstExpected = true;
-            trial.boundsAgainstExpected = binding.conformance.failure !is null;
             return;
         }
-        auto conformance = binding.conformance;
-        // Undecided only when a bound is on what a lambda's result would decide.
-        trial.awaitsLambda = conformance.pending
-            && binding.undecided.any!(p => _typing.bounds.get(p, null).length > 0);
-        trial.turns = binding.turns;
-        if (conformance.failure is null) return;
-        trial.problem = conformance.failure.replace("\n", "\n    ");
-        trial.boundsAgainstExpected = !binding.failedEarly && binding.fromExpected.length > 0;
     }
 
     /// How well an argument of type `actual` fits `param`, which may still mention some of the
@@ -3895,14 +3653,6 @@ private final class TypeChecker
         if (!reportable) return Id!FunctionDecl.init;
         auto unbeaten = trials.filter!(t => !trials.any!(u => beats(u, t))).array;
         auto tied = unbeaten.map!(t => "`" ~ overloadLabel(t.func) ~ "`").array;
-        if (unbeaten.any!(t => t.awaitsLambda))
-        {
-            _collector.reportError(DiagnosticCode.AmbiguousOverload, span,
-                ("This call fits more than one `%s`: %s, and only what a lambda here returns would say which bounds hold, "
-                    ~ "but they'd give the lambda different types; annotate it, as in `(x: Int): Int => ...`")
-                    .format(spelled, tied.join(" and ")));
-            return Id!FunctionDecl.init;
-        }
         // Functions of different modules tie where a blanket forward brings them together.
         auto homes = unbeaten.map!(t => _resolutions.declarations.functionModules.get(t.func, null).idup).array.sort.uniq.array;
         if (homes.length > 1 && !homes.canFind(null) && !unbeaten.any!(t => (t.func in _resolutions.requirements) !is null))
@@ -3934,44 +3684,7 @@ private final class TypeChecker
         if (aGeneric != bGeneric) return bGeneric;
         if (!aGeneric) return false;
         auto aTakes = accepts(a.func, b.func), bTakes = accepts(b.func, a.func);
-        if (aTakes != bTakes) return bTakes;
-        // Bounds that only a lambda's result would decide can't say the function fits better.
-        return asksForMore(a.func, b.func) && !a.awaitsLambda;
-    }
-
-    /// Whether `a` and `b` take the same parameters and `a`'s bounds require every function `b`'s
-    /// do, and one more at least.
-    private bool asksForMore(Id!FunctionDecl a, Id!FunctionDecl b)
-    {
-        return signatureOf(a).mutables == signatureOf(b).mutables && requiresAll(a, b) && !requiresAll(b, a);
-    }
-
-    /// Whether `a` and `b` take the same parameters and each function `b`'s bounds require is one
-    /// `a`'s do: of the same name and, with `a`'s type parameters read as `b`'s, the same signature.
-    private bool requiresAll(Id!FunctionDecl a, Id!FunctionDecl b)
-    {
-        Id!TypeParam[Id!TypeParam] renamed;
-        if (!sameParameters(a, b, renamed)) return false;
-        auto aTypeParams = _resolutions.typeParamsOf(a);
-        auto bTypeParams = _resolutions.typeParamsOf(b);
-        auto supplied = _resolutions.boundFunctions.get(a, null);
-
-        // A type parameter only the bounds mention is paired by the functions that are, so an
-        // earlier pairing that a later function can't keep is tried again.
-        bool found(const(Id!FunctionDecl)[] needed, Id!TypeParam[Id!TypeParam] pairs)
-        {
-            if (needed.length == 0) return true;
-            auto wanted = _resolutions.declarations.functions[needed[0]].name;
-            foreach (s; supplied)
-            {
-                if (_resolutions.declarations.functions[s].name != wanted) continue;
-                auto attempt = pairs.dup;
-                if (sameUpToRenaming(_typing.symbolTypes[SymbolId(s)], _typing.symbolTypes[SymbolId(needed[0])],
-                    aTypeParams, bTypeParams, attempt) && found(needed[1 .. $], attempt)) return true;
-            }
-            return false;
-        }
-        return found(_resolutions.boundFunctions.get(b, null), renamed);
+        return bTakes && !aTakes;
     }
 
     private bool isGenericFunction(Id!FunctionDecl f)
@@ -4088,7 +3801,6 @@ private final class TypeChecker
         }
         // A function that isn't generic is more specific than one that is.
         if (fits.length > 1 && fits.any!(f => !isGenericFunction(f))) fits = fits.filter!(f => !isGenericFunction(f)).array;
-        if (fits.length > 1) fits = fits.filter!(f => !fits.any!(g => asksForMore(g, f))).array;
         if (fits.length != 1)
         {
             auto across = acrossModules(candidates.groups.joiner);
@@ -4099,7 +3811,6 @@ private final class TypeChecker
             return _types.error;
         }
         _typing.chosenSymbols[name.id] = SymbolId(fits[0]);
-        _siblings[name.id] = siblingsOf(candidates, fits[0]);
         return namedValue(name, SymbolId(fits[0]), expected, site);
     }
 
@@ -4220,7 +3931,7 @@ private final class TypeChecker
         {
             foreach (earlier; seen)
             {
-                if (!sameParameters(earlier, later) || asksForMore(earlier, later) || asksForMore(later, earlier)) continue;
+                if (!sameParameters(earlier, later)) continue;
                 auto home = _resolutions.declarations.functionModules[earlier];
                 _collector.reportError(DiagnosticCode.DuplicateOverload, forward.span,
                     ("`%s` can't be forwarded: %s takes the same parameter types, so a module importing this one "
@@ -4228,7 +3939,7 @@ private final class TypeChecker
                             home == m ? "this module's `" ~ overloadLabel(earlier) ~ "`" : "`" ~ overloadLabel(earlier, true)
                                 ~ "`, forwarded too,",
                             _resolutions.boundFunctions.get(earlier, null).length + _resolutions.boundFunctions.get(later, null).length == 0
-                                ? "" : "; bounds only tell two functions apart when one asks for everything the other does, and more"));
+                                ? "" : ", whatever their bounds"));
                 return;
             }
         }
@@ -4255,13 +3966,13 @@ private final class TypeChecker
         {
             problem = "`%s` already binds the C symbol `" ~ later.symbol ~ "`; give this one another with `native(\"...\")`";
         }
-        else if (sameParameters(earlier, later.id) && !asksForMore(earlier, later.id) && !asksForMore(later.id, earlier))
+        else if (sameParameters(earlier, later.id))
         {
             auto a = signatureOf(earlier), b = signatureOf(later.id);
             problem = "`%s` already takes `" ~ overloadLabel(earlier)[first.name.length .. $] ~ "`; overloads need different parameter types"
                 ~ (a.mutables == b.mutables ? "" : ", and `mutable` alone doesn't make one")
                 ~ (_resolutions.boundFunctions.get(earlier, null).length + _resolutions.boundFunctions.get(later.id, null).length == 0
-                    ? "" : ", and bounds only tell two functions apart when one asks for everything the other does, and more");
+                    ? "" : ", whatever their bounds");
         }
         if (problem is null) return false;
         _collector.reportError(DiagnosticCode.DuplicateOverload, later.nameSpan, problem.format(later.name));
@@ -4356,13 +4067,11 @@ private final class TypeChecker
     /// Looks for what makes the types in `bound` satisfy the bounds of `func`'s type parameters, as
     /// calls from `site` would find it. A bound whose type isn't in `bound` yet is left pending, and
     /// one whose interface has type arguments that aren't known yet binds them from the function
-    /// found. `stack` holds the goals this search is already inside. With `defer`, the witnesses
-    /// are followed by the answers to `func`'s queries.
-    private Conformance conformanceOf(Id!FunctionDecl func, ref Substitution bound, Site site, const(Goal)[] stack = null,
-        Deferral* defer = null)
+    /// found. `stack` holds the goals this search is already inside.
+    private Conformance conformanceOf(Id!FunctionDecl func, ref Substitution bound, Site site, const(Goal)[] stack = null)
     {
         auto params = _resolutions.typeParamsOf(func);
-        if (!bound.byValue.any!(v => mentionsAny(v, params))) return conformanceOf(func, params, null, null, bound, site, stack, defer);
+        if (!bound.byValue.any!(v => mentionsAny(v, params))) return conformanceOf(func, params, null, null, bound, site, stack);
 
         // In a call from `func`'s own body, what `bound` says is in terms of the same type
         // parameters it binds, and the search substitutes again for the ones it finds. So the
@@ -4375,7 +4084,7 @@ private final class TypeChecker
             renaming[param.id] = _types.parameter(standIns[i].id, param.name);
             if (auto known = param.id in bound) renamed[standIns[i].id] = *known;
         }
-        auto result = conformanceOf(func, params, standIns, renaming, renamed, site, stack, defer);
+        auto result = conformanceOf(func, params, standIns, renaming, renamed, site, stack);
         foreach (i, param; params)
         {
             if (param.id !in bound && standIns[i].id in renamed) bound[param.id] = renamed[standIns[i].id];
@@ -4386,12 +4095,11 @@ private final class TypeChecker
     /// `conformanceOf`, with each of `func`'s type parameters `params` standing for the one
     /// `renaming` gives in `bound`, which are `open`; with no `renaming`, they stand for themselves.
     private Conformance conformanceOf(Id!FunctionDecl func, const(TypeParam)[] params, const(TypeParam)[] open,
-        Substitution renaming, ref Substitution bound, Site site, const(Goal)[] stack, Deferral* defer)
+        Substitution renaming, ref Substitution bound, Site site, const(Goal)[] stack)
     {
         Conformance result;
         auto supplied = _resolutions.boundFunctions.get(func, null);
-        auto asked = defer is null ? null : _typing.queries.get(func, null);
-        if (supplied.length == 0 && asked.length == 0) return result;
+        if (supplied.length == 0) return result;
         if (renaming.length == 0) open = params;
         Id!TypeParam key(Id!TypeParam param)
         {
@@ -4423,7 +4131,7 @@ private final class TypeChecker
                     decided[start .. end] = true;
                     continue;
                 }
-                auto found = satisfy(goal, open, bound, site, stack, defer);
+                auto found = satisfy(goal, open, bound, site, stack);
                 if (found.pending) continue;
                 if (found.tooDeep) return found;
                 if (found.failure !is null)
@@ -4443,29 +4151,17 @@ private final class TypeChecker
             }
         }
         result.pending = decided.canFind(false);
-        if (asked.length > 0 && !result.pending && open.all!(p => (p.id in bound) !is null))
-        {
-            Substitution whole;
-            foreach (param; params) whole[param.id] = bound[key(param.id)];
-            result.witnesses ~= answersTo(asked, whole, site, stack, defer);
-        }
         return result;
     }
 
     /// Looks for the function behind each function of `goal`'s interface, which is what it is for
     /// `goal.self` to satisfy it. `open` are the type parameters `goal.args` may still mention
-    /// unbound, which the functions found bind in `bound`. `given`, when there's no interface, are
-    /// the functions to look for instead.
-    ///
-    /// With `defer`, a goal on a type parameter of the function the search is in that its bounds
-    /// don't meet is asked of that function's caller: the witnesses found are its query's slots.
+    /// unbound, which the functions found bind in `bound`.
     private Conformance satisfy(const Goal goal, const(TypeParam)[] open, ref Substitution bound, Site site,
-        const(Goal)[] stack, Deferral* defer = null, const(Request)[] given = null)
+        const(Goal)[] stack)
     {
         Conformance result;
-        string described(const Goal g) => g.decl.isValid
-            ? "`%s: %s`".format(_types.describe(g.self), _declarer.describe(Bound(g.decl, g.args.dup)))
-            : "`%s` looped over by index".format(_types.describe(g.self));
+        string described(const Goal g) => "`%s: %s`".format(_types.describe(g.self), _declarer.describe(Bound(g.decl, g.args.dup)));
         if (stack.canFind(goal))
         {
             result.failure = "that would need %s to hold already".format(described(goal));
@@ -4479,37 +4175,11 @@ private final class TypeChecker
             return result;
         }
 
-        auto askable = defer !is null && isOwnParameter(goal.self, defer.owner);
-        Conformance asking()
+        foreach (function_; _resolutions.declarations.interfaces[goal.decl].functions)
         {
-            Conformance asked;
-            auto requests = given !is null ? given.dup : requestsOf(goal, bound);
-            auto slot = ask(defer, Query(goal.decl, goal.self, goal.args.dup, requests, defer.asker));
-            if (slot == size_t.max)
-            {
-                asked.failure = "asks too many questions of its callers";
-                return asked;
-            }
-            foreach (i; 0 .. requests.length) asked.witnesses ~= Witness(Id!FunctionDecl.init, null, null, slot + i);
-            return asked;
-        }
-
-        auto functions = given !is null ? null : _resolutions.declarations.interfaces[goal.decl].functions;
-        foreach (i; 0 .. given !is null ? given.length : functions.length)
-        {
-            Request request;
-            if (given !is null) request = cast() given[i];
-            else
-            {
-                auto asked = Bound(goal.decl, goal.args.map!(a => _types.substitute(a, bound)).array);
-                request = Request(functions[i].name,
-                    _types.substitute(symbolType(SymbolId(functions[i].id)), _declarer.substitutionOf(asked, goal.self)));
-            }
-            auto found = witnessFor(request.name, signatureOf(request.wanted), open, bound, site, stack ~ goal, defer);
-            if (askable && !found.pending && !found.ambiguous && !found.tooDeep && (!found.holds || !settled(found.witnesses[0])))
-            {
-                return asking();
-            }
+            auto asked = Bound(goal.decl, goal.args.map!(a => _types.substitute(a, bound)).array);
+            auto wanted = _types.substitute(symbolType(SymbolId(function_.id)), _declarer.substitutionOf(asked, goal.self));
+            auto found = witnessFor(function_.name, signatureOf(wanted), open, bound, site, stack ~ goal);
             if (!found.holds)
             {
                 found.witnesses = null;
@@ -4519,102 +4189,6 @@ private final class TypeChecker
         }
         return result;
     }
-
-    /// What each function of `goal`'s interface has to be, with what `bound` says.
-    private Request[] requestsOf(const Goal goal, ref Substitution bound)
-    {
-        auto asked = Bound(goal.decl, goal.args.map!(a => _types.substitute(a, bound)).array);
-        return _resolutions.declarations.interfaces[goal.decl].functions
-            .map!(f => Request(f.name, _types.substitute(symbolType(SymbolId(f.id)), _declarer.substitutionOf(asked, goal.self))))
-            .array;
-    }
-
-    /// How many queries a function can ask, which only one whose questions keep growing reaches.
-    private enum queryLimit = 64;
-
-    /// Whether `type` is one of `owner`'s own type parameters.
-    private bool isOwnParameter(Type type, Id!FunctionDecl owner)
-    {
-        if (!owner.isValid) return false;
-        return _types[type].match!(
-            (const TypeParamData p) => _resolutions.typeParamsOf(owner).canFind!(q => q.id == p.param),
-            _ => false,
-        );
-    }
-
-    /// The first of the slots `query` has among the witnesses of each use of `defer.owner`,
-    /// adding it to the owner's queries if it's new; `size_t.max` when it has too many already.
-    private size_t ask(Deferral* defer, Query query)
-    {
-        bool same(const Query a, const Query b) => a.decl == b.decl && a.self == b.self && a.args == b.args
-            && a.requests.length == b.requests.length
-            && a.requests.length.iota.all!(i => a.requests[i].name == b.requests[i].name && a.requests[i].wanted == b.requests[i].wanted);
-        auto slot = _resolutions.boundFunctions.get(defer.owner, null).length;
-        auto asked = _typing.queries.get(defer.owner, null);
-        foreach (existing; asked)
-        {
-            if (same(existing, query)) return slot;
-            slot += existing.requests.length;
-        }
-        if (asked.length >= queryLimit) return size_t.max;
-        _typing.queries[defer.owner] ~= query;
-        defer.changed = true;
-        return slot;
-    }
-
-    /// Whether `witness` holds whatever answers the instance it's in was given.
-    private bool settled(const Witness witness)
-    {
-        if (witness.isSlot || !witness.func.isValid) return false;
-        auto required = min(_resolutions.boundFunctions.get(witness.func, null).length, witness.witnesses.length);
-        return witness.witnesses[0 .. required].all!(w => settled(w));
-    }
-
-    private bool settledAttempt(const Attempt attempt)
-    {
-        auto required = min(_resolutions.boundFunctions.get(attempt.trial.func, null).length, attempt.witnesses.length);
-        return attempt.witnesses[0 .. required].all!(w => settled(w));
-    }
-
-    /// The answers to `asked`, the queries of a function whose type parameters stand for what
-    /// `bound` says, from `site`: each query's witnesses, or as many that never hold.
-    private Witness[] answersTo(const(Query)[] asked, ref Substitution bound, Site site, const(Goal)[] stack, Deferral* defer)
-    {
-        Witness[] found;
-        foreach (query; asked)
-        {
-            auto goal = Goal(query.decl, _types.substitute(query.self, bound), query.args.map!(a => _types.substitute(a, bound)).array);
-            auto requests = query.requests.map!(r => Request(r.name, _types.substitute(r.wanted, bound))).array;
-            auto asker = defer.asker;
-            defer.asker = query.asker;
-            scope (exit) defer.asker = asker;
-            Substitution none;
-            auto answer = satisfy(goal, null, none, site, stack, defer, requests);
-            if (answer.holds)
-            {
-                found ~= answer.witnesses;
-                continue;
-            }
-            if (answer.ambiguous || answer.tooDeep) reportAnswer(query.asker, goal, answer, defer);
-            found ~= new Witness[query.requests.length];
-        }
-        return found;
-    }
-
-    /// Reports an answer to a query that's neither yes nor no, at the use the search is for.
-    private void reportAnswer(Id!FunctionDecl asker, const Goal goal, const Conformance answer, const Deferral* defer)
-    {
-        if (!defer.reporting) return;
-        auto what = goal.decl.isValid
-            ? "whether `%s` is %s".format(_types.describe(goal.self), withArticle(_declarer.describe(Bound(goal.decl, goal.args.dup))))
-            : "whether `for` can loop over `%s` by index".format(_types.describe(goal.self));
-        auto message = "`%s` asks %s, and %s".format(_resolutions.declarations.functions[asker].name, what, answer.failure);
-        auto key = "%s:%s:%s".format(defer.span.start, defer.span.end, message);
-        if (key in _reportedAnswers) return;
-        _reportedAnswers[key] = true;
-        _collector.reportError(answer.tooDeep ? DiagnosticCode.BoundSearchTooDeep : DiagnosticCode.AmbiguousQuery, defer.span, message);
-    }
-
 
     /// One function a search for a witness tried.
     private struct Attempt
@@ -4632,11 +4206,8 @@ private final class TypeChecker
     /// chooses, which has to return exactly what `wanted` does. A parameter type that mentions one
     /// of `open` that isn't in `bound` yet isn't known: it takes no part in the choice, and the
     /// function chosen says what it is, as its result says what the result is.
-    ///
-    /// With `defer`, a function that fits only where a query's answer is there doesn't fit, and
-    /// is one of the witness's alternatives when it would be chosen over the one that does.
     private Conformance witnessFor(string name, const FunctionData wanted, const(TypeParam)[] open, ref Substitution bound,
-        Site site, const(Goal)[] stack, Deferral* defer = null)
+        Site site, const(Goal)[] stack)
     {
         Conformance result;
         auto unbound = open.filter!(p => p.id !in bound).array;
@@ -4682,7 +4253,7 @@ private final class TypeChecker
                     return tried;
                 }
             }
-            auto needs = conformanceOf(f, tried.binding, site, stack, defer);
+            auto needs = conformanceOf(f, tried.binding, site, stack);
             tried.witnesses = needs.witnesses;
             tried.tooDeep = needs.tooDeep;
             if (needs.failure !is null) tried.trial.problem = needs.tooDeep ? needs.failure : needs.failure.replace("\n", "\n    ");
@@ -4698,19 +4269,6 @@ private final class TypeChecker
             result.tooDeep = true;
             result.failure = tried.trial.problem;
             return result;
-        }
-        Attempt[] conditional;
-        if (defer !is null)
-        {
-            foreach (ref group; groups)
-            {
-                foreach (ref tried; group)
-                {
-                    if (!tried.trial.fitsAll || settledAttempt(tried)) continue;
-                    conditional ~= tried;
-                    tried.trial.problem = "fits only where what it asks of its caller holds";
-                }
-            }
         }
 
         // What's left to say once a function is chosen: what the arguments that weren't known
@@ -4763,31 +4321,6 @@ private final class TypeChecker
             return finished;
         }
 
-        // The functions that fit only where answers are there, best first, that would be chosen
-        // over `best`, or over nothing when it's null.
-        Witness[] alternativesTo(const(Attempt)* best)
-        {
-            auto better = conditional.filter!(c => best is null || c.group == 0 && best.group > 0
-                || c.group == best.group && beats(c.trial, best.trial)).array;
-            better.sort!((a, b) => a.group < b.group || a.group == b.group && beats(a.trial, b.trial));
-            Witness[] found;
-            foreach (c; better)
-            {
-                auto into = bound.dup;
-                auto finished = finish(c, into);
-                if (finished.holds) found ~= finished.witnesses[0];
-            }
-            return found;
-        }
-        Conformance onlyAlternatives(Conformance failed)
-        {
-            auto alternatives = alternativesTo(null);
-            if (alternatives.length == 0) return failed;
-            Conformance some;
-            some.witnesses = [Witness(Id!FunctionDecl.init, null, null, size_t.max, alternatives)];
-            return some;
-        }
-
         Attempt[] fitting(Attempt[] group) => group.filter!(t => t.trial.fitsAll).array;
         auto pool = groups.length > 0 ? fitting(groups[0]) : null;
         if (pool.length == 0 && groups.length > 1)
@@ -4814,7 +4347,7 @@ private final class TypeChecker
                 foreach (tried; group) lines ~= "\n    %s %s".format(overloadLabel(tried.trial.func, g > 0), tried.trial.problem);
             }
             result.failure = "no `%s` in scope takes %s%s%s".format(name, arguments(), lines.join, importHint(name, wanted, known, candidates, site.module_));
-            return onlyAlternatives(result);
+            return result;
         }
         // With an argument unknown, ranking the ones that are known could choose by half a call.
         if (pool.length > 1 && known.canFind(false))
@@ -4833,11 +4366,7 @@ private final class TypeChecker
             return result;
         }
 
-        auto best = winners[0];
-        auto finished = finish(best, bound);
-        if (!finished.holds) return onlyAlternatives(finished);
-        if (conditional.length > 0) finished.witnesses[0].alternatives = alternativesTo(&best);
-        return finished;
+        return finish(winners[0], bound);
     }
 
     /// The functions a call of `name` from `site` chooses from: the current module's, with those
@@ -5241,22 +4770,10 @@ private final class TypeChecker
         /// parameter that was known by then, or, in a trial, compared by their shape.
         bool[] checked;
         Conformance conformance;
-        /// Whether the bounds failed before the expected type was looked at.
-        bool failedEarly;
         /// The type parameters the expected type bound.
         Id!TypeParam[] fromExpected;
         /// In a trial, the type parameters only a lambda's result would decide, which stay unbound.
         Id!TypeParam[] undecided;
-        /// In a trial, each lambda whose result was left undecided, with what it would be typed against.
-        LambdaTurn[] turns;
-    }
-
-    /// A lambda argument a trial would have typed: its place, and what it's typed against.
-    private struct LambdaTurn
-    {
-        size_t arg;
-        FunctionData expectation;
-        bool optional;
     }
 
     /// Binds `params`, the type parameters of a call of a function with `signature` and `result`,
@@ -5320,11 +4837,6 @@ private final class TypeChecker
                 },
                 (_) {},
             );
-            if (expectation !is null)
-            {
-                auto optional = expectation.ret == Type.init && _types.isOption(signatureOf(signature.params[i]).ret);
-                b.turns ~= LambdaTurn(i, *expectation, optional);
-            }
             undecide(signature.params[i]);
         }
 
@@ -5353,7 +4865,6 @@ private final class TypeChecker
             bind(i, b.typed[i]);
         }
         solveBounds();
-        b.failedEarly = b.conformance.failure !is null;
         if (open())
         {
             auto before = params.filter!(p => p.id !in b.bound).array;
@@ -5763,7 +5274,6 @@ private final class TypeChecker
         else if (receiver != _types.error)
         {
             function_ = chooseFunction(*call.callee, access.member, access.typeArgs, lookup, *rewritten, typed, true, ctx, expected);
-            if (function_.isValid) _siblings[call.callee.id] = siblingsOf(lookup, function_);
         }
         if (!function_.isValid)
         {
@@ -6070,8 +5580,6 @@ private final class TypeChecker
         FunctionUse use;
         /// With the type arguments filled in.
         FunctionData signature;
-        /// The functions it was chosen from that may ask more than it.
-        const(Id!FunctionDecl)[] siblings;
         /// Whether finding it was reported as an error.
         bool failed;
 
@@ -6085,8 +5593,8 @@ private final class TypeChecker
     private Type loopElement(const Expr for_, const Expr iterable, Type type, BodyContext ctx)
     {
         auto index = placeholder(iterable.span);
-        auto length = syntaxFunction(for_, iterable.span, "length", "`for`", [iterable], [type], ctx, false);
-        auto at = syntaxFunction(for_, iterable.span, "opIndex", "`for`", [iterable, index], [type, _types.int_], ctx, false);
+        auto length = syntaxFunction(for_, iterable.span, "length", "`for`", [iterable], [type], ctx, false, true);
+        auto at = syntaxFunction(for_, iterable.span, "opIndex", "`for`", [iterable, index], [type, _types.int_], ctx, false, true);
         auto next = syntaxFunction(for_, iterable.span, "next", "`for`", [iterable], [type], ctx, false);
         if (length.failed || at.failed || next.failed) return _types.error;
         if (length.found && at.found)
@@ -6114,8 +5622,8 @@ private final class TypeChecker
             if (stepParts(next, type, at.signature.ret, iterable.span).length != 2) return _types.error;
             _typing.loops[for_.id] = LoopFunctions(length.use, at.use);
             auto loopId = for_.id;
-            noteSyntaxUse(ctx.site, iterable.span, length, () => &_typing.loops[loopId].length);
-            noteSyntaxUse(ctx.site, iterable.span, at, () => &_typing.loops[loopId].index);
+            noteSyntaxUse(ctx.site, iterable.span, length);
+            noteSyntaxUse(ctx.site, iterable.span, at);
             return at.signature.ret;
         }
 
@@ -6124,13 +5632,7 @@ private final class TypeChecker
         auto parts = stepParts(next, type, Type.init, iterable.span);
         if (parts.length != 2) return _types.error;
         _typing.loops[for_.id] = LoopFunctions(FunctionUse.init, FunctionUse.init, next.use);
-        auto loopId = for_.id;
-        noteSyntaxUse(ctx.site, iterable.span, next, () => &_typing.loops[loopId].next);
-        if (ctx.site.function_.isValid && isGenericFunction(ctx.site.function_))
-        {
-            _steppedLoops ~= SteppedLoop(ctx.site, iterable.span, for_.id, type, parts[0]);
-            _steppedLoops[$ - 1].site.unsettled = null;
-        }
+        noteSyntaxUse(ctx.site, iterable.span, next);
         return parts[0];
     }
 
@@ -6155,8 +5657,10 @@ private final class TypeChecker
     /// for a value with no expression, which the caller checks. The rest are checked against their
     /// parameters. Not found when no function takes them, which is reported when `required`;
     /// failed when finding one reported an error.
+    /// With `indexing`, for the functions a `for` would loop by index with, one whose bounds fail
+    /// isn't found either, so the loop steps instead.
     private SyntaxUse syntaxFunction(const Expr at, Span span, string name, string syntax, const(Expr)[] args,
-        Type[] typed, BodyContext ctx, bool required = true)
+        Type[] typed, BodyContext ctx, bool required = true, bool indexing = false)
     {
         SyntaxUse failed;
         failed.failed = true;
@@ -6265,6 +5769,7 @@ private final class TypeChecker
         auto conformance = conformanceOf(function_, bound, ctx.site);
         if (conformance.failure !is null)
         {
+            if (indexing) return SyntaxUse.init;
             typeUnchecked();
             _collector.reportError(conformance.tooDeep ? DiagnosticCode.BoundSearchTooDeep : DiagnosticCode.UnsatisfiedBound, span,
                 "%s calls `%s`, and `%s` %s".format(syntax, name, overloadLabel(function_), conformance.failure));
@@ -6272,7 +5777,6 @@ private final class TypeChecker
         }
         SyntaxUse found;
         found.use = FunctionUse(function_, params.map!(p => bound[p.id]).array, conformance.witnesses);
-        found.siblings = siblingsOf(*lookup, function_);
         found.signature = signatureOf(_types.substitute(symbolType(SymbolId(function_)), bound));
         foreach (i, arg; args)
         {

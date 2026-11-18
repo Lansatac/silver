@@ -1,1 +1,0 @@
-T0035: `forward_support.two.measure<T: Named>(T)` can't be forwarded: `forward_support.one.measure<T: Sized>(T)`, forwarded too, takes the same parameter types, so a module importing this one couldn't choose between them; bounds only tell two functions apart when one asks for everything the other does, and more

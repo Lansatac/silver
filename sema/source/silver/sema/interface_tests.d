@@ -10,8 +10,6 @@ import silver.ast : DiagnosticCode;
 import silver.sema.check_tests : shouldDeclareType, shouldHaveType;
 import silver.sema.resolution_tests;
 import silver.sema.target : Target;
-import silver.sema.typing : Query;
-import silver.ast : FunctionDecl, Id;
 
 private enum declarations = `
 interface Json { def toJson(value: Self): String }
@@ -139,259 +137,28 @@ unittest
         .shouldHaveNoDiagnostics();
 }
 
-@("two functions differing in bounds are overloads when one's ask for every function the other's do and more")
+@("two functions with the same parameter types are duplicates, whatever their bounds")
 unittest
 {
     enum interfaces = `
 interface A { def a(x: Self): Int }
 interface B { def b(x: Self): Int }
-interface C { def c(x: Self): Int }
-interface AB { def a(x: Self): Int
-    def b(x: Self): Int }
-interface Other { def a(x: Self): String }
 interface Range<T> { def next(range: Self): (T, Self)? }
 `;
-    analyzedModule(interfaces ~ "def f<T: A>(x: T): Int => 1\ndef f<U: A & B>(x: U): Int => 2\ndef f<T: C & B & A>(x: T): Int => 3\ndef f<T>(x: T): Int => 0")
-        .shouldHaveNoDiagnostics();
-    // By the functions asked for, whatever the interfaces are named.
-    analyzedModule(interfaces ~ "def f<T: A>(x: T): Int => 1\ndef f<T: AB>(x: T): Int => 2").shouldHaveNoDiagnostics();
-    analyzedModule(interfaces ~ "def f(x: A): Int => 1\ndef f<T: A & B>(x: T): Int => 2").shouldHaveNoDiagnostics();
-    analyzedModule(interfaces ~ "def f<R: Range<T>, T>(x: R): Int => 1\ndef f<S: Range<E> & A, E>(x: S): Int => 2").shouldHaveNoDiagnostics();
-
-    analyzedModule(interfaces ~ "def f<T: A & B>(x: T): Int => 1\ndef f<T: AB>(x: T): Int => 2").shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
-    analyzedModule(interfaces ~ "def f<T: A & B>(x: T): Int => 1\ndef f<T: B & A>(x: T): Int => 2").shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
-    analyzedModule(interfaces ~ "def f<T: A & B>(x: T): Int => 1\ndef f<T: A & C>(x: T): Int => 2").shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
-    // A function of the same name with another result isn't the same function.
-    analyzedModule(interfaces ~ "def f<T: A>(x: T): Int => 1\ndef f<T: Other & B>(x: T): Int => 2").shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
-    analyzedModule(interfaces ~ "def f<R: Range<Int>>(x: R): Int => 1\ndef f<R: Range<String> & A>(x: R): Int => 2")
+    analyzedModule(interfaces ~ "def f<T: A>(x: T): Int => 1\ndef f<T: A & B>(x: T): Int => 2")
         .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
-    // The bounds have to be on the same parameters.
-    analyzedModule(interfaces ~ "def f<T: A, U>(x: T, y: U): Int => 1\ndef f<T: B, U: A>(x: T, y: U): Int => 2")
+    analyzedModule(interfaces ~ "def f<T>(x: T): Int => 0\ndef f<T: A>(x: T): Int => 1")
+        .onlyMessage(DiagnosticCode.DuplicateOverload).should.contain("whatever their bounds");
+    analyzedModule(interfaces ~ "def f<T: A>(x: T): Int => 1\ndef f<T: B>(x: T): Int => 2")
         .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
-    analyzedModule(interfaces ~ "def f<T: A>(x: T): Int => 1\ndef f<T: A & B>(x: T): Int => 2\ndef f<T: A & C>(x: T): Int => 3")
-        .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 3));
-    analyzedModule(interfaces ~ "def f<T: A>(mutable x: T): Int => 1\ndef f<T: A & B>(x: T): Int => 2")
+    analyzedModule(interfaces ~ "def f(x: A): Int => 1\ndef f<T: A & B>(x: T): Int => 2")
         .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
-    // A concrete interface argument isn't counted as the generic one.
-    analyzedModule(interfaces ~ "def f<R: Range<T>, T>(x: R): Int => 1\ndef f<R: Range<Int> & A>(x: R): Int => 2")
+    analyzedModule(interfaces ~ "def f(x: A): Int => 1\ndef f(x: B): Int => 2")
         .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
-}
-
-@("where both fit, the function whose bounds ask for more is chosen")
-unittest
-{
-    enum declared = `
-interface A { def a(x: Self): Int }
-interface B { def b(x: Self): Int }
-type Both(n: Int)
-type OnlyA(n: Int)
-def a(x: Both): Int => 1
-def b(x: Both): Int => 1
-def a(x: OnlyA): Int => 1
-def f<T: A>(x: T): Int => 1
-def f<T: A & B>(x: T): String => "more"
-def weak<T: A>(x: T): Int => f(x)
-def strong<T: B & A>(x: T): String => f(x)
-`;
-    auto a = analyzed(declared ~ "def main(): Unit {\n val p = f(Both(1))\n val q = f(OnlyA(1))\n val g: (Both) -> String = f\n}");
-    a.shouldHaveNoDiagnostics();
-    a.shouldHaveType("f(Both(1))", "String");
-    a.shouldHaveType("f(OnlyA(1))", "Int");
-}
-
-@("what the expected type binds has to suit a literal argument for a function to fit")
-unittest
-{
-    enum declared = `
-interface A { def a(x: Self): Int }
-interface B { def b(x: Self): Int }
-def a(x: Int): Int => 1
-def a(x: [Int]): Int => 1
-def b(x: [Int]): Int => 1
-def a(x: String): Int => 1
-def b(x: String): Int => 1
-def conv<T: A>(x: T): [T] => [x]
-def conv<T: A & B>(x: T): T => x
-def sel<T: A>(x: T): T? => x
-def sel<T: A & B>(x: T): T? => x
-`;
-    auto a = analyzed(declared ~ "def main(): Unit {\n val xs: [Int] = conv(1)\n}");
-    a.shouldHaveNoDiagnostics();
-    a.shouldHaveType("conv(1)", "[Int]");
-    // When it leaves nothing that fits, the choice is made without it, and the literal is the error.
-    analyzed(declared ~ "def main(): Unit {\n val s: String? = sel(1)\n}")
-        .onlyMessage(DiagnosticCode.TypeMismatch).should.equal("Type `Int` is not assignable to type `String`");
-}
-
-@("a bound only the expected type decides is checked while an overload is chosen")
-unittest
-{
-    enum declared = `
-interface A { def a(x: Self): Int }
-interface B { def b(x: Self): Int }
-type Box(n: Int)
-def a(x: Int): Int => 1
-def a(x: Float): Int => 1
-def b(x: Float): Int => 1
-def pick<T: A>(): T? => None
-def pick<T: A & B>(): T? => None
-`;
-    analyzed(declared ~ "def main(): Unit {\n val i: Int? = pick()\n val f: Float? = pick()\n}").shouldHaveNoDiagnostics();
-    // A failure is a reason to choose another, so none holding is the call that fits nothing.
-    analyzed(declared ~ "def main(): Unit {\n val x: Box? = pick()\n}")
-        .onlyMessage(DiagnosticCode.NoMatchingOverload).should.contain("`Box` isn't one");
-}
-
-@("a function the expected type rules out by its bounds isn't chosen again when nothing fits")
-unittest
-{
-    enum declared = `
-interface A { def a(x: Self): Int }
-interface B { def b(x: Self): Int }
-type Box(n: Int)
-def a(x: Int): Int => 1
-def b(x: Int): Int => 1
-def a(x: Box): Int => 1
-def mk<T: B>(n: Int): T? => None
-def mk<T: A & B>(x: T): T? => Some(x)
-def conv<T: A>(x: T): [T] => [x]
-def conv<T: A & B>(x: T): T => x
-`;
-    auto message = analyzed(declared ~ "def main(): Unit {\n val v: Box? = mk(1)\n}")
-        .onlyMessage(DiagnosticCode.NoMatchingOverload);
-    message.should.contain("`Box` isn't one");
-    message.should.contain("argument 1 can't be `Box`, which the expected type gives `T`");
-    // Each fails on the literal, and a `[Box]` isn't an `A`, so the first isn't chosen without the expected type.
-    message = analyzed(declared ~ "def main(): Unit {\n val q: [Box] = conv(1)\n}")
-        .onlyMessage(DiagnosticCode.NoMatchingOverload);
-    message.should.contain("argument 1 can't be `Box`");
-    message.should.contain("argument 1 can't be `[Box]`");
-}
-
-@("a function that fails on an argument whatever the expected type is doesn't keep the others from being chosen without it")
-unittest
-{
-    enum declared = `
-interface A { def a(x: Self): Int }
-interface B { def b(x: Self): Int }
-type Box(n: Int)
-def a(x: Int): Int => 1
-def b(x: Int): Int => 1
-def a(x: Box): Int => 1
-def a(x: [Box]): Int => 1
-def b(x: [Box]): Int => 1
-def conv<T: A>(x: T): [T] => [x]
-def conv<T: A & B>(x: T): T => x
-`;
-    // Each fails only on the literal, so the choice is made without the expected type, and the
-    // literal is the error against the one chosen, with or without a function that takes a `Bool`.
-    enum call = "def main(): Unit {\n val q: [Box] = conv(1)\n}";
-    analyzed(declared ~ call).onlyMessage(DiagnosticCode.TypeMismatch);
-    analyzed(declared ~ "def conv(x: Bool): Int => 0\n" ~ call).onlyMessage(DiagnosticCode.TypeMismatch);
-}
-
-@("a lambda whose result decides the bounds of tied functions is typed once, unless they would type it differently")
-unittest
-{
-    enum declared = `
-interface A { def a(x: Self): Int }
-interface B { def b(x: Self): Int }
-def a(x: Int): Int => 1
-def a(x: Float): Int => 1
-def name(n: Int): String => "n"
-def ap<T>(x: Int, g: (Int) -> T): Int => 1
-def ap<T: A>(x: Int, g: (Int) -> T): String => "a"
-def bq<T: A>(x: Int, g: (Int) -> T): Int => 1
-def bq<T: A & B>(x: Int, g: (Int) -> T): String => "b"
-`;
-    // The tied functions give the lambda the same parameter types, so it's typed once and its result decides.
-    auto once = analyzed(declared ~ "def main(): Unit {\n val p = ap(1, n => \"s\")\n val q = ap(2, n => n + 1)\n"
-        ~ " val r = bq(3, n => n)\n}");
-    once.shouldHaveNoDiagnostics();
-    once.shouldHaveType(`ap(1, n => "s")`, "Int");
-    once.shouldHaveType("ap(2, n => n + 1)", "String");
-    once.shouldHaveType("bq(3, n => n)", "Int");
-    // A lambda that's wrong is reported once, and not as the call.
-    analyzed(declared ~ "def main(): Unit {\n val p = ap(1, n => n ~ \"x\")\n}").onlyMessage(DiagnosticCode.InvalidOperand);
-    // Functions that would give the lambda different parameter types can't type it once.
-    analyzed(declared ~ "def cq<T: A>(g: (Int) -> T): Int => 1\ndef cq<T: A>(g: (String) -> T): Int => 1\n"
-        ~ "def main(): Unit {\n val p = cq(n => 1)\n}")
-        .onlyMessage(DiagnosticCode.AmbiguousOverload).should.contain("annotate it");
-    // An annotated lambda, or a named function, has a type of its own, so its result decides.
-    auto a = analyzed(declared ~ "def main(): Unit {\n val p = ap(1, (n): String => \"s\")\n val q = ap(2, (n: Int): Int => n)\n"
-        ~ " val r = ap(3, name)\n val s = 3.ap((n): Int => n)\n}");
-    a.shouldHaveNoDiagnostics();
-    a.shouldHaveType(`ap(1, (n): String => "s")`, "Int");
-    a.shouldHaveType("ap(2, (n: Int): Int => n)", "String");
-    a.shouldHaveType("ap(3, name)", "Int");
-    a.shouldHaveType("3.ap((n): Int => n)", "String");
-    // With `bq`, only the second's bounds would fail for an `Int`, and only the first's hold for a `String`.
-    analyzed(declared ~ "def main(): Unit {\n val p = bq(1, (n): String => \"s\")\n}")
-        .onlyMessage(DiagnosticCode.NoMatchingOverload).should.contain("`String` isn't one");
-}
-
-@("a lambda typed once gets the parameter types the chosen function gives it")
-unittest
-{
-    enum declared = `
-interface A { def a(x: Self): Int }
-def a(x: Float): Int => 1
-def a(x: Int?): Int => 1
-def f<T, U>(g: (Int) -> T, h: (T) -> U, x: T): Int => 1
-def f<T, U: A>(g: (Int) -> T, h: (T) -> U, x: T): String => "a"
-def k<T, U>(xs: [T], y: T, g: (T) -> U): Int => 1
-def k<T, U: A>(xs: [T], y: T, g: (T) -> U): String => "a"
-def ap<T, U>(x: T, g: (T) -> U): Int => 1
-def ap<T, U: A>(x: T, g: (T) -> U): String => "a"
-`;
-    // An earlier lambda's result binds `T` before the literal does, as it would for a lone function,
-    // and each lambda typed once gives the next its parameter.
-    auto once = analyzed(declared ~ "def main(): Unit {\n val p = f(n => 1.5, t => t, 1)\n val q = k([Some(1), None], 2, t => t)\n"
-        ~ " val r = ap(3, t => \"s\")\n val s = 3.ap(t => \"s\")\n}");
-    once.shouldHaveNoDiagnostics();
-    once.shouldHaveType("f(n => 1.5, t => t, 1)", "String");
-    once.shouldHaveType("k([Some(1), None], 2, t => t)", "String");
-    once.shouldHaveType(`ap(3, t => "s")`, "Int");
-    once.shouldHaveType(`3.ap(t => "s")`, "Int");
-    // Written out, the results decide.
-    auto a = analyzed(declared ~ "def main(): Unit {\n val p = f((n): Float => 1.5, (t): Float => t, 1)\n"
-        ~ " val q = k([Some(1), None], 2, (t): Int? => t)\n val r = ap(3, (t): String => \"s\")\n}");
-    a.shouldHaveNoDiagnostics();
-    a.shouldHaveType("f((n): Float => 1.5, (t): Float => t, 1)", "String");
-    a.shouldHaveType("k([Some(1), None], 2, (t): Int? => t)", "String");
-    a.shouldHaveType(`ap(3, (t): String => "s")`, "Int");
-}
-
-@("a lambda isn't typed for the current module's functions when an imported one would give it other parameters")
-unittest
-{
-    enum lib = "module lib\ndef ap<T>(x: Int, g: (String) -> T): Int => 1\n";
-    enum declared = `import lib
-interface A { def a(x: Self): Int }
-interface B { def b(x: Self): Int }
-def a(x: Int): Int => 1
-def ap<T: A>(x: Int, g: (Int) -> T): Int => 1
-def ap<T: A & B>(x: Int, g: (Int) -> T): Int => 1
-`;
-    // Nothing says the lambda's parameter is an `Int`, so no message should say it is one.
-    auto a = analyzed(declared ~ "def main(): Unit {\n val p = ap(1, s => \"x\")\n}", ["lib.ag": lib]);
-    a.collector.diagnostics.length.should.equal(1);
-    a.collector.diagnostics[0].message.should.not.contain("(Int) -> String");
-}
-
-@("two functions whose bounds ask for different things are duplicates")
-unittest
-{
-    analyzedModule(`
-interface A { def a(x: Self): Int }
-interface B { def b(x: Self): Int }
-def f<T: A>(x: T): Int => 1
-def f<T: B>(x: T): Int => 2`).shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
-    analyzedModule(`
-interface A { def a(x: Self): Int }
-interface B { def b(x: Self): Int }
-def f(x: A): Int => 1
-def f(x: B): Int => 2`).shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    analyzedModule(interfaces ~ "def f<R: Range<Int>>(x: R): Int => 1\ndef f<R: Range<String>>(x: R): Int => 2")
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    // Parameter types still tell them apart.
+    analyzedModule(interfaces ~ "def f<T: A>(x: T): Int => 1\ndef f<T: A>(x: [T]): Int => 2").shouldHaveNoDiagnostics();
 }
 
 // Inside a generic function
@@ -540,7 +307,7 @@ def measure<T: HasArea>(shape: T): Int => area(shape)
 `).shouldHaveNoDiagnostics();
 }
 
-@("a function whose bound fails doesn't fit, so another overload is chosen")
+@("a function is chosen by its arguments, whatever its bounds")
 unittest
 {
     auto a = analyzedWith(`
@@ -557,15 +324,20 @@ def show<T>(item: [T]): Float => 1.0
     a.shouldDeclareType(At("other", 1), "Float");
 }
 
-@("when no overload fits, the error says which bound failed")
+@("a chosen function whose bound fails is an error at the call, and no other is chosen instead")
 unittest
 {
-    auto message = analyzedWith("val a = show(Plain(1))", `
-def show<T: Json>(item: T): Int => 1
-def show(item: String): Int => 2
-`).onlyMessage(DiagnosticCode.NoMatchingOverload);
-    message.should.contain("show<T: Json>(T) needs `T` to be a `Json`, and `Plain` isn't one");
-    message.should.contain("show(String) argument 1 is `Plain`, not `String`");
+    enum put = `
+def put<T: Json>(x: T): String => "json"
+def put<T>(x: T?): String => "option"
+`;
+    auto a = analyzedWith("val p = put(Point(1, 2))\n    val s = put(Some(\"text\"))", put);
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("put(Point(1, 2))", "String");
+    analyzedWith("val t = put(\"text\")", put).onlyMessage(DiagnosticCode.UnsatisfiedBound)
+        .should.contain("needs `T` to be a `Json`, and `String` isn't one");
+    analyzedWith("val a = show(Plain(1))", "def show<T: Json>(item: T): Int => 1\ndef show(item: String): Int => 2\n")
+        .onlyMessage(DiagnosticCode.UnsatisfiedBound).should.contain("`Plain` isn't one");
 }
 
 @("a literal doesn't adapt through a bound")
@@ -1056,50 +828,6 @@ unittest
         .shouldReport(DiagnosticCode.UnsatisfiedBound, At("Range", 2));
 }
 
-// Capability queries
-
-/// What the function declared at `declaration` asks of its callers.
-private const(Query)[] queriesAt(const Analyzed a, At declaration)
-{
-    import std.sumtype : match;
-    auto symbol = declaration.offsetIn(a) in a.names[declaration.moduleName].declarations;
-    assert(symbol !is null, declaration.toString ~ " isn't a declaration");
-    return (*symbol).match!((const Id!FunctionDecl f) => a.analysis.queriesOf(f), _ => (const(Query)[]).init);
-}
-
-@("a generic function asks what a more demanding overload it calls needs, and its callers ask it in turn")
-unittest
-{
-    auto a = analyzed("interface Sized { def size(x: Self): Int }
-def count<T>(x: T): String => \"any\"
-def count<T: Sized>(x: T): String => \"sized\"
-def busy<T>(x: T): String => count(x)
-def outer<U>(x: U): String => busy(x)
-def known<V: Sized>(x: V): String => count(x)
-def boxed<W>(x: W): String => count([x])
-def main(): Unit => ()");
-    a.shouldHaveNoDiagnostics();
-    a.queriesAt(At("busy", 1)).length.should.equal(1);
-    a.queriesAt(At("outer", 1)).length.should.equal(1);
-    // Its bound answers the question where the call is written.
-    a.queriesAt(At("known", 1)).length.should.equal(0);
-    // Whether a `[W]` is `Sized` is settled where the call is written: nothing says it is.
-    a.queriesAt(At("boxed", 1)).length.should.equal(0);
-    a.queriesAt(At("count", 1)).length.should.equal(0);
-}
-
-@("a function asking more that returns another type isn't asked about inside a generic function")
-unittest
-{
-    auto a = analyzed("interface Sized { def size(x: Self): Int }
-def count<T>(x: T): String => \"any\"
-def count<T: Sized>(x: T): Int => 1
-def busy<T>(x: T): String => count(x)
-def main(): Unit => ()");
-    a.shouldHaveNoDiagnostics();
-    a.queriesAt(At("busy", 1)).length.should.equal(0);
-}
-
 @("review: choosing an overload doesn't work out the result of a candidate it doesn't choose")
 unittest
 {
@@ -1110,35 +838,6 @@ unittest
 }
 def h(x: Int): [Int] => [x]
 def h(x: Int?): Range<Int> => f(1)").shouldHaveNoDiagnostics();
-}
-
-@("review: a literal binds before a lambda during choice, whatever their order")
-unittest
-{
-    enum declared = `
-interface A { def a(x: Self): Int }
-def a(x: Int): Int => 1
-def ap<T>(x: Int, g: (Int) -> T, y: T): Int => 1
-def ap<T: A>(x: Int, g: (Int) -> T, y: T): String => "a"
-`;
-    // The literal `2` gives `T = Int` at step 4 before the lambda's turn, so the bound is decided.
-    auto a = analyzed(declared ~ "def main(): Unit {\n val p = ap(1, n => n, 2)\n}");
-    a.shouldHaveNoDiagnostics();
-    a.shouldHaveType("ap(1, n => n, 2)", "String");
-}
-
-@("review: a bound left open by something other than a lambda isn't blamed on the lambda")
-unittest
-{
-    // `T` is open because of `[]`, and annotating the lambda doesn't change that.
-    analyzed(`
-interface A { def a(x: Self): Int }
-def a(x: Int): Int => 1
-def f<T, U>(xs: [T], g: (Int) -> U): Int => 1
-def f<T: A, U>(xs: [T], g: (Int) -> U): String => "a"
-def main(): Unit {
- val p = f([], n => 1)
-}`).onlyMessage(DiagnosticCode.UntypedEmptyArray);
 }
 
 @("review: what the expected type rules out doesn't depend on whether a candidate's result was worked out yet")

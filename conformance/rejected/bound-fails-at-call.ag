@@ -1,0 +1,13 @@
+// A function is chosen by its arguments, and a bound that fails is an error at the call: the
+// other `put` isn't chosen instead.
+interface Json { def toJson(value: Self): String }
+type Point(x: Int, y: Int)
+def toJson(p: Point): String => "point"
+def put<T: Json>(x: T): String => toJson(x)
+def put<T>(x: T?): String => "option"
+
+def main(): Unit {
+    printl(put(Point(1, 2)))
+    printl(put(Some("text")))
+    printl(put("text"))
+}

@@ -1,0 +1,6 @@
+// Two forwarded functions with the same parameter types clash, whatever their bounds.
+import forward_support.bounds
+
+def main(): Unit {
+    printl(1)
+}

@@ -1,9 +1,0 @@
-// Tied functions that would give a lambda different parameter types can't type it once, so a
-// bound only its result would decide leaves the call ambiguous.
-interface A { def fa(v: Self): Int }
-def fa(x: Int): Int => 1
-def ap<T: A>(g: (Int) -> T): String => "int"
-def ap<T: A>(g: (String) -> T): String => "string"
-def main(): Unit {
-    printl(ap(n => 1))
-}

@@ -231,7 +231,7 @@ unittest
         .shouldHaveNoDiagnostics();
 }
 
-@("forwarded functions that differ only in bounds neither includes are reported")
+@("forwarded functions that differ only in their bounds are reported")
 unittest
 {
     auto files = [
@@ -244,7 +244,8 @@ unittest
     ];
     analyzed("import two\ndef main(): Unit => ()", files)
         .shouldReport(DiagnosticCode.DuplicateOverload, At("get", 2, "two"));
-    analyzed("import ladder\ndef main(): Unit => ()", files).shouldHaveNoDiagnostics();
+    analyzed("import ladder\ndef main(): Unit => ()", files)
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("get", 2, "ladder"));
 }
 
 @("what two blanket forwards bring as one name clashes only where it's used")

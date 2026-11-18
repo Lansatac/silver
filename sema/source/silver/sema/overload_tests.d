@@ -129,13 +129,6 @@ unittest
     auto a = analyzedWith("def g<T>(x: T): [T] => [x]\ndef g(x: Int?): [String] => []", "    val xs: [String] = g(1)");
     a.shouldHaveNoDiagnostics();
     a.shouldCall(At("g", 3), At("g", 2));
-
-    // An array with a `None` binds what synthesis would give it, so the bound is checked for `Int?`.
-    auto b = analyzed("interface A { def a(x: Self): Int }\ndef a(x: Int?): Int => 1\n"
-        ~ "def k<T>(xs: [T], y: T): Int => 1\ndef k<T: A>(xs: [T], y: T): String => \"a\"\n"
-        ~ "def main(): Unit {\n    val r = k([Some(1), None], 2)\n}");
-    b.shouldHaveNoDiagnostics();
-    b.shouldHaveType("k([Some(1), None], 2)", "String");
 }
 
 @("fewer promotion steps beat more, counting each layer and each injection")

@@ -1,5 +1,0 @@
-module queries_support.one
-
-import queries_support.things : Thing
-
-def size(t: Thing): Int => 1

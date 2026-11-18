@@ -335,27 +335,6 @@ def tries<E>(r: Int ! E, n: Int): Int ! E | Oops {
 }`).shouldHaveNoDiagnostics();
 }
 
-@("a generic function that needs itself at a larger type through what a loop's indexing finds for each instance")
-unittest
-{
-    analyzedModule(`
-interface Steps<T> { def next(r: Self): (T, Self)? }
-interface Counted { def size(r: Self): Int }
-type Doubled<R>(source: R)
-def next<R: Steps<Int>>(d: Doubled<R>): (Int, Doubled<R>)? {
-    val (item, rest) = next(d.source)?
-    (item * 2, Doubled(rest))
-}
-def size<R: Counted>(d: Doubled<R>): Int => size(d.source)
-def length<R: Steps<Int> & Counted>(d: Doubled<R>): Int => count(d) + size(d.source)
-def opIndex<R: Steps<Int> & Counted>(d: Doubled<R>, i: Int): Int => i
-def count<R: Steps<Int>>(r: R): Int {
-    mutable val k = 0
-    for _ in Doubled(r) { k += 1 }
-    k
-}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("count", 1));
-}
-
 @("a generic function that builds a larger instance of a type whose invariant calls it needs endlessly many instances")
 unittest
 {
@@ -451,38 +430,6 @@ def grows<E>(r: Int ! E, n: Int): Int {
     val o: Int ! E | Box<E> = r
     grows(o, n - 1)
 }`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("grows(o", 1));
-}
-
-@("growth through a loop's indexing is found however deep the loop's type and wherever the loop is")
-unittest
-{
-    enum base = `
-interface Steps<T> { def next(r: Self): (T, Self)? }
-interface Counted { def size(r: Self): Int }
-type Doubled<R>(source: R)
-def next<R: Steps<Int>>(d: Doubled<R>): (Int, Doubled<R>)? {
-    val (item, rest) = next(d.source)?
-    (item * 2, Doubled(rest))
-}
-def size<R: Counted>(d: Doubled<R>): Int => size(d.source)
-def length<R: Steps<Int> & Counted>(d: Doubled<R>): Int => count(d) + size(d.source)
-def opIndex<R: Steps<Int> & Counted>(d: Doubled<R>, i: Int): Int => i
-`;
-    analyzedModule(base ~ `
-def count<R: Steps<Int>>(r: R): Int {
-    mutable val k = 0
-    for _ in Doubled(Doubled(r)) { k += 1 }
-    k
-}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("count", 1));
-    analyzedModule(base ~ `
-def count<R: Steps<Int>>(r: R): Int {
-    val f = (x: R) => {
-        mutable val k = 0
-        for _ in Doubled(x) { k += 1 }
-        k
-    }
-    f(r)
-}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("count", 1));
 }
 
 @("a method call's receiver is its first argument for inference, and isn't converted")

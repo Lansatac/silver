@@ -1,1 +1,1 @@
-T0035: `write` already takes `<T: Json>(T)`; overloads need different parameter types, and bounds only tell two functions apart when one asks for everything the other does, and more
+T0035: `write` already takes `<T: Json>(T)`; overloads need different parameter types, whatever their bounds

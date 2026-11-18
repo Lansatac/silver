@@ -1,0 +1,2 @@
+T0043: `put` needs `T` to be a `Json`, and `String` isn't one: no `toJson` in scope takes `String`
+    toJson(Point) takes `Point` there, not `String`

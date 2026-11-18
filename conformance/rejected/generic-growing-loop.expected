@@ -1,1 +1,0 @@
-T0048: `length` can't be instantiated, as it would need endlessly many instances, each needing a larger one: `length<R>`, then `count<Doubled<R>>`, then `length<Doubled<R>>`, then `count<Doubled<Doubled<R>>>`, then `length<Doubled<Doubled<R>>>`, and so on

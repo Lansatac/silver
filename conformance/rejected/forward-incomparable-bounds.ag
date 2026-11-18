@@ -1,6 +1,0 @@
-// Bounds tell two forwarded functions apart only when one asks for everything the other does.
-import forward_support.bounds
-
-def main(): Unit {
-    printl(1)
-}

@@ -1,4 +1,4 @@
-// Two functions that differ only in their bounds can't be told apart by a call.
+// Two functions with the same parameter types are duplicates, whatever their bounds.
 interface Json { def toJson(value: Self): String }
 interface Yaml { def toYaml(value: Self): String }
 
