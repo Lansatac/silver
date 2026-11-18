@@ -209,6 +209,7 @@ private final class TypeChecker
                     },
                     (const AliasDecl _) {},
                     (const ImportStmt _) {},
+                    (const ConformDecl _) {},
                 );
             }
         }
@@ -225,6 +226,11 @@ private final class TypeChecker
                     (const TypeDecl t) {
                         if (!t.inheritsParams) rejectBounds(t.typeParams,
                             "A type's parameter can't have a bound yet; put the bound on the functions that need it");
+                    },
+                    (const ConformDecl c) {
+                        auto holder = _resolutions.conformances[c.id];
+                        _declarer.declareBounds(_resolutions.typeParamsOf(holder));
+                        _declarer.declareBoundFunctions(holder);
                     },
                     (_) {},
                 );
@@ -281,10 +287,12 @@ private final class TypeChecker
                     (const AliasDecl _) {},
                     (const InterfaceDecl _) {},
                     (const ImportStmt _) {},
+                    (const ConformDecl _) {},
                 );
             }
         }
 
+        checkConformances(programModules);
         _declarer.checkInhabited(programModules);
         _declarer.rejectGrowingTypes(programModules);
         rejectGrowingCalls();
@@ -4062,6 +4070,186 @@ private final class TypeChecker
         bool ambiguous;
 
         bool holds() const => failure is null && !pending;
+    }
+
+    /// Checks each `conform` in `modules` and keeps what it declares in `Typing.conformances`:
+    /// each function of each interface is found as a call where the declaration is written would
+    /// find it, with the bounds its `when` gives the type parameters it introduces. Then each
+    /// conformance has to have one for what its interface requires, and no two can apply to the
+    /// same type and interface.
+    private void checkConformances(R)(R modules)
+    {
+        foreach (mod; modules)
+        {
+            foreach (decl; mod.declarations)
+            {
+                decl.kind.match!(
+                    (const ConformDecl c) => declareConformance(c, mod.name),
+                    (_) {},
+                );
+            }
+        }
+        foreach (entries; _typing.conformances.byValue)
+        {
+            foreach (entry; entries) checkRequired(entry);
+        }
+        foreach (entries; _typing.conformances.byValue)
+        {
+            foreach (j, later; entries)
+            {
+                foreach (earlier; entries[0 .. j])
+                {
+                    if (reportOverlap(earlier, later)) break;
+                }
+            }
+        }
+    }
+
+    /// Finds the functions that make `c`'s type satisfy each of its interfaces, reporting those
+    /// that aren't found, and keeps each conformance whose functions are.
+    private void declareConformance(const ConformDecl c, string moduleName)
+    {
+        auto holder = _resolutions.conformances[c.id];
+        auto self = _declarer.resolveType(c.type);
+        // Name resolution reported a type it couldn't resolve, and a type parameter alone.
+        if (_types.mentionsError(self) || _types.isParameter(self)) return;
+        auto site = Site(moduleName, holder);
+        foreach (written; c.interfaces)
+        {
+            auto bound = _declarer.resolveBound(written);
+            if (!bound.valid || bound.args.any!(a => _types.mentionsError(a))) continue;
+            Substitution none;
+            auto found = satisfy(Goal(bound.decl, self, bound.args), null, none, site, null);
+            if (!found.holds)
+            {
+                _collector.reportError(found.tooDeep ? DiagnosticCode.BoundSearchTooDeep : DiagnosticCode.UnmetConformance, written.span,
+                    "`%s` can't be %s: %s".format(_types.describe(self), withArticle(_declarer.describe(bound)), found.failure is null
+                        ? "more than one function could say what its type arguments are" : found.failure));
+                continue;
+            }
+            _typing.conformances.require(bound.decl, null) ~= Conforming(c.id, bound, self, found.witnesses, holder, written.span);
+        }
+    }
+
+    /// Reports `entry` when its interface requires one that no conformance gives its type.
+    private void checkRequired(const Conforming entry)
+    {
+        auto substitution = _declarer.substitutionOf(entry.bound, entry.self);
+        foreach (required; _typing.requires.get(entry.bound.decl, null))
+        {
+            if (!required.valid) continue;
+            auto wanted = Bound(required.decl, required.args.map!(a => _types.substitute(a, substitution)).array);
+            if (conformsInTable(wanted, entry.self, entry.holder)) continue;
+            _collector.reportError(DiagnosticCode.MissingRequiredConformance, entry.span,
+                "`%s` requires %s, and no conformance makes `%s` one; declare it too, on this line or another"
+                    .format(_declarer.describe(entry.bound), withArticle(_declarer.describe(wanted)), _types.describe(entry.self)));
+        }
+    }
+
+    /// Whether a declared conformance makes `type` satisfy `bound`, where the type parameters of
+    /// `holder` have the bounds it gives them.
+    private bool conformsInTable(const Bound bound, Type type, Id!FunctionDecl holder, size_t depth = 0)
+    {
+        if (depth >= boundDepthLimit) return false;
+        bool same(const Bound b) => b.valid && b.decl == bound.decl && b.args == bound.args;
+        auto given = _types[type].match!((const TypeParamData p) => _resolutions.typeParamsOf(holder).canFind!(q => q.id == p.param)
+            ? _typing.bounds.get(p.param, null) : null, _ => null);
+        if (given.any!(b => same(b))) return true;
+        foreach (entry; _typing.conformances.get(bound.decl, null))
+        {
+            auto params = _resolutions.typeParamsOf(entry.holder);
+            Substitution s;
+            bindParams(entry.self, type, params, s);
+            foreach (i, arg; entry.bound.args) bindParams(arg, bound.args[i], params, s);
+            if (params.any!(p => p.id !in s) || _types.substitute(entry.self, s) != type) continue;
+            if (entry.bound.args.length.iota.any!(i => _types.substitute(entry.bound.args[i], s) != bound.args[i])) continue;
+            auto holds = params.all!(p => _typing.bounds.get(p.id, null).all!(b => !b.valid || conformsInTable(
+                Bound(b.decl, b.args.map!(a => _types.substitute(a, s)).array), s[p.id], holder, depth + 1)));
+            if (holds) return true;
+        }
+        return false;
+    }
+
+    /// Reports `later` when it and `earlier`, of the same interface, could apply to one type.
+    /// Whether it did.
+    private bool reportOverlap(const Conforming earlier, const Conforming later)
+    {
+        auto vars = (_resolutions.typeParamsOf(earlier.holder) ~ _resolutions.typeParamsOf(later.holder)).map!(p => cast() p.id).array;
+        Substitution s;
+        if (!unify(earlier.self, later.self, vars, s)) return false;
+        // A type argument of the interface that only its results mention is what the conformance
+        // says, not what it's for, so it doesn't tell two apart.
+        foreach (i; argumentParameters(earlier.bound.decl))
+        {
+            if (!unify(earlier.bound.args[i], later.bound.args[i], vars, s)) return false;
+        }
+        auto both = resolved(earlier.self, s);
+        auto home = _resolutions.declarations.functionModules[earlier.holder];
+        auto where = home == _resolutions.declarations.functionModules[later.holder] ? "" : " in `%s`".format(home);
+        auto name = _resolutions.declarations.interfaces[earlier.bound.decl].name;
+        _collector.reportError(DiagnosticCode.OverlappingConformance, later.span, both == earlier.self && both == later.self
+            ? "`%s` already conforms to `%s`%s; a type has one conformance to an interface".format(_types.describe(both), name, where)
+            : "`%s` already conforms to `%s`%s, and this conformance would apply to `%s` too; a type has one conformance to an interface"
+                .format(_types.describe(earlier.self), name, where, _types.describe(both)));
+        return true;
+    }
+
+    /// The positions of the type parameters of `decl` that a parameter of one of its functions mentions.
+    private size_t[] argumentParameters(Id!InterfaceDecl decl)
+    {
+        auto interface_ = _resolutions.declarations.interfaces[decl];
+        size_t[] found;
+        foreach (i, param; interface_.typeParams)
+        {
+            auto mentioned = interface_.functions.any!(f => signatureOf(f.id).params.any!(p => _types.mentionsParameter(p, param.id)));
+            if (mentioned) found ~= i;
+        }
+        return found;
+    }
+
+    /// Whether `a` and `b` can be made the same type by choosing what each of `vars` stands for,
+    /// which `s` gathers.
+    private bool unify(Type a, Type b, const(Id!TypeParam)[] vars, ref Substitution s)
+    {
+        a = resolved(a, s);
+        b = resolved(b, s);
+        if (a == b) return true;
+        Id!TypeParam variable(Type t) => _types[t].match!((const TypeParamData p) => vars.canFind(p.param) ? p.param : Id!TypeParam.init,
+            _ => Id!TypeParam.init);
+        foreach (pair; [[a, b], [b, a]])
+        {
+            auto v = variable(pair[0]);
+            if (!v.isValid) continue;
+            if (_types.mentionsParameter(pair[1], v)) return false;
+            s[v] = pair[1];
+            return true;
+        }
+        bool all(const(Type)[] xs, const(Type)[] ys) => xs.length == ys.length && xs.length.iota.all!(i => unify(xs[i], ys[i], vars, s));
+        auto other = _types[b];
+        return _types[a].match!(
+            (const OptionData o) => other.match!((const OptionData p) => unify(o.inner, p.inner, vars, s), _ => false),
+            (const ArrayData x) => other.match!((const ArrayData y) => unify(x.element, y.element, vars, s), _ => false),
+            (const TupleData x) => other.match!((const TupleData y) => all(x.elements, y.elements), _ => false),
+            (const NominalData x) => other.match!((const NominalData y) => x.decl == y.decl && all(x.args, y.args), _ => false),
+            (const FunctionData x) => other.match!((const FunctionData y) => x.mutables == y.mutables && all(x.params, y.params)
+                && unify(x.ret, y.ret, vars, s), _ => false),
+            (const ErrorUnionData x) => other.match!((const ErrorUnionData y) => unify(x.success, y.success, vars, s)
+                && unify(x.error, y.error, vars, s), _ => false),
+            (const ErrorListData x) => other.match!((const ErrorListData y) => all(x.members, y.members), _ => false),
+            _ => false,
+        );
+    }
+
+    /// `type` with what `s` says each of its variables stands for, in turn.
+    private Type resolved(Type type, const Substitution s)
+    {
+        for (auto i = 0; i < 64; i++)
+        {
+            auto next = _types.substitute(type, s);
+            if (next == type) return type;
+            type = next;
+        }
+        return type;
     }
 
     /// Looks for what makes the types in `bound` satisfy the bounds of `func`'s type parameters, as

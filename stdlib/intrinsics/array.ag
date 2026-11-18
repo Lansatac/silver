@@ -13,3 +13,6 @@ def opIndexAssign<T>(values: [T], index: Int, value: T): [T] {
 
 // How many elements an array has.
 intrinsic def length<T>(values: [T]): Int
+// The first element of `values` and the rest of it, or `None` when it's empty. This is what makes
+// an array a `Range`, though `for` loops over an array without calling it.
+def next<T>(values: [T]): (T, [T])? => if length(values) == 0 => None else (values[0], values[1..])

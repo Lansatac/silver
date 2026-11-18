@@ -69,7 +69,7 @@ conform Mapped<R, T, U>: Indexed<U> when R: Indexed<T>
 
 A conformance is written at module level, in any module. It names a type, then the interfaces it satisfies, joined with `&`.
 
-- The type is a named type, a built-in one, or one of those with type parameters in its arguments, which the declaration introduces. A type parameter alone isn't a type to conform: `conform T: Sized when T: Indexed<U>` is an error.
+- The type is a named type, a built-in one, or one of those with type parameters in its arguments, which the declaration introduces: a name in it that isn't a type where the declaration is written is a type parameter, so `T` in `conform [T]: Range<T>` is one and `Int` in `conform Box<Int>: Json` isn't. A type parameter alone isn't a type to conform: `conform T: Sized when T: Indexed<U>` is an error.
 - For each function of the interface, with `Self` replaced, the function used is the one a call of that name with those argument types would choose where the declaration is written. So the functions have to be in scope there, as they would for the call.
 - The function is chosen by its arguments alone. Its result then has to be exactly the interface's, with no conversion, and `mutable` has to agree: a function that takes its parameter as `mutable` fits only an interface function that does.
 - A function that isn't found, or has the wrong result, is an error at the declaration, which names it.
@@ -343,11 +343,13 @@ Decided, and not part of the first version, each described in the [conformance p
 
 ## Current implementation
 
-Declared conformance isn't built. What's built is the design it replaces, described in the [interfaces proposal](../proposals/interfaces.md):
+`conform` declarations and interfaces that require others are built, and each declaration is checked as described above. Bounds don't look at them yet. What meets a bound is still the design they replace, described in the [interfaces proposal](../proposals/interfaces.md):
 
-- There's no `conform`. A type satisfies an interface where a call of each of its functions would resolve: in the module that supplies the type, among its own functions and its imports'. So writing the function is enough, using a type with a bound needs the module that holds its function imported, and two modules can give one type different conformances, each compiling its own instance of a generic function.
+- A type satisfies a bound where a call of each of the interface's functions would resolve: in the module that supplies the type, among its own functions and its imports'. So writing the function is enough, whether or not a `conform` line says so, using a type with a bound needs the module that holds its function imported, and two modules can give one type different conformances, each compiling its own instance of a generic function.
 - A function found for a bound can have bounds itself, searched from the same call, which is what `when` replaces. A search that keeps needing the same interface of a larger type is given up after 32 steps. Where the search chooses among functions of one name, one whose own bounds fail is passed over, unlike at a call, and so is one for an overloaded function used as a value.
-- An interface can't require another. One covers another by declaring the same function.
+- A bound on an interface that requires others is met by searching for each of them too.
+- `Range` and the conformances of arrays, `String` and the integer `Interval`s to it are in the prelude, but `for` doesn't use them yet.
+- The error for two conformances that overlap names the earlier one by its type and module, not where it's written.
 - There's no `if type`, so a generic function can't ask what its type argument can do beyond its bounds.
 - A `for` finds `next`, `length` and `opIndex` by name where it's written, with no conformance.
 - A `val`'s annotation can still name an interface, as in `val xs: Range<Int> = [1, 2, 3]`: the binding has the value's type, checked against the interface, and a `mutable val` keeps the first value's type.

@@ -1,0 +1,5 @@
+// An interface can't require itself, directly or through others.
+interface A: B { def a(x: Self): Int }
+interface B: A { def b(x: Self): Int }
+
+def main(): Unit => ()

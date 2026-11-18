@@ -1,0 +1,7 @@
+// A `when` bound goes on a type parameter the conforming type introduces.
+interface Json { def toJson(value: Self): String }
+type Box<T>(value: T)
+def toJson<T>(b: Box<T>): String => "box"
+conform Box<T>: Json when U: Json
+
+def main(): Unit => ()

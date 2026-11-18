@@ -1,0 +1,6 @@
+// A conformance needs each of the interface's functions, with exactly the result it declares.
+interface Json { def toJson(value: Self): String }
+def toJson(value: Int): Int => value
+conform Int: Json
+
+def main(): Unit => ()

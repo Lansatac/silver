@@ -1,0 +1,9 @@
+// Two conformances that could apply to the same type and interface are an error.
+interface Json { def toJson(value: Self): String }
+def toJson(value: Int): String => "int"
+def toJson<T: Json>(xs: [T]): String => "array"
+conform Int: Json
+conform [T]: Json when T: Json
+conform [Int]: Json
+
+def main(): Unit => ()

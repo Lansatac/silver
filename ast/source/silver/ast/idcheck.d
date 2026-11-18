@@ -81,6 +81,15 @@ private final class IdCheck
         see(i.self.id, i.nameSpan);
         foreach (p; i.typeParams) visit(p);
         foreach (f; i.functions) visit(f, span);
+        foreach (r; i.requires) visit(r);
+    }
+
+    void visit(const ConformDecl c, Span span)
+    {
+        see(c.id, span);
+        visit(c.type);
+        foreach (i; c.interfaces) visit(i);
+        foreach (p; c.when) visit(p);
     }
 
     void visit(const TypeDecl t, Span span)

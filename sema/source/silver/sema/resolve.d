@@ -130,6 +130,10 @@ package struct Resolution
     ForwardImport[][string] forwardImports;
     /// Each name each module's imports and forwards list, in order.
     ListedImport[][string] listedImports;
+    /// For each `conform`, a function that isn't declared anywhere and holds the type parameters
+    /// it introduces, with the bounds its `when` gives them, so they supply functions as a generic
+    /// function's bounds do.
+    SideTable!(Id!ConformDecl, Id!FunctionDecl) conformances;
 
     /// The type parameters of `func`: those it declares, then its hidden ones.
     const(TypeParam)[] typeParamsOf(Id!FunctionDecl func) const
@@ -259,6 +263,39 @@ package struct Requirement
     size_t bound;
     Id!FunctionDecl declared;
     size_t index;
+}
+
+/// An interface a type parameter's bounds require without naming it: the `which`th interface that
+/// the bound at `from` requires, in the list of bounds that this and the others extend.
+package struct Implied
+{
+    size_t from;
+    size_t which;
+    Id!InterfaceDecl decl;
+}
+
+/// The interfaces the interfaces `written` require, directly or in turn, that aren't among them,
+/// depth first from each, and each once. They follow `written` as bounds, so `from` counts them
+/// too. `requiresOf` gives what an interface requires as written, invalid where that isn't an
+/// interface.
+package Implied[] impliedBounds(const(Id!InterfaceDecl)[] written,
+    scope const(Id!InterfaceDecl)[] delegate(Id!InterfaceDecl) requiresOf)
+{
+    Implied[] implied;
+    bool[Id!InterfaceDecl] seen;
+    foreach (decl; written) if (decl.isValid) seen[decl] = true;
+    void visit(size_t from, Id!InterfaceDecl decl)
+    {
+        foreach (which, required; requiresOf(decl))
+        {
+            if (!required.isValid || required in seen) continue;
+            seen[required] = true;
+            implied ~= Implied(from, which, required);
+            visit(written.length + implied.length - 1, required);
+        }
+    }
+    foreach (i, decl; written) if (decl.isValid) visit(i, decl);
+    return implied;
 }
 
 /// The builtin or declared type `symbol` is another name for. It's still an alias if it stands
@@ -565,6 +602,7 @@ private final class NameResolver
     private SideTable!(Id!Expr, Id!AliasDecl) _aliasedInstances;
     private ForwardImport[][string] _forwardImports;
     private ListedImport[][string] _listedImports;
+    private SideTable!(Id!ConformDecl, Id!FunctionDecl) _conformances;
     /// Where the nodes resolution makes up get their IDs.
     private NodeIds _ids;
 
@@ -603,13 +641,22 @@ private final class NameResolver
         {
             reportRecursiveAliases(mod);
         }
+        // Before any bound, since a bound supplies what its interface requires too.
+        foreach (mod; modules)
+        {
+            resolveRequires(mod.name, mod);
+        }
+        foreach (mod; modules)
+        {
+            reportRequiringItself(mod);
+        }
         foreach (mod; modules)
         {
             resolveModule(mod.name, mod);
         }
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
             _operatorLookups, _declarations, _nativeLibraries, cast(const(Scope)[string]) _moduleScopes, _hiddenParams, _sugarParams,
-            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances, _forwardImports, _listedImports);
+            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances, _forwardImports, _listedImports, _conformances);
     }
 
     /// Works out what every module forwards. A blanket forward passes on what its module forwards
@@ -999,6 +1046,7 @@ private final class NameResolver
                 (const ConstDecl _) {},
                 (const AliasDecl _) {},
                 (const InterfaceDecl _) {},
+                (const ConformDecl _) {},
                 (const ImportStmt importStmt) {
                     auto imported = importStmt.path.join(".");
                     auto index = imports.countUntil!(i => i.name == imported);
@@ -1150,6 +1198,7 @@ private final class NameResolver
                     }
                 },
                 (const ImportStmt _) {},
+                (const ConformDecl _) {},
             );
         }
         _moduleScopes[name] = moduleScope;
@@ -1164,6 +1213,7 @@ private final class NameResolver
                 (const AliasDecl _) {},
                 (const InterfaceDecl _) {},
                 (const ImportStmt _) {},
+                (const ConformDecl _) {},
             );
         }
     }
@@ -1272,6 +1322,69 @@ private final class NameResolver
         );
     }
 
+    /// Resolves the interfaces each interface of `mod` requires, in its own scope.
+    private void resolveRequires(string name, const Module mod)
+    {
+        foreach (decl; mod.declarations)
+        {
+            decl.kind.match!(
+                (ref const InterfaceDecl interface_) {
+                    if (interface_.requires.length == 0) return;
+                    auto declScope = new Scope(_moduleScopes[name]);
+                    foreach (ref param; interface_.typeParams) declScope.declare(param.name, TypeSymbol(param.id));
+                    foreach (required; interface_.requires)
+                    {
+                        resolveTypeExpr(required, declScope, InterfaceUse.bound);
+                        if (!interface_.isPrivate) reportPrivateType(required, "a public interface");
+                    }
+                },
+                (_) {},
+            );
+        }
+    }
+
+    /// What `decl` requires as written, invalid where that isn't an interface.
+    private const(Id!InterfaceDecl)[] requiresOf(Id!InterfaceDecl decl)
+    {
+        return _declarations.interfaces[decl].requires.map!((r) {
+            auto interface_ = interfaceNamed(r);
+            return interface_ is null ? Id!InterfaceDecl.init : interface_.id;
+        }).array;
+    }
+
+    /// Reports each interface of `mod` that requires itself, directly or through others.
+    private void reportRequiringItself(const Module mod)
+    {
+        foreach (decl; mod.declarations)
+        {
+            decl.kind.match!(
+                (ref const InterfaceDecl interface_) {
+                    bool[Id!InterfaceDecl] seen;
+                    string[] path;
+                    bool reaches(Id!InterfaceDecl from)
+                    {
+                        foreach (required; requiresOf(from))
+                        {
+                            if (!required.isValid) continue;
+                            if (required == interface_.id) return true;
+                            if (required in seen) continue;
+                            seen[required] = true;
+                            path ~= _declarations.interfaces[required].name;
+                            if (reaches(required)) return true;
+                            path = path[0 .. $ - 1];
+                        }
+                        return false;
+                    }
+                    if (!reaches(interface_.id)) return;
+                    _collector.reportError(DiagnosticCode.RequiresItself, interface_.requires[0].span, path.length == 0
+                        ? "`%s` requires itself".format(interface_.name)
+                        : "`%s` requires itself, through %-(`%s`%|, %)".format(interface_.name, path));
+                },
+                (_) {},
+            );
+        }
+    }
+
     private void resolveModule(string name, const Module mod)
     {
         _currentModule = name;
@@ -1365,8 +1478,86 @@ private final class NameResolver
                     }
                 },
                 (const ImportStmt _) {},
+                (ref const ConformDecl conform) => resolveConformance(conform, name),
             );
         }
+    }
+
+    /// Resolves a `conform` declared in `moduleName`: the names in its type that aren't types are
+    /// the type parameters it introduces, which a function made for it holds with the bounds its
+    /// `when` gives them, so they supply functions where the conformance's functions are looked for.
+    private void resolveConformance(ref const ConformDecl conform, string moduleName)
+    {
+        auto moduleScope = _moduleScopes[moduleName];
+        TypeParam[] introduced;
+        void collect(const TypeExpr type)
+        {
+            type.kind.match!(
+                (const NamedType named) {
+                    foreach (arg; named.args) collect(arg);
+                    if (named.path.length != 1 || named.args.length > 0 || namesType(named.path[0], moduleScope)) return;
+                    if (introduced.canFind!(p => p.name == named.path[0])) return;
+                    auto written = conform.when.find!(p => p.name == named.path[0]);
+                    introduced ~= written.empty ? TypeParam(_ids.next!TypeParam, named.path[0], type.span) : cast() written.front;
+                },
+                (const OptionType option) => collect(*option.inner),
+                (const ArrayType array) => collect(*array.element),
+                (const TupleType tuple) {
+                    foreach (element; tuple.elements) collect(element);
+                },
+                (const FunctionType function_) {
+                    foreach (param; function_.params) collect(param);
+                    collect(*function_.returnType);
+                },
+                (_) {},
+            );
+        }
+        collect(conform.type);
+        foreach (ref written; conform.when)
+        {
+            if (introduced.canFind!(p => p.id == written.id)) continue;
+            _collector.reportError(DiagnosticCode.UnknownWhenParameter, written.span, namesType(written.name, moduleScope)
+                ? "`%s` is a type, and a `when` bound goes on a type parameter that the conforming type introduces".format(written.name)
+                : "`%s` isn't in the conforming type, so it isn't a type parameter this conformance introduces".format(written.name));
+        }
+
+        auto declScope = genericScope(introduced, moduleScope, false);
+        resolveTypeExpr(conform.type, declScope);
+        foreach (interface_; conform.interfaces) resolveTypeExpr(interface_, declScope, InterfaceUse.bound);
+        foreach (ref param; introduced)
+        {
+            foreach (bound; param.bounds) resolveTypeExpr(bound, declScope, InterfaceUse.bound);
+        }
+        auto whole = conform.type.kind.match!((const NamedType n) => n.path.length == 1 && n.args.length == 0 ? n.path[0] : null,
+            _ => cast(string) null);
+        if (whole !is null && introduced.canFind!(p => p.name == whole))
+        {
+            _collector.reportError(DiagnosticCode.ConformsTypeParameter, conform.type.span,
+                ("`%s` isn't a type, so this would conform every type; conform a named type, a built-in one, "
+                    ~ "or one of those with type parameters in its arguments").format(whole));
+        }
+
+        auto holder = new FunctionDecl(_ids.next!FunctionDecl, "conform", conform.type.span, null, null, cast() conform.type,
+            FunctionKind.required);
+        holder.typeParams = introduced;
+        _declarations.functions[holder.id] = holder;
+        _declarations.functionModules[holder.id] = moduleName;
+        _conformances[conform.id] = holder.id;
+        declareBounds(*holder, declScope, moduleName, false);
+    }
+
+    /// Whether `name` is a type where `current` is, as a type written there would find it.
+    private bool namesType(string name, const Scope current)
+    {
+        if (current.resolveType(name) !is null) return true;
+        foreach (level, modules; current.modulesProvidingByLevel(name))
+        {
+            foreach (m; modules)
+            {
+                if (visibleTypes(m, name).length > 0) return true;
+            }
+        }
+        return false;
     }
 
     /// Gives `func` a hidden type parameter for each parameter whose type is an interface name, and
@@ -1392,13 +1583,24 @@ private final class NameResolver
         size_t index;
         foreach (ref typeParam; func.typeParams ~ hidden)
         {
-            foreach (b, bound; typeParam.bounds)
+            auto written = typeParam.bounds.map!((b) {
+                auto interface_ = interfaceNamed(b);
+                return interface_ is null ? Id!InterfaceDecl.init : interface_.id;
+            }).array;
+            // What the bounds require comes after them, supplied where the bound that leads to it is written.
+            Span[] spans = typeParam.bounds.map!(b => cast() b.span).array;
+            auto decls = written.dup;
+            foreach (implied; impliedBounds(written, &requiresOf))
             {
-                auto interface_ = interfaceNamed(bound);
-                if (interface_ is null) continue;
-                foreach (ref declared; interface_.functions)
+                decls ~= implied.decl;
+                spans ~= spans[implied.from];
+            }
+            foreach (b, decl; decls)
+            {
+                if (!decl.isValid) continue;
+                foreach (ref declared; _declarations.interfaces[decl].functions)
                 {
-                    auto supplied = new FunctionDecl(_ids.next!FunctionDecl, declared.name, bound.span, cast(Param[]) declared.params,
+                    auto supplied = new FunctionDecl(_ids.next!FunctionDecl, declared.name, spans[b], cast(Param[]) declared.params,
                         null, cast() declared.returnType, FunctionKind.required);
                     _declarations.functions[supplied.id] = supplied;
                     _declarations.functionModules[supplied.id] = moduleName;

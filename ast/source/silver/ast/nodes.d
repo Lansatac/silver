@@ -8,7 +8,7 @@ import silver.ast.span;
 import silver.ast.id;
 
 /// The node kinds that get IDs. Each module has its own NodeIds, made with the module's key.
-alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt, TypeDecl, Field, ConstDecl, Pattern, AliasDecl,
+alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, ImportStmt, TypeDecl, Field, ConstDecl, Pattern, AliasDecl, ConformDecl,
     TypeParam, InterfaceDecl);
 
 /// The types every module can name, which no declaration can take the name of.
@@ -52,7 +52,7 @@ struct Decl
     DeclKind kind;
 }
 
-alias DeclKind = SumType!(ImportStmt, FunctionDecl, TypeDecl, ConstDecl, AliasDecl, InterfaceDecl);
+alias DeclKind = SumType!(ImportStmt, FunctionDecl, TypeDecl, ConstDecl, AliasDecl, InterfaceDecl, ConformDecl);
 
 /// A type as written in source. Names aren't resolved, so `Int` is a NamedType
 /// like any other; the checker's resolved types are a separate representation.
@@ -825,7 +825,20 @@ struct InterfaceDecl
     TypeParam self;
     /// Each has the kind `required`.
     FunctionDecl[] functions;
+    /// The interfaces it requires, as written after its name.
+    TypeExpr[] requires;
     bool isPrivate;
+}
+
+/// `conform Type: I & J when T: K`: `type` satisfies each interface. The names in `type` that
+/// aren't types are the type parameters the declaration introduces, which name resolution
+/// decides; `when` gives some of them bounds, each naming one of those.
+struct ConformDecl
+{
+    Id!ConformDecl id;
+    TypeExpr type;
+    TypeExpr[] interfaces;
+    TypeParam[] when;
 }
 
 /// One alternative of `type Name = A(x: Int) | B | geo.C`.
@@ -900,6 +913,7 @@ string printDecl(const Decl d)
             ? "(intrinsic alias " ~ a.name ~ ")"
             : "(alias " ~ a.name ~ " = " ~ printTypeExpr(a.target) ~ ")"),
         (const InterfaceDecl i) => marked(i.isPrivate, printInterfaceDecl(i)),
+        (const ConformDecl c) => printConformDecl(c),
     );
 }
 
@@ -988,7 +1002,17 @@ private string printInterfaceDecl(const InterfaceDecl i)
     import std.array : join;
     import std.format : format;
 
-    return format("(interface %s%s%-( %s%))", i.name, printTypeParams(i.typeParams), i.functions.map!(f => printFunctionDecl(f)));
+    auto requires = i.requires.length == 0 ? "" : ": " ~ i.requires.map!(r => printTypeExpr(r)).join(" & ");
+    return format("(interface %s%s%s%-( %s%))", i.name, printTypeParams(i.typeParams), requires, i.functions.map!(f => printFunctionDecl(f)));
+}
+
+private string printConformDecl(const ConformDecl c)
+{
+    import std.algorithm : map;
+    import std.array : join;
+
+    auto when = c.when.length == 0 ? "" : " when " ~ printTypeParams(c.when)[1 .. $ - 1];
+    return "(conform " ~ printTypeExpr(c.type) ~ ": " ~ c.interfaces.map!(i => printTypeExpr(i)).join(" & ") ~ when ~ ")";
 }
 
 /// `<T, U>`, or nothing when `params` is empty.

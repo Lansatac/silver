@@ -150,6 +150,10 @@ private final class Lowering
                 (ref AliasDecl alias_) { alias_.isPrivate = true; },
                 (ref InterfaceDecl interface_) { interface_.isPrivate = true; },
                 (ref ImportStmt _) {},
+                (ref ConformDecl _) {
+                    throw new ParseException(Diagnostic(DiagnosticCode.ParseError, declaration.span,
+                        "A conformance is never private: every module sees it, and a private type can conform", Severity.Error));
+                },
             );
         }
         return declarations;
@@ -180,6 +184,8 @@ private final class Lowering
             return [Decl(spanOf(cst, file), DeclKind(alias_))];
         case "Silver.InterfaceDeclaration":
             return [Decl(spanOf(cst, file), DeclKind(convertInterfaceDeclaration(cst)))];
+        case "Silver.ConformDeclaration":
+            return [Decl(spanOf(cst, file), DeclKind(convertConformDeclaration(cst)))];
         case "Silver.ConstantDeclaration":
             return [Decl(spanOf(cst, file), DeclKind(convertConstantDeclaration(cst)))];
         case "Silver.TestDeclaration":
@@ -1040,9 +1046,30 @@ private final class Lowering
         foreach (child; cst.children[1 .. $])
         {
             if (child.name == "Silver.TypeParameters") decl.typeParams = convertTypeParameters(child);
+            else if (child.name == "Silver.Interfaces") decl.requires = convertInterfaces(child);
             else decl.functions ~= convertFunctionDeclaration(child);
         }
         return decl;
+    }
+
+    /// `conform Type: I & J when T: K, U: L`.
+    private ConformDecl convertConformDeclaration(ParseTree cst)
+    {
+        cst.validateNodeIs("Silver.ConformDeclaration");
+        auto decl = ConformDecl(ids.next!ConformDecl, convertTypeExpression(cst[0]), convertInterfaces(cst[1]));
+        foreach (p; cst.children[2 .. $])
+        {
+            auto bounds = p.children.filter!(c => c.name == "Silver.NamedType").map!(b => convertTypeExpression(b)).array;
+            decl.when ~= TypeParam(ids.next!TypeParam, p.matches[0], Span(file, p.begin, p.begin + p.matches[0].length), bounds);
+        }
+        return decl;
+    }
+
+    /// `I & J<T>`, after an interface's name or in a conformance.
+    private TypeExpr[] convertInterfaces(ParseTree cst)
+    {
+        cst.validateNodeIs("Silver.Interfaces");
+        return cst.children.map!(c => convertTypeExpression(c)).array;
     }
 
     /// `NATIVE LIBRARY StringLiteral`. `previous` is the one the module already has, if any.

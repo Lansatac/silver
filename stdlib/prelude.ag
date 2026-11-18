@@ -5,6 +5,7 @@ forward import intrinsics.array
 forward import intrinsics.interval
 forward import intrinsics.io
 forward import intrinsics.panic
+forward import intrinsics.range
 forward import intrinsics.string
 forward import intrinsics.testing
 

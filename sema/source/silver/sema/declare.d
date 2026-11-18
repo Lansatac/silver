@@ -216,13 +216,32 @@ package final class Declarer
                 }
                 bounds ~= bound;
             }
+            // What they require follows, in the order name resolution supplies its functions.
+            auto self = parameterType(param);
+            foreach (implied; impliedBounds(bounds.map!(b => b.decl).array, &requiresOf))
+            {
+                auto from = bounds[implied.from];
+                auto required = _typing.requires.get(from.decl, null);
+                bounds ~= implied.which < required.length && required[implied.which].valid
+                    ? Bound(implied.decl, required[implied.which].args.map!(a => _types.substitute(a, substitutionOf(from, self))).array)
+                    : Bound.init;
+            }
             if (bounds.length > 0) _typing.bounds[param.id] = bounds;
         }
     }
 
+    /// What `decl` requires as written, as name resolution found it.
+    private const(Id!InterfaceDecl)[] requiresOf(Id!InterfaceDecl decl)
+    {
+        return _resolutions.declarations.interfaces[decl].requires.map!((r) {
+            auto symbol = r.id in _resolutions.typeResolutions;
+            return symbol is null ? Id!InterfaceDecl.init : (*symbol).match!((const Id!InterfaceDecl i) => i, _ => Id!InterfaceDecl.init);
+        }).array;
+    }
+
     /// The interface and type arguments `written` names, or a bound that isn't valid when name
     /// resolution didn't find an interface, which it reported.
-    private Bound resolveBound(const TypeExpr written)
+    package Bound resolveBound(const TypeExpr written)
     {
         auto symbol = written.id in _resolutions.typeResolutions;
         auto decl = symbol is null ? Id!InterfaceDecl.init
@@ -280,6 +299,7 @@ package final class Declarer
     /// interfaces leaves out.
     package void declareInterface(const InterfaceDecl interface_)
     {
+        if (interface_.requires.length > 0) _typing.requires[interface_.id] = interface_.requires.map!(r => resolveBound(r)).array;
         foreach (param; interface_.typeParams)
         {
             if (param.bounds.length == 0) continue;

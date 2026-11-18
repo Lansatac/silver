@@ -5,6 +5,8 @@ module silver.sema.interface_tests;
 version (unittest):
 
 import fluent.asserts;
+import std.algorithm : map;
+import std.array : array;
 
 import silver.ast : DiagnosticCode;
 import silver.sema.check_tests : shouldDeclareType, shouldHaveType;
@@ -850,4 +852,98 @@ unittest
     // the expected type never rules it out: it wins on steps either way, and its result is the error.
     analyzedModule(ranges ~ plain ~ gen ~ use).onlyMessage(DiagnosticCode.TypeMismatch);
     analyzedModule(ranges ~ plain ~ use ~ gen).onlyMessage(DiagnosticCode.TypeMismatch);
+}
+
+// Declared conformance
+
+private enum conformances = `
+interface Json { def toJson(value: Self): String }
+interface Sized { def size(value: Self): Int }
+interface Indexed<T>: Sized { def at(value: Self, i: Int): T }
+type Box<T>(value: T)
+type Grid(n: Int)
+def toJson(value: Int): String => "int"
+def toJson<T: Json>(b: Box<T>): String => toJson(b.value)
+def size(g: Grid): Int => g.n
+def at(g: Grid, i: Int): Int => i
+def size<T: Sized>(b: Box<T>): Int => size(b.value)
+def at<T: Indexed<Int>>(b: Box<T>, i: Int): Int => at(b.value, i)
+`;
+
+@("a conformance finds each function as a call where it's written would, with exactly the interface's result")
+unittest
+{
+    analyzedModule(conformances ~ "conform Int: Json\nconform Grid: Sized & Indexed<Int>").shouldHaveNoDiagnostics();
+    analyzedModule(conformances ~ "conform String: Json").onlyMessage(DiagnosticCode.UnmetConformance)
+        .should.startWith("`String` can't be a `Json`: no `toJson` in scope takes `String`");
+    analyzedModule(conformances ~ "def size(x: Float): UInt8 => 1\nconform Float: Sized").onlyMessage(DiagnosticCode.UnmetConformance)
+        .should.contain("`size(Float)` returns `UInt8`, where `Int` is needed");
+}
+
+@("a name in the conforming type that isn't a type is a type parameter the conformance introduces")
+unittest
+{
+    analyzedModule(conformances ~ "conform Int: Json\nconform Box<T>: Json when T: Json").shouldHaveNoDiagnostics();
+    analyzedModule(conformances ~ "conform Int: Json\ndef toJson(b: Box<Int>): String => \"\"\nconform Box<Int>: Json")
+        .shouldHaveNoDiagnostics();
+    analyzedModule(conformances ~ "conform T: Json").onlyMessage(DiagnosticCode.ConformsTypeParameter)
+        .should.startWith("`T` isn't a type, so this would conform every type");
+    analyzedModule(conformances ~ "conform Int: Json\nconform Box<T>: Json when T: Json, U: Json")
+        .shouldReport(DiagnosticCode.UnknownWhenParameter, At("U: Json", 1));
+    analyzedModule(conformances ~ "conform Box<Int>: Json when Int: Json").onlyMessage(DiagnosticCode.UnknownWhenParameter)
+        .should.contain("`Int` is a type");
+}
+
+@("the bounds of a function a conformance finds have to follow from its when clause")
+unittest
+{
+    analyzedModule(conformances ~ "conform Int: Json\nconform Box<T>: Json").onlyMessage(DiagnosticCode.UnmetConformance)
+        .should.contain("needs `T` to be a `Json`, and `T` isn't one");
+}
+
+@("conforming to an interface needs a conformance to each one it requires, which when bounds can give")
+unittest
+{
+    analyzedModule(conformances ~ "conform Grid: Indexed<Int>").onlyMessage(DiagnosticCode.MissingRequiredConformance)
+        .should.equal("`Indexed<Int>` requires a `Sized`, and no conformance makes `Grid` one; declare it too, on this line or another");
+    // On another line, before or after.
+    analyzedModule(conformances ~ "conform Grid: Indexed<Int>\nconform Grid: Sized").shouldHaveNoDiagnostics();
+    analyzedModule(conformances ~ "conform Grid: Sized & Indexed<Int>\nconform Box<T>: Indexed<Int> when T: Indexed<Int>\n"
+        ~ "conform Box<T>: Sized when T: Sized").shouldHaveNoDiagnostics();
+    analyzedModule(conformances ~ "conform Grid: Sized & Indexed<Int>\nconform Box<T>: Indexed<Int> when T: Indexed<Int>")
+        .shouldReport(DiagnosticCode.MissingRequiredConformance, At("Indexed<Int> when", 1));
+}
+
+@("a bound on an interface supplies the functions of those it requires")
+unittest
+{
+    analyzedModule(conformances ~ "def last<R: Indexed<T>, T>(r: R): T => at(r, size(r) - 1)\n"
+        ~ "def both<R: Indexed<Int> & Sized>(r: R): Int => size(r)").shouldHaveNoDiagnostics();
+}
+
+@("an interface can't require itself, directly or through others")
+unittest
+{
+    analyzedModule("interface A: A { def a(x: Self): Int }").onlyMessage(DiagnosticCode.RequiresItself)
+        .should.equal("`A` requires itself");
+    analyzedModule("interface A: B { def a(x: Self): Int }\ninterface B: A { def b(x: Self): Int }")
+        .collector.diagnostics.map!(d => d.message).array.should.equal(["`A` requires itself, through `B`", "`B` requires itself, through `A`"]);
+}
+
+@("two conformances that could apply to the same type and interface are an error, wherever they are")
+unittest
+{
+    analyzedModule(conformances ~ "conform Int: Json\nconform Int: Json").onlyMessage(DiagnosticCode.OverlappingConformance)
+        .should.equal("`Int` already conforms to `Json`; a type has one conformance to an interface");
+    analyzedModule(conformances ~ "def toJson<T: Json>(xs: [T]): String => \"\"\nconform Int: Json\nconform [T]: Json when T: Json\n"
+        ~ "conform [Int]: Json").onlyMessage(DiagnosticCode.OverlappingConformance)
+        .should.contain("this conformance would apply to `[Int]` too");
+    // A type argument in a parameter of the interface's functions says what a conformance is for.
+    analyzedModule("interface Add<Rhs> { def add(a: Self, b: Rhs): Self }\ntype Vec(x: Float)\n"
+        ~ "def add(a: Vec, b: Vec): Vec => a\ndef add(a: Vec, b: Float): Vec => a\nconform Vec: Add<Vec> & Add<Float>")
+        .shouldHaveNoDiagnostics();
+    auto files = ["lib.ag": "module lib\ninterface Sized { def size(value: Self): Int }\ntype Grid(n: Int)\n"
+        ~ "def size(g: Grid): Int => g.n\nconform Grid: Sized"];
+    analyzed("import lib\nconform Grid: Sized\ndef main(): Unit => ()", files).onlyMessage(DiagnosticCode.OverlappingConformance)
+        .should.equal("`Grid` already conforms to `Sized` in `lib`; a type has one conformance to an interface");
 }

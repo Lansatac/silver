@@ -1,0 +1,46 @@
+// A conformance is declared, conditionally with `when`, and a bound on an interface that requires
+// another supplies the other's functions too.
+interface Json { def toJson(value: Self): String }
+interface Sized { def size(value: Self): Int }
+interface Indexed<T>: Sized { def at(value: Self, i: Int): T }
+interface Add<Rhs> { def add(a: Self, b: Rhs): Self }
+
+type Point(x: Int, y: Int)
+type Box<T>(value: T)
+type Grid(n: Int)
+type Vec(x: Float)
+
+def toJson(value: Int): String => "{value}"
+def toJson(p: Point): String => "[{toJson(p.x)}, {toJson(p.y)}]"
+def toJson<T: Json>(b: Box<T>): String => "box({toJson(b.value)})"
+def toJson<T: Json>(x: T?): String => match x {
+    None => "null"
+    Some(v) => toJson(v)
+}
+def size(g: Grid): Int => g.n
+def at(g: Grid, i: Int): Int => i * 10
+def size<T: Sized>(b: Box<T>): Int => size(b.value)
+def at<T: Indexed<Int>>(b: Box<T>, i: Int): Int => at(b.value, i) + 1
+def add(a: Vec, b: Vec): Vec => Vec(a.x + b.x)
+def add(a: Vec, b: Float): Vec => Vec(a.x + b)
+
+conform Int: Json
+conform Point: Json
+conform Box<T>: Json when T: Json
+conform T?: Json when T: Json
+conform Grid: Sized & Indexed<Int>
+conform Box<T>: Sized when T: Sized
+conform Box<T>: Indexed<Int> when T: Indexed<Int>
+conform Vec: Add<Vec> & Add<Float>
+
+def encode<T: Json>(item: T): String => "<" ~ toJson(item) ~ ">"
+def last<R: Indexed<T>, T>(r: R): T => at(r, size(r) - 1)
+def twice<T: Add<T>>(x: T): T => add(x, x)
+
+def main(): Unit {
+    printl(encode(Box(Point(1, 2))))
+    printl(encode(Some(3)))
+    printl(last(Grid(5)))
+    printl(last(Box(Grid(3))))
+    printl(twice(Vec(1.5)).x == 3.0)
+}

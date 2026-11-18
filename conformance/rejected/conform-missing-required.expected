@@ -1,0 +1,1 @@
+T0052: `Indexed<Int>` requires a `Sized`, and no conformance makes `Grid` one; declare it too, on this line or another

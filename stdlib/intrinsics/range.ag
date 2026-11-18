@@ -1,0 +1,21 @@
+module intrinsics.range
+
+import intrinsics.array
+import intrinsics.interval
+import intrinsics.string
+
+// What `for` loops over: something that gives its first item and the rest, until it gives `None`.
+interface Range<T> {
+    def next(range: Self): (T, Self)?
+}
+
+conform [T]: Range<T>
+conform String: Range<Char>
+conform Interval<Int>: Range<Int>
+conform Interval<Int8>: Range<Int8>
+conform Interval<Int16>: Range<Int16>
+conform Interval<Int32>: Range<Int32>
+conform Interval<UInt>: Range<UInt>
+conform Interval<UInt8>: Range<UInt8>
+conform Interval<UInt16>: Range<UInt16>
+conform Interval<UInt32>: Range<UInt32>

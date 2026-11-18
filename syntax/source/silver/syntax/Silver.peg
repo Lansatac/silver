@@ -21,6 +21,7 @@ Silver:
                             / TypeDeclaration
                             / AliasDeclaration
                             / InterfaceDeclaration
+                            / ConformDeclaration
                             / ConstantDeclaration
                             / TestDeclaration
                             )
@@ -41,7 +42,8 @@ Silver:
                             / ExpressionStatement
                             )
 
-    PrivateDeclaration   < :PRIVATE Nl? (FunctionDeclaration / NativeFunctionDeclaration / IntrinsicFunctionDeclaration / IntrinsicAlias / IntrinsicType / TypeDeclaration / AliasDeclaration / InterfaceDeclaration / ConstantDeclaration)
+    # A conformance is never private, which lowering can say better than a parse error could
+    PrivateDeclaration   < :PRIVATE Nl? (FunctionDeclaration / NativeFunctionDeclaration / IntrinsicFunctionDeclaration / IntrinsicAlias / IntrinsicType / TypeDeclaration / AliasDeclaration / InterfaceDeclaration / ConformDeclaration / ConstantDeclaration)
 
     QualifiedName        <- ValueName ('.' ValueName)*
 
@@ -93,7 +95,9 @@ Silver:
     TypeDeclaration      < :TYPE Nl? TypeName (Nl? TypeParameters)? (Fields Invariant? / Nl? :'=' !'=' Nl? SumMembers)?
     # The `else` is required; lowering reports one that's missing
     Invariant            < Nl? :INVARIANT Nl? Expression (Nl? :ELSE Nl? Expression)?
-    InterfaceDeclaration < :INTERFACE Nl? TypeName (Nl? TypeParameters)? Nl? :'{' Sep? (InterfaceFunction (Sep InterfaceFunction)* Sep?)? :'}'
+    InterfaceDeclaration < :INTERFACE Nl? TypeName (Nl? TypeParameters)? (Nl? :':' Nl? Interfaces)? Nl? :'{' Sep? (InterfaceFunction (Sep InterfaceFunction)* Sep?)? :'}'
+    Interfaces           < NamedType (Nl? :BitAndOperator Nl? NamedType)*
+    ConformDeclaration   < :CONFORM Nl? OptionalType Nl? :':' Nl? Interfaces (Nl? :WHEN Nl? TypeParameter (Nl? :',' Nl? TypeParameter)*)?
     # The type parameters and the body aren't allowed, but lowering can say so better than a parse error could
     InterfaceFunction    < :DEF Nl? Identifier (Nl? TypeParameters)? Nl? :'(' Nl? Params Nl? :')' TypeAnnotation (Nl? :'=>' Nl? Expression / Block)?
     AliasDeclaration     < :ALIAS Nl? TypeName (Nl? TypeParameters)? Nl? :'=' !'=' Nl? Type
@@ -283,6 +287,8 @@ Silver:
     INVARIANT           <- Kword("invariant")
     TEST                <- Kword("test")
     FORWARD             <- Kword("forward")
+    CONFORM             <- Kword("conform")
+    WHEN                <- Kword("when")
     UNDERSCORE          <- Kword("_")
 
     # The same words as the rules above, as literals: it's tried at every identifier, and a rule per

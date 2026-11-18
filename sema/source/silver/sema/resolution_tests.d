@@ -307,6 +307,7 @@ NameIndex indexNames(const Module m)
             (const ConstDecl c) => indexer.visit(c),
             (const AliasDecl _) {},
             (const InterfaceDecl _) {},
+            (const ConformDecl _) {},
             (const ImportStmt _) {},
         );
     }

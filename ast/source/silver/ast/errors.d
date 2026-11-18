@@ -44,6 +44,12 @@ enum DiagnosticCode : string
     NotAnInterface = "S0027",
     /// A cycle of forward imports that never settles on what a module passes on by a name.
     UnsettledForwardCycle = "S0028",
+    /// A `conform` whose type is one of the type parameters it introduces.
+    ConformsTypeParameter = "S0029",
+    /// An interface that requires itself, directly or through others.
+    RequiresItself = "S0030",
+    /// A `when` bound on a name that isn't a type parameter its conformance introduces.
+    UnknownWhenParameter = "S0031",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",
@@ -120,6 +126,12 @@ enum DiagnosticCode : string
     /// A value where an error union is expected that is one of its errors and could also become
     /// its success, so it has to be written as `Error(...)` or `Ok(...)`.
     ErrorOrSuccess = "T0050",
+    /// A conformance for which a function of the interface isn't found, or doesn't return what it has to.
+    UnmetConformance = "T0051",
+    /// A conformance to an interface that requires another the type has no conformance to.
+    MissingRequiredConformance = "T0052",
+    /// Two conformances that could apply to the same type and interface.
+    OverlappingConformance = "T0053",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

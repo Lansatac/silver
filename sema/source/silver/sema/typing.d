@@ -28,6 +28,11 @@ package struct Typing
     /// What each bound of a type parameter names, in the order written. One that couldn't be
     /// resolved is there too, and isn't `valid`.
     SideTable!(Id!TypeParam, Bound[]) bounds;
+    /// What each interface requires, in the order written, in terms of its own type parameters.
+    /// One that couldn't be resolved is there too, and isn't `valid`.
+    SideTable!(Id!InterfaceDecl, Bound[]) requires;
+    /// Every conformance the program declares, by interface, in declaration order.
+    SideTable!(Id!InterfaceDecl, Conforming[]) conformances;
     SideTable!(Id!Expr, const(Expr)[]) concatOperands;
     SideTable!(Id!Expr, const(CallExpr)*) methodCalls;
     SideTable!(Id!Expr, Id!FunctionDecl) methodCallees;
@@ -76,6 +81,20 @@ struct FunctionUse
     Witness[] witnesses;
 
     bool found() const => func.isValid;
+}
+
+/// What a `conform` declares for one of its interfaces: `self`, in terms of the type parameters
+/// the declaration introduces, which `holder` holds with their `when` bounds, satisfies `bound`
+/// through `witnesses`, one for each of the interface's functions.
+struct Conforming
+{
+    Id!ConformDecl decl;
+    Bound bound;
+    Type self;
+    Witness[] witnesses;
+    Id!FunctionDecl holder;
+    /// Where the interface is written in the declaration.
+    Span span;
 }
 
 /// An interface with its type arguments, as a bound names it.

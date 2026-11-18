@@ -189,6 +189,24 @@ Indexed<T>
     rejects("interface Json { }"),
     rejects("val interface = 1"),
 
+    declaresAs("interface Indexed<T>: Sized & Counted { def at(value: Self, i: Int): T }",
+        "(interface Indexed<T>: Sized & Counted (def at (value: Self, i: Int): T))"),
+    declaresAs("conform Point: Json", "(conform Point: Json)"),
+    declaresAs("conform [T]: Range<T> & Sized", "(conform [T]: Range<T> & Sized)"),
+    declaresAs("conform Mapped<R, T, U>: Range<U> when R: Range<T>, T: Json & Named",
+        "(conform Mapped<R, T, U>: Range<U> when R: Range<T>, T: Json & Named)"),
+    declaresAs("conform T?:
+    Json
+    when T: Json", "(conform T?: Json when T: Json)"),
+    declaresAs("conform lib.Foo: lib.Range<Int>", "(conform lib.Foo: lib.Range<Int>)"),
+    rejectsDeclaration("conform Point"),
+    rejectsDeclaration("conform Point: [Int]"),
+    rejectsDeclaration("conform Point: Json when"),
+    rejectsDeclaration("private conform Point: Json"),
+    // `conform` and `when` are only words in those places.
+    parsesAs("val conform = when", "(val conform when)"),
+    declaresAs("def when(conform: Int): Int => conform", "(def when (conform: Int): Int conform)"),
+
     parsesAs("val e = empty<Int>()", "(val e (call empty<Int>))"),
     parsesAs("val e = std.x.empty<Int>()", "(val e (call (. (. std x) empty<Int>)))"),
     parsesAs("val b = Box<UInt8>(1)", "(val b (call Box<UInt8> 1))"),

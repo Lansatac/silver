@@ -1,0 +1,5 @@
+// A type parameter alone isn't a type to conform.
+interface Sized { def size(value: Self): Int }
+conform T: Sized
+
+def main(): Unit => ()

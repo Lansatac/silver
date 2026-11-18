@@ -1,0 +1,9 @@
+// Conforming to an interface needs a conformance to each one it requires.
+interface Sized { def size(value: Self): Int }
+interface Indexed<T>: Sized { def at(value: Self, i: Int): T }
+type Grid(n: Int)
+def size(g: Grid): Int => g.n
+def at(g: Grid, i: Int): Int => i
+conform Grid: Indexed<Int>
+
+def main(): Unit => ()
