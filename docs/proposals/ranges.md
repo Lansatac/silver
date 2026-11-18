@@ -347,6 +347,8 @@ interface Backward<T> {
 - `first`, `last`, `find`, `min` and `max` return an option, `None` for an empty range.
 - `count`, `last` and `array` each have a second function that also asks for `Indexed<T>`, chosen where the type is known to be indexed.
 - **Left out of the first version**: grouping, chunks, windows, `cycle`, and an adapter that remembers steps.
+- **Designed, and built after the first version**: `sum`, which waits for a bound that says a type is a number, with `fold(0, (a, b) => a + b)` until then; `min`, `max`, `sorted` and `sortedBy`, which wait for `Ord`; and `Backward`, with `nextBack`, `reversed` and a `last` that steps from the end. Until then `last` indexes an indexed range and walks any other.
+- `unfold` and `repeat` are ordinary ranges whose `next` may never return `None`. `array()` on one never finishes, and nothing in its type says so.
 
 **The erased form** is `Seq<T>`, made with `seq()`:
 

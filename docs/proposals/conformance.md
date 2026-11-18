@@ -27,14 +27,12 @@ What's wanted is a range library that costs nothing most of the time in an optim
 - An interface that requires others.
 - Bounds answered from the table, and checked after a function is chosen.
 - `if type R: I` in a body, as the one way to ask for more than a bound says.
-- `for` by index when the type is `Indexed`.
+- `for` over any `Range`, always by stepping.
 
 Decided and deferred, each marked below:
 
 - **Who may declare a conformance, and a program's conformance that only the program sees.** Both need packages. Until then any module may declare one, a duplicate is an error wherever the two are, and every module sees the same answer.
-- **Functions with a default body.** `if type` covers what the range library needs: see [why](#functions-with-a-default-body-decided-deferred).
 - **`Ord`.**
-- **A result type or annotation that restricts to the interface.** It's independent of how conformance is found.
 
 Measured, two million elements ten times in an optimized build: a `map` and `filter` chain that only steps takes 20 ms against 18 ms for the loop by hand, and counting an array by stepping compiles to its length. Counting or taking the last element through a `map` stays a walk of every element, about 2 ms per two million, since the transform can panic and has to run. So nothing here is needed for the cost per element. The test is for the shortcuts an optimizer can't find, and for sizing an array before filling it.
 
@@ -72,7 +70,7 @@ conform Mapped<R, T, U>: Indexed<U> when R: Indexed<T>
 - A type parameter alone isn't a type to conform: `conform T: Sized when T: Indexed<U>` is an error. It can be allowed later without breaking a program.
 - `when` gives the bounds the type's parameters need. This is conditional conformance: a `Mapped<R, T, U>` is indexed when its source is.
 - For each function of the interface, with `Self` replaced, the function is the one a call of that name with those argument types would choose where the declaration is written. Its result has to be exactly the interface's, and `mutable` has to agree. This is today's rule for a bound, run once at the declaration instead of at every use.
-- A function with no default body that isn't found is an error at the declaration, as is one with the wrong result.
+- A function that isn't found is an error at the declaration, as is one with the wrong result.
 - The functions stay ordinary module-level functions. `c.next()` and `next(c)` mean what they do today, and a function can serve several interfaces.
 - A conformance is never `private`. It's a fact about the type, seen by every package that can see it. A private type can conform, and its values behave the same in generic code elsewhere. A conformance to a private interface is hidden already, since nothing outside can ask.
 
@@ -155,34 +153,6 @@ encode("text")         // error: `String` isn't a `Json`; no conformance is decl
 - A parameter of the interface that's only in a result is fixed by the conformance: `collect([1, 2, 3])` reads `T = Int` from `conform [T]: Range<T>`. A parameter in an argument is part of what the conformance is for, so a `Vec` can be an `Add<Vec>` and an `Add<Float>`.
 - A literal still has its default type by the time a bound is looked up.
 
-### Functions with a default body (decided, deferred)
-
-Not in the first version. An interface's functions are written in the interface, and `Range` is in `lang`, so every function of the range library with a faster form would have to be declared in the compiler's package: `count`, `last`, `array`, and the `fold` their bodies call. The [test](#asking-whether-a-type-conforms-decided) does the same job from the library. This stays for an interface a library owns. One thing is unsettled for then: an interface's function called by name fits every type, and can't step aside, so two interfaces in different modules with a function of one name make a call ambiguous for a type that has neither function of its own. Qualifying the call settles it.
-
-A function of an interface can have a body. A conformance uses a function of that name when one is found for the type, and the body otherwise:
-
-```silver
-interface Range<T> {
-    def next(range: Self): (T, Self)?
-    def count(range: Self): Int => fold(range, 0, (n, item) => n + 1)
-}
-
-def count<T>(xs: [T]): Int => length(xs)
-conform [T]: Range<T>                // uses the count above
-
-conform Countdown: Range<Int>        // uses the default
-
-def total<R: Range<Int>>(r: R): Int => count(r)
-
-total([1, 2, 3])        // the array's count
-total(Countdown(3))     // the default
-```
-
-- Each function of an interface is a function of the interface's module, generic over the conforming type, and callable by name: `count(Countdown(3))` reaches the default through the conformance.
-- The interface's own function isn't a candidate when a conformance looks for a better one.
-- An adapter passes a fast path on by writing it once. `Mapped` has `count(m) => count(m.source)`, and `Filtered` writes nothing and gets the default.
-- The functions are expected to differ in speed and not in what they compute. Nothing checks that.
-
 ### Asking whether a type conforms (decided)
 
 Where code needs to know whether a type has a capability it doesn't require, it asks in the body with `if type`:
@@ -235,7 +205,7 @@ A lambda's result no longer takes part in choosing: the function is chosen by th
 
 ### `for` (decided)
 
-`for` loops over a `Range`. When the type is `Indexed` as well, it loops by index, with `length` and `opIndex`, and otherwise it steps with `next`.
+`for` loops over a `Range`, and always steps with `next`.
 
 ```silver
 def total<R: Range<Int>>(r: R): Int {
@@ -244,16 +214,18 @@ def total<R: Range<Int>>(r: R): Int {
     sum
 }
 
-total([1, 2, 3])                  // by index
-total([1, 2, 3].map(double))      // by index: a Mapped over an array is Indexed
+total([1, 2, 3])                  // steps
+total([1, 2, 3].map(double))      // steps, though a Mapped over an array is Indexed
 total(Countdown(3))               // steps
 ```
 
-- It's the same rule for every type, an array included. An array has no loop of its own: it's a `Range` and an `Indexed` through `lang`'s conformances.
-- An `Interval` is a `Range` and a `Sized`, and not an `Indexed`, so every loop over one steps. Its `length` panics when it holds more integers than an `Int` counts, and a loop by index would panic where a loop that steps runs. `r[i]` and slicing an interval still work, since syntax finds `opIndex` by name. `(10..20).map(f)[3]` is an error.
-- So the compiler knows `Range`, `Sized` and `Indexed`, and all three are declared in `lang`.
-- In a generic function it's decided for each real type, as [asking](#asking-whether-a-type-conforms-decided) is.
-- A type's `next` and its `opIndex` are expected to give the same elements in the same order. Nothing checks that.
+- It's the same rule for every type, and in a generic function it asks nothing about the real type.
+- A loop over an array or an interval may run without calling `next`. It gives the elements stepping gives, so a program can't tell.
+- The compiler knows `Range` and no other interface. `Range` is declared in `lang`, and `Sized` and `Indexed` in `std.range`.
+- An `Interval` is an `Indexed`. Its `length` panics when it holds more integers than an `Int` counts, which a loop over it never asks for.
+- A function that's faster by index says so: it asks with `if type R: Indexed<T>` and loops with a `while`.
+
+Measured, two million elements ten times. In an optimized build a `for` over a `map` of a `map` takes 17 ms by index, 17 ms by stepping and 18 ms by hand, and one over a `map`, a `filter` and a `map` takes 17 ms against 20 ms by hand. Without optimization stepping the first takes 2.4 times what the loop by index does, and in the interpreter 1.8 times. A chain with a `filter` in it steps under either rule.
 
 ### Ordering (decided, deferred)
 
@@ -272,7 +244,7 @@ The library can't have had an order for `Tag`, or this would be a duplicate, so 
 ### An interface name as a type
 
 - As a parameter's type, unchanged.
-- As a result type or a binding's annotation, the value has the interfaces promised and no others, as already decided for the range work. How more is asked for is an [open question](#open-questions), since such a value's type has no name for `if type`. That is deferred as work of its own: until then the value keeps its own type, as built. Of its reasons, the promise being checked only in its author's module goes with conformance by search, and the question of how a promised result combines with functions that differ in their bounds no longer exists.
+- As a result type or a binding's annotation (decided), the value keeps its own type and everything that type can do, and the interface is a promise checked where it's written, against the table. See [Interfaces](../language/interfaces.md#an-interface-name-as-a-result-type). So a result can be asked about with `if type` wherever its type has a name, as a type parameter does when it's passed to a generic function.
 - A value whose type is only an interface, as in `[Json]`, holds the value and the conformance it was made with. `Seq<T>` is that for `Range<T>`.
 
 ### What doesn't change
@@ -297,7 +269,7 @@ The library can't have had an order for `Tag`, or this would be a duplicate, so 
 - Questions carried to callers, answers that may be absent, the pass that works them out, and the functions kept behind a call for each instance to choose from.
 - Bounds inside the overload choice, and with them a lambda's result deciding which function is chosen.
 - Instances keyed by the functions found. An instance is keyed by its types, and once a program's conformance is its own, by whether it was asked for from the program.
-- The array's own `for` loop.
+- A `for` by index, and the question a `for` asked about the real type in a generic function.
 
 ## Alternatives considered
 
@@ -315,21 +287,46 @@ The library can't have had an order for `Tag`, or this would be a duplicate, so 
 - **`private conform`.** A conformance that isn't a public promise. But `encode(point)` would work in one module and fail in the next, a second conformance for the same pair could be declared beside it, and instances would differ by module. A private interface gives a library an internal conformance without it.
 - **`Ord` declared only by the type's package.** One order per type with nothing to check. A library's type without one couldn't be a set's element or a map's key without a wrapper type.
 - **Going back to conformance by search, without functions that differ in their bounds.** Nothing new to build, and the chain already costs what the loop by hand does. Generic code then can't ask what a type can do without the answer being carried from each caller, which is the part that was hard.
-- **An `Interval` keeps a loop of its own.** `for i in a..b` would run directly, and the same interval passed to a generic function would loop by index and panic in `length` when it's large.
+- **`for` by index when the type is `Indexed`,** stepping otherwise. This was the earlier decision. It's faster without optimization and in the interpreter, and the same in an optimized build. The compiler then knows three interfaces, a `for` in a generic function asks about each real type, a type's `next` and `opIndex` have to agree with nothing to check it, and an `Interval` can't be an `Indexed`, since a loop by index would panic in `length` on one that a loop by stepping runs.
+- **A result type or annotation that restricts the value to the interface,** with a test to ask for more. This was the earlier decision. It lets a function return a private type, and keeps a caller from depending on more than was promised. A result's type then has no name for `if type` to ask about, so it needs a form of its own. A generic function would still see the real type, since `if type` is settled for each one, so the restriction would hold only where the result is used directly. And a function that wraps a chain would lose what the library's own adapters pass on. A function that hides how its range is built returns a `Seq<T>`, and one that wants a stable type writes it out.
 - **`if val indexed: Indexed<Int> = r`,** the test as a pattern on a value. This was the earlier decision. It reads as the `name: Type` pattern, which asks about a value while the program runs, and on an option it reads as unwrapping one. It also needs a second name for a narrowed view of the same value.
 - **`if R: Indexed<Int>`,** with no marker. It matches a bound exactly. In a body, among ordinary `if`s, nothing but a capital letter and a colon says that this one is settled when the function is compiled.
 - **`static if`.** It says when the question is settled. In D the branch not taken isn't compiled and the block can hold declarations, and here both branches are checked and it's an expression. It also reads as a condition on any compile-time value, which is a different feature.
-- **`for` always stepping with `next`.** One meaning, and the compiler knows one interface. It leaves the speed of a loop over an indexed chain to the optimizer, and to nothing in the interpreter.
-- **`for` stepping, except over built-in types.** No interface but `Range` for the compiler to know, and an array's two ways are known to agree. Arrays stay a special case, and a `Mapped` over one still steps.
 - **Other spellings:** `where` for `when`; bounds in `<>` after `conform`, as on a `def`; `impl Range<Int> for Countdown`. `conform T: I` reads as the bound it satisfies.
+
+### Functions with a default body (considered, not taken)
+
+A function of an interface could have a body, used by a conformance when no function of that name is found for the type. This was decided and then deferred, and is no longer a decision. [`if type`](#asking-whether-a-type-conforms-decided) does the same job from the library, so a fast path has one way to be written. An interface's functions are written in the interface, and `Range` is in `lang`, so every function of the range library with a faster form would have had to be declared in the compiler's package: `count`, `last`, `array`, and the `fold` their bodies call. One thing was never settled: an interface's function called by name fits every type, and can't step aside, so two interfaces in different modules with a function of one name make a call ambiguous for a type that has neither function of its own. It could come back for an interface a library owns. As it was described:
+
+```silver
+interface Range<T> {
+    def next(range: Self): (T, Self)?
+    def count(range: Self): Int => fold(range, 0, (n, item) => n + 1)
+}
+
+def count<T>(xs: [T]): Int => length(xs)
+conform [T]: Range<T>                // uses the count above
+
+conform Countdown: Range<Int>        // uses the default
+
+def total<R: Range<Int>>(r: R): Int => count(r)
+
+total([1, 2, 3])        // the array's count
+total(Countdown(3))     // the default
+```
+
+- Each function of an interface is a function of the interface's module, generic over the conforming type, and callable by name: `count(Countdown(3))` reaches the default through the conformance.
+- The interface's own function isn't a candidate when a conformance looks for a better one.
+- An adapter passes a fast path on by writing it once. `Mapped` has `count(m) => count(m.source)`, and `Filtered` writes nothing and gets the default.
+- The functions are expected to differ in speed and not in what they compute. Nothing checks that.
 
 ## What changes for ranges
 
-- `Range`, `Sized` and `Indexed` are declared in the compiler's package, since `for` uses all three, with the built-in types' conformances beside them. `Range` has `next` and nothing else. `Indexed` requires `Sized` and no longer declares `length` itself. `Backward` stays in `std.range`.
-- An `Interval` isn't an `Indexed`.
+- `Range` is declared in the compiler's package, since `for` uses it, with the built-in types' conformances to it. It has `next` and nothing else. `Sized`, `Indexed` and `Backward` are in `std.range`, which declares the built-in types' conformances to them. `Indexed` requires `Sized` and no longer declares `length` itself.
+- A `for` always steps, so a loop over an indexed chain is no longer a loop by index. A consumer that wants one asks.
 - Each adapter declares its own conformances, with `when`.
 - `count`, `last`, `array` and the others with a second function for an indexed or backward source become one function each that asks in its body.
-- A result type that's an interface stays as built until the restricting form is taken up, and the open question about functions that differ in their bounds goes.
+- A result type that's an interface stays as built: the result keeps its own type. The open question about functions that differ in their bounds goes.
 - Answering a question inside an invariant goes with the questions.
 - A chain built in one module and consumed in another is the same range in both, so the prelude no longer has to forward every adapter's `next` for that reason.
 
@@ -341,4 +338,3 @@ The library can't have had an order for `Tag`, or this would be a duplicate, so 
 4. Whether a conformance for a bare type parameter is allowed, and what wins where it overlaps.
 5. Whether a type can have a field only when a type argument conforms.
 6. A form with several arms, as `match type R { ... }`.
-7. How a result whose type is only an interface is asked about, once that's taken up: it has no name for `if type` to use.

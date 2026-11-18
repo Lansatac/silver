@@ -66,19 +66,17 @@ The iterable is evaluated once, before the loop. The loop variable is immutable,
 
 The loop variable can be a tuple pattern, which takes each element apart as `val` would: `for (name, count) in [("a", 1), ("b", 2)] { ... }`. The pattern is names, `_`, and tuples of those, and it binds only in the body. An element of the wrong shape is an error, as it would be for `val (name, count) = element`.
 
-A range is half-open. One whose start isn't below its end is empty, and a range ending at a type's maximum doesn't overflow. `for i in a..b` and a `for` over an [`Interval`](arrays.md#ranges) held in a name give the same elements, in a generic function too: an interval is a `Range` and not an `Indexed`, so a loop over one always steps from its start while below its end, and never calls `length`.
+A range is half-open. One whose start isn't below its end is empty, and a range ending at a type's maximum doesn't overflow. `for i in a..b` and a `for` over an [`Interval`](arrays.md#ranges) held in a name give the same elements, in a generic function too: a loop over either steps from its start while below its end, and never calls `length`.
 
 ### Looping over a value of your own
 
-A type `R` can be looped over when it's a `Range<T>`. That takes a function `next(r: R): (T, R)?`, which returns the next element and the rest, or `None` at the end, and a declaration that says so. Each element is a `T`. When the type is an `Indexed<T>` as well, with `length(r: R): Int` and `opIndex(r: R, index: Int): T`, the function that `r[i]` calls, the loop goes by index and `next` isn't called.
+A type `R` can be looped over when it's a `Range<T>`. That takes a function `next(r: R): (T, R)?`, which returns the next element and the rest, or `None` at the end, and a declaration that says so. Each element is a `T`.
 
 ```silver
 interface Range<T> { def next(range: Self): (T, Self)? }
-interface Sized { def length(value: Self): Int }
-interface Indexed<T>: Sized { def opIndex(value: Self, index: Int): T }
 ```
 
-The three are declared in `lang`, the [package the compiler knows](modules.md#the-package-the-compiler-knows).
+`Range` is declared in `lang`, the [package the compiler knows](modules.md#the-package-the-compiler-knows).
 
 ```silver
 type Countdown(from: Int)
@@ -87,25 +85,14 @@ def next(c: Countdown): (Int, Countdown)? =>
     if c.from == 0 => None else Some((c.from, Countdown(c.from - 1)))
 conform Countdown: Range<Int>
 
-type Squares(from: Int, count: Int)
-
-def next(s: Squares): (Int, Squares)? =>
-    if s.count == 0 => None else Some((s.from * s.from, Squares(s.from + 1, s.count - 1)))
-def length(s: Squares): Int => s.count
-def opIndex(s: Squares, index: Int): Int => (s.from + index) * (s.from + index)
-conform Squares: Range<Int> & Sized & Indexed<Int>
-
 for n in Countdown(3) {
-    printl(n)    // 3, 2, 1, by stepping
-}
-for n in Squares(0, 3) {
-    printl(n)    // 0, 1, 4, by index
+    printl(n)    // 3, 2, 1
 }
 ```
 
-A type that's an `Indexed` and not a `Range` isn't looped over: what a `for` takes is what the functions that step a range take.
+A type with a `length` and an `opIndex` and no `next` isn't looped over: what a `for` takes is what the functions that step a range take.
 
-By index, `for x in r { body }` calls `length(r)` once, before the loop, then `opIndex(r, i)` for each `i` from `0` up to the length, in order, even when the loop variable is `_`. By stepping, it means:
+`for x in r { body }` means:
 
 ```silver
 mutable val rest = r
@@ -118,9 +105,9 @@ while val step = next(rest) {
 
 `rest` is a hidden variable. It has moved on before the body runs, so `continue` goes to the next element. `next` is called once per element, and once more for the `None` that ends the loop.
 
-The functions are the ones the type's conformances found where they were declared, so a loop means the same wherever it's written. In a generic function, over a value whose type has a `Range` bound, which way it loops is decided for each real type, as an [`if type`](interfaces.md#asking-whether-a-type-conforms) is. A type's `next` and its `opIndex` are expected to give the same elements in the same order, and nothing checks that.
+The `next` is the one the type's conformance found where it was declared, so a loop means the same wherever it's written, in a generic function too. A loop never calls `length` or `opIndex`, whatever else the type conforms to. A function that's faster by index asks whether its type is indexed with an [`if type`](interfaces.md#asking-whether-a-type-conforms) and loops with a `while`.
 
-An array has no loop of its own. It's a `Range` and an `Indexed` through `lang`'s conformances, so it's looped by index.
+A loop over an array or an interval gives the elements that stepping it gives. It may run without calling `next`, which a program can't observe.
 
 ## break and continue
 
@@ -162,6 +149,6 @@ None.
 
 ## Current implementation
 
-- A `for` needs no conformance: it finds `next`, `length` and `opIndex` by name, as a call where the loop is written would, and goes by index when all three take the type. Inside a generic function it uses the bound's functions.
+- A `for` needs no conformance: it finds `next`, `length` and `opIndex` by name, as a call where the loop is written would, and goes by index when all three take the type, where it's meant to step. By index it calls `length` once, then `opIndex` for each position. Inside a generic function it uses the bound's functions.
 - An array and an `Interval` each have a loop of their own, which calls none of those functions. A generic function given an interval loops it by index, through its `length`.
 - The error for a type with a `length` and an `opIndex` but no `next` suggests `iterate()`, which isn't built yet.

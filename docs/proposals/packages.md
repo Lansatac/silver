@@ -72,7 +72,7 @@ package silver at source
 The compiler refers to one package by name, `lang`. Everything else, the standard library included, is an ordinary package.
 
 1. `intrinsic def` and `intrinsic alias` are allowed only in `lang`.
-2. Every declaration the compiler refers to itself is declared there: `Interval` today, and `Range`, `Sized` and `Indexed` once `for` goes through [declared conformance](conformance.md#for-decided).
+2. Every declaration the compiler refers to itself is declared there: `Interval` today, and `Range` once `for` goes through [declared conformance](conformance.md#for-decided).
 3. `lang` depends on nothing. `std` depends on it, and never the reverse.
 4. `lang` ships with the compiler, at the compiler's version, and can't be replaced. `std` can be versioned on its own.
 5. A declaration belongs there only when it's an intrinsic or the compiler names it. Anything that's plain Silver belongs in `std`.

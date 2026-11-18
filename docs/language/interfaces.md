@@ -348,7 +348,7 @@ current = current.filter(x => x > 2)              // error: current is an [Int]
 - A shorter way to write a function for a type only in the result, such as `def Point.fromText(text: String): Point?`.
 - Whether `Of` is the right name.
 
-Decided, and not part of the first version, each described in the [conformance proposal](../proposals/conformance.md): which [package](modules.md#packages) may declare a conformance, and a program's conformance for a library's type that only the program sees; functions of an interface with a default body; `Ord` as an ordinary interface; and a result type or annotation that restricts a value to the interface. The proposal also has the reasoning behind these rules and what was rejected. The [ranges proposal](../proposals/ranges.md#an-interface-name-as-a-type-decided) covers an interface name as a result type.
+Decided, and not part of the first version, each described in the [conformance proposal](../proposals/conformance.md): which [package](modules.md#packages) may declare a conformance, and a program's conformance for a library's type that only the program sees; and `Ord` as an ordinary interface. The proposal also has the reasoning behind these rules and what was rejected. The [ranges proposal](../proposals/ranges.md#an-interface-name-as-a-type-decided) covers an interface name as a result type.
 
 ## Current implementation
 

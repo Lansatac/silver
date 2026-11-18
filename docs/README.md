@@ -24,7 +24,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Numbers](language/numbers.md) | Numeric types, literals, operators, overflow, conversions | Implemented |
 | [Bindings](language/bindings.md) | `val`, `mutable val`, discards, shadowing, constants | Implemented |
 | [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading, operator functions | Partial: no tail calls, `opEquals`, `opCompare` or `opString`; bounds still take part in overloading |
-| [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented, except that `for` finds its functions by name and not by conformance |
+| [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented, except that `for` finds its functions by name and not by conformance, and goes by index where it can |
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
 | [Errors](language/errors.md) | `T ! E`, `?` and `!` on errors, what panics, `main` | Implemented, except `read()` returning an error |
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, `a..b` as an `Interval` | Implemented, except that element assignment always copies |

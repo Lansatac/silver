@@ -217,7 +217,7 @@ def opHash<K, V>(m: Map<K, V>): UInt64 => ...      // combines the entries in an
 
 Structural equality is right for nearly every type. These functions are for a type whose fields can differ for values that mean the same thing, such as a collection whose layout depends on the order it was built in. A comparison that ignores part of a value, such as positions in source or the case of a name, is an ordinary function, passed where it's needed, and not a replacement for `==`.
 
-A function that's useful to call by name keeps a plain name, even where syntax uses it: `length` and `next`, which `for` calls through the type's conformance to [`Range`](control-flow.md#for).
+A function that's useful to call by name keeps a plain name, even where syntax uses it: `length`, and `next`, which `for` calls through the type's conformance to [`Range`](control-flow.md#for).
 
 ## Open questions
 
