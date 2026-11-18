@@ -1,0 +1,11 @@
+// A bound that only an `if type` gives can't be passed on outside its true branch.
+interface Sized { def size(value: Self): Int }
+
+def twice<S: Sized>(s: S): Int => size(s) * 2
+
+def f<T>(x: T): Int {
+    if type T: Sized { printl("sized") }
+    twice(x)
+}
+
+def main(): Unit => ()

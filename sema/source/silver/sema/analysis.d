@@ -8,7 +8,8 @@ import silver.sema.resolve;
 import silver.sema.target : Intrinsic, intrinsicNamed, Target;
 import silver.sema.type;
 
-import std.algorithm : map;
+import std.algorithm : all, canFind, map;
+import std.range : iota;
 import std.array : array;
 import std.sumtype : match;
 
@@ -216,7 +217,143 @@ final class Analysis
     const(size_t)* witnessIndexOf(Id!FunctionDecl func) const
     {
         auto requirement = func in _resolution.requirements;
-        return requirement is null ? null : &requirement.index;
+        return requirement is null || requirement.test.isValid ? null : &requirement.index;
+    }
+
+    /// For the `if type` `if_`: the type it asks about, in terms of the type parameters of the
+    /// function it's in.
+    Type testedType(Id!Expr if_) const
+    {
+        auto param = _resolution.declarations.typeParams[_resolution.tests[if_].param];
+        return (cast(TypeTable) _typing.types).parameter(param.id, param.name);
+    }
+
+    /// What the `if type` `if_` asks its type to satisfy, as `testedType` is: the bounds written,
+    /// then what they require.
+    const(Bound)[] testBoundsOf(Id!Expr if_) const
+    {
+        return _typing.testBounds[if_];
+    }
+
+    /// The functions the bounds of the `if type` `if_` supply in its true branch, in the order of
+    /// the witnesses `conforms` finds for its bounds, one after another.
+    const(Id!FunctionDecl)[] testFunctionsOf(Id!Expr if_) const
+    {
+        return _resolution.tests[if_].functions;
+    }
+
+    /// Whether `self`, which mentions no type parameter, satisfies `bound`, whose arguments don't
+    /// either, by the program's conformances; and if so the function behind each of the
+    /// interface's, which mention none either.
+    bool conforms(const Bound bound, Type self, out Witness[] witnesses) const
+    {
+        Substitution open;
+        return lookUp(bound.decl, self, bound.args, open, witnesses);
+    }
+
+    /// `conforms` for `args` that can mention type parameters that aren't in `open` yet, which
+    /// the conformance found binds there.
+    private bool lookUp(Id!InterfaceDecl decl, Type self, const(Type)[] args, ref Substitution open, out Witness[] witnesses) const
+    {
+        auto table = cast(TypeTable) _typing.types;
+        foreach (entry; _typing.conformances.get(decl, null))
+        {
+            Substitution s;
+            if (!matchType(entry.self, self, s)) continue;
+            // An argument already known says what the conformance's parameters in it are.
+            auto fits = args.length.iota.all!((k) {
+                auto known = table.substitute(args[k], open);
+                return table.mentionsParameter(known) || matchType(entry.bound.args[k], known, s);
+            });
+            Witness[] supplied;
+            if (!fits || !solveWhen(entry.holder, s, supplied)) continue;
+            auto opened = open.dup;
+            fits = args.length.iota.all!((k) {
+                auto declared = table.substitute(entry.bound.args[k], s);
+                auto known = table.substitute(args[k], opened);
+                return matchType(known, declared, opened) && table.substitute(known, opened) == declared;
+            });
+            if (!fits) continue;
+            foreach (param, type; opened) open[param] = type;
+            witnesses = entry.witnesses.map!(w => given(w, s, supplied, entry.holder)).array;
+            return true;
+        }
+        return false;
+    }
+
+    /// Looks up the `when` bounds of the conformance whose type parameters `holder` holds, as `s`
+    /// binds them, binding those that only a `when` bound decides. Whether they hold, and the
+    /// witness for each function they supply.
+    private bool solveWhen(Id!FunctionDecl holder, ref Substitution s, out Witness[] supplied) const
+    {
+        // As the checker's `conformanceOf` does, so the two agree.
+        supplied = new Witness[_resolution.boundFunctions.get(holder, null).length];
+        auto slots = boundSlots(_resolution, _typing, holder);
+        auto decided = new bool[slots.length];
+        for (auto progress = true; progress;)
+        {
+            progress = false;
+            foreach (i, slot; slots)
+            {
+                if (decided[i]) continue;
+                auto self = slot.param in s;
+                if (self is null) continue;
+                auto declared = _typing.bounds[slot.param][slot.bound];
+                Witness[] found;
+                if (!lookUp(declared.decl, *self, declared.args, s, found)) return false;
+                supplied[slot.start .. slot.end] = found[];
+                decided[i] = true;
+                progress = true;
+            }
+        }
+        return !decided.canFind(false);
+    }
+
+    /// `witness`, found for a conformance, for its type parameters as `s` binds them: what one of
+    /// `holder`'s `when` bounds supplies is what `supplied` gives for it.
+    private Witness given(const Witness witness, const Substitution s, const(Witness)[] supplied, Id!FunctionDecl holder) const
+    {
+        if (auto requirement = witness.func in _resolution.requirements)
+        {
+            if (requirement.owner == holder) return cast() supplied[requirement.index];
+        }
+        auto table = cast(TypeTable) _typing.types;
+        return Witness(witness.func, witness.typeArgs.map!(t => table.substitute(t, s)).array,
+            witness.witnesses.map!(w => given(w, s, supplied, holder)).array);
+    }
+
+    /// Binds the type parameters `pattern` mentions that `s` doesn't bind yet so that it's
+    /// `actual`. Whether it can be.
+    private bool matchType(Type pattern, Type actual, ref Substitution s) const
+    {
+        if (pattern == actual) return true;
+        auto table = types;
+        bool all(const(Type)[] patterns, const(Type)[] actuals, ref Substitution into)
+        {
+            if (patterns.length != actuals.length) return false;
+            foreach (i, p; patterns)
+            {
+                if (!matchType(p, actuals[i], into)) return false;
+            }
+            return true;
+        }
+        auto data = table[actual];
+        return table[pattern].match!(
+            (const TypeParamData p) {
+                if (auto known = p.param in s) return *known == actual;
+                s[p.param] = actual;
+                return true;
+            },
+            (const OptionData o) => data.match!((const OptionData a) => matchType(o.inner, a.inner, s), _ => false),
+            (const ArrayData a) => data.match!((const ArrayData b) => matchType(a.element, b.element, s), _ => false),
+            (const TupleData t) => data.match!((const TupleData u) => all(t.elements, u.elements, s), _ => false),
+            (const NominalData n) => data.match!((const NominalData m) => m.decl == n.decl && all(n.args, m.args, s), _ => false),
+            (const ErrorUnionData u) => data.match!(
+                (const ErrorUnionData v) => matchType(u.success, v.success, s) && matchType(u.error, v.error, s), _ => false),
+            (const FunctionData f) => data.match!((const FunctionData g) => f.mutables == g.mutables
+                && all(f.params ~ f.ret, g.params ~ g.ret, s), _ => false),
+            _ => false,
+        );
     }
 
     /// The type parameters of `func`, which its type arguments are in the order of: those it

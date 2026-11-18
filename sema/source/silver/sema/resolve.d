@@ -134,6 +134,9 @@ package struct Resolution
     /// it introduces, with the bounds its `when` gives them, so they supply functions as a generic
     /// function's bounds do.
     SideTable!(Id!ConformDecl, Id!FunctionDecl) conformances;
+    /// For each `if type`, by the `if`: the type parameter it asks about and the functions its
+    /// bounds supply in its true branch, which a caller doesn't give witnesses for.
+    SideTable!(Id!Expr, Test) tests;
 
     /// The type parameters of `func`: those it declares, then its hidden ones.
     const(TypeParam)[] typeParamsOf(Id!FunctionDecl func) const
@@ -263,6 +266,20 @@ package struct Requirement
     size_t bound;
     Id!FunctionDecl declared;
     size_t index;
+    /// For a function an `if type` supplies, the `if`; `index` is then where it is among the
+    /// test's functions.
+    Id!Expr test;
+}
+
+/// What an `if type` asks: whether `param`, a type parameter of `owner`, satisfies its bounds.
+package struct Test
+{
+    Id!FunctionDecl owner;
+    Id!TypeParam param;
+    /// The true branch, where they hold.
+    Id!Expr branch;
+    /// The functions its bounds supply, by bound and then the interface's function.
+    Id!FunctionDecl[] functions;
 }
 
 /// An interface a type parameter's bounds require without naming it: the `which`th interface that
@@ -603,6 +620,9 @@ private final class NameResolver
     private ForwardImport[][string] _forwardImports;
     private ListedImport[][string] _listedImports;
     private SideTable!(Id!ConformDecl, Id!FunctionDecl) _conformances;
+    private SideTable!(Id!Expr, Test) _tests;
+    /// The module-level function whose body is being resolved.
+    private Id!FunctionDecl _bodyOf;
     /// Where the nodes resolution makes up get their IDs.
     private NodeIds _ids;
 
@@ -656,7 +676,7 @@ private final class NameResolver
         }
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
             _operatorLookups, _declarations, _nativeLibraries, cast(const(Scope)[string]) _moduleScopes, _hiddenParams, _sugarParams,
-            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances, _forwardImports, _listedImports, _conformances);
+            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances, _forwardImports, _listedImports, _conformances, _tests);
     }
 
     /// Works out what every module forwards. A blanket forward passes on what its module forwards
@@ -1432,8 +1452,11 @@ private final class NameResolver
 
                     if (func.body !is null)
                     {
+                        auto outer = _bodyOf;
+                        _bodyOf = func.id;
                         resolveBody(func.params, *func.body, declScope, Id!Expr.init, Id!VarDecl.init,
                             func.invariantOf.isValid);
+                        _bodyOf = outer;
                     }
                 },
                 (ref const TypeDecl type) {
@@ -1620,6 +1643,64 @@ private final class NameResolver
             }
         }
         return bodyScope is null ? declScope : bodyScope;
+    }
+
+    /// Resolves what the `if type` `test` of the `if` `expr` asks, and gives its true branch, `branch`, a scope
+    /// inside `current` in which its bounds supply their functions, beside what's supplied already.
+    private Scope declareTest(Id!Expr expr, const TypeTest test, Id!Expr branch, Scope current)
+    {
+        foreach (bound; test.bounds) resolveTypeExpr(bound, current, InterfaceUse.bound);
+        auto symbol = current.resolveType(test.name);
+        auto param = symbol is null ? Id!TypeParam.init
+            : (*symbol).match!((const Id!TypeParam p) => p, _ => Id!TypeParam.init);
+        auto owner = _bodyOf;
+        if (!param.isValid || !owner.isValid || !_declarations.functions[owner].typeParams.canFind!(p => p.id == param))
+        {
+            if (symbol is null)
+            {
+                _collector.reportError(DiagnosticCode.UnknownType, test.span, "Unknown type `%s`".format(test.name));
+            }
+            else
+            {
+                _collector.reportError(DiagnosticCode.TestsNonParameter, test.span,
+                    "`if type` asks about a type parameter of the function it's in, and `%s` isn't one".format(test.name));
+            }
+            return current;
+        }
+        auto written = test.bounds.map!((b) {
+            auto interface_ = interfaceNamed(b);
+            return interface_ is null ? Id!InterfaceDecl.init : interface_.id;
+        }).array;
+        Span[] spans = test.bounds.map!(b => cast() b.span).array;
+        auto decls = written.dup;
+        foreach (implied; impliedBounds(written, &requiresOf))
+        {
+            decls ~= implied.decl;
+            spans ~= spans[implied.from];
+        }
+        auto branchScope = new Scope(current);
+        Test asked = Test(owner, param, branch);
+        foreach (b, decl; decls)
+        {
+            if (!decl.isValid) continue;
+            foreach (ref declared; _declarations.interfaces[decl].functions)
+            {
+                auto supplied = new FunctionDecl(_ids.next!FunctionDecl, declared.name, spans[b], cast(Param[]) declared.params,
+                    null, cast() declared.returnType, FunctionKind.required);
+                _declarations.functions[supplied.id] = supplied;
+                _declarations.functionModules[supplied.id] = _currentModule;
+                _requirements[supplied.id] = Requirement(owner, param, b, declared.id, asked.functions.length, expr);
+                asked.functions ~= supplied.id;
+                // What's supplied outside is still supplied inside.
+                if (declared.name !in branchScope._boundFunctions)
+                {
+                    foreach (outer; current.boundFunctionsNamed(declared.name)) branchScope.declareBoundFunction(declared.name, outer);
+                }
+                branchScope.declareBoundFunction(declared.name, supplied.id);
+            }
+        }
+        _tests[expr] = asked;
+        return branchScope;
     }
 
     /// The interface `type` names, or null if it doesn't name one.
@@ -2343,7 +2424,11 @@ private final class NameResolver
             },
             (const IfExpr ifExpr) {
                 auto trueScope = scopeTable;
-                if (ifExpr.binding is null)
+                if (ifExpr.test !is null)
+                {
+                    trueScope = declareTest(expr.id, *ifExpr.test, ifExpr.trueBody.id, scopeTable);
+                }
+                else if (ifExpr.binding is null)
                 {
                     resolveExpr(*ifExpr.condition, scopeTable);
                 }

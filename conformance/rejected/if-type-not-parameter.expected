@@ -1,0 +1,1 @@
+S0032: `if type` asks about a type parameter of the function it's in, and `Int` isn't one

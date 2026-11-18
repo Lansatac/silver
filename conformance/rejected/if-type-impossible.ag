@@ -1,0 +1,6 @@
+// A test that the type's bounds already rule out is a mistake, as two such bounds are.
+def f<R: Range<Int>>(r: R): Int =>
+    if type R: Range<String> => 1
+    else 2
+
+def main(): Unit => ()

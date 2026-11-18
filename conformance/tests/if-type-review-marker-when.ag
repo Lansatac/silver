@@ -1,0 +1,16 @@
+// A `when` bound on an interface with no functions still has to hold: `Box<Int>` isn't a `Sized`,
+// because `Int` isn't a `Marker`.
+interface Marker {}
+interface Sized { def size(value: Self): Int }
+type Box<T>(inner: T)
+type Good(x: Int)
+def size<T>(b: Box<T>): Int => 1
+conform Good: Marker
+conform Box<T>: Sized when T: Marker
+
+def measure<T>(x: T): Int => if type T: Sized => size(x) else -1
+
+def main(): () {
+    printl(measure(Box(Good(1))))
+    printl(measure(Box(1)))
+}

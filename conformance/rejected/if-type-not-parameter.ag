@@ -1,0 +1,6 @@
+// `if type` asks about a type parameter of the function it's in.
+interface Sized { def size(value: Self): Int }
+
+def f(x: Int): Int => if type Int: Sized => 1 else 2
+
+def main(): Unit => ()

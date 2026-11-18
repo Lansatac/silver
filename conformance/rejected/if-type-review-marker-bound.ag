@@ -1,0 +1,5 @@
+// A bound on an interface with no functions is checked at the call, as any bound is.
+interface Marker {}
+def g<T: Marker>(x: T): Int => 1
+
+def main(): () { printl(g(1)) }

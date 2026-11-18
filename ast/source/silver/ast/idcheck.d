@@ -246,6 +246,7 @@ private final class IdCheck
             },
             (const IfExpr i) {
                 if (i.binding !is null) visit(*i.binding, i.binding.nameSpan);
+                if (i.test !is null) foreach (bound; i.test.bounds) visit(bound);
                 visit(i.condition);
                 visit(i.trueBody);
                 visit(i.falseBody);

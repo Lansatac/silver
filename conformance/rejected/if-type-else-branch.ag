@@ -1,0 +1,8 @@
+// What an `if type` asks holds only in its true branch.
+interface Sized { def size(value: Self): Int }
+
+def f<T>(x: T): Int =>
+    if type T: Sized => size(x)
+    else size(x)
+
+def main(): Unit => ()

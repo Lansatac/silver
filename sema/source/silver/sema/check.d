@@ -117,6 +117,7 @@ private final class TypeChecker
         _resolutions = resolutions;
         _ids = ids;
         _declarer = new Declarer(_types, &_typing, resolutions, collector);
+        foreach (test; resolutions.tests.byKey) _testsByBranch[resolutions.tests[test].branch] = test;
     }
 
     private TypeTable _types;
@@ -167,6 +168,10 @@ private final class TypeChecker
     private Conformance[Looked] _lookups;
     /// What a `for` asks the element type of its `Range` to be.
     private TypeParam _loopElement;
+    /// The `if type`s whose true branch is being checked, innermost last, by the `if`.
+    private Id!Expr[] _activeTests;
+    /// Each `if type`, by its true branch.
+    private Id!Expr[Id!Expr] _testsByBranch;
     /// Every use of a generic function, for `rejectGrowingCalls`.
     private Reference[] _references;
     private InvariantUse[] _invariantUses;
@@ -483,24 +488,36 @@ private final class TypeChecker
     /// says what those are, so no type could meet both.
     private void rejectImpossibleBounds(const(TypeParam)[] params)
     {
-        foreach (param; params)
+        foreach (param; params) rejectImpossibleBounds(param.name, param.span, _typing.bounds.get(param.id, null));
+    }
+
+    /// Reports, at `span`, a pair of `bounds` on the type parameter `name` that no type satisfies,
+    /// the later of them from `from` on.
+    private void rejectImpossibleBounds(string name, Span span, const(Bound)[] bounds, size_t from = 0)
+    {
+        foreach (j, later; bounds)
         {
-            auto bounds = _typing.bounds.get(param.id, null);
-            foreach (j, later; bounds)
+            if (!later.valid || j < from) continue;
+            foreach (earlier; bounds[0 .. j])
             {
-                if (!later.valid) continue;
-                foreach (earlier; bounds[0 .. j])
+                if (!earlier.valid || earlier.decl != later.decl || earlier.args == later.args) continue;
+                if (argumentParameters(later.decl).any!(i => earlier.args[i] != later.args[i])) continue;
+                if (from > 0)
                 {
-                    if (!earlier.valid || earlier.decl != later.decl || earlier.args == later.args) continue;
-                    if (argumentParameters(later.decl).any!(i => earlier.args[i] != later.args[i])) continue;
-                    _collector.reportError(DiagnosticCode.InvalidBound, param.span,
-                        "`%s` can't be both %s and %s: a type has one conformance to `%s`, which says what %s"
-                            .format(param.name, withArticle(_declarer.describe(earlier)), withArticle(_declarer.describe(later)),
-                                _resolutions.declarations.interfaces[later.decl].name,
-                                resultOnlyParameters(later.decl).map!(i => "`" ~ _resolutions.declarations.interfaces[later.decl]
-                                    .typeParams[i].name ~ "`").join(" and ") ~ (resultOnlyParameters(later.decl).length == 1 ? " is" : " are")));
-                    break;
+                    // A test asks for less than the bounds already say, not something else.
+                    _collector.reportError(DiagnosticCode.InvalidBound, span,
+                        "`%s` is already %s, so it can't also be %s: a type has one conformance to `%s`, and the bounds already say which"
+                            .format(name, withArticle(_declarer.describe(earlier)), withArticle(_declarer.describe(later)),
+                                _resolutions.declarations.interfaces[later.decl].name));
+                    return;
                 }
+                _collector.reportError(DiagnosticCode.InvalidBound, span,
+                    "`%s` can't be both %s and %s: a type has one conformance to `%s`, which says what %s"
+                        .format(name, withArticle(_declarer.describe(earlier)), withArticle(_declarer.describe(later)),
+                            _resolutions.declarations.interfaces[later.decl].name,
+                            resultOnlyParameters(later.decl).map!(i => "`" ~ _resolutions.declarations.interfaces[later.decl]
+                                .typeParams[i].name ~ "`").join(" and ") ~ (resultOnlyParameters(later.decl).length == 1 ? " is" : " are")));
+                return;
             }
         }
     }
@@ -1348,7 +1365,7 @@ private final class TypeChecker
             (const IfExpr if_) {
                 if (if_.falseBody is null) return synthesizeIf(if_, expr.span, ctx);
                 checkIfHead(if_, ctx);
-                auto thenType = checkDiscarded(*if_.trueBody, ctx);
+                auto thenType = trueBranch(if_, () => checkDiscarded(*if_.trueBody, ctx));
                 auto elseType = checkDiscarded(*if_.falseBody, ctx);
                 return thenType == _types.never && elseType == _types.never ? _types.never : _types.unit;
             },
@@ -2638,7 +2655,8 @@ private final class TypeChecker
                 if (if_.falseBody is null) return Type.init;
                 checkIfHead(if_, ctx);
                 const(Expr)[] bodies = [*if_.trueBody, *if_.falseBody];
-                return joinedOf(bodies, bodies.map!(b => synthesizeToward(b, expected, ctx)).array, expr.span, "Branches");
+                auto thenType = trueBranch(if_, () => synthesizeToward(*if_.trueBody, expected, ctx));
+                return joinedOf(bodies, [thenType, synthesizeToward(*if_.falseBody, expected, ctx)], expr.span, "Branches");
             },
             (const MatchExpr match_) {
                 if (match_.origin == MatchOrigin.IfVal) return Type.init;
@@ -4348,20 +4366,37 @@ private final class TypeChecker
                 result.failure = "nothing here says what it can do";
                 return result;
             }
-            size_t[] fitting;
-            Substitution chosen;
-            foreach (k, given; _typing.bounds.get(param, null))
+            // Its own bounds, then what each `if type` around the site asks of it.
+            static struct Given { Bound bound; size_t index; Id!Expr test; }
+            Given[] givens;
+            foreach (k, b; _typing.bounds.get(param, null)) givens ~= Given(b, k);
+            foreach (test; _activeTests)
             {
-                if (!given.valid || given.decl != goal.decl) continue;
+                auto asked = _resolutions.tests[test];
+                if (asked.owner != owner || asked.param != param) continue;
+                foreach (k, b; _typing.testBounds.get(test, null)) givens ~= Given(b, k, test);
+            }
+            Given[] fitting;
+            Substitution chosen;
+            foreach (given; givens)
+            {
+                if (!given.bound.valid || given.bound.decl != goal.decl) continue;
                 Substitution none;
                 auto opened = bound.dup;
-                if (!matchArguments(given.args, none, null, opened)) continue;
+                if (!matchArguments(given.bound.args, none, null, opened)) continue;
                 if (fitting.length == 0) chosen = opened;
-                fitting ~= k;
+                // The same bound from a test supplies nothing more.
+                if (fitting.canFind!(f => f.bound == given.bound)) continue;
+                fitting ~= given;
             }
             if (fitting.length == 0)
             {
-                auto others = _typing.bounds.get(param, null).filter!(b => b.valid && b.decl == goal.decl).map!(b => withArticle(_declarer.describe(b))).array;
+                string[] others;
+                foreach (g; givens.filter!(g => g.bound.valid && g.bound.decl == goal.decl))
+                {
+                    auto described = withArticle(_declarer.describe(g.bound));
+                    if (!others.canFind(described)) others ~= described;
+                }
                 result.failure = others.length > 0 ? "its bounds make it %-(%s and %) instead".format(others)
                     : "nothing `%s` is bounded by says it is".format(_types.describe(goal.self));
                 return result;
@@ -4372,10 +4407,11 @@ private final class TypeChecker
                 return result;
             }
             bound = chosen;
-            foreach (f; _resolutions.boundFunctions.get(owner, null))
+            auto from = fitting[0];
+            foreach (f; from.test.isValid ? _resolutions.tests[from.test].functions : _resolutions.boundFunctions.get(owner, null))
             {
                 auto requirement = _resolutions.requirements[f];
-                if (requirement.param == param && requirement.bound == fitting[0]) result.witnesses ~= Witness(f);
+                if (requirement.param == param && requirement.bound == from.index) result.witnesses ~= Witness(f);
             }
             return result;
         }
@@ -4489,6 +4525,7 @@ private final class TypeChecker
         auto args = goal.args.map!(a => _types.substitute(a, tried)).array;
         auto line = "`conform %s: %s`".format(_types.describe(goal.self), _declarer.describe(Bound(goal.decl, args)));
         if (auto general = generalConformance(goal, found.witnesses)) line = general;
+        if (_resolutions.declarations.interfaces[goal.decl].functions.length == 0) return "; declare it with %s".format(line);
         return "; it has the functions, so %s is all that's missing".format(line);
     }
 
@@ -4644,7 +4681,9 @@ private final class TypeChecker
     {
         Conformance result;
         auto supplied = _resolutions.boundFunctions.get(func, null);
-        if (supplied.length == 0) return result;
+        // Every bound, with functions or without.
+        auto slots = boundSlots(_resolutions, _typing, func);
+        if (slots.length == 0) return result;
         if (renaming.length == 0) open = params;
         Id!TypeParam key(Id!TypeParam param)
         {
@@ -4653,27 +4692,28 @@ private final class TypeChecker
         }
         Type inTermsOfOpen(Type type) => _types.substitute(_types.substitute(type, renaming), bound);
         result.witnesses = new Witness[supplied.length];
-        auto decided = new bool[supplied.length];
+        auto decided = new bool[slots.length];
 
         for (auto progress = true; progress;)
         {
             progress = false;
-            size_t end;
-            for (size_t start = 0; start < supplied.length; start = end)
+            foreach (i, slot; slots)
             {
-                auto first = _resolutions.requirements[supplied[start]];
-                end = start + 1;
-                while (end < supplied.length && _resolutions.requirements[supplied[end]].param == first.param
-                    && _resolutions.requirements[supplied[end]].bound == first.bound) end++;
-                if (decided[start]) continue;
-                auto self = key(first.param) in bound;
+                if (decided[i]) continue;
+                auto self = key(slot.param) in bound;
                 if (self is null) continue;
-                auto declared = _typing.bounds[first.param][first.bound];
+                auto declared = _typing.bounds[slot.param][slot.bound];
+                // One that couldn't be resolved was reported.
+                if (!declared.valid)
+                {
+                    decided[i] = true;
+                    continue;
+                }
                 auto goal = Goal(declared.decl, *self, declared.args.map!(a => inTermsOfOpen(a)).array);
                 // What's already an error has been reported, and anything satisfies it.
                 if (_types.mentionsError(goal.self) || goal.args.any!(a => _types.mentionsError(a)))
                 {
-                    decided[start .. end] = true;
+                    decided[i] = true;
                     continue;
                 }
                 auto found = lookUp(goal, open, bound, site, depth);
@@ -4682,16 +4722,16 @@ private final class TypeChecker
                 if (found.failure !is null)
                 {
                     auto wanted = Bound(goal.decl, declared.args.map!(a => inTermsOfOpen(a)).array);
-                    auto hidden = _resolutions.hiddenParams.get(func, null).canFind!(p => p.id == first.param);
+                    auto hidden = _resolutions.hiddenParams.get(func, null).canFind!(p => p.id == slot.param);
                     result.failure = (hidden ? "needs %2$s, and `%3$s` isn't one: %4$s" : "needs `%1$s` to be %2$s, and `%3$s` isn't one: %4$s")
-                        .format(_resolutions.declarations.typeParams[first.param].name, withArticle(_declarer.describe(wanted)),
+                        .format(_resolutions.declarations.typeParams[slot.param].name, withArticle(_declarer.describe(wanted)),
                             _types.describe(goal.self), found.failure);
                     result.tooDeep = found.tooDeep;
                     result.ambiguous = found.ambiguous;
                     return result;
                 }
-                result.witnesses[start .. end] = found.witnesses[];
-                decided[start .. end] = true;
+                result.witnesses[slot.start .. slot.end] = found.witnesses[];
+                decided[i] = true;
                 progress = true;
             }
         }
@@ -6360,9 +6400,60 @@ private final class TypeChecker
         checkDiscarded(body, ctx);
     }
 
-    /// The condition, or the binding of an `if val`.
+    /// What `dg` gives when it checks the true branch of `if_`, inside which what an `if type`
+    /// asks holds for its type.
+    private T trueBranch(T)(const IfExpr if_, scope T delegate() dg)
+    {
+        auto test = if_.test is null ? null : if_.trueBody.id in _testsByBranch;
+        if (test is null) return dg();
+        _activeTests ~= *test;
+        scope (exit) _activeTests = _activeTests[0 .. $ - 1];
+        return dg();
+    }
+
+    /// What the `if type` `if_` asks for its type, and the signatures of the functions that
+    /// gives its true branch.
+    private void declareTest(const IfExpr if_)
+    {
+        auto found = if_.trueBody.id in _testsByBranch;
+        if (found is null || *found in _typing.testBounds) return;
+        auto test = _resolutions.tests[*found];
+        auto self = _declarer.parameterType(*_resolutions.declarations.typeParams[test.param]);
+        auto asked = _declarer.boundsOn(if_.test.bounds, self);
+        _typing.testBounds[*found] = asked;
+        // What the type has to be here already, from its bounds and the tests around this one.
+        Bound[] already = _typing.bounds.get(test.param, null).dup;
+        Id!FunctionDecl[] outer = _resolutions.boundFunctions.get(test.owner, null).dup;
+        foreach (around; _activeTests)
+        {
+            if (_resolutions.tests[around].param != test.param) continue;
+            already ~= _typing.testBounds.get(around, null);
+            outer ~= _resolutions.tests[around].functions;
+        }
+        rejectImpossibleBounds(if_.test.name, if_.test.span, already ~ asked, already.length);
+        foreach (supplied; test.functions)
+        {
+            auto requirement = _resolutions.requirements[supplied];
+            auto bound = asked[requirement.bound];
+            _typing.symbolTypes[SymbolId(supplied)] = _types.substitute(_typing.symbolTypes[SymbolId(requirement.declared)],
+                _declarer.substitutionOf(bound, self));
+            // One that's supplied already, or by a bound before it here, is that one.
+            auto name = _resolutions.declarations.functions[supplied].name;
+            auto same = outer.find!(d => _resolutions.declarations.functions[d].name == name
+                && (d !in _repeatedBounds) && _typing.symbolTypes.get(SymbolId(d), Type.init) == _typing.symbolTypes[SymbolId(supplied)]);
+            if (!same.empty) _repeatedBounds[supplied] = same.front;
+            outer ~= supplied;
+        }
+    }
+
+    /// The condition, or the binding of an `if val`. An `if type` has neither.
     private void checkIfHead(const IfExpr if_, BodyContext ctx)
     {
+        if (if_.test !is null)
+        {
+            declareTest(if_);
+            return;
+        }
         if (if_.binding is null)
         {
             auto condType = synthesize(*if_.condition, ctx);
@@ -6405,11 +6496,11 @@ private final class TypeChecker
         checkIfHead(if_, ctx);
         if (if_.falseBody is null)
         {
-            checkDiscarded(*if_.trueBody, ctx);
+            trueBranch(if_, () => checkDiscarded(*if_.trueBody, ctx));
             return _types.unit;
         }
 
-        auto thenType = synthesizeBeside(*if_.trueBody, errors, ctx);
+        auto thenType = trueBranch(if_, () => synthesizeBeside(*if_.trueBody, errors, ctx));
         auto elseType = synthesizeBeside(*if_.falseBody, errors, ctx);
         auto joined = join(thenType, elseType, span, "Branches");
         if (joined != _types.error)
@@ -7198,7 +7289,7 @@ private final class TypeChecker
     private Type checkIf(const IfExpr if_, Type expected, BodyContext ctx)
     {
         checkIfHead(if_, ctx);
-        auto thenType = check(*if_.trueBody, expected, ctx);
+        auto thenType = trueBranch(if_, () => check(*if_.trueBody, expected, ctx));
         auto elseType = check(*if_.falseBody, expected, ctx);
         return thenType == _types.never && elseType == _types.never ? _types.never : expected;
     }

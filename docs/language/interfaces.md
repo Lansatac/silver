@@ -181,9 +181,12 @@ def middle<R: Range<Int>>(r: R): Int? =>
 - Inside the branch the bound holds, so every value of that type has the interfaces' functions. There's no new name.
 - It's decided when the function is compiled for a real type, by looking the type up. Nothing is written in the signature, and a caller passes nothing.
 - Both branches are checked, once, like the rest of a generic body. It's an expression, with `=>` and `else` or with blocks, as `if` is, and its branches give one type.
-- It asks about a type, so the type needs a name. A parameter written `r: Range<Int>` has a type that isn't written, and a function that asks about it names it: `<R: Range<Int>>(r: R)`.
+- It asks about a type, so the type needs a name: one of the type parameters of the function it's in. A parameter written `r: Range<Int>` has a type that isn't written, and a function that asks about it names it: `<R: Range<Int>>(r: R)`.
+- Every name in it is one already in scope. A type parameter that only a test mentions has to be given by each caller, so `def f<R, T>(r: R): Int => if type R: Range<T> => 1 else 0` can't be called as `f([1])`: nothing there says what `T` is.
+- A test asks with the arguments the type's bounds already give. Where `R` is a `Range<T>`, `if type R: Range<Int>` is an error, as [those two bounds](#bounds) are: a type has one conformance to `Range`, and the bound already says which, so a test can't narrow `T` to `Int`.
 - It isn't a condition, and can't be joined to one with `&&`.
-- The two branches are expected to differ in speed and not in what they compute. Nothing checks that.
+- Its branches can compute different things: it chooses by type, for a faster way to do the same thing or for something else.
+- Where two bounds supply a function with the same name and type, as two interfaces that both declare `size(value: Self): Int` do, a call finds the one of the bound written first, and in an `if type` the one supplied outside it.
 
 [`if val`](control-flow.md#if) asks about a value while the program runs, and doesn't ask about interfaces.
 
@@ -337,6 +340,7 @@ A binding needs no such annotation: the value already has a type, and the bindin
 - A conformance for every type that meets a bound, as `conform T: Sized when T: Indexed<U>`, and what wins where it overlaps another.
 - A field a type has only when a type argument conforms.
 - A form of `if type` with several arms, as `match type R { ... }`.
+- An `if type` that narrows an argument its bounds leave open, as `if type R: Range<Int>` where `R` is a `Range<T>`, making `T` an `Int` in the branch; one that names a type of its own, as `if type R: Range<E>`; and one that asks about a type that isn't a bare type parameter, as `if type Box<T>: Sized`.
 - Generic functions in an interface.
 - Whether the functions can also be written inside the `conform` declaration.
 - A shorter way to write a function for a type only in the result, such as `def Point.fromText(text: String): Point?`.
@@ -346,9 +350,8 @@ Decided, and not part of the first version, each described in the [conformance p
 
 ## Current implementation
 
-Declared conformance is built as described above, except `if type` and what needs packages:
+Declared conformance is built as described above, except what needs packages:
 
-- There's no `if type`, so a generic function can't ask what its type argument can do beyond its bounds.
 - In the first version every module sees every conformance, and any module can declare one.
 - A conformance's functions are found as a call where it's declared would find them. Where that chooses among functions of one name, one whose own bounds fail is passed over, unlike at a call, and so is one for an overloaded function used as a value.
 - The error for two conformances that overlap names the earlier one by its type and module, not where it's written.

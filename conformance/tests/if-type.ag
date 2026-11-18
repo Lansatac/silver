@@ -1,0 +1,88 @@
+// `if type` asks whether a type parameter satisfies a bound, and is decided for each instance by
+// the conformances: inside the true branch the bound holds, and its functions can be called and
+// passed on to other bounds.
+interface Sized { def size(value: Self): Int }
+interface Indexed<T>: Sized { def at(value: Self, i: Int): T }
+
+type Bag(items: [Int])
+type Box<T>(inner: T)
+type Countdown(from: Int)
+
+def size(b: Bag): Int => length(b.items)
+def at(b: Bag, i: Int): Int => b.items[i]
+def size<T: Sized>(b: Box<T>): Int => size(b.inner) + 1
+
+conform Bag: Indexed<Int> & Sized
+conform Box<T>: Sized when T: Sized
+
+def twice<S: Sized>(s: S): Int => size(s) * 2
+
+def measure<T>(x: T): Int =>
+    if type T: Sized => twice(x)
+    else -1
+
+// A bound with an argument: a `Bag` is an `Indexed<Int>`, and not an `Indexed<String>`.
+def middle<R, T>(r: R, fallback: T): T =>
+    if type R: Indexed<T> => at(r, size(r) / 2)
+    else fallback
+
+// Asked again in a function that doesn't ask, through its own instance.
+def through<U>(u: U): Int => measure(u)
+
+// The prelude's own conformances answer too.
+def first<R, T>(r: R, fallback: T): T =>
+    if type R: Range<T> {
+        match next(r) {
+            Some((item, _)) => item
+            None => fallback
+        }
+    } else fallback
+
+// What the bound supplies reaches a lambda in the branch.
+def plus<T>(x: T, n: Int): Int {
+    if type T: Sized {
+        val add = (k: Int) => size(x) + k
+        return add(n)
+    }
+    n
+}
+
+// What the bound already gives the type is the same function inside.
+def last<R: Sized>(r: R): Int =>
+    if type R: Indexed<Int> => at(r, size(r) - 1)
+    else size(r)
+
+def pair<T, U>(x: T, y: U): String =>
+    if type T: Sized {
+        if type U: Sized => "both" else "first"
+    } else if type U: Sized => "second"
+    else "neither"
+
+def report<T>(x: T): () {
+    if type T: Sized { printl("sized {size(x)}") }
+    printl("done")
+}
+
+def main(): () {
+    printl(measure(Bag([1, 2, 3])))
+    printl(measure(Box(Bag([1]))))
+    printl(measure(Box(5)))
+    printl(measure(Countdown(3)))
+    printl(middle(Bag([4, 5, 6]), 0))
+    printl(middle(Bag([4, 5, 6]), "none"))
+    printl(middle(Countdown(2), 9))
+    printl(through(Box(Box(Bag([1, 2])))))
+    printl(first([7, 8], 0))
+    printl(first("hi", 'x'))
+    printl(first(Countdown(1), 'x'))
+    printl(plus(Bag([1, 2]), 10))
+    printl(plus(7, 10))
+    printl(last(Bag([4, 5, 6])))
+    printl(last(Box(Bag([4, 5]))))
+    printl(pair(Bag([]), Box(Bag([]))))
+    printl(pair(Bag([]), 1))
+    printl(pair(1, Bag([])))
+    printl(pair(1, 1))
+    report(Bag([1]))
+    report("text")
+}

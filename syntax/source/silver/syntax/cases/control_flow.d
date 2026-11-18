@@ -27,6 +27,15 @@ immutable Case[] ifs = [
     parsesAs("if val x = a ?? b => x", "(if (val x (Coalesce a b)) x)"),
     rejects("if mutable val x = a => 1"),
 
+    // Asking whether a type conforms
+    parsesAs("if type R: Sized => 1 else 2", "(if (type R Sized) 1 2)"),
+    parsesAs("if type R: Sized & Indexed<T> { 1 }", "(if (type R Sized Indexed<T>) (block => 1))"),
+    parsesAs("if type R:\n    Sized => 1", "(if (type R Sized) 1)"),
+    parsesAs("val n = if type R: Sized => 1 else if type R: Indexed<Int> => 2 else 3",
+        "(val n (if (type R Sized) 1 (if (type R Indexed<Int>) 2 3)))"),
+    rejects("if type R: Sized && done => 1"),
+    rejects("if type R => 1"),
+
     // As an expression
     parsesAs("a = if b => 1 else 2", "(assign a (if b 1 2))"),
     parsesAs("a = if b => 1 else if c => 2 else 3", "(assign a (if b 1 (if c 2 3)))"),

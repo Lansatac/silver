@@ -11,7 +11,7 @@ import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
 import silver.core.nodes;
 import silver.sema : Analysis, FunctionUse, IndexFunctions, LoopFunctions, ConstChar, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
-    Substitution, SymbolId, Type, TypeTable, Witness;
+    Bound, Substitution, SymbolId, Type, TypeTable, Witness;
 
 /// A parameter's local name. Discarded ones get a name no Silver identifier can have, so several
 /// in one function stay distinct where a backend names them.
@@ -233,6 +233,9 @@ private final class Lowering
     /// The instances that stand behind a bound's functions, each under the number an `InstanceKey`
     /// names it by.
     private InstanceKey[] _witnesses;
+    /// Inside the true branch of an `if type` that holds for the instance being lowered, the
+    /// witness each function its bounds supply stands for.
+    private uint[Id!(ast.FunctionDecl)] _testWitnesses;
     private uint[InstanceKey] _witnessIds;
     /// A witness used as a value of a function type that isn't its own, by the instance and that type.
     private size_t[Type][InstanceKey] _adapters;
@@ -377,6 +380,7 @@ private final class Lowering
     /// in the instance of it being lowered.
     private uint witnessId(const Witness witness)
     {
+        if (auto tested = witness.func in _testWitnesses) return *tested;
         if (auto index = _analysis.witnessIndexOf(witness.func)) return _current.witnesses[*index];
         auto ids = witness.witnesses.map!(w => witnessId(w)).array;
         auto key = InstanceKey(witness.func, witness.typeArgs.map!(t => _analysis.concrete(t)).array.idup, ids.idup);
@@ -391,6 +395,7 @@ private final class Lowering
     /// for the use. A function a bound supplies is whichever one this instance was given for it.
     private InstanceKey instanceOf(Id!(ast.FunctionDecl) func, immutable(Type)[] typeArgs, const(Witness)[] witnesses)
     {
+        if (auto tested = func in _testWitnesses) return _witnesses[*tested];
         if (auto index = _analysis.witnessIndexOf(func)) return _witnesses[_current.witnesses[*index]];
         return InstanceKey(func, typeArgs, witnesses.map!(w => witnessId(w)).array.idup);
     }
@@ -404,6 +409,7 @@ private final class Lowering
         _analysis = Instance(_analysis.analysis, substitution);
         _current = key;
         _span = func.nameSpan;
+        _testWitnesses = null;
         _locals = null;
         _selves = null;
         auto signature = _analysis.signatureOf(func.id);
@@ -615,7 +621,7 @@ private final class Lowering
             (const ast.Identifier _) => symbolValue(resolved(e), type, span, e.id),
             (const ast.UnaryExpr unary) => make(lowerUnary(unary, type)),
             (const ast.BinaryExpr binary) => lowerBinary(binary, e, type),
-            (const ast.IfExpr if_) => lowerIf(if_, type, span),
+            (const ast.IfExpr if_) => lowerIf(e.id, if_, type, span),
             (const ast.BlockExpr block) => lowerBlock(block, type, span),
             (const ast.WhileExpr while_) => lowerWhile(while_, span),
             (const ast.ForExpr for_) => lowerFor(e, for_, span),
@@ -1228,8 +1234,31 @@ private final class Lowering
         return notLowered!Local("a reference to something other than a local or param");
     }
 
-    private Expr lowerIf(const ast.IfExpr if_, Type type, Span span)
+    /// An `if type`, which is decided for the instance being lowered: the branch it takes, and
+    /// nothing of the other.
+    private Expr lowerTest(Id!(ast.Expr) id, const ast.IfExpr if_, Type type, Span span)
     {
+        auto self = _analysis.concrete(_analysis.testedType(id));
+        Witness[] found;
+        foreach (bound; _analysis.testBoundsOf(id))
+        {
+            Witness[] more;
+            auto asked = Bound(bound.decl, bound.args.map!(a => _analysis.concrete(a)).array);
+            if (!_analysis.conforms(asked, self, more))
+            {
+                return if_.falseBody is null ? unit(span) : coerce(lowerExpr(*if_.falseBody), type);
+            }
+            found ~= more;
+        }
+        auto outer = _testWitnesses.dup;
+        scope (exit) _testWitnesses = outer;
+        foreach (i, func; _analysis.testFunctionsOf(id)) _testWitnesses[func] = witnessId(found[i]);
+        return coerce(lowerExpr(*if_.trueBody), type);
+    }
+
+    private Expr lowerIf(Id!(ast.Expr) id, const ast.IfExpr if_, Type type, Span span)
+    {
+        if (if_.test !is null) return lowerTest(id, if_, type, span);
         auto otherwise = if_.falseBody is null ? unit(span) : coerce(lowerExpr(*if_.falseBody), type);
         if (if_.binding is null)
         {
@@ -1300,7 +1329,8 @@ private final class Lowering
     private Stmt[] bindOrDrop(const ast.VarDecl decl, Expr value)
     {
         if (decl.name == discardName) return [eval(value)];
-        auto local = new Local(decl.name, value.type, decl.mutable);
+        // A value that never arrives, like `{ return 1 }`, still binds a local of the declared type.
+        auto local = new Local(decl.name, value.type == types.never ? _analysis.typeOf(decl.id) : value.type, decl.mutable);
         _locals[SymbolId(decl.id)] = local;
         return [let(local, value)];
     }
@@ -1891,7 +1921,7 @@ private final class Lowering
         auto callee = instanceOf(*calleeId, _analysis.typeArgumentsOf(call.callee.id), _analysis.witnessesOf(call.callee.id));
         auto signature = _analysis.signatureOf(callee.decl, callee.args);
         // What a bound supplies is called as its witness, which the arguments are promoted to fit.
-        if (_analysis.witnessIndexOf(*calleeId) !is null)
+        if (_analysis.witnessIndexOf(*calleeId) !is null || (*calleeId in _testWitnesses) !is null)
         {
             return callWith(written, signature, type, span, null, (Expr[] args, Expr* _) => callInstance(callee, args, span));
         }

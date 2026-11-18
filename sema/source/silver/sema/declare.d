@@ -205,29 +205,35 @@ package final class Declarer
     {
         foreach (param; params)
         {
-            Bound[] bounds;
-            foreach (written; param.bounds)
-            {
-                auto bound = resolveBound(written);
-                if (bound.valid && bounds.canFind!(b => b.valid && b.decl == bound.decl && b.args == bound.args))
-                {
-                    _collector.reportError(DiagnosticCode.InvalidBound, written.span,
-                        "`%s` is joined to itself here; name each interface once".format(describe(bound)));
-                }
-                bounds ~= bound;
-            }
-            // What they require follows, in the order name resolution supplies its functions.
-            auto self = parameterType(param);
-            foreach (implied; impliedBounds(bounds.map!(b => b.decl).array, &requiresOf))
-            {
-                auto from = bounds[implied.from];
-                auto required = _typing.requires.get(from.decl, null);
-                bounds ~= implied.which < required.length && required[implied.which].valid
-                    ? Bound(implied.decl, required[implied.which].args.map!(a => _types.substitute(a, substitutionOf(from, self))).array)
-                    : Bound.init;
-            }
+            auto bounds = boundsOn(param.bounds, parameterType(param));
             if (bounds.length > 0) _typing.bounds[param.id] = bounds;
         }
+    }
+
+    /// What the bounds `written` on `self` name, in order, then what they require.
+    package Bound[] boundsOn(const(TypeExpr)[] written, Type self)
+    {
+        Bound[] bounds;
+        foreach (one; written)
+        {
+            auto bound = resolveBound(one);
+            if (bound.valid && bounds.canFind!(b => b.valid && b.decl == bound.decl && b.args == bound.args))
+            {
+                _collector.reportError(DiagnosticCode.InvalidBound, one.span,
+                    "`%s` is joined to itself here; name each interface once".format(describe(bound)));
+            }
+            bounds ~= bound;
+        }
+        // What they require follows, in the order name resolution supplies its functions.
+        foreach (implied; impliedBounds(bounds.map!(b => b.decl).array, &requiresOf))
+        {
+            auto from = bounds[implied.from];
+            auto required = _typing.requires.get(from.decl, null);
+            bounds ~= implied.which < required.length && required[implied.which].valid
+                ? Bound(implied.decl, required[implied.which].args.map!(a => _types.substitute(a, substitutionOf(from, self))).array)
+                : Bound.init;
+        }
+        return bounds;
     }
 
     /// What `decl` requires as written, as name resolution found it.

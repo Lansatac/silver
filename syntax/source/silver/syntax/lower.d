@@ -819,7 +819,15 @@ private final class Lowering
         cst.validateNodeIs("Silver.IfExpression");
         Expr* condition = null;
         VarDecl* binding = null;
-        if (cst[0].name == "Silver.OptionBinding")
+        TypeTest* test = null;
+        if (cst[0].name == "Silver.TypeTest")
+        {
+            auto t = cst[0];
+            auto name = t.children[0];
+            test = new TypeTest(name.matches[0], spanOf(name, file),
+                convertInterfaces(t.children[$ - 1]));
+        }
+        else if (cst[0].name == "Silver.OptionBinding")
         {
             binding = convertOptionBinding(cst[0]);
         }
@@ -830,7 +838,7 @@ private final class Lowering
         auto thenBranch = convertExpression(cst[1]);
         Expr* elseBranch = cst.children.length > 2 ? boxed(convertExpression(cst[2])) : null;
         return Expr(ids.next!Expr, spanOf(cst, file),
-            ExprKind(IfExpr(condition, boxed(thenBranch), elseBranch, binding)));
+            ExprKind(IfExpr(condition, boxed(thenBranch), elseBranch, binding, test)));
     }
 
     /// Applies one postfix operation (a call or member access) to `lhs`.
@@ -1550,6 +1558,27 @@ unittest
     assert(text(ifExpr.condition.span) == "c");
     assert(text(ifExpr.trueBody.span) == "{ 1 }");
     assert(text((*body).span) == "if c /* why */ { 1 } // one\n else { 2 }");
+}
+
+@("an `if type`'s span for its type is the type's name")
+unittest
+{
+    import std.sumtype : match;
+    import silver.syntax.parse : parse;
+
+    auto source = "def f<R>(r: R): Int => if type  R: Sized => 1 else 2";
+    auto m = parse(source, "test", new NodeIds);
+    auto body = m.declarations[0].kind.match!(
+        (const FunctionDecl f) => f.body,
+        _ => null,
+    );
+    auto test = (*body).kind.match!(
+        (const IfExpr i) => i.test,
+        _ => null,
+    );
+    assert(test !is null);
+    assert(source[test.span.start .. test.span.end] == "R");
+    assert(test.name == "R");
 }
 
 @("a binary expression's span includes parentheses around its operands")

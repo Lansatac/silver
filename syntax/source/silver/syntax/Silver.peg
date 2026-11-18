@@ -152,7 +152,8 @@ Silver:
     ForExpression        < :FOR Nl? (TuplePattern / BindingName) Nl? :IN Nl? Condition Nl? Block
     WhileExpression      < :WHILE Nl? (OptionBinding / Condition) Nl? Block
 
-    IfExpression         < :IF Nl? (PatternBinding / OptionBinding / Condition) Nl? IfBranch (Nl? :ELSE Nl? ElseBranch)?
+    IfExpression         < :IF Nl? (TypeTest / PatternBinding / OptionBinding / Condition) Nl? IfBranch (Nl? :ELSE Nl? ElseBranch)?
+    TypeTest             < :TYPE Nl? TypeName Nl? :':' Nl? Interfaces
     PatternBinding       < :VAL Nl? ConstructorPattern Nl? :'=' Nl? Condition
     OptionBinding        < :VAL Nl? BindingName Nl? :'=' Nl? Condition
     IfBranch             < :'=>' Nl? Expression / Block

@@ -1,0 +1,23 @@
+// A branch that leaves the function is the `if`'s type, wherever the instance takes it: what's
+// bound to the `if` keeps that type, in either branch.
+interface Sized { def size(value: Self): Int }
+type Bag(items: [Int])
+def size(b: Bag): Int => length(b.items)
+conform Bag: Sized
+
+def early<T>(x: T): Int {
+    val v: Int = if type T: Sized { return size(x) * 10 } else 3
+    v + 1
+}
+
+def guard<T>(x: T): Int {
+    val v = if type T: Sized => size(x) else { return -1 }
+    v + 1
+}
+
+def main(): () {
+    printl(early(Bag([1])))
+    printl(early(1))
+    printl(guard(Bag([1, 2])))
+    printl(guard(1))
+}

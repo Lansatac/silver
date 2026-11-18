@@ -50,6 +50,8 @@ enum DiagnosticCode : string
     RequiresItself = "S0030",
     /// A `when` bound on a name that isn't a type parameter its conformance introduces.
     UnknownWhenParameter = "S0031",
+    /// An `if type` on a type that isn't a type parameter of the function it's in.
+    TestsNonParameter = "S0032",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",

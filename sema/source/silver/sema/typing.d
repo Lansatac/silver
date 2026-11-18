@@ -3,7 +3,7 @@ module silver.sema.typing;
 
 import silver.ast;
 import silver.sema.constant : ConstValue;
-import silver.sema.resolve : SymbolId;
+import silver.sema.resolve : Resolution, SymbolId;
 import silver.sema.table : SideTable;
 import silver.sema.type;
 import silver.sema.table : SideTable;
@@ -33,6 +33,9 @@ package struct Typing
     SideTable!(Id!InterfaceDecl, Bound[]) requires;
     /// Every conformance the program declares, by interface, in declaration order.
     SideTable!(Id!InterfaceDecl, Conforming[]) conformances;
+    /// What each `if type` asks its type to satisfy, by the `if`: the bounds written, then what
+    /// they require, in the order of its functions.
+    SideTable!(Id!Expr, Bound[]) testBounds;
     SideTable!(Id!Expr, const(Expr)[]) concatOperands;
     SideTable!(Id!Expr, const(CallExpr)*) methodCalls;
     SideTable!(Id!Expr, Id!FunctionDecl) methodCallees;
@@ -135,4 +138,35 @@ struct IndexFunctions
     FunctionUse read;
     FunctionUse write;
     FunctionUse length;
+}
+
+/// One bound of a type parameter of a generic function, and where the functions it supplies are
+/// among the function's (`Resolution.boundFunctions`): `start` to `end`, empty for an interface
+/// with no functions.
+package struct BoundSlot
+{
+    Id!TypeParam param;
+    size_t bound;
+    size_t start;
+    size_t end;
+}
+
+/// Every bound of every type parameter of `func`, in the order its functions are supplied.
+package BoundSlot[] boundSlots(const Resolution resolution, const ref Typing typing, Id!FunctionDecl func)
+{
+    auto supplied = resolution.boundFunctions.get(func, null);
+    BoundSlot[] slots;
+    size_t at;
+    foreach (param; resolution.typeParamsOf(func))
+    {
+        foreach (b; 0 .. typing.bounds.get(param.id, null).length)
+        {
+            auto start = at;
+            while (at < supplied.length && resolution.requirements[supplied[at]].param == param.id
+                && resolution.requirements[supplied[at]].bound == b) at++;
+            slots ~= BoundSlot(param.id, b, start, at);
+        }
+    }
+    assert(at == supplied.length, "every function a bound supplies is in a slot");
+    return slots;
 }

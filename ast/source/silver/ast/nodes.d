@@ -424,13 +424,23 @@ const(RangeExpr)* asRange(const(Expr)* expr)
 /// `if c => a else b` or `if c { ... } else { ... }`.
 /// `falseBody` is null when there's no else, and the if's value is then ().
 /// `if val x = opt ...` sets `binding` instead of `condition`: its value is the option, and
-/// `x` is in scope only in `trueBody`.
+/// `x` is in scope only in `trueBody`. `if type R: I ...` sets `test` instead.
 struct IfExpr
 {
     Expr* condition;
     Expr* trueBody;
     Expr* falseBody;
     VarDecl* binding;
+    TypeTest* test;
+}
+
+/// `type R: I & J` after `if`: whether the type parameter `name` satisfies `bounds`, which then
+/// hold for it in the `if`'s true branch.
+struct TypeTest
+{
+    string name;
+    Span span;
+    TypeExpr[] bounds;
 }
 
 /// `while c { ... }`, whose value is `()`.
@@ -510,7 +520,9 @@ string printExpr(const Expr e)
             : format("(val %s %s)", w.binding.name, printExpr(w.binding.value)), printExpr(*w.body)),
         (const ForExpr f) => format("(for %s %s %s)", f.binding.name, printExpr(f.binding.value), printExpr(*f.body)),
         (const IfExpr i) {
-            auto head = i.binding is null
+            auto head = i.test !is null
+                ? format("(type %s %-(%s %))", i.test.name, i.test.bounds.map!printTypeExpr)
+                : i.binding is null
                 ? printExpr(*i.condition)
                 : format("(val %s %s)", i.binding.name, printExpr(i.binding.value));
             return i.falseBody is null

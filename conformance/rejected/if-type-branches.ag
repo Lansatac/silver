@@ -1,0 +1,8 @@
+// Both branches are checked, and give one type.
+interface Sized { def size(value: Self): Int }
+
+def f<T>(x: T): Int =>
+    if type T: Sized => "sized"
+    else 2
+
+def main(): Unit => ()
