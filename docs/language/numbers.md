@@ -25,7 +25,24 @@ val tooBig: UInt8 = 256    // error
 val next = byte + 1        // UInt8
 ```
 
-Adaptation applies to a literal, not to arithmetic on literals. `val x: UInt8 = 1 + 2` is an error, because `1 + 2` is an `Int`.
+Adaptation goes through arithmetic. An arithmetic or bitwise operator passes the type expected of it to its operands, and an operand made only of literals takes the type of the operand beside it, on either side:
+
+```silver
+val small: UInt8 = 3
+
+val sum: UInt8 = 1 + 2        // both literals are UInt8s
+val mask: UInt8 = 1 << 3      // 8
+val total = 1 + 2 + small     // UInt8, as small + 1 + 2 is
+small & (1 << 3)              // the mask is a UInt8
+small == 1 + 2                // true
+val half: Float = 1 / 2       // 0.5: both literals are Floats
+```
+
+- The operators are `+ - * / %`, the wrapping forms, `& | ^`, prefix `-` and `~`, and the value side of a shift. A shift amount keeps its own type.
+- An expected option or error union passes its value's type, so `val x: UInt8? = 1 + 2` works. Any expected type that isn't a number passes nothing.
+- Only literals adapt. A value has its type already, so with `n: Int`, `val z: UInt8 = n + 1` is an error at `n`.
+- Each literal is checked at compile time to fit, and the arithmetic then behaves as it does anywhere: `val y: UInt8 = 200 + 100` panics with `Integer overflow` when it runs. In a [constant](bindings.md#top-level-constants), which is evaluated at compile time, it's a compile error.
+- With nothing expected and no number beside it, arithmetic on integer literals is an `Int`.
 
 ## Operators
 
@@ -66,4 +83,5 @@ A conversion panics when the value doesn't fit, or is NaN. A `Float` is truncate
 
 ## Current implementation
 
+- Adaptation doesn't go through arithmetic yet. Only a literal by itself adapts, also in parentheses or negated, so `val x: UInt8 = 1 + 2` and `1 + 2 + small` are errors while `small + 1 + 2` works; `UInt8(1 + 2)` is the way to write it.
 - A literal arm of an `if` or `match` doesn't take the type of the other arms yet, so `if c => 1 else small` is an error unless a `UInt8` is expected of it.

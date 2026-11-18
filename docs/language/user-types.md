@@ -38,59 +38,23 @@ val chained = point with (x = 1) with (y = 2)
 
 The result has the original's type. Each value is checked against its field, so literals adapt and options promote. There must be at least one update, and two updates can't overlap. `with` can't be used on tuples or on a sum value.
 
-### Invariants
+### Checking a condition
 
-A product can state a condition that every value of it meets, and the error that building one gives when the condition doesn't hold:
+A type's fields are all public, so a product by itself promises nothing about them. A condition on the fields is checked by an ordinary function that builds the value and returns an [error](errors.md) when it doesn't hold:
 
 ```silver
 type OutOfRange(value: Int)
-type Reversed(low: Int, high: Int)
-type Empty
+type Percent(value: Int)
 
-type Percent(value: Int) invariant 0 <= value && value <= 100 else OutOfRange(value)
-type Span(low: Int, high: Int) invariant low <= high else Reversed(low, high)
-type NonEmpty<T>(items: [T]) invariant length(items) > 0 else Empty
+def percent(value: Int): Percent ! OutOfRange =>
+    if 0 <= value && value <= 100 => Percent(value) else Error(OutOfRange(value))
+
+val volume = percent(number)?                    // pass the error on
+val capped = percent(number) ?? Percent(100)     // or choose a value
+val half = percent(50)!                          // or say it can't fail
 ```
 
-The invariant is a `Bool` expression over the fields. A name in it refers to a field first, and otherwise resolves as it would in a function of the module, so it can call functions and use constants, private ones included. The `else` is required. Its expression is written over the fields in the same way, is evaluated only when the condition is false, and can be of any type. A marker has no fields and can't have an invariant.
-
-A value that would break its invariant is never produced, so a function that receives a `Span` never checks it again. Building one yields an [error union](errors.md), and the caller says what a failure means:
-
-```silver
-val volume = Percent(number)?                    // Percent ! OutOfRange: pass the error on
-val capped = Percent(number) ?? Percent(100)     // or choose a value
-val half = Percent(50)!                          // or say it can't fail
-```
-
-A value of the type comes about in two ways, in the type's own module as much as anywhere else:
-
-- **Construction** of a `T` whose invariant gives an `E` is a `T ! E`. That includes construction through an alias, and the constructor used as a function value, which is a `(Int) -> Percent ! OutOfRange`.
-- **`with`** that updates a field the invariant mentions is a `T ! E` too. The invariant is checked once, after every update is applied, so `span with (low = 5, high = 9)` is fine even where `low = 5` alone would cross `high`. A `with` that updates only other fields is a plain `T`.
-
-A field the invariant mentions changes only through `with`. Assigning to it is a compile error, since a statement has nowhere to put an error, and so is assigning through it, as in `line.start.x = 2` where `Line`'s invariant mentions `start`, or passing it as a `mutable` argument. A field the invariant doesn't mention is assigned as usual.
-
-```silver
-type TooEarly
-type Meeting(time: Span, title: String) invariant time.low >= 0 else TooEarly
-
-meeting.title = "Review"                              // fine
-meeting.time = later                                  // error: `time` is in the invariant of `Meeting`
-meeting = (meeting with (time = later))?
-```
-
-When `!` follows a construction whose arguments are all literals, and the invariant uses only what a constant's initializer may, the check is made at compile time, and a violation is a compile error, as `UInt8(256)` is.
-
-Reading a field, matching and destructuring check nothing. Equality and printing are unchanged.
-
-An invariant and its `else` should have no effects. How many times the condition is evaluated isn't specified.
-
-In a generic type the invariant is checked once, where it's written, like a generic function's body. So it can't order a value whose type mentions a type parameter.
-
-A member that a sum declares inline can have an invariant, with the condition and the error each written in parentheses, since `|` would otherwise read as the operator. Its constructor then yields the sum or the error, so `Circle(r)` is a `Shape ! NotPositive`:
-
-```silver
-type Shape = Circle(radius: Float) invariant (radius > 0.0) else (NotPositive(radius)) | Square(side: Float) | Nothing
-```
+Nothing yet stops other code from writing `Percent(150)` or assigning `p.value`. Keeping construction to the type's own module, with the fields still readable, is an [open question](#open-questions).
 
 ## Sums
 
@@ -128,11 +92,10 @@ val cs = [Red, Green]     // [Color]
 val p = Point2D(1, 2)     // Point2D
 ```
 
-Where a type is expected, a constructor checked against its member type produces the member, and checked against the sum it promotes. Under `!` or `?` it builds the member too, since what's expected of their value reaches their operand (see [Errors](errors.md#whats-expected-of-the-operand)):
+Where a type is expected, a constructor checked against its member type produces the member, and checked against the sum it promotes:
 
 ```silver
 val c: Circle = Circle(1.0)
-val d: Circle = Circle(2.0)!    // with an invariant on Circle
 ```
 
 Common types: a member and its sum join to the sum. Otherwise a sum is never invented, so `if c => Point2D(1, 2) else Point3D(1, 2, 3)` needs an annotation.
@@ -201,12 +164,15 @@ val r = if val Circle(radius) = shape => radius else 0.0
 - Named constants as patterns, as in `match p { origin => ... }`, and whether one compares with `==`, since it's a whole value rather than a structure
 - Named patterns, alongside named arguments
 - A one-member sum over an existing type, such as `type Id = :Int`, is a nominal wrapper with implicit injection. It may be rejected if it proves a footgun.
-- A `with` through a path that reaches two types with invariants, such as `line with (start.x = 2)`, where the two errors differ. A list of errors is never invented, so for now the inner value is built first.
-- Whether an invariant can name a field whose type contains a `Ref`, whose cell changes without going through the type.
-- An invariant that's costly to check, or that a module maintains step by step, such as a sorted array. Checking it at every construction is too slow. This is what `opaque type` is for; see [Modules](modules.md).
+- Construction that's private to a type's module, with its fields still readable and matchable everywhere, so a function such as `percent` above is the only way to a value. `with` and assignment would be the module's too. See [Modules](modules.md#open-questions) for hiding the fields as well.
 
 ## Current implementation
 
-- An invariant may name a field whose type contains a `Ref`, although the cell can change without going through the type.
-- An invariant's `else` can't lead back to building a value of its own type, directly or through a function it calls whose result type is an [interface](interfaces.md#an-interface-name-as-a-result-type). Through such a function, the error names the type, the function and what to do: write that function's result type out, and its body is no longer part of the `else`.
+- `invariant` is still available, and is to be removed. `type Percent(value: Int) invariant 0 <= value && value <= 100 else OutOfRange(value)` states a condition over the fields and the error given when it fails:
+  - Construction is then a `Percent ! OutOfRange`, also through an alias or as a function value, and so is a `with` that updates a field the condition names.
+  - A field the condition names can't be assigned, assigned through, or passed as a `mutable` argument.
+  - `!` on a construction whose arguments are all literals is checked at compile time.
+  - An inline member of a sum takes one with the condition and the error each in parentheses, and its constructor gives the sum or the error.
+  - The `else` can't lead back to building its own type, and a `with` through two invariants with different errors is an error.
+  - A condition can name a field whose type contains a `Ref`, whose cell then changes without being checked.
 - Everything else above is implemented.

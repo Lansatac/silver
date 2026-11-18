@@ -137,7 +137,7 @@ import graphics : scale       // declares `scale(x: Float)` and `scale(x: Int)`
 def scale(x: Float): Float => x * 2.0   // error: graphics's `scale(Float)` is listed too
 ```
 
-A call then [chooses](functions.md#overloading) among the module's own functions first, and among imported ones only when none of its own fits, with each import's functions ranked as one group, so adding an import never changes which of the module's own functions a call means. A [conformance](interfaces.md#conformance) finds its functions as a call where it's declared would.
+A call then [chooses](functions.md#overloading) among the module's own functions first, and among imported ones only when none of its own fits, ranked together whichever import brings them, so adding an import never changes which of the module's own functions a call means. A [conformance](interfaces.md#conformance) finds its functions as a call where it's declared would.
 
 A name that's a constant or type at its nearest level hides functions of that name at farther ones, and functions at the nearest level hide farther constants and types.
 
@@ -162,7 +162,7 @@ def first<R: Range<T>, T>(range: R): T? => ...
 
 // in a module that imports std.range
 limit                                   // std.range's own
-first([1, 2, 3])                        // std.array's: both `first`s come through, ranked as one module's
+first([1, 2, 3])                        // std.array's: both `first`s come through, and the array's fits closer
 ```
 
 - The selective form forwards the names it lists, each with everything of that name. The blanket form forwards every public name of the module, including what that module forwards itself.
@@ -170,16 +170,16 @@ first([1, 2, 3])                        // std.array's: both `first`s come throu
 - Only names are forwarded. Importing `shapes` doesn't make `shapes.circle.area` reachable; that takes an import of `shapes.circle`.
 - A forwarded name has to be public in its module, and the module has to have it.
 - A private declaration and a forward that lists its name are a duplicate, as with any import that lists it. Beside a blanket forward, a private declaration is what the name means inside the module, and importers get the forwarded one.
-- Forward imports can form a cycle. Each module in it gives its importers what the others give it, by the same levels. A cycle in which what one module passes on by a name changes what another does, and back, never settles, and is an error at the forward.
+- Forward imports can't form a cycle: a module that forwards one that forwards it back, directly or through others, is an error at the forward. Plain imports can: a module may import one that forwards it, as the `std` modules import the prelude.
 - `forward` is reserved only at the top level, followed by `import`. Anywhere else it's an ordinary name.
 
 A declaration is the same declaration however it's reached, so a name that arrives through two imports, directly and through a forwarding module or through two forwarding modules, isn't ambiguous.
 
 The same-level rules apply to what a module forwards. A forward that lists a name the module declares publicly, or one that another forward or import lists for a different declaration, is an error at the forward, and for functions that is one taking the same parameters as another explicit one. What two blanket forwards bring by one name is ambiguous only where an importer uses it, and `kit.origin` is as ambiguous there as `origin`, so the way out is to import the declaring module.
 
-For choosing among overloads, everything one import brings counts as one module: the module's own functions and those it forwards. So with `std.array.first<T>(xs: [T])` and `std.range.first<R: Range<T>, T>(range: R)` both forwarded by the prelude, `first([1, 2, 3])` is the array's, as it would be if one module declared both. Importing the two modules separately leaves that call ambiguous. Two imports that lead to the same functions agree, so importing `std.range` beside the prelude changes nothing: an import whose functions that fit a call are all among another import's is ranked with that one. That holds only while nothing on the way hides one of those functions: a facade whose own `f(Int)` replaces a forwarded one gives a different `f(Int)` than the original module does, and importing both makes a call ambiguous.
+Forwarding doesn't change how a call chooses. Imported functions are ranked together whichever import brings them, so with `std.array.first<T>(xs: [T])` and `std.range.first<R: Range<T>, T>(range: R)`, `first([1, 2, 3])` is the array's whether the two arrive through the prelude, through two imports, or both. Importing `std.range` beside the prelude changes nothing, since a function reached twice is one function. A facade whose own `f(Int)` replaces a forwarded one gives a different `f(Int)` than the original module does, and importing both makes a call that fits them ambiguous.
 
-Inside the forwarding module, its own functions come first, and what all its forwards bring is then one group, as its importers rank it, so the prelude's own code would choose the array's `first` for `first([1, 2, 3])` as a program does. Its other imports are groups of their own.
+Inside the forwarding module, its own functions come first, and what it forwards is ranked with its other imports.
 
 ## Open questions
 
@@ -187,7 +187,7 @@ Inside the forwarding module, its own functions come first, and what all its for
 - The syntax for renamed imports.
 - A visibility level wider than a file and narrower than public, for what the parts of a package share.
 - Whether a library's tests may see more than the library does.
-- How a module hides a type's representation. A type's fields are all public, so anyone can construct it, read it or use `with` on it. A condition on the fields is an [invariant](user-types.md#invariants). What that can't cover is a representation that should be free to change, or a condition too costly to check at every construction. An `opaque type`, with a public name and a constructor, fields and patterns private to its module, is the planned answer, to follow invariants.
+- How a module hides a type's representation. A type's fields are all public, so anyone can construct it, read it or use `with` on it. A condition on the fields is [checked by a function](user-types.md#checking-a-condition), which nothing obliges other code to call. Two levels are wanted: construction private to the module with the fields still readable, which is enough for a condition, and an `opaque type`, with a public name and a constructor, fields and patterns private to its module, for a representation that should be free to change.
 
 ## Current implementation
 
@@ -196,6 +196,8 @@ Inside the forwarding module, its own functions come first, and what all its for
 - The compiler's package is named `intrinsics`, and `intrinsic def` is also allowed in `std` and the prelude.
 - The prelude is the module `prelude`, which the compiler always loads. It forwards the `intrinsics` modules, declares `Of` itself, and doesn't forward `std` modules yet.
 - Two functions of the same parameters aren't a duplicate when one's bounds ask for everything the other's do and more, and a type satisfies an interface through the functions a module can see, so those have to be imported or forwarded: see [Interfaces](interfaces.md#current-implementation).
+- A call still chooses among imported functions one import at a time, with what an import forwards ranked as its own, as [Functions](functions.md#current-implementation) describes. So two functions can be ambiguous through two imports and not through a facade that forwards both, and inside a forwarding module its forwards are a group apart from its other imports.
+- Forward imports can still form a cycle. Each module in it gives its importers what the others give it, and a cycle that never settles is an error at the forward.
 - An explicit duplicate of functions is reported where it's written, and a call that fits both is then reported as ambiguous too.
 - What two blanket forwards bring as functions of the same parameters is reported at a call or a plain or qualified use of the name, but where a bound's search or a function value meets it, as their own error (`T0043`, `T0034`).
 - A sum's members travel with it only when each is written as a plain name that the sum's module declares or forwards.

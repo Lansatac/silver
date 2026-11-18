@@ -315,26 +315,17 @@ def bad(xs: [Int]): Range<Int> => length(xs)    // error in bad: an Int isn't a 
 - A lambda's and a nested `def`'s result type can be written this way too.
 - Every other result type is still written in full.
 
-### On a binding
+### Only in a signature
 
-A `val`'s annotation works the same way: the binding has the value's type, checked against the interface.
+An interface name is a type only in a function's signature: a parameter of a module-level `def`, and the result of a `def`, a nested `def` or a lambda. Everywhere else a type is written in full, and an interface name is an error: a `val`'s annotation, a binding in a pattern, a top-level constant, a field, an element and an alias. Mixed values go in a sum type.
 
 ```silver
-val xs: Range<Int> = [1, 2, 3]
-xs[0]                                             // 1: xs is an [Int]
-
-val ys: Range<Int> & Indexed<Int> = squares(xs)
-val strings: Range<String> = [1, 2]               // error: an [Int] is a Range<Int>
-
-mutable val current: Range<Int> = [1]
-current = [2, 3]
-current = current.filter(x => x > 2)              // error: current is an [Int]
+val xs: Range<Int> = [1, 2, 3]      // error: an interface isn't a type for a binding
+val xs = [1, 2, 3]                  // [Int]
+val ys = squares(xs)                // Mapped<[Int], Int, Int>, the type `squares` returns
 ```
 
-- A `mutable val` still has one type, the first value's.
-- It nests as in a result type: `val pair: (String, Range<Int>)? = ...`, and `val loaded: Range<String> ! IoError = lines(path)`.
-- The value has to say what the type is. `val xs: Range<Int> = []` and `mutable val xs: Range<Int>?` with no value are errors.
-- Only a `val` with a name inside a function takes one. A binding in a pattern, as in `val (a: Range<Int>, b) = ...`, a top-level constant, a field, an element and an alias don't: each of those has one type, which has to be written. Mixed values go in a sum type.
+A binding needs no such annotation: the value already has a type, and the binding takes it.
 
 ## Open questions
 
@@ -359,6 +350,7 @@ Declared conformance isn't built. What's built is the design it replaces, descri
 - An interface can't require another. One covers another by declaring the same function.
 - There's no `if type`, so a generic function can't ask what its type argument can do beyond its bounds.
 - A `for` finds `next`, `length` and `opIndex` by name where it's written, with no conformance.
+- A `val`'s annotation can still name an interface, as in `val xs: Range<Int> = [1, 2, 3]`: the binding has the value's type, checked against the interface, and a `mutable val` keeps the first value's type.
 - Beside an interface name in a result type or an annotation, a literal has its default type, since nothing but the interface is there to say otherwise. `def f(xs: [Int]): (Float, Range<Int>) => (1, xs)` is a mismatch and `val a: Range<Float> = [1, 2]` is an `[Int]` that isn't a `Range<Float>`; `(1.0, xs)` and `[1.0, 2.0]` are how to write them, and the error says so. The errors of an error union aren't beside it in this sense: they're written out, and a literal in an `Error` adapts to them.
 - `Ok(None)` and `Ok([])` under an interface name are errors even where another branch says what the type is, since the `Ok` has to have a type of its own.
 - A private alias for a public type doesn't count as private in what a public function returns through an interface name, since the result's type is the type the alias names.

@@ -149,7 +149,7 @@ def tries<E>(r: Int ! E, n: Int): Int ! E | Oops {
 }
 ```
 
-The same goes for everything else an instance needs at types that come from it: the functions of the conformances that meet its bounds, the `next`, `length` and `opIndex` a `for` loops with, and the invariant of a type it builds or changes with `with`, as in `def ok<U>(xs: [U])` building a `W<[U]>` whose invariant calls `ok` again.
+The same goes for everything else an instance needs at types that come from it: the functions of the conformances that meet its bounds, and the `next`, `length` and `opIndex` a `for` loops with.
 
 Both branches of an [`if type`](interfaces.md#asking-whether-a-type-conforms) count, whichever an instance takes, so the rule is read from declarations alone.
 
@@ -176,6 +176,7 @@ type Grow<T> = More(rest: Grow<(T, T)>, head: T) | Stop    // error: `Grow<T>`, 
 
 ## Current implementation
 
+- The limit also counts the [invariant](user-types.md#current-implementation) of a type an instance builds or changes with `with`, while invariants are still available.
 - Bounds are met by a search and not by declared conformances: see [Interfaces](interfaces.md#current-implementation).
 - Type arguments that don't grow without end can still nest only 64 deep. Past that the program doesn't compile, and the error shows the instances, or the type, that led there.
 - Inference treats two more kinds of argument as having no type of their own, as `None` does: a marker that a generic sum owns, such as `Nil`, and a generic function or constructor named without its type arguments. Each binds nothing, and is checked once the type arguments are known.

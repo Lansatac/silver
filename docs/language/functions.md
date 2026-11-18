@@ -137,13 +137,13 @@ describe([true])   // describe<T>([T])
 A call chooses among the functions of its name like this:
 
 1. Only those taking as many arguments are candidates, and as many type arguments when some are written. If that leaves one, it's called as a function with no overloads would be.
-2. Each argument that has a type of its own is typed, once. Some arguments' types depend on where they go, and those are compared with each candidate's parameter by their shape instead: literals, `None`, `[]`, lambdas without their result type written, names of generic or overloaded functions, arrays, tuples and `Some`s made only of these, and `if`s, `match`es and blocks whose values are all of these. An arm that can't finish, because it ends in `return`, `break`, `continue` or `tail`, has no value to count, and a block's earlier statements don't count. Such an `if` fits a parameter as well as its worst-fitting value does. They're checked against the chosen function's parameters afterwards. A lambda fits a function parameter that takes as many parameters as it does, with the types it annotates.
+2. Each argument that has a type of its own is typed, once. Some arguments' types depend on where they go, and those are compared with each candidate's parameter by their shape instead: literals, `None`, `[]`, lambdas without their result type written, names of generic or overloaded functions, [arithmetic on literals](numbers.md#literals), arrays, tuples and `Some`s made only of these, and `if`s, `match`es and blocks whose values are all of these. An arm that can't finish, because it ends in `return`, `break`, `continue` or `tail`, has no value to count, and a block's earlier statements don't count. Such an `if` fits a parameter as well as its worst-fitting value does. They're checked against the chosen function's parameters afterwards. A lambda fits a function parameter that takes as many parameters as it does, with the types it annotates.
 3. Each generic candidate's type parameters are bound as a call of it alone would bind them, by [inference](generics.md#inference), in a trial that records nothing, so the choice and the call can't disagree. An argument compared by its shape binds what it would be given on its own, so `[Some(1), None]` binds as an `[Int?]`, and a lambda binds what its annotations say. A bound that holds binds what its interface's parameters say, as in inference, and one that fails doesn't rule the candidate out. The expected type binds too, and the arguments have to suit what it binds, but it never makes one candidate better than another.
 4. A candidate fits when every argument [fits](types.md#steps) its parameter, and costs the number of steps that takes, per argument. A candidate that fits every argument beats another if it costs no more for each argument and less for one, so with `type Held = :Box<Int> | :Box<String>`, `g(Box(1))` calls `g(b: Box<Int>?)`, one step, rather than `g(h: Held?)`, two. When two fit every argument equally well, a function that isn't generic beats a generic one, and a generic function beats another that takes everything it takes, as `f<T>(x: [T])` beats `f<T>(x: T)`.
 5. If no candidate fits, or more than one fits better than all the others, the call is an error. When nothing fits only because of what the expected type bound, the choice is made again without it, and the argument is then an error against the one chosen, as it would be with no overloads.
 6. The bounds of the function chosen are checked. A lambda is typed before that, so a bound on its result is checked like any other.
 
-The current module's functions come first. Imported functions are only tried when none of the current module's fits, and then the choice is made within one imported module. A module with a function that fits every argument exactly and isn't generic beats the other modules, whose functions would need a conversion or are generic. Otherwise only one imported module's functions may fit: if functions from two modules fit equally well, the call is ambiguous, and qualifying it resolves that. A module here is what one import brings, so the functions a module [forwards](modules.md#forwarding) are ranked with its own.
+The current module's functions come first. Imported functions are only tried when none of the current module's fits, and then every imported function of the name is ranked together, by step 4, whichever import brings it. If two fit equally well, the call is ambiguous, and qualifying it resolves that. A function is the same function however it's reached, so one that arrives through two imports counts once.
 
 ```silver
 import shapes    // def encode(s: Square): String
@@ -153,7 +153,7 @@ encode(Square(2))  // shapes.encode, which fits exactly
 encode(Circle(1))  // encoding.encode, the only one that fits
 ```
 
-So a new overload in a library can silently change a call only by fitting it exactly, without being generic, where another import's function needed a conversion or was generic. Anything else it adds can at worst cause an ambiguity error. It also means a module can declare its own `printl(p: Point)` and still call the prelude's `printl` with anything else.
+So an import, or a new overload in a library, never changes which of the current module's own functions a call means. Among imported functions, a new overload that fits a call better than the one it reached takes the call, as it would if one module declared both, and one that fits equally well makes the call ambiguous. It also means a module can declare its own `printl(p: Point)` and still call the prelude's `printl` with anything else.
 
 An overloaded function used as a value is the one whose type is exactly the expected type, so it needs one:
 
@@ -172,7 +172,7 @@ Syntax that isn't a call means a call to a function whose name starts with `op`.
 | `x[a..b]` | `opIndex(x, a..b)` |
 | `x[a..b] = v` | `x = opIndexAssign(x, a..b, v)` |
 | `a == b`, `a != b` | `opEquals(a, b)` |
-| `a < b`, `<=`, `>`, `>=` | `opCompare(a, b)` |
+| `a < b`, `<=`, `>`, `>=` | `opCompare(a, b)`, through the type's conformance to `Ord` |
 | printing, `String(x)`, a string hole | `opString(x)` |
 
 ```silver
@@ -198,7 +198,22 @@ def opIndex<T>(w: Window<T>, part: Interval<Int>): Window<T> =>
 - An `opIndex` whose index is a type parameter takes an interval as any other key: for a `Table<K, V>` with `K` an `Interval<Int>`, `t[9..11]` looks up the key `9..11`.
 - For an array the syntax is built in, and an integer index is an `Int`. The prelude's `opIndex` and `opIndexAssign` for arrays do the same where a function is wanted, and its `opIndex` that takes an `Interval<Int>` slices. `x[i]` on an array with an integer index, and `x[a..b]` written out, never call a module's own. With an index of another type, `x[i]` calls `opIndex(x, i)`, as for any type.
 
-`opIndex` and `opIndexAssign` are ordinary functions, chosen as any call is, so a module can write them for a type it didn't declare. The syntax finds them by name, and needs no [conformance](interfaces.md#conformance). `opEquals`, `opHash`, `opCompare` and `opString` belong to the type: every type has an `opEquals`, an `opHash` and an `opString` already, and only the type's own module can write one to replace it, or write an `opCompare`.
+### How syntax finds its function
+
+Syntax finds its function in one of three ways, by what the syntax is for:
+
+- **Indexing is a call.** `x[i]`, `x[i] = v` and slices mean the calls in the table, chosen where they're written as any call is, just as `x.f()` means `f(x)`. So indexing a type needs its `opIndex` in scope, as calling `x.length()` needs `length`, and a module can write one for a type it didn't declare. No [conformance](interfaces.md#conformance) is involved.
+- **Looping and ordering go through a conformance.** `for` steps with the `next` of the type's conformance to [`Range`](control-flow.md#for), and `<` compares with the `opCompare` of its conformance to `Ord`. A conformance is one answer for the whole program, so a loop or a comparison means the same wherever it's written, in a generic function too, where a bound asks for it.
+- **Equality, hashing and printing belong to the type.** Every type has an `opEquals`, an `opHash` and an `opString` already, so generic code needs no bound to use them, and only the type's own module can write one to replace it.
+
+```silver
+import grid : Grid, make       // the type and `make`, but not grid's `opIndex`
+
+val g = make()
+g == make()                    // fine: equality belongs to the type
+for cell in g { ... }          // fine: grid declares `conform Grid: Range<Int>`
+g[1]                           // error: `x[i]` calls `opIndex`, and no `opIndex` here takes a `Grid`
+```
 
 ### Equality and hashing
 
@@ -221,7 +236,7 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 
 ## Open questions
 
-- What `opCompare` returns, whether a type gets one without writing it, and how `opEquals` and `opCompare` are kept in agreement.
+- What `opCompare` returns, whether a type gets one without writing it, and how `opEquals` and `opCompare` are kept in agreement. `Ord` itself is described in the [conformance proposal](../proposals/conformance.md#ordering-decided-deferred).
 - Whether `x.f()` can drop its parentheses.
 - Whether a method call can have a `mutable` receiver.
 - Method calls through `?.`, as in `a?.f()`.
@@ -229,10 +244,12 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 ## Current implementation
 
 - A nested function can call itself and those declared before it, but not one declared after it.
-- Of the operator functions, `opIndex` and `opIndexAssign` are available. `opEquals`, `opHash`, `opCompare` and `opString` aren't, so `==` and printing are always the structural ones, and `<` works only on numbers and strings.
+- Of the operator functions, `opIndex` and `opIndexAssign` are available. `opEquals`, `opHash` and `opString` aren't, so `==` and printing are always the structural ones. There's no `Ord`, so `<` works only on numbers and strings. A `for` still finds `next` by name, as [Control flow](control-flow.md#current-implementation) describes.
 - Only module-level functions can be overloaded. Two nested `def`s of one name in a block are an error.
+- Imported functions are still ranked one import at a time, with what an import [forwards](modules.md#forwarding) ranked as its own. An import with a function that fits every argument exactly and isn't generic beats the others. Otherwise functions from two imports that both fit are ambiguous, even when one fits better: with `h(x: Int?)` in one import and `h<T>(x: T)` in another, `h(1)` is an error where it's meant to call the second.
 - When more than one candidate is left, an `if`, `match` or block is typed before any is chosen, even when its values are all literals, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.
 - Of the arguments compared by their shape, `None` and `[]` count one step wherever they go.
+- Arithmetic on literals isn't compared by its shape yet: it's an `Int`, as [Numbers](numbers.md#current-implementation) describes, so `f(1 + 2)` doesn't fit an `f(x: UInt8)`.
 - A method call's receiver needs a type of its own, so `None.f()` and `[].f()` are errors. An integer literal receiver adapts, as in `(200).f()` with `f(x: UInt8)`.
 - Two native functions of one name in a module have to bind different C symbols, and two intrinsics can't share a name.
 - A `mutable` first parameter is rejected for a method call. A later `mutable` argument is fine.
