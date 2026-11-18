@@ -1,1 +1,1 @@
-T0043: `strings` is `[Int]`, which isn't a `Range<String>`: `next<T>([T])` returns `(Int, [Int])?`, where `(String, [Int])?` is needed
+T0043: `strings` is `[Int]`, which isn't a `Range<String>`: it's a `Range<Int>` instead

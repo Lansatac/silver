@@ -14,3 +14,6 @@ def toJson<T: Json>(values: [T]): String {
     }
     text ~ "]"
 }
+
+conform Int: Json
+conform [T]: Json when T: Json

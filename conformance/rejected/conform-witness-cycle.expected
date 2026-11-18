@@ -1,0 +1,1 @@
+T0051: `Bag` can't be a `Source<[Int]>`: a function it would use works out its result type from its body, which needs this conformance already; write that function's result type

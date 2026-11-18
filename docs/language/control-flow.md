@@ -149,6 +149,5 @@ None.
 
 ## Current implementation
 
-- A `for` needs no conformance: it finds `next`, `length` and `opIndex` by name, as a call where the loop is written would, and goes by index when all three take the type, where it's meant to step. By index it calls `length` once, then `opIndex` for each position. A `length` or `opIndex` whose bounds don't hold for the type is passed over, and the loop steps. Inside a generic function it uses the bound's functions, so a loop over a type parameter steps with `next` unless its bounds supply `length` and `opIndex`, whatever type an instance is given.
-- An array and an `Interval` each have a loop of their own, which calls none of those functions. A generic function given an array or an interval for a type parameter steps it, through `next`.
-- The error for a type with a `length` and an `opIndex` but no `next` suggests `iterate()`, which isn't built yet.
+- `Range` is declared in `stdlib/intrinsics/range.ag`, where the compiler package is until there is a `lang`.
+- An array and an `Interval` each have a loop of their own, which does what their `next` would. A generic function given one for a type parameter steps it through `next`.

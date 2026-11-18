@@ -1,9 +1,10 @@
-// `for` over anything but an array or `a..b` steps it with `next`.
+// `for` over anything but an array or `a..b` steps it with the `next` of its conformance to `Range`.
 
 import for_support.lines
 
 type Countdown(from: Int)
 
+conform Countdown: Range<Int>
 def next(c: Countdown): (Int, Countdown)? {
     printl("next {c.from}")
     if c.from == 0 { return None }
@@ -13,6 +14,7 @@ def next(c: Countdown): (Int, Countdown)? {
 type Seq<T>(step: () -> (T, Seq<T>)?)
 
 def next<T>(s: Seq<T>): (T, Seq<T>)? => s.step()
+conform Seq<T>: Range<T>
 
 def upTo(from: Int, to: Int): Seq<Int> =>
     Seq(() => if from >= to => None else Some((from, upTo(from + 1, to))))
@@ -90,7 +92,7 @@ def main(): Unit {
     }
     printl(pairs)
 
-    // A `next` found in the module that declares the type.
+    // The conformance of a type from another module, with its `next` there.
     for line in Lines(["one", "two"], 0) {
         printl(line)
     }

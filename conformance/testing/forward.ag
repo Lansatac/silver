@@ -13,3 +13,5 @@ test "a forwarded function is called unqualified and through the facade" {
 test "what a module forwards is ranked with its own" => expect(next(Pace(5)) == 105)
 
 test "a failure shows a forwarded call as written" => expect(next(1) == next(Pace(1)))
+
+conform Pace: Stepped

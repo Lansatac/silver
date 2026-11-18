@@ -2107,22 +2107,25 @@ unittest
     for _ in [2] { }`).shouldHaveNoDiagnostics();
 }
 
-@("for steps anything else with the next a call would choose, yielding what it returns first")
+@("for steps anything else through its conformance to Range, yielding the element the conformance says")
 unittest
 {
     auto a = analyzed("type Down(n: Int)\n"
         ~ "def next(d: Down): (Int, Down)? => None\n"
+        ~ "conform Down: Range<Int>\n"
         ~ "type Box<T>(items: [T])\n"
         ~ "def next<T>(b: Box<T>): (T, Box<T>)? => None\n"
+        ~ "conform Box<T>: Range<T>\n"
         ~ "def next(s: String): (Bool, String)? => None\n"
         ~ "def count<T>(b: Box<T>): Int {\n    mutable val n = 0\n    for item in b { n += length([item]) }\n    n\n}\n"
         ~ "def main(): Unit {\n    for down in Down(3) { print(down) }\n    for word in Box([\"a\"]) { print(word) }\n"
-        ~ "    for flag in \"abc\" { print(flag) }\n    for _ in Down(1) { }\n}");
+        ~ "    for letter in \"abc\" { print(letter) }\n    for _ in Down(1) { }\n}");
     a.shouldHaveNoDiagnostics();
     a.shouldHaveType("item", 2, "T");
     a.shouldHaveType("down", 2, "Int");
     a.shouldHaveType("word", 2, "String");
-    a.shouldHaveType("flag", 2, "Bool");
+    // A String's conformance is the prelude's, whatever `next` this module declares.
+    a.shouldHaveType("letter", 2, "Char");
 }
 
 @("an array is looped over by index, whatever next is in scope")
@@ -2134,88 +2137,31 @@ unittest
     a.shouldHaveType("x", 2, "Int");
 }
 
-@("the next that steps a for takes exactly its type and returns an element and the same type")
+@("a for needs a conformance to Range, and says when a conform line is all that's missing")
 unittest
 {
-    enum source = "type A(x: Int)\ntype B(x: Int)\n";
     enum loop = "\ndef main(): Unit {\n    for x in A(1) { }\n}";
-    analyzed(source ~ loop).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    analyzed(source ~ "def next(b: B): (Int, B)? => None" ~ loop).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    analyzed(source ~ "def next(a: A?): (Int, A)? => None" ~ loop).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    analyzed(source ~ "def next(a: A): Int => 1" ~ loop).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    analyzed(source ~ "def next(a: A): (Int, B)? => None" ~ loop).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    analyzed(source ~ "def next(a: A): (Int, A) => (1, a)" ~ loop).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    analyzed(source ~ "def next(mutable a: A): (Int, A)? => None" ~ loop)
-        .shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    analyzed(source ~ "def next<T>(a: A): (T, A)? => None" ~ loop)
-        .shouldReport(DiagnosticCode.CannotInferTypeArgument, At("A(1)", 1));
-    analyzed(source ~ "def next<T>(a: T): (Int, T)? => None" ~ loop).shouldHaveNoDiagnostics();
-}
-
-@("for loops by index when a length and an opIndex take the value, in place of next")
-unittest
-{
-    auto a = analyzed("type A(x: Int)\n"
-        ~ "def length(a: A): Int => 1\ndef opIndex(a: A, index: Int): String => \"\"\n"
-        ~ "def next(a: A): (String, A)? => None\n"
-        ~ "type B(x: Int)\ndef opIndex(b: B, index: Int): String => \"\"\ndef next(b: B): (Bool, B)? => None\n"
-        ~ "type W<T>(items: [T])\ndef length<T>(w: W<T>): Int => 0\ndef opIndex<T>(w: W<T>, index: Int): T => w.items[index]\n"
-        ~ "def next<T>(w: W<T>): (T, W<T>)? => None\n"
-        ~ "def main(): Unit {\n    for one in A(1) { print(one) }\n    for two in B(1) { print(two) }\n"
-        ~ "    for three in W([1.5]) { print(three) }\n    print([1].at(0))\n}");
-    a.shouldHaveNoDiagnostics();
-    a.shouldHaveType("one", 2, "String");
-    a.shouldHaveType("two", 2, "Bool");
-    a.shouldHaveType("three", 2, "Float");
-}
-
-@("a for needs a next, so a type with only a length and an opIndex isn't looped over")
-unittest
-{
-    enum source = "type A(x: Int)\ndef length(a: A): Int => 1\ndef opIndex(a: A, index: Int): Int => 1\n";
-    analyzed(source ~ "def main(): Unit {\n    for x in A(1) { }\n}").shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    analyzed(source ~ "def next(a: A): (Int, A)? => None\ndef main(): Unit {\n    for x in A(1) { }\n}").shouldHaveNoDiagnostics();
-}
-
-@("a for by index still needs a next that steps the type, with the element type opIndex gives")
-unittest
-{
-    enum source = "type A(x: Int)\ndef length(a: A): Int => 1\ndef opIndex(a: A, index: Int): Int => 1\n";
-    enum main = "def main(): Unit {\n    for x in A(1) { }\n}";
-    analyzed(source ~ "def next(a: A): (Int, A) => (1, a)\n" ~ main).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    analyzed(source ~ "def next(a: A): (String, A)? => None\n" ~ main).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-}
-
-@("the length and opIndex a for uses take exactly the value and an Int, and length returns an Int")
-unittest
-{
-    enum source = "type A(x: Int)\n";
-    enum loop = "\ndef main(): Unit {\n    for x in A(1) { }\n}";
-    enum at = "def opIndex(a: A, index: Int): Int => 1\n";
-    enum length = "def length(a: A): Int => 1\n";
-    analyzed(source ~ at ~ "def length(a: A): UInt8 => 1" ~ loop).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    analyzed(source ~ at ~ "def length(a: A?): Int => 1" ~ loop).shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    analyzed(source ~ length ~ "def opIndex(a: A, index: Int?): Int => 1" ~ loop)
-        .shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
-    // An `opIndex` that an Int doesn't fit isn't one.
-    analyzed(source ~ length ~ "def opIndex(a: A, index: UInt8): Int => 1" ~ loop)
+    analyzed("type A(x: Int)" ~ loop).onlyMessage(DiagnosticCode.InvalidOperand)
+        .should.equal("`for` loops over a `Range`, and `A` isn't one: no conformance says so");
+    analyzed("type A(x: Int)\ndef next(a: A): (Int, A)? => None" ~ loop).onlyMessage(DiagnosticCode.InvalidOperand)
+        .should.equal("`for` loops over a `Range`, and `A` isn't one: no conformance says so; it has the functions, "
+            ~ "so `conform A: Range<Int>` is all that's missing");
+    // A length and an opIndex don't make it one.
+    analyzed("type A(x: Int)\ndef length(a: A): Int => 1\ndef opIndex(a: A, index: Int): Int => 1" ~ loop)
         .shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
 }
 
-@("a for chooses its next as a call does, so the current module's comes first and only one import may fit")
+@("the next a for uses is the one its conformance found where it's declared")
 unittest
 {
     auto files = [
-        "one.ag": "module one\ntype A(x: Int)\ndef next(a: A): (String, A)? => None",
+        "one.ag": "module one\ntype A(x: Int)\ndef next(a: A): (String, A)? => None\nconform A: Range<String>",
         "two.ag": "module two\nimport one\ndef next(a: one.A): (Bool, one.A)? => None",
     ];
     auto own = analyzed("import one\nimport two\ndef next(a: one.A): (Int, one.A)? => None\n"
         ~ "def main(): Unit {\n    for x in one.A(1) { print(x) }\n}", files);
     own.shouldHaveNoDiagnostics();
-    own.shouldHaveType("x", 2, "Int");
-    analyzed("import one\ndef main(): Unit {\n    for x in one.A(1) { print(x) }\n}", files).shouldHaveType("x", 2, "String");
-    analyzed("import one\nimport two\ndef main(): Unit {\n    for x in one.A(1) { }\n}", files)
-        .shouldReport(DiagnosticCode.AmbiguousName, At("one.A(1)", 1));
+    own.shouldHaveType("x", 2, "String");
 }
 
 @("a for range takes integers of one type, and a literal adapts to the number beside it")

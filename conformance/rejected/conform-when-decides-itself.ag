@@ -1,0 +1,7 @@
+// A `when` bound on a parameter the conforming type doesn't mention can't decide that parameter.
+interface Json { def toJson(value: Self): String }
+type Box<S>(value: S)
+def toJson<S>(b: Box<S>): String => "box"
+conform Box<S>: Json when T: Range<T>
+
+def main(): Unit => ()

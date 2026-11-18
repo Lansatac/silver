@@ -1,0 +1,1 @@
+S0031: `T` isn't in the conforming type, and no `when` bound decides it; it has to be an argument of a bound's interface that only the interface's results mention, as `T` is in `S: Range<T>`

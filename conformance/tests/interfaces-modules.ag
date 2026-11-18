@@ -1,12 +1,15 @@
-// Conformance is found where the type is supplied: a module makes a library type conform with an
-// ordinary function, and two modules can give one type different conformances.
+// A module can make a library type conform, and the conformance holds wherever the type is used,
+// with the functions it found where it's declared.
 
 import interfaces_support.things
 import interfaces_support.json
 import interfaces_support.pretty : pretty, prettyAll
 
-// The module that declares Foo wrote no toJson. This one makes it a Json here.
+// The module that declares Foo wrote no toJson, so this one makes it a Json.
 def toJson(f: Foo): String => "foo#{f.id}"
+conform Foo: Json
+// Bar's toJson is its module's, which doesn't know Json.
+conform Bar: Json
 
 def report<T: Json>(label: String, item: T): String => label ~ " " ~ encode(item)
 
@@ -14,16 +17,15 @@ def main(): Unit {
     val foo = Foo(7)
     printl(foo.toJson())
     printl(encode(foo))
-    // The same type through the other module's function.
+    // Another module with a `toJson` of its own for Foo still encodes it by the conformance.
     printl(pretty(foo))
 
-    // A bound on the function found is searched from here, wherever that function lives.
+    // A conformance with a `when` holds for the types its `when` does.
     printl(encode([foo, Foo(8)]))
     printl(prettyAll([foo]))
     val maybe: Foo? = foo
     printl(encode(maybe))
 
-    // An imported type with the conformance its module wrote, and a built-in type with the library's.
     printl(encode(Bar(1)))
     printl(encode([1, 2]))
     printl(report("got", foo))

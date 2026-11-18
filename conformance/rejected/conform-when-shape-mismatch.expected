@@ -1,0 +1,1 @@
+T0005: `for` loops over a `Range`, and `Seconds<[(Int, String)]>` isn't one: the conformance for `Seconds<S>` needs `S` to be a `Range<(T, Int)>`, and `[(Int, String)]` isn't one: it's a `Range<(Int, String)>` instead

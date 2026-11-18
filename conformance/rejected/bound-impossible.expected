@@ -1,0 +1,1 @@
+T0042: `R` can't be both a `Range<Int>` and a `Range<String>`: a type has one conformance to `Range`, which says what `T` is

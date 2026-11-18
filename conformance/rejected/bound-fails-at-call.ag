@@ -3,6 +3,7 @@
 interface Json { def toJson(value: Self): String }
 type Point(x: Int, y: Int)
 def toJson(p: Point): String => "point"
+conform Point: Json
 def put<T: Json>(x: T): String => toJson(x)
 def put<T>(x: T?): String => "option"
 

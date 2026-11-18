@@ -1,0 +1,1 @@
+T0043: `encode` needs `T` to be a `Json`, and `Box<Int>` isn't one: no conformance says so; it has the functions, so `conform Box<T>: Json when T: Json` is all that's missing

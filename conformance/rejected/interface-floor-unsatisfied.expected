@@ -1,12 +1,1 @@
-T0043: `bad` returns `Int`, which isn't a `Range<Int>`: no `next` in scope takes `Int`
-    next<T>([T]) takes `[T]` there, not `Int`
-    next<R: Range<T>, T>(Filtered<R, T>) takes `Filtered<R, T>` there, not `Int`
-    intrinsics.interval.next(Interval<Int>) takes `Interval<Int>` there, not `Int`
-    intrinsics.interval.next(Interval<Int8>) takes `Interval<Int8>` there, not `Int`
-    intrinsics.interval.next(Interval<Int16>) takes `Interval<Int16>` there, not `Int`
-    intrinsics.interval.next(Interval<Int32>) takes `Interval<Int32>` there, not `Int`
-    intrinsics.interval.next(Interval<UInt>) takes `Interval<UInt>` there, not `Int`
-    intrinsics.interval.next(Interval<UInt8>) takes `Interval<UInt8>` there, not `Int`
-    intrinsics.interval.next(Interval<UInt16>) takes `Interval<UInt16>` there, not `Int`
-    intrinsics.interval.next(Interval<UInt32>) takes `Interval<UInt32>` there, not `Int`
-    intrinsics.string.next(String) takes `String` there, not `Int`
+T0043: `bad` returns `Int`, which isn't a `Range<Int>`: no conformance says so

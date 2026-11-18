@@ -7,3 +7,5 @@ def next(lines: Lines): (String, Lines)? {
     if lines.at == length(lines.text) { return None }
     return (lines.text[lines.at], Lines(lines.text, lines.at + 1))
 }
+
+conform Lines: Range<String>

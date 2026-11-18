@@ -1,0 +1,8 @@
+// A type parameter a conformance introduces has to be in its type, or decided by a `when` bound.
+interface Json { def toJson(value: Self): String }
+interface Add<Rhs> { def add(a: Self, b: Rhs): Self }
+type Box<S>(value: S)
+def toJson<S>(b: Box<S>): String => "box"
+conform Box<S>: Json when S: Add<T>
+
+def main(): Unit => ()

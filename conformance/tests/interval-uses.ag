@@ -1,9 +1,6 @@
 // An interval is a value like any other, and works where a range does.
-interface Steps<T> {
-    def next(range: Self): (T, Self)?
-}
 
-def total<R: Steps<Int>>(range: R): Int {
+def total<R: Range<Int>>(range: R): Int {
     mutable val sum = 0
     for x in range {
         sum += x

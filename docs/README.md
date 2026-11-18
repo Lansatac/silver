@@ -24,7 +24,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Numbers](language/numbers.md) | Numeric types, literals, operators, overflow, conversions | Implemented |
 | [Bindings](language/bindings.md) | `val`, `mutable val`, discards, shadowing, constants | Implemented |
 | [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading, operator functions | Partial: no tail calls, `opEquals`, `opCompare` or `opString` |
-| [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented, except that `for` finds its functions by name and not by conformance, and goes by index where it can |
+| [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented |
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
 | [Errors](language/errors.md) | `T ! E`, `?` and `!` on errors, what panics, `main` | Implemented, except `read()` returning an error |
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, `a..b` as an `Interval` | Implemented, except that element assignment always copies |
@@ -33,7 +33,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, `match` | Implemented, with `invariant` still to be removed |
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
-| [Interfaces](language/interfaces.md) | Interfaces, declared conformance, bounds, `if type`, interface names as parameter and result types | Partial: `conform` is checked, but bounds are still met by a search; no `if type`; no interface types as values |
+| [Interfaces](language/interfaces.md) | Interfaces, declared conformance, bounds, `if type`, interface names as parameter and result types | Partial: no `if type`; every module sees every conformance; no interface types as values |
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
 | [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: no packages or renamed imports, and the prelude doesn't forward `std` modules yet |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the standard library's natives |

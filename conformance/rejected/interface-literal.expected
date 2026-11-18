@@ -1,2 +1,1 @@
-T0043: `encode` needs `T` to be a `Json`, and `Int` isn't one: no `toJson` in scope takes `Int`
-    toJson(UInt8) takes `UInt8` there, not `Int`
+T0043: `encode` needs `T` to be a `Json`, and `Int` isn't one: no conformance says so

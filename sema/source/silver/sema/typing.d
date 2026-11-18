@@ -93,6 +93,8 @@ struct Conforming
     Type self;
     Witness[] witnesses;
     Id!FunctionDecl holder;
+    /// The module the declaration is in, where its functions are found.
+    string module_;
     /// Where the interface is written in the declaration.
     Span span;
 }
@@ -118,15 +120,11 @@ struct Witness
     Witness[] witnesses;
 }
 
-/// How a `for` loops over a value: by index with `length` and `opIndex` when `index` is set, and
-/// otherwise by stepping it with `next`.
+/// How a `for` steps a value that isn't an array or an interval: with the `next` of its type's
+/// conformance to `Range`.
 struct LoopFunctions
 {
-    FunctionUse length;
-    FunctionUse index;
     FunctionUse next;
-
-    bool indexed() const => index.found;
 }
 
 /// The functions `x[i]` calls when `x` isn't an array. Any of them can be missing: `read` is

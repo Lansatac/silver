@@ -122,13 +122,13 @@ unittest
     assert(a.collector.errors.front.message.canFind("`selected.pick(...)`"));
 }
 
-@("a forwarded function satisfies a bound for the forwarding module's importers")
+@("a conformance finds a function that a forward brings")
 unittest
 {
     auto files = [
         "json.ag": "module json\ninterface Json { def toJson(self: Self): String }\ndef encode<T: Json>(x: T): String => toJson(x)",
         "things.ag": "module things\ntype Thing(n: Int)\ndef toJson(t: Thing): String => \"thing\"",
-        "all.ag": "module all\nforward import json\nforward import things",
+        "all.ag": "module all\nforward import json\nforward import things\nconform Thing: Json",
     ];
     analyzed("import all\ndef main(): Unit => printl(encode(Thing(1)))", files).shouldHaveNoDiagnostics();
     analyzed("import all\nimport things\nimport json\ndef main(): Unit => printl(encode(Thing(1)))", files)
@@ -224,8 +224,8 @@ unittest
 {
     auto files = [
         "steps.ag": "module steps\ninterface Steps { def next(self: Self): Int }\ntype Count(n: Int)\n"
-            ~ "def next(c: Count): Int => c.n\ndef total<R: Steps>(r: R): Int => next(r)",
-        "fac.ag": "module fac\nforward import steps\ntype Twice(n: Int)\ndef next(t: Twice): Int => t.n * 2",
+            ~ "def next(c: Count): Int => c.n\ndef total<R: Steps>(r: R): Int => next(r)\nconform Count: Steps",
+        "fac.ag": "module fac\nforward import steps\ntype Twice(n: Int)\ndef next(t: Twice): Int => t.n * 2\nconform Twice: Steps",
     ];
     analyzed("import fac\ndef main(): Unit => printl(total(Count(3)) + total(Twice(1)) + next(Count(1)))", files)
         .shouldHaveNoDiagnostics();

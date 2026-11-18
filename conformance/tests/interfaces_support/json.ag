@@ -16,3 +16,7 @@ def toJson<T: Json>(xs: [T]): String {
 }
 
 def encode<T: Json>(item: T): String => "json:" ~ toJson(item)
+
+conform Int: Json
+conform T?: Json when T: Json
+conform [T]: Json when T: Json

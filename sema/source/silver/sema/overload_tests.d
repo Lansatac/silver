@@ -336,14 +336,14 @@ unittest
     }
 }
 
-@("a for chooses among imported modules by fit as a call does")
+@("a conformance chooses among imported modules by fit as a call does")
 unittest
 {
     auto files = [
         "down.ag": "module down\ntype Down(n: Int)\ndef next(d: Down): (Int, Down)? => None",
         "gen.ag": "module gen\ndef next<T>(x: T?): (Int, T?)? => None",
     ];
-    analyzed("import down\nimport gen\ndef main(): Unit {\n    for x in Down(3) { print(x) }\n}", files)
+    analyzed("import down\nimport gen\nconform Down: Range<Int>\ndef main(): Unit {\n    for x in Down(3) { print(x) }\n}", files)
         .shouldHaveNoDiagnostics();
 }
 

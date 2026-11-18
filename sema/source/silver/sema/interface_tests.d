@@ -36,16 +36,24 @@ def map<R: Range<T>, T, U>(source: R, transform: (T) -> U): [U] => []
 def plus<T: Add<R>, R>(a: T, b: R): T => add(a, b)
 `;
 
+/// The conformances of the declarations above. They come after everything else, so a test's
+/// `At` counts occurrences from the declarations as written.
+private enum declared = "\nconform Int: Json\nconform Point: Json\nconform Box<T>: Json when T: Json\nconform T?: Json when T: Json\n"
+    ~ "conform [T]: Range<T>\nconform Vec: Add<Vec> & Add<Float>";
+
 /// `body` in `main`, after the declarations above.
 private Analyzed analyzedWith(string body, string more = "")
 {
-    return analyzed(declarations ~ more ~ "def main(): Unit {\n" ~ body ~ "\n}");
+    return analyzed(declarations ~ more ~ "def main(): Unit {\n" ~ body ~ "\n}" ~ declared);
 }
 
-/// `source` at module level, with an empty `main`.
+/// `source` at module level, with an empty `main`, and the conformances of `ranges` when it
+/// starts with those.
 private Analyzed analyzedModule(string source)
 {
-    return analyzed(source ~ "\ndef main(): Unit => ()");
+    import std.algorithm : startsWith;
+    auto conforming = source.startsWith(ranges) ? "\nconform [T]: Range<T> & Sized" : "";
+    return analyzed(source ~ "\ndef main(): Unit => ()" ~ conforming);
 }
 
 // Declarations
@@ -240,21 +248,19 @@ def firstOf<R: Range<T>, T>(range: R): T? {
     a.shouldHaveType("next(range)", "(T, R)?");
 }
 
-@("for steps a value of a type parameter with the bound's next")
+@("for steps a value of a type parameter with the next its Range bound supplies")
 unittest
 {
-    analyzedWith("", `
-def count<T>(range: Range<T>): Int {
-    mutable val n = 0
-    for item in range { n += 1 }
-    n
-}
-`).shouldHaveNoDiagnostics();
+    enum loop = " {\n    mutable val n = 0\n    for item in range { n += 1 }\n    n\n}";
+    analyzedModule("def count<T>(range: Range<T>): Int" ~ loop).shouldHaveNoDiagnostics();
+    // An interface with the same function isn't the `Range` a `for` loops over.
+    analyzedModule("interface Steps<T> { def next(r: Self): (T, Self)? }\ndef count<R: Steps<Int>>(range: R): Int" ~ loop)
+        .onlyMessage(DiagnosticCode.InvalidOperand).should.equal("`for` loops over a `Range`, and `R` isn't one: nothing `R` is bounded by says it is");
 }
 
 // Conformance
 
-@("a type conforms through a function a call would choose")
+@("a type satisfies a bound through its declared conformance, a conditional one too")
 unittest
 {
     auto a = analyzedWith(`
@@ -266,35 +272,30 @@ unittest
     a.shouldHaveNoDiagnostics();
 }
 
-@("a type with no function doesn't conform, and the error says what was tried")
+@("a type with no conformance doesn't satisfy a bound, and the error says when a conform line is all that's missing")
 unittest
 {
-    auto message = analyzedWith("val a = encode(Plain(1))").onlyMessage(DiagnosticCode.UnsatisfiedBound);
-    message.should.startWith("`encode` needs `T` to be a `Json`, and `Plain` isn't one: no `toJson` in scope takes `Plain`");
-    message.should.contain("toJson(Int) takes `Int` there, not `Plain`");
-    message.should.contain("toJson<T: Json>(T?) needs `T` to be a `Json`, and `Plain` isn't one: that would need `Plain: Json` to hold already");
+    analyzedWith("val a = encode(Plain(1))").onlyMessage(DiagnosticCode.UnsatisfiedBound)
+        .should.equal("`encode` needs `T` to be a `Json`, and `Plain` isn't one: no conformance says so");
+    analyzedWith("val a = encode(Plain(1))", "def toJson(p: Plain): String => \"plain\"\n").onlyMessage(DiagnosticCode.UnsatisfiedBound)
+        .should.equal("`encode` needs `T` to be a `Json`, and `Plain` isn't one: no conformance says so; it has the functions, "
+            ~ "so `conform Plain: Json` is all that's missing");
+    // A conditional conformance whose `when` doesn't hold.
+    analyzedWith("val a = encode(Box(Plain(1)))").onlyMessage(DiagnosticCode.UnsatisfiedBound)
+        .should.equal("`encode` needs `T` to be a `Json`, and `Box<Plain>` isn't one: the conformance for `Box<T>` needs `T` "
+            ~ "to be a `Json`, and `Plain` isn't one: no conformance says so");
 }
 
-@("a bound that needs itself fails")
+@("a conformance's functions are chosen by their arguments, and the result then has to be the interface's exactly")
 unittest
 {
-    analyzedModule(`
-interface Json { def toJson(value: Self): String }
-def toJson<T: Json>(x: T?): String => "option"
-def encode<T: Json>(item: T): String => toJson(item)
-def f(): String => encode(1)`).onlyMessage(DiagnosticCode.UnsatisfiedBound).should.contain("that would need `Int: Json` to hold already");
-}
-
-@("the function is chosen by its arguments, and its result then has to be the interface's exactly")
-unittest
-{
-    auto message = analyzedWith("val a = encode(Plain(1))", "def toJson(p: Plain): Int => 1\n").onlyMessage(DiagnosticCode.UnsatisfiedBound);
-    message.should.contain("`toJson(Plain)` returns `Int`, where `String` is needed");
-    analyzedWith("val a = encode(Plain(1))", "def toJson(p: Plain): String? => None\n").onlyMessage(DiagnosticCode.UnsatisfiedBound)
+    analyzedWith("val a = 1", "def toJson(p: Plain): Int => 1\nconform Plain: Json\n").onlyMessage(DiagnosticCode.UnmetConformance)
+        .should.contain("`toJson(Plain)` returns `Int`, where `String` is needed");
+    analyzedWith("val a = 1", "def toJson(p: Plain): String? => None\nconform Plain: Json\n").onlyMessage(DiagnosticCode.UnmetConformance)
         .should.contain("`toJson(Plain)` returns `String?`, where `String` is needed");
 }
 
-@("an argument is promoted to fit, as a call's is")
+@("a conformance's argument is promoted to fit, as a call's is")
 unittest
 {
     analyzedWith(`
@@ -306,6 +307,7 @@ type Square(side: Int)
 type Shape = :Circle | :Square
 def area(s: Shape): Int => 1
 def measure<T: HasArea>(shape: T): Int => area(shape)
+conform Circle: HasArea
 `).shouldHaveNoDiagnostics();
 }
 
@@ -349,38 +351,39 @@ unittest
 interface Json { def toJson(value: Self): String }
 def toJson(x: UInt8): String => "u8"
 def encode<T: Json>(item: T): String => toJson(item)
+conform UInt8: Json
 `;
     analyzedModule(small ~ "def f(): String => toJson(1) ~ encode<UInt8>(1)").shouldHaveNoDiagnostics();
     analyzedModule(small ~ "def f(): String => encode(1)").onlyMessage(DiagnosticCode.UnsatisfiedBound)
         .should.startWith("`encode` needs `T` to be a `Json`, and `Int` isn't one");
 }
 
-@("the current module's function comes before an imported one, and a bound finds the one a call does")
+@("a conformance uses the functions where it's declared, whatever the module using it declares or imports")
 unittest
 {
     enum lib = "module lib\ninterface Json { def toJson(value: Self): String }\ntype Foo(id: Int)\n"
         ~ "def toJson(f: Foo): String => \"lib\"\ndef toJson<T: Json>(x: T?): String => \"option\"\n"
-        ~ "def encode<T: Json>(item: T): String => toJson(item)\n";
+        ~ "def encode<T: Json>(item: T): String => toJson(item)\nconform Foo: Json\nconform T?: Json when T: Json\n";
     analyzed("import lib\ndef toJson(f: Foo): String => \"mine\"\ndef main(): Unit {\n    val a = encode(Foo(1))\n}", ["lib.ag": lib])
         .shouldHaveNoDiagnostics();
-    analyzed("import lib\ndef main(): Unit {\n    val a = encode(Foo(1))\n    val b = encode(Some(Foo(1)))\n}", ["lib.ag": lib])
-        .shouldHaveNoDiagnostics();
+    analyzed("import lib : encode, Foo\ndef main(): Unit {\n    val a = encode(Foo(1))\n    val b = encode(Some(Foo(1)))\n}",
+        ["lib.ag": lib]).shouldHaveNoDiagnostics();
 }
 
-@("only what the caller's module sees is searched, and the error says what to import")
+@("a conformance's functions are found where it's declared, and the error says what to import")
 unittest
 {
     enum json = "module json\ninterface Json { def toJson(value: Self): String }\ndef encode<T: Json>(item: T): String => toJson(item)\n";
     enum foo = "module foo\ntype Foo(id: Int)\ndef toJson(f: Foo): String => \"foo\"\n";
-    analyzed("import json\nimport foo\ndef main(): Unit {\n    val a = encode(Foo(1))\n}", ["json.ag": json, "foo.ag": foo])
-        .shouldHaveNoDiagnostics();
-    auto message = analyzed("import json\nimport foo : Foo\ndef main(): Unit {\n    val a = encode(Foo(1))\n}",
-        ["json.ag": json, "foo.ag": foo]).onlyMessage(DiagnosticCode.UnsatisfiedBound);
+    analyzed("import json\nimport foo\nconform Foo: Json\ndef main(): Unit {\n    val a = encode(Foo(1))\n}",
+        ["json.ag": json, "foo.ag": foo]).shouldHaveNoDiagnostics();
+    auto message = analyzed("import json\nimport foo : Foo\nconform Foo: Json\ndef main(): Unit => ()",
+        ["json.ag": json, "foo.ag": foo]).onlyMessage(DiagnosticCode.UnmetConformance);
     message.should.contain("no `toJson` in scope takes `Foo`");
     message.should.contain("`foo` has a `toJson(Foo)` that would fit; list it in the import of `foo` to use that one");
 }
 
-@("two imported modules that fit a bound equally well are an error")
+@("two imported modules whose functions fit a conformance equally well are an error at the declaration")
 unittest
 {
     enum json = "module json\ninterface Json { def toJson(value: Self): String }\ndef encode<T: Json>(item: T): String => toJson(item)\n";
@@ -388,23 +391,19 @@ unittest
     enum one = "module one\nimport foo\ndef toJson(f: Foo): String => \"one\"\n";
     enum two = "module two\nimport foo\ndef toJson(f: Foo): String => \"two\"\n";
     auto files = ["json.ag": json, "foo.ag": foo, "one.ag": one, "two.ag": two];
-    analyzed("import json\nimport foo\nimport one\nimport two\ndef main(): Unit {\n    val a = encode(Foo(1))\n}", files)
-        .onlyMessage(DiagnosticCode.UnsatisfiedBound).should.contain("a `toJson` in more than one imported module (one, two) takes `Foo`");
-    analyzed("import json\nimport foo\nimport one\nimport two\ndef toJson(f: Foo): String => one.toJson(f)\n"
+    analyzed("import json\nimport foo\nimport one\nimport two\nconform Foo: Json\ndef main(): Unit => ()", files)
+        .onlyMessage(DiagnosticCode.UnmetConformance).should.contain("a `toJson` in more than one imported module (one, two) takes `Foo`");
+    analyzed("import json\nimport foo\nimport one\nimport two\ndef toJson(f: Foo): String => one.toJson(f)\nconform Foo: Json\n"
         ~ "def main(): Unit {\n    val a = encode(Foo(1))\n}", files).shouldHaveNoDiagnostics();
 }
 
-@("a search that keeps needing a larger type stops with an error of its own")
+@("a conformance that would need itself to find its functions isn't one")
 unittest
 {
     analyzedModule(`
-interface Grow { def grow(value: Self): Int }
-interface Next<U> { def step(value: Self): U }
-type Wrap<T>(value: T)
-def step<T>(x: T): Wrap<T> => Wrap(x)
-def grow<T: Next<U>, U: Grow>(x: T): Int => 1
-def needsGrow<T: Grow>(x: T): Int => 1
-def f(): Int => needsGrow(1)`).onlyMessage(DiagnosticCode.BoundSearchTooDeep).should.contain("`Int: Grow`, then `Wrap<Int>: Grow`");
+interface Json { def toJson(value: Self): String }
+def toJson<T: Json>(x: T?): String => "option"
+conform Int: Json`).onlyMessage(DiagnosticCode.UnmetConformance).should.startWith("`Int` can't be a `Json`");
 }
 
 // Interface parameters
@@ -420,8 +419,7 @@ unittest
     a.shouldDeclareType(At("ints", 1), "[Int]");
     a.shouldDeclareType(At("strings", 1), "[String]");
     analyzedWith(`val a = total(["a"])`).onlyMessage(DiagnosticCode.UnsatisfiedBound)
-        .should.equal("`total` needs a `Range<Int>`, and `[String]` isn't one: `next<T>([T])` returns `(String, [String])?`, "
-            ~ "where `(Int, [String])?` is needed");
+        .should.equal("`total` needs a `Range<Int>`, and `[String]` isn't one: it's a `Range<String>` instead");
 }
 
 @("a bound is solved before lambdas, so a lambda's parameter is known from it")
@@ -440,7 +438,7 @@ unittest
     val b = plus(Vec(1.0), 2.0)`);
     a.shouldHaveNoDiagnostics();
     analyzedWith(`val a = plus(Vec(1.0), "a")`).onlyMessage(DiagnosticCode.UnsatisfiedBound)
-        .should.startWith("`plus` needs `T` to be an `Add<String>`, and `Vec` isn't one: no `add` in scope takes `(Vec, String)`");
+        .should.equal("`plus` needs `T` to be an `Add<String>`, and `Vec` isn't one: it's an `Add<Vec>` and an `Add<Float>` instead");
 }
 
 @("an unknown parameter is bound by the one function that fits what's known")
@@ -449,6 +447,7 @@ unittest
     auto a = analyzedWith("val a = scale(Shift(1), s => 2)", `
 type Shift(by: Int)
 def add(a: Shift, b: Int): Shift => a
+conform Shift: Add<Int>
 def scale<T: Add<R>, R>(a: T, f: (T) -> R): T => add(a, f(a))
 `);
     a.shouldHaveNoDiagnostics();
@@ -467,6 +466,8 @@ interface FromText { def fromText(of: Of<Self>, text: String): Self? }
 def fromText(of: Of<Point>, text: String): Point? => None
 def fromText(of: Of<Int>, text: String): Int? => None
 def fromText<T: FromText>(text: String): T? => fromText(Of<T>, text)
+conform Point: FromText
+conform Int: FromText
 `);
     a.shouldHaveNoDiagnostics();
     a.shouldDeclareType(At("parsed", 1), "Point?");
@@ -696,7 +697,7 @@ def f(n: Int): Range<Box<Inner>> => [Box(Inner(n))]")
 @("a public function can't return a private type through a floor")
 unittest
 {
-    enum steps = ranges ~ "private type Steps(n: Int)\nprivate def next(s: Steps): (Int, Steps)? => None\n";
+    enum steps = ranges ~ "private type Steps(n: Int)\nprivate def next(s: Steps): (Int, Steps)? => None\nconform Steps: Range<Int>\n";
     analyzedModule(steps ~ "def f(): Range<Int> => Steps(1)").onlyMessage(DiagnosticCode.PrivateTypeExposed)
         .should.equal("`Steps` is private, so it can't appear in a public function's signature, and `f` returns `Steps`; "
             ~ "make `f` private or `Steps` public");
@@ -710,11 +711,6 @@ unittest
 @("an error about a floor is the only one, and says something that can be done")
 unittest
 {
-    // The function a bound finds is the one being worked out.
-    analyzedModule(ranges ~ "interface Source<R> { def contents(s: Self): R }
-def pull<S: Source<R>, R>(s: S): R => contents(s)
-def contents(b: Box<Int>): Range<Int> => pull(b)").shouldReport(DiagnosticCode.RecursiveResultType, At("Range", 2));
-
     // Its own type isn't known inside its body, so the example is another's.
     analyzedModule(ranges ~ "def over(b: Box<Int>): Range<Int> {
     val f = over
@@ -767,7 +763,7 @@ unittest
         .shouldHaveNoDiagnostics();
 
     // A test's body allows `expect`, and a function it needs the result of still doesn't.
-    analyzed(ranges ~ "test \"t\" {\n    val r = helper([1])\n}\ndef helper(xs: [Int]): Range<Int> {\n    expect(true)\n    xs\n}",
+    analyzed(ranges ~ "test \"t\" {\n    val r = helper([1])\n}\ndef helper(xs: [Int]): Range<Int> {\n    expect(true)\n    xs\n}\nconform [T]: Range<T>",
         null, Target.host, true).shouldReport(DiagnosticCode.ExpectOutsideTest, At("expect(true)", 1));
 }
 
@@ -890,7 +886,7 @@ unittest
         .should.startWith("`T` isn't a type, so this would conform every type");
     analyzedModule(conformances ~ "conform Int: Json\nconform Box<T>: Json when T: Json, U: Json")
         .shouldReport(DiagnosticCode.UnknownWhenParameter, At("U: Json", 1));
-    analyzedModule(conformances ~ "conform Box<Int>: Json when Int: Json").onlyMessage(DiagnosticCode.UnknownWhenParameter)
+    analyzedModule(conformances ~ "conform Int: Json\nconform Box<Int>: Json when Int: Json").onlyMessage(DiagnosticCode.UnknownWhenParameter)
         .should.contain("`Int` is a type");
 }
 

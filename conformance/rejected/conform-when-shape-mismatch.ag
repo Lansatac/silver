@@ -1,0 +1,13 @@
+// A `when` bound that decides a parameter from the shape of what its source gives holds only for a
+// source that gives that shape.
+type Seconds<S>(inner: S)
+
+def next<S: Range<(T, Int)>, T>(s: Seconds<S>): (Int, Seconds<S>)? {
+    val ((_, n), rest) = next(s.inner)?
+    (n, Seconds(rest))
+}
+conform Seconds<S>: Range<Int> when S: Range<(T, Int)>
+
+def main(): Unit {
+    for x in Seconds([(1, "a"), (2, "b")]) { printl(x) }
+}

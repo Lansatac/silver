@@ -1,0 +1,4 @@
+// A type has one conformance to an interface, so two bounds that differ only in what it says can't both hold.
+def f<R: Range<Int> & Range<String>>(r: R): Int => 1
+
+def main(): Unit => ()

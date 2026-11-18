@@ -177,7 +177,6 @@ type Grow<T> = More(rest: Grow<(T, T)>, head: T) | Stop    // error: `Grow<T>`, 
 ## Current implementation
 
 - The limit also counts the [invariant](user-types.md#current-implementation) of a type an instance builds or changes with `with`, while invariants are still available.
-- Bounds are met by a search and not by declared conformances: see [Interfaces](interfaces.md#current-implementation).
 - Type arguments that don't grow without end can still nest only 64 deep. Past that the program doesn't compile, and the error shows the instances, or the type, that led there.
 - Inference treats two more kinds of argument as having no type of their own, as `None` does: a marker that a generic sum owns, such as `Nil`, and a generic function or constructor named without its type arguments. Each binds nothing, and is checked once the type arguments are known.
 - In step 1, an argument whose parameter type is already known when its turn comes is checked against it rather than given a type of its own, so with `f<T>(a: T, b: [T])`, `f(small, [1, 2])` adapts the literals to `small`'s type.

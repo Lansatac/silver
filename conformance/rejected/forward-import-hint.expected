@@ -1,2 +1,2 @@
-T0043: `measure` needs `T` to be a `Sized`, and `Parcel` isn't one: no `size` in scope takes `Parcel`
+T0051: `Parcel` can't be a `Sized`: no `size` in scope takes `Parcel`
     `forward_support.kit` has a `size(Parcel)` that would fit; list it in the import of `forward_support.kit` to use that one

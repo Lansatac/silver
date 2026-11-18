@@ -1,6 +1,6 @@
 # Proposal: declared conformance
 
-**Status: decided. [The first version](#the-first-version) is a part of it, and the rest is deferred. Of the first version, only [choosing a function](#choosing-a-function-decided) without its bounds is built.** This replaces the conformance rules of the [interfaces proposal](interfaces.md), which still describes how conformance is found: by a search at the call. [Interfaces](../language/interfaces.md) describes the first version. Interfaces, bounds, interface parameters, `Of<T>`, and an interface name as a parameter type are kept. The [ranges proposal](ranges.md) is written against the rules this replaces, and [What changes for ranges](#what-changes-for-ranges) lists what it needs. The deferred parts depend on [packages](../language/modules.md#packages), and the first version doesn't.
+**Status: decided. [The first version](#the-first-version) is a part of it, and the rest is deferred. The first version is built except `if type`.** This replaces the conformance rules of the [interfaces proposal](interfaces.md). [Interfaces](../language/interfaces.md) describes the first version. Interfaces, bounds, interface parameters, `Of<T>`, and an interface name as a parameter type are kept. The [ranges proposal](ranges.md) is written against the rules this replaces, and [What changes for ranges](#what-changes-for-ranges) lists what it needs. The deferred parts depend on [packages](../language/modules.md#packages), and the first version doesn't.
 
 ## Summary
 

@@ -2,6 +2,7 @@
 
 type Pairs(count: Int)
 
+conform Pairs: Range<(Int, String)>
 def next(p: Pairs): ((Int, String), Pairs)? =>
     if p.count == 0 => None else Some(((p.count, "p{p.count}"), Pairs(p.count - 1)))
 

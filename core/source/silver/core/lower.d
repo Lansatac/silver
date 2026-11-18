@@ -139,7 +139,7 @@ private struct Instance
         auto loop = analysis.loopOf(for_);
         if (loop is null) return null;
         auto instance = new LoopFunctions;
-        *instance = LoopFunctions(concrete(loop.length), concrete(loop.index), concrete(loop.next));
+        *instance = LoopFunctions(concrete(loop.next));
         return instance;
     }
 
@@ -335,7 +335,6 @@ private final class Lowering
             functions[_slots[key]] = lowered;
         }
         if (_comparesFunctions) compareCaptures();
-        nameWitnesses();
     }
 
     /// Gives each lambda with captures a `captureEquality`. It's made only once every function is
@@ -372,27 +371,6 @@ private final class Lowering
         functions[slot] = Function("equal.captures." ~ lambda.name, _moduleName, [a, b], null, types.bool_,
             allOf(tests, span), FunctionOrigin.derived);
         return slot;
-    }
-
-    /// Adds its witnesses to the name of each instance that another shares its function and type
-    /// arguments with, which only a program with two conformances of one type has.
-    private void nameWitnesses()
-    {
-        InstanceKey[][InstanceKey] alike;
-        foreach (key; _slots.byKey) alike[InstanceKey(key.decl, key.args)] ~= key;
-        foreach (keys; alike.byValue)
-        {
-            if (keys.length < 2) continue;
-            foreach (key; keys) functions[_slots[key]].name ~= " with %-(%s, %)".format(key.witnesses.map!(w => witnessName(w)));
-        }
-    }
-
-    /// `json.toJson<Int>`, with the witnesses it was given in turn.
-    private string witnessName(uint id)
-    {
-        auto key = _witnesses[id];
-        auto own = "%s.%s".format(_analysis.moduleOf(key.decl), instanceName(key));
-        return key.witnesses.length == 0 ? own : "%s [%-(%s, %)]".format(own, key.witnesses.map!(w => witnessName(w)));
     }
 
     /// The number of the instance that `witness`, found in the function being lowered, stands for
@@ -1636,12 +1614,7 @@ private final class Lowering
         if (range is null)
         {
             auto functions = _analysis.loopOf(e.id);
-            if (functions is null) return lowerForIndexed(for_, null, span);
-            if (functions.indexed)
-            {
-                const InstanceKey[2] keys = [callKey(functions.length), callKey(functions.index)];
-                return lowerForIndexed(for_, keys[], span);
-            }
+            if (functions is null) return lowerForArray(for_, span);
             return lowerForStepped(for_, functions.next, span);
         }
         return lowerForBounds(for_, null, lowerExpr(*range.start), lowerExpr(*range.end), span);
@@ -1671,29 +1644,19 @@ private final class Lowering
         ]);
     }
 
-    /// `for x in xs` over an array, or a value with `length` and `at` (the instances `functions`), evaluates `xs`
-    /// and its length once, and steps an index before the body, so `continue` can't skip it. An
-    /// array's element isn't read for `_`, since that can't be seen, but `at` is called.
-    private Expr lowerForIndexed(const ast.ForExpr for_, const(InstanceKey)[] functions, Span span)
+    /// `for x in xs` over an array evaluates `xs` and its length once, and steps an index before
+    /// the body, so `continue` can't skip it. The element isn't read for `_`, since that can't be
+    /// seen. It's what the array's `next` would do, which the program can't tell apart.
+    private Expr lowerForArray(const ast.ForExpr for_, Span span)
     {
         auto source = lowerExpr(for_.binding.value);
-        auto held = temp(functions is null ? "array" : "source", source.type);
+        auto held = temp("array", source.type);
         auto count = temp("count", types.int_);
         auto next = temp("next", types.int_, true);
-        Expr length;
-        Expr value;
-        if (functions is null)
-        {
-            auto element = types.isArray(source.type) ? types.arrayElement(source.type) : types.never;
-            length = Expr(types.int_, span, ExprKind(Length(boxed(use(held, span)))));
-            value = Expr(element, span, ExprKind(Index(boxed(use(held, span)), boxed(use(next, span)))));
-        }
-        else
-        {
-            length = callInstance(functions[0], [use(held, span)], span);
-            value = callInstance(functions[1], [use(held, span), use(next, span)], span);
-        }
-        auto binds = functions is null && for_.binding.name == discardName ? null : bindOrDrop(*for_.binding, value);
+        auto element = types.isArray(source.type) ? types.arrayElement(source.type) : types.never;
+        auto length = Expr(types.int_, span, ExprKind(Length(boxed(use(held, span)))));
+        auto value = Expr(element, span, ExprKind(Index(boxed(use(held, span)), boxed(use(next, span)))));
+        auto binds = for_.binding.name == discardName ? null : bindOrDrop(*for_.binding, value);
         auto label = newLabel();
         auto forBody = loopBody(*for_.body, label);
         return block(span, [
@@ -1949,12 +1912,6 @@ private final class Lowering
             case ast.FunctionKind.required:
                 assert(0, "a function a bound supplies is replaced by its witness");
         }
-    }
-
-    /// The instance a function that syntax uses means here.
-    private InstanceKey callKey(const FunctionUse f)
-    {
-        return instanceOf(f.func, f.typeArgs.idup, f.witnesses);
     }
 
     /// A call of a function that syntax uses, given its arguments as values.
@@ -3410,6 +3367,8 @@ type Shape = :Circle | :Square
 def area(s: Shape): Int => 1
 def area(n: Int): Int => n
 def measure<T: HasArea>(shape: T): Int => area(shape)
+conform Circle: HasArea
+conform Int: HasArea
 
 def f(): Int => measure(Circle(2)) + measure(3)
 `, "f");

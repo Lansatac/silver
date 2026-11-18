@@ -6,6 +6,7 @@ forward import forward_support.ranges
 type Bag(size: Int)
 
 def count(b: Bag): Int => b.size
+conform Bag: Counted
 def count<T>(xs: [T]): Int => length(xs)
 
 // Its forwards are ranked as one group here, as they are for its importers.

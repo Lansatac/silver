@@ -1,0 +1,12 @@
+// When the function a missing conformance would use is generic, the hint is the conformance for
+// every type it takes, not only the one at hand.
+interface Json { def toJson(value: Self): String }
+type Box<T>(value: T)
+def toJson<T: Json>(b: Box<T>): String => "box"
+def toJson(n: Int): String => "int"
+conform Int: Json
+def encode<T: Json>(item: T): String => toJson(item)
+
+def main(): Unit {
+    printl(encode(Box(1)))
+}

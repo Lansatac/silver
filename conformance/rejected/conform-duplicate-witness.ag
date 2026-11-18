@@ -1,0 +1,8 @@
+// Two functions that take the same types are reported as duplicates, before what a conformance
+// finds among them.
+interface Json { def toJson(value: Self): String }
+def toJson(n: Int): String => "a"
+def toJson(n: Int): String => "b"
+conform Int: Json
+
+def main(): Unit => ()

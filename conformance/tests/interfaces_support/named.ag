@@ -5,6 +5,7 @@ interface Named {
 }
 
 def name(n: Int): String => "number {n}"
+conform Int: Named
 
 // Checked after the module that calls it, which needs its result first.
 def numbered(n: Int): Named => n + 1

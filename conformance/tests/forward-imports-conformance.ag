@@ -1,10 +1,11 @@
-// A wrapper library that forwards an interface's module and a type with the function that makes
-// it conform: importing the wrapper is enough for the search a bound makes.
+// A wrapper library that forwards an interface's module and a type that conforms to it:
+// importing the wrapper is enough to use the type where the interface is a bound.
 import forward_support.wrapper
 
 type Mine(label: String)
 
 def toJson(mine: Mine): String => "mine {mine.label}"
+conform Mine: Json
 
 def main(): Unit {
     printl(report(1))

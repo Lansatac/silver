@@ -9,3 +9,5 @@ type Bin(k: Int)
 type Square(width: Int)
 
 def count(b: Bin): Int => b.k
+conform Bin: Counted
+conform Tally: Counted

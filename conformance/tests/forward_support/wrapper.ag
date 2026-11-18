@@ -4,3 +4,5 @@ forward import forward_support.json
 forward import forward_support.things : Thing, toJson
 
 def report<T: Json>(value: T): String => "report {encode(value)}"
+
+conform Thing: Json

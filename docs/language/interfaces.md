@@ -99,6 +99,7 @@ encode(Box("text"))           // error: `Box<String>` is a `Json` only when `Str
 ```
 
 - A `when` bound is on one of the declaration's type parameters, and is written as any bound is.
+- A `when` bound can introduce a type parameter the conforming type doesn't mention, when it's in an argument of the bound's interface that only the interface's results mention, alone or inside another type: `S: Range<(T, Int)>` takes a source that gives pairs whose second part is an `Int`, and decides `T` from the first. In `conform Skipped<S>: Range<T> when S: Range<T>`, `T` is whatever `S`'s conformance says its items are, so an adapter needs no type parameter for them. A name that nothing decides, as in `conform Box<S>: Json when S: Add<T>`, is an error, since `Add`'s `T` is in an argument.
 - The function found for the conformance can have bounds of its own. They have to follow from the `when` clause, which is checked at the declaration.
 
 ### One conformance for a type and an interface
@@ -125,6 +126,8 @@ def describe<T: Json & Named>(item: T): String => name(item) ~ " " ~ toJson(item
 ```
 
 A bound goes on a type parameter of a `def` at module level. A type's parameter can't have one, and neither can an interface's.
+
+Two bounds on one parameter to the same interface that differ only in arguments the interface's results alone mention can't both hold, since a type has one conformance to the interface: `R: Range<Int> & Range<String>` is an error where it's written. `T: Add<Int> & Add<Float>` is fine, since `Add`'s argument is in a parameter.
 
 A bound is checked by looking the type up among the conformances. A function in scope with the right name doesn't make a type conform, and the error for a failed bound says when such a function exists and the `conform` line is all that's missing.
 
@@ -343,15 +346,12 @@ Decided, and not part of the first version, each described in the [conformance p
 
 ## Current implementation
 
-`conform` declarations and interfaces that require others are built, and each declaration is checked as described above. Bounds don't look at them yet. What meets a bound is still the design they replace, described in the [interfaces proposal](../proposals/interfaces.md):
+Declared conformance is built as described above, except `if type` and what needs packages:
 
-- A type satisfies a bound where a call of each of the interface's functions would resolve: in the module that supplies the type, among its own functions and its imports'. So writing the function is enough, whether or not a `conform` line says so, using a type with a bound needs the module that holds its function imported, and two modules can give one type different conformances, each compiling its own instance of a generic function.
-- A function found for a bound can have bounds itself, searched from the same call, which is what `when` replaces. A search that keeps needing the same interface of a larger type is given up after 32 steps. Where the search chooses among functions of one name, one whose own bounds fail is passed over, unlike at a call, and so is one for an overloaded function used as a value.
-- A bound on an interface that requires others is met by searching for each of them too.
-- `Range` and the conformances of arrays, `String` and the integer `Interval`s to it are in the prelude, but `for` doesn't use them yet.
-- The error for two conformances that overlap names the earlier one by its type and module, not where it's written.
 - There's no `if type`, so a generic function can't ask what its type argument can do beyond its bounds.
-- A `for` finds `next`, `length` and `opIndex` by name where it's written, with no conformance.
+- In the first version every module sees every conformance, and any module can declare one.
+- A conformance's functions are found as a call where it's declared would find them. Where that chooses among functions of one name, one whose own bounds fail is passed over, unlike at a call, and so is one for an overloaded function used as a value.
+- The error for two conformances that overlap names the earlier one by its type and module, not where it's written.
 - A `val`'s annotation can still name an interface, as in `val xs: Range<Int> = [1, 2, 3]`: the binding has the value's type, checked against the interface, and a `mutable val` keeps the first value's type.
 - Beside an interface name in a result type or an annotation, a literal has its default type, since nothing but the interface is there to say otherwise. `def f(xs: [Int]): (Float, Range<Int>) => (1, xs)` is a mismatch and `val a: Range<Float> = [1, 2]` is an `[Int]` that isn't a `Range<Float>`; `(1.0, xs)` and `[1.0, 2.0]` are how to write them, and the error says so. The errors of an error union aren't beside it in this sense: they're written out, and a literal in an `Error` adapts to them.
 - `Ok(None)` and `Ok([])` under an interface name are errors even where another branch says what the type is, since the `Ok` has to have a type of its own.

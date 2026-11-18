@@ -1513,12 +1513,20 @@ private final class NameResolver
             );
         }
         collect(conform.type);
+        // A `when` bound can decide a type parameter the type doesn't mention, which the checker makes sure of.
+        foreach (ref written; conform.when)
+        {
+            foreach (bound; written.bounds)
+            {
+                bound.kind.match!((const NamedType n) { foreach (arg; n.args) collect(arg); }, (_) {});
+            }
+        }
         foreach (ref written; conform.when)
         {
             if (introduced.canFind!(p => p.id == written.id)) continue;
             _collector.reportError(DiagnosticCode.UnknownWhenParameter, written.span, namesType(written.name, moduleScope)
                 ? "`%s` is a type, and a `when` bound goes on a type parameter that the conforming type introduces".format(written.name)
-                : "`%s` isn't in the conforming type, so it isn't a type parameter this conformance introduces".format(written.name));
+                : "`%s` isn't in the conforming type or a `when` bound's arguments, so it isn't a type parameter this conformance introduces".format(written.name));
         }
 
         auto declScope = genericScope(introduced, moduleScope, false);

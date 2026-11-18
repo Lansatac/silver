@@ -1,4 +1,4 @@
-// Interfaces and bounds: a type conforms by having the functions, with nothing declaring it.
+// Interfaces and bounds: a type conforms by a `conform` line, through ordinary functions.
 
 interface Json {
     def toJson(value: Self): String
@@ -37,8 +37,17 @@ def area(s: Shape): Int => match s {
 
 def name(p: Point): String => "point"
 
+conform Int: Json
+conform Bool: Json
+conform Point: Json & Named & Titled
+conform Box<T>: Json when T: Json
+conform (A, B): Json when A: Json, B: Json
+conform T?: Json when T: Json
+conform Circle: HasArea
+conform Square: HasArea
+
 def encode<T: Json>(item: T): String => "<" ~ toJson(item) ~ ">"
-// A generic calling a generic: the bound on `T` is passed along, and `Box<T>` is searched here.
+// A generic calling a generic: the bound on `T` is passed along, and `Box<T>` is looked up here.
 def twice<T: Json>(item: T): String => encode(item) ~ encode(Box(item))
 def viaMethod<T: Json>(item: T): String => item.toJson()
 // A witness that takes more than the type: a `Circle` promotes into `Shape`.
@@ -48,7 +57,7 @@ def measurer<T: HasArea>(shape: T): (T) -> Int => area
 def described<T: Json & Named>(item: T): String => name(item) ~ " " ~ toJson(item)
 def titled<T: Named & Titled>(item: T): String => name(item) ~ "/" ~ item.name()
 
-// A function whose bound fails steps aside for one that fits.
+// A function is chosen by its arguments, and its bounds are checked afterwards.
 def show<T: Json>(item: T): String => "json " ~ toJson(item)
 def show(item: String): String => "string " ~ item
 def show<T>(item: [T]): String => "{length(item)} values"

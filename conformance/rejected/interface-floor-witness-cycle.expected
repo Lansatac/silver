@@ -1,1 +1,0 @@
-T0045: The type `items` returns is worked out from its body, which uses `items` before that's known; write the type it returns in place of `Range<Int>`

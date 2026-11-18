@@ -1,17 +1,16 @@
 // An interface name as a parameter type stands for some type that satisfies it.
 
-interface Range<T> {
-    def next(range: Self): (T, Self)?
-}
-
 interface Json { def toJson(value: Self): String }
 
 type Countdown(from: Int)
 
-def next<T>(xs: [T]): (T, [T])? => if length(xs) == 0 => None else (xs[0], xs[1..])
 def next(c: Countdown): (Int, Countdown)? => if c.from == 0 => None else (c.from, Countdown(c.from - 1))
 def toJson(x: Int): String => "{x}"
 def toJson(x: String): String => "\"{x}\""
+
+conform Countdown: Range<Int>
+conform Int: Json
+conform String: Json
 
 // `<S: Range<T>, T>(range: S)`, with `S` never written.
 def toArray<T>(range: Range<T>): [T] {

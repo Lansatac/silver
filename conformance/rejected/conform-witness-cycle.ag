@@ -1,0 +1,11 @@
+// A conformance's function whose result is worked out from its body can't use that conformance.
+interface Source<R> { def items(source: Self): R }
+type Bag(xs: [Int])
+conform Bag: Source<[Int]>
+def pull<S: Source<R>, R>(source: S): R => items(source)
+
+def items(b: Bag): Range<Int> => pull(b)
+
+def main(): Unit {
+    printl(items(Bag([1])))
+}

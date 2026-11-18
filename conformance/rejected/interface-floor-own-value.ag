@@ -1,14 +1,11 @@
 // Inside its own body an overloaded function has no type yet, so the example shows another's.
-interface Range<T> {
-    def next(range: Self): (T, Self)?
-}
 
 interface Indexed<T> {
     def length(value: Self): Int
     def opIndex(value: Self, index: Int): T
 }
 
-def next<T>(xs: [T]): (T, [T])? => if length(xs) == 0 => None else (xs[0], xs[1..])
+conform [T]: Indexed<T>
 
 type Deck(cards: [Int])
 

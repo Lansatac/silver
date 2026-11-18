@@ -1,0 +1,24 @@
+// A `when` bound decides a type parameter the conforming type doesn't mention, so an adapter
+// needs no parameter for what its source gives.
+type Skipped<S>(source: S)
+
+def skip<S: Range<T>, T>(source: S): Skipped<S> => Skipped(source)
+def next<S: Range<T>, T>(s: Skipped<S>): (T, Skipped<S>)? {
+    val (_, rest) = next(s.source)?
+    val (item, after) = next(rest)?
+    (item, Skipped(after))
+}
+conform Skipped<S>: Range<T> when S: Range<T>
+
+def total<R: Range<Int>>(r: R): Int {
+    mutable val sum = 0
+    for x in r { sum += x }
+    sum
+}
+
+def main(): Unit {
+    for x in skip([1, 2, 3, 4, 5]) { printl(x) }
+    for c in skip("abcd") { printl(c) }
+    printl(total(skip(1..7)))
+    printl(total(skip(skip([1, 2, 3, 4, 5, 6, 7, 8]))))
+}

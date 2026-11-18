@@ -1,0 +1,13 @@
+// A `when` bound whose parameter the bound decides can name a larger type each time, so looking
+// it up is given up.
+interface Json { def toJson(value: Self): String }
+type G<S>(s: S)
+def next<S>(g: G<S>): (G<G<S>>, G<S>)? => None
+conform G<S>: Range<G<G<S>>>
+def toJson<S: Range<T>, T: Json>(g: G<S>): String => "g"
+conform G<S>: Json when S: Range<T>, T: Json
+def encode<T: Json>(item: T): String => toJson(item)
+
+def main(): Unit {
+    printl(encode(G(G(1))))
+}

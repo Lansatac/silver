@@ -12,3 +12,5 @@ def first(text: String): String => "first of {text}"
 
 // A forward import is an import here too.
 def tallest(): Int => limit + forward_support.arrays.limit
+
+conform Pile: Counted

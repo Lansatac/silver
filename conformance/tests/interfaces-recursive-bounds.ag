@@ -9,6 +9,9 @@ type Countdown(from: Int)
 
 def step(c: Countdown): (Int, Countdown)? => if c.from == 0 => None else (c.from, Countdown(c.from - 1))
 
+conform [Int]: Steps<Int>
+conform Countdown: Steps<Int>
+
 def total<R: Steps<Int>>(r: R, sum: Int): Int => match step(r) {
     None => sum
     Some((x, rest)) => total(rest, sum + x)

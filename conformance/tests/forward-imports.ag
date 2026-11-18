@@ -3,6 +3,7 @@ import forward_support.facade
 type Tally(n: Int)
 
 def count(t: Tally): Int => t.n
+conform Tally: Counted
 
 // A forwarded interface is a bound and a parameter's type.
 def twice<R: Counted>(range: R): Int => total(range) * 2

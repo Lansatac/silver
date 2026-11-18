@@ -1,8 +1,8 @@
 foo#7
 json:foo#7
-json:Foo { id: 7 }
+json:foo#7
 json:[foo#7;foo#8;]
-json:[Foo { id: 7 };]
+json:[foo#7;]
 json:foo#7
 json:bar1
 json:[1;2;]

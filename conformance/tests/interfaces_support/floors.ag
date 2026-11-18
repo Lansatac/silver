@@ -43,3 +43,9 @@ def squares<R: Range<Int>>(r: R): Range<Int> => r.map(x => x * x)
 def odds(xs: [Int]): Range<Int> => xs.filter(x => x % 2 == 1)
 
 def labelled(n: Int): String => name(numbered(n)) ~ ", doubled {numbered(n) * 2}"
+
+conform [T]: Indexed<T>
+conform Mapped<R, T, U>: Range<U> when R: Range<T>
+conform Mapped<R, T, U>: Indexed<U> when R: Indexed<T>
+conform Filtered<R, T>: Range<T> when R: Range<T>
+conform Countdown: Range<Int>

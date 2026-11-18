@@ -1,6 +1,8 @@
-// Only what this module sees is searched, so the type's own function has to be imported.
+// A conformance finds what its module sees, so the type's own function has to be imported.
 import interfaces_support.json
 import interfaces_support.things : Thing
+
+conform Thing: Json
 
 def main(): Unit {
     printl(encode(Thing(1)))

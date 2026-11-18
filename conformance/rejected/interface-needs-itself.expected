@@ -1,2 +1,2 @@
-T0043: `encode` needs `T` to be a `Json`, and `Int` isn't one: no `toJson` in scope takes `Int`
+T0051: `Int` can't be a `Json`: no `toJson` in scope takes `Int`
     toJson<T: Json>(T?) needs `T` to be a `Json`, and `Int` isn't one: that would need `Int: Json` to hold already

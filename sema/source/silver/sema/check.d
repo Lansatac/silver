@@ -153,6 +153,20 @@ private final class TypeChecker
     private ResultState[Id!FunctionDecl] _resultStates;
     /// Those found to need their own result type while it was being worked out.
     private bool[Id!FunctionDecl] _recursiveResults;
+    /// How far finding each conformance's functions has got.
+    private ResultState[Entry] _conformanceStates;
+    /// Every conformance, in the order declared.
+    private Entry[] _entries;
+    /// Those reported as needing themselves to find their functions.
+    private bool[Entry] _cycledConformances;
+    /// Whether a hint about a missing `conform` line is being worked out, which doesn't look for another.
+    private bool _hinting;
+    /// How many trials, which drop what they find wrong, the checker is inside.
+    private size_t _trials;
+    /// What looking a goal on types with no type parameters up found, by the goal.
+    private Conformance[Looked] _lookups;
+    /// What a `for` asks the element type of its `Range` to be.
+    private TypeParam _loopElement;
     /// Every use of a generic function, for `rejectGrowingCalls`.
     private Reference[] _references;
     private InvariantUse[] _invariantUses;
@@ -231,11 +245,15 @@ private final class TypeChecker
                         auto holder = _resolutions.conformances[c.id];
                         _declarer.declareBounds(_resolutions.typeParamsOf(holder));
                         _declarer.declareBoundFunctions(holder);
+                        rejectImpossibleBounds(_resolutions.typeParamsOf(holder));
                     },
                     (_) {},
                 );
             }
         }
+
+        // After every bound is declared, and before anything that can look a bound up among them.
+        declareConformances(programModules);
 
         // After every signature, since an invariant's `else` can call anything, and before any body,
         // since a body can build the type. One that another needs first is typed from there.
@@ -272,6 +290,11 @@ private final class TypeChecker
             checkListedOverloads(mod.name);
         }
 
+        // After every overload is checked and invariant typed, which finding a conformance's functions
+        // can need, and before any body. One that's needed first is found from there.
+        foreach (entry; _entries) findConformance(entry);
+        checkConformances();
+
         foreach (mod; programModules)
         {
             foreach (decl; mod.declarations)
@@ -292,7 +315,6 @@ private final class TypeChecker
             }
         }
 
-        checkConformances(programModules);
         _declarer.checkInhabited(programModules);
         _declarer.rejectGrowingTypes(programModules);
         rejectGrowingCalls();
@@ -456,6 +478,33 @@ private final class TypeChecker
     }
 
     /// What the bounds of `func`'s type parameters name, and the functions they supply inside it.
+    /// Reports two bounds of one of `params` to the same interface that differ only in arguments
+    /// the interface's results alone mention: a type has one conformance to an interface, which
+    /// says what those are, so no type could meet both.
+    private void rejectImpossibleBounds(const(TypeParam)[] params)
+    {
+        foreach (param; params)
+        {
+            auto bounds = _typing.bounds.get(param.id, null);
+            foreach (j, later; bounds)
+            {
+                if (!later.valid) continue;
+                foreach (earlier; bounds[0 .. j])
+                {
+                    if (!earlier.valid || earlier.decl != later.decl || earlier.args == later.args) continue;
+                    if (argumentParameters(later.decl).any!(i => earlier.args[i] != later.args[i])) continue;
+                    _collector.reportError(DiagnosticCode.InvalidBound, param.span,
+                        "`%s` can't be both %s and %s: a type has one conformance to `%s`, which says what %s"
+                            .format(param.name, withArticle(_declarer.describe(earlier)), withArticle(_declarer.describe(later)),
+                                _resolutions.declarations.interfaces[later.decl].name,
+                                resultOnlyParameters(later.decl).map!(i => "`" ~ _resolutions.declarations.interfaces[later.decl]
+                                    .typeParams[i].name ~ "`").join(" and ") ~ (resultOnlyParameters(later.decl).length == 1 ? " is" : " are")));
+                    break;
+                }
+            }
+        }
+    }
+
     private void declareBounds(const FunctionDecl func)
     {
         if (func.kind != FunctionKind.ordinary)
@@ -466,6 +515,7 @@ private final class TypeChecker
         _declarer.declareBounds(_resolutions.typeParamsOf(func.id));
         _declarer.declareBounds(_resolutions.resultFloors.get(func.id, null));
         _declarer.declareBoundFunctions(func.id);
+        rejectImpossibleBounds(_resolutions.typeParamsOf(func.id));
         // Two bounds that declare the same function supply one function.
         Id!FunctionDecl[] distinct;
         foreach (supplied; _resolutions.boundFunctions.get(func.id, null))
@@ -843,7 +893,7 @@ private final class TypeChecker
                 if (!declared.valid) continue;
                 auto goal = Goal(declared.decl, *type, declared.args.map!(a => _types.substitute(a, found)).array);
                 if (_types.mentionsError(goal.self) || goal.args.any!(a => _types.mentionsError(a))) continue;
-                auto conformance = satisfy(goal, floored.floors, found, site, null);
+                auto conformance = lookUp(goal, floored.floors, found, site, 0);
                 if (conformance.holds) continue;
                 auto wanted = Bound(goal.decl, goal.args.map!(a => _types.substitute(a, found)).array);
                 auto whole = *type == actual ? "" : " in `%s`".format(_types.describe(actual));
@@ -2259,6 +2309,15 @@ private final class TypeChecker
         return expected;
     }
 
+    /// The prelude's `Range`, which `for` loops over, or an invalid ID when there's no prelude.
+    private Id!InterfaceDecl rangeDecl()
+    {
+        auto prelude = "intrinsics.range" in _resolutions.moduleScopes;
+        auto symbol = prelude is null ? null : (*prelude).resolveLocalType("Range");
+        if (symbol is null) return Id!InterfaceDecl.init;
+        return (*symbol).match!((const Id!InterfaceDecl decl) => decl, _ => Id!InterfaceDecl.init);
+    }
+
     /// The prelude's `Interval`, which `a..b` builds, or an invalid ID when there's no prelude.
     private Id!TypeDecl intervalDecl()
     {
@@ -3320,6 +3379,8 @@ private final class TypeChecker
             // as an interface name then says nothing the expected type could bind, whether or not
             // it's been worked out elsewhere, so the choice doesn't depend on the order of checking.
             if ((trial.func in _resolutions.resultFloors) !is null) against = Type.init;
+            _trials++;
+            scope (exit) _trials--;
             bindCall(binding, signature, signatureOf(trial.func).ret, params, trial.func, call, against, ctx, true);
             // Bounds don't rule a function out, but one that holds binds what its interface says.
             conformanceOf(trial.func, binding.bound, ctx.site);
@@ -3832,7 +3893,9 @@ private final class TypeChecker
         Substitution bound;
         foreach (i, w; written) bound[params[i].id] = quietlyResolved(w);
         bindParams(type, expected, params, bound);
+        _trials++;
         auto conformance = conformanceOf(f, bound, site);
+        _trials--;
         if (params.any!(p => p.id !in bound) || !conformance.holds) return false;
         return _types.substitute(type, bound) == expected;
     }
@@ -4072,62 +4135,141 @@ private final class TypeChecker
         bool holds() const => failure is null && !pending;
     }
 
-    /// Checks each `conform` in `modules` and keeps what it declares in `Typing.conformances`:
-    /// each function of each interface is found as a call where the declaration is written would
-    /// find it, with the bounds its `when` gives the type parameters it introduces. Then each
-    /// conformance has to have one for what its interface requires, and no two can apply to the
-    /// same type and interface.
-    private void checkConformances(R)(R modules)
+    /// Keeps each conformance `modules` declare in `Typing.conformances`, before any body is
+    /// checked, since a bound anywhere is looked up there. What a conformance's functions are is
+    /// found once something needs it, and for every conformance before bodies are checked.
+    private void declareConformances(R)(R modules)
     {
         foreach (mod; modules)
         {
             foreach (decl; mod.declarations)
             {
                 decl.kind.match!(
-                    (const ConformDecl c) => declareConformance(c, mod.name),
+                    (const ConformDecl c) {
+                        auto holder = _resolutions.conformances[c.id];
+                        auto self = _declarer.resolveType(c.type);
+                        // Name resolution reported a type it couldn't resolve, and a type parameter alone.
+                        if (_types.mentionsError(self) || _types.isParameter(self)) return;
+                        if (!decidesParameters(holder, self)) return;
+                        foreach (written; c.interfaces)
+                        {
+                            auto bound = _declarer.resolveBound(written);
+                            if (!bound.valid || bound.args.any!(a => _types.mentionsError(a))) continue;
+                            auto entries = &_typing.conformances.require(bound.decl, null);
+                            _entries ~= Entry(bound.decl, entries.length);
+                            *entries ~= Conforming(c.id, bound, self, null, holder, mod.name, written.span);
+                        }
+                    },
                     (_) {},
                 );
             }
         }
-        foreach (entries; _typing.conformances.byValue)
-        {
-            foreach (entry; entries) checkRequired(entry);
-        }
-        foreach (entries; _typing.conformances.byValue)
-        {
-            foreach (j, later; entries)
-            {
-                foreach (earlier; entries[0 .. j])
-                {
-                    if (reportOverlap(earlier, later)) break;
-                }
-            }
-        }
     }
 
-    /// Finds the functions that make `c`'s type satisfy each of its interfaces, reporting those
-    /// that aren't found, and keeps each conformance whose functions are.
-    private void declareConformance(const ConformDecl c, string moduleName)
+    /// Whether each type parameter `holder` introduces that `self` doesn't mention is decided by
+    /// a `when` bound on one that is decided, reporting each that isn't: it has to be in an
+    /// argument of the bound's interface that only the interface's results mention, as `T` is in
+    /// `S: Range<T>`.
+    private bool decidesParameters(Id!FunctionDecl holder, Type self)
     {
-        auto holder = _resolutions.conformances[c.id];
-        auto self = _declarer.resolveType(c.type);
-        // Name resolution reported a type it couldn't resolve, and a type parameter alone.
-        if (_types.mentionsError(self) || _types.isParameter(self)) return;
-        auto site = Site(moduleName, holder);
-        foreach (written; c.interfaces)
+        auto params = _resolutions.typeParamsOf(holder);
+        bool[Id!TypeParam] known;
+        foreach (param; params) if (_types.mentionsParameter(self, param.id)) known[param.id] = true;
+        for (auto progress = true; progress;)
         {
-            auto bound = _declarer.resolveBound(written);
-            if (!bound.valid || bound.args.any!(a => _types.mentionsError(a))) continue;
-            Substitution none;
-            auto found = satisfy(Goal(bound.decl, self, bound.args), null, none, site, null);
-            if (!found.holds)
+            progress = false;
+            foreach (param; params)
             {
-                _collector.reportError(found.tooDeep ? DiagnosticCode.BoundSearchTooDeep : DiagnosticCode.UnmetConformance, written.span,
-                    "`%s` can't be %s: %s".format(_types.describe(self), withArticle(_declarer.describe(bound)), found.failure is null
-                        ? "more than one function could say what its type arguments are" : found.failure));
-                continue;
+                if (param.id in known) continue;
+                auto fixed = params.any!(p => (p.id in known) !is null && _typing.bounds.get(p.id, null).any!(b => b.valid
+                    && resultOnlyParameters(b.decl).any!(i => _types.mentionsParameter(b.args[i], param.id))));
+                if (fixed) known[param.id] = progress = true;
             }
-            _typing.conformances.require(bound.decl, null) ~= Conforming(c.id, bound, self, found.witnesses, holder, written.span);
+        }
+        auto decided = true;
+        foreach (param; params)
+        {
+            if (param.id in known) continue;
+            _collector.reportError(DiagnosticCode.UnknownWhenParameter, param.span,
+                ("`%s` isn't in the conforming type, and no `when` bound decides it; it has to be an argument of a bound's interface "
+                    ~ "that only the interface's results mention, as `T` is in `S: Range<T>`").format(param.name));
+            decided = false;
+        }
+        return decided;
+    }
+
+    /// The positions of the type parameters of `decl` that only results of its functions mention.
+    private size_t[] resultOnlyParameters(Id!InterfaceDecl decl)
+    {
+        auto inArguments = argumentParameters(decl);
+        return _resolutions.declarations.interfaces[decl].typeParams.length.iota.filter!(i => !inArguments.canFind(i)).array;
+    }
+
+    /// A goal on types with no type parameters, as `_lookups` keeps it.
+    private struct Looked
+    {
+        Id!InterfaceDecl decl;
+        Type self;
+        immutable(Type)[] args;
+    }
+
+    /// A conformance in `Typing.conformances`: the `index`th of those to `decl`.
+    private struct Entry
+    {
+        Id!InterfaceDecl decl;
+        size_t index;
+    }
+
+    /// Finds the functions that make `entry`'s type satisfy its interface, as calls where it's
+    /// declared would find them, with the bounds its `when` gives the type parameters it
+    /// introduces, reporting it when they aren't found. Whether they are.
+    private bool findConformance(Entry entry)
+    {
+        if (auto state = entry in _conformanceStates) return *state == ResultState.settled;
+        _conformanceStates[entry] = ResultState.working;
+        auto conforming = &_typing.conformances[entry.decl][entry.index];
+        Substitution none;
+        auto found = satisfy(Goal(conforming.bound.decl, conforming.self, conforming.bound.args), null, none,
+            Site(conforming.module_, conforming.holder), null);
+        conforming = &_typing.conformances[entry.decl][entry.index];
+        if (!found.holds || entry in _cycledConformances)
+        {
+            if (entry !in _cycledConformances) _collector.reportError(found.tooDeep ? DiagnosticCode.BoundSearchTooDeep : DiagnosticCode.UnmetConformance, conforming.span,
+                "`%s` can't be %s: %s".format(_types.describe(conforming.self), withArticle(_declarer.describe(conforming.bound)),
+                    found.failure is null ? "more than one function could say what its type arguments are" : found.failure));
+            _conformanceStates[entry] = ResultState.waiting;
+            return false;
+        }
+        conforming.witnesses = found.witnesses;
+        _conformanceStates[entry] = ResultState.settled;
+        return true;
+    }
+
+    /// Reports, once, that finding `entry`'s functions led through a body whose result is worked
+    /// out to a use of `entry` itself.
+    private void reportConformanceCycle(Entry entry)
+    {
+        if (entry in _cycledConformances) return;
+        _cycledConformances[entry] = true;
+        auto conforming = _typing.conformances[entry.decl][entry.index];
+        _collector.reportError(DiagnosticCode.UnmetConformance, conforming.span,
+            ("`%s` can't be %s: a function it would use works out its result type from its body, which needs this "
+                ~ "conformance already; write that function's result type").format(_types.describe(conforming.self),
+                withArticle(_declarer.describe(conforming.bound))));
+    }
+
+    /// Checks, once every body has been, that each conformance has one for what its interface
+    /// requires, and that no two can apply to the same type and interface.
+    private void checkConformances()
+    {
+        Conforming of(Entry e) => _typing.conformances[e.decl][e.index];
+        foreach (entry; _entries) checkRequired(of(entry));
+        foreach (entry; _entries)
+        {
+            foreach (earlier; 0 .. entry.index)
+            {
+                if (reportOverlap(of(Entry(entry.decl, earlier)), of(entry))) break;
+            }
         }
     }
 
@@ -4139,35 +4281,250 @@ private final class TypeChecker
         {
             if (!required.valid) continue;
             auto wanted = Bound(required.decl, required.args.map!(a => _types.substitute(a, substitution)).array);
-            if (conformsInTable(wanted, entry.self, entry.holder)) continue;
+            Substitution none;
+            if (lookUp(Goal(wanted.decl, entry.self, wanted.args), null, none, Site(entry.module_, entry.holder), 0).holds) continue;
             _collector.reportError(DiagnosticCode.MissingRequiredConformance, entry.span,
                 "`%s` requires %s, and no conformance makes `%s` one; declare it too, on this line or another"
                     .format(_declarer.describe(entry.bound), withArticle(_declarer.describe(wanted)), _types.describe(entry.self)));
         }
     }
 
-    /// Whether a declared conformance makes `type` satisfy `bound`, where the type parameters of
-    /// `holder` have the bounds it gives them.
-    private bool conformsInTable(const Bound bound, Type type, Id!FunctionDecl holder, size_t depth = 0)
+    /// What makes `goal.self` satisfy `goal`'s interface, looked up among the conformances, as
+    /// `site` sees it: a type parameter of the function there satisfies what its bounds say, and
+    /// is given the functions they supply. Otherwise it's the conformance whose type `goal.self`
+    /// is an instance of, when its `when` bounds hold in turn, with its functions for that type.
+    /// An argument of the interface that mentions one of `open` that isn't in `bound` yet is
+    /// what the conformance says it is. `depth` is how many conformances' `when` bounds this is
+    /// inside.
+    private Conformance lookUp(const Goal goal, const(TypeParam)[] open, ref Substitution bound, Site site, size_t depth)
     {
-        if (depth >= boundDepthLimit) return false;
-        bool same(const Bound b) => b.valid && b.decl == bound.decl && b.args == bound.args;
-        auto given = _types[type].match!((const TypeParamData p) => _resolutions.typeParamsOf(holder).canFind!(q => q.id == p.param)
-            ? _typing.bounds.get(p.param, null) : null, _ => null);
-        if (given.any!(b => same(b))) return true;
-        foreach (entry; _typing.conformances.get(bound.decl, null))
+        Conformance result;
+        if (depth >= boundDepthLimit)
+        {
+            result.tooDeep = true;
+            result.failure = "needs more than %s conformances in turn".format(boundDepthLimit);
+            return result;
+        }
+        // A goal on types that mention no type parameter has one answer, wherever it's asked.
+        auto concrete = !_types.mentionsParameter(goal.self) && !goal.args.any!(a => _types.mentionsParameter(a));
+        auto key = Looked(goal.decl, goal.self, goal.args.idup);
+        if (concrete)
+        {
+            if (auto known = key in _lookups) return *known;
+        }
+        auto unbound = open.filter!(p => p.id !in bound).array;
+        // What the interface's arguments say about the open parameters, once one is chosen.
+        bool matchArguments(const(Type)[] declared, ref Substitution into, const(TypeParam)[] params, ref Substitution opened)
+        {
+            foreach (i, arg; goal.args)
+            {
+                if (mentionsAny(arg, unbound)) continue;
+                bindParams(declared[i], arg, params, into);
+                if (_types.substitute(declared[i], into) != arg) return false;
+            }
+            foreach (i, arg; goal.args)
+            {
+                if (!mentionsAny(arg, unbound)) continue;
+                auto given = _types.substitute(declared[i], into);
+                bindParams(arg, given, unbound, opened);
+                // Binding goes by shape, so what it leaves has to be the same type.
+                auto now = _types.substitute(arg, opened);
+                if (!mentionsAny(now, unbound.filter!(p => p.id !in opened).array) && !mentionsAny(given, params) && now != given)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // With an argument of the interface still unknown, two that fit leave it undecided.
+        auto unknown = goal.args.any!(a => mentionsAny(a, unbound));
+        auto param = _types[goal.self].match!((const TypeParamData p) => p.param, _ => Id!TypeParam.init);
+        if (param.isValid)
+        {
+            auto owner = site.function_;
+            if (!owner.isValid || !_resolutions.typeParamsOf(owner).canFind!(p => p.id == param))
+            {
+                result.failure = "nothing here says what it can do";
+                return result;
+            }
+            size_t[] fitting;
+            Substitution chosen;
+            foreach (k, given; _typing.bounds.get(param, null))
+            {
+                if (!given.valid || given.decl != goal.decl) continue;
+                Substitution none;
+                auto opened = bound.dup;
+                if (!matchArguments(given.args, none, null, opened)) continue;
+                if (fitting.length == 0) chosen = opened;
+                fitting ~= k;
+            }
+            if (fitting.length == 0)
+            {
+                auto others = _typing.bounds.get(param, null).filter!(b => b.valid && b.decl == goal.decl).map!(b => withArticle(_declarer.describe(b))).array;
+                result.failure = others.length > 0 ? "its bounds make it %-(%s and %) instead".format(others)
+                    : "nothing `%s` is bounded by says it is".format(_types.describe(goal.self));
+                return result;
+            }
+            if (fitting.length > 1 && unknown)
+            {
+                result.pending = true;
+                return result;
+            }
+            bound = chosen;
+            foreach (f; _resolutions.boundFunctions.get(owner, null))
+            {
+                auto requirement = _resolutions.requirements[f];
+                if (requirement.param == param && requirement.bound == fitting[0]) result.witnesses ~= Witness(f);
+            }
+            return result;
+        }
+
+        // What the type's conformances make it, where they don't make it what's asked.
+        string[] instead;
+        size_t[] fitting;
+        Substitution[] bindings;
+        foreach (i, entry; _typing.conformances.get(goal.decl, null))
         {
             auto params = _resolutions.typeParamsOf(entry.holder);
             Substitution s;
-            bindParams(entry.self, type, params, s);
-            foreach (i, arg; entry.bound.args) bindParams(arg, bound.args[i], params, s);
-            if (params.any!(p => p.id !in s) || _types.substitute(entry.self, s) != type) continue;
-            if (entry.bound.args.length.iota.any!(i => _types.substitute(entry.bound.args[i], s) != bound.args[i])) continue;
-            auto holds = params.all!(p => _typing.bounds.get(p.id, null).all!(b => !b.valid || conformsInTable(
-                Bound(b.decl, b.args.map!(a => _types.substitute(a, s)).array), s[p.id], holder, depth + 1)));
-            if (holds) return true;
+            bindParams(entry.self, goal.self, params, s);
+            if (_types.substitute(entry.self, s) != goal.self) continue;
+            // A parameter that only a `when` bound decides is known once that bound is solved.
+            foreach (k, arg; goal.args)
+            {
+                if (!mentionsAny(arg, unbound)) bindParams(entry.bound.args[k], arg, params, s);
+            }
+            auto differs = goal.args.length.iota.any!(k => !mentionsAny(goal.args[k], unbound)
+                && !mentionsAny(_types.substitute(entry.bound.args[k], s), params) && _types.substitute(entry.bound.args[k], s) != goal.args[k]);
+            if (differs)
+            {
+                instead ~= withArticle(_declarer.describe(Bound(goal.decl, entry.bound.args.map!(a => _types.substitute(a, s)).array)));
+                continue;
+            }
+            fitting ~= i;
+            bindings ~= s;
         }
-        return false;
+        if (fitting.length > 1 && unknown)
+        {
+            result.pending = true;
+            return result;
+        }
+        if (fitting.length > 0)
+        {
+            auto i = fitting[0];
+            auto entry = _typing.conformances[goal.decl][i];
+            auto params = _resolutions.typeParamsOf(entry.holder);
+            auto s = bindings[0];
+            auto when = conformanceOf(entry.holder, s, site, depth + 1);
+            if (when.pending || when.failure !is null || params.any!(p => p.id !in s))
+            {
+                result.tooDeep = when.tooDeep;
+                result.failure = when.tooDeep ? when.failure : "the conformance for `%s` %s".format(_types.describe(entry.self),
+                    when.failure is null ? "can't say what its type arguments are" : when.failure);
+                return result;
+            }
+            auto opened = bound.dup;
+            Substitution none;
+            if (!matchArguments(entry.bound.args.map!(a => _types.substitute(a, s)).array, none, null, opened))
+            {
+                result.failure = "it's %s instead".format(withArticle(_declarer.describe(
+                    Bound(goal.decl, entry.bound.args.map!(a => _types.substitute(a, s)).array))));
+                return result;
+            }
+            if (!findConformance(Entry(goal.decl, i)))
+            {
+                if (_conformanceStates.get(Entry(goal.decl, i), ResultState.waiting) == ResultState.working)
+                {
+                    // Not while a declaration's search is trying functions: one that needs itself just doesn't fit.
+                    if (_resultStates.byValue.canFind(ResultState.working))
+                    {
+                        reportConformanceCycle(Entry(goal.decl, i));
+                    }
+                    else
+                    {
+                        result.failure = "that would need `%s: %s` to hold already".format(_types.describe(goal.self),
+                            _declarer.describe(Bound(goal.decl, goal.args.dup)));
+                        return result;
+                    }
+                }
+                // Its declaration was reported, and the program is never lowered, so nothing reads these.
+                bound = opened;
+                result.witnesses = new Witness[_resolutions.declarations.interfaces[goal.decl].functions.length];
+                return result;
+            }
+            bound = opened;
+            result.witnesses = _typing.conformances[goal.decl][i].witnesses.map!(w => given(w, s, when.witnesses, entry.holder)).array;
+            if (concrete) _lookups[key] = result;
+            return result;
+        }
+        result.failure = instead.length > 0 ? "it's %-(%s and %) instead".format(instead)
+            : "no conformance says so" ~ conformHint(goal, open, bound, site);
+        return result;
+    }
+
+    /// `witness`, found for a conformance, as it is for its type parameters bound by `s`: what
+    /// one of `holder`'s `when` bounds supplies is what `supplied` gives for it.
+    private Witness given(const Witness witness, const Substitution s, const(Witness)[] supplied, Id!FunctionDecl holder)
+    {
+        if (auto requirement = witness.func in _resolutions.requirements)
+        {
+            if (requirement.owner == holder) return cast() supplied[requirement.index];
+        }
+        return Witness(witness.func, witness.typeArgs.map!(t => _types.substitute(t, s)).array,
+            witness.witnesses.map!(w => given(w, s, supplied, holder)).array);
+    }
+
+    /// What to add when no conformance makes `goal.self` satisfy `goal` and the functions a
+    /// conformance would need are there, since then a `conform` line is all that's missing. When
+    /// the function found is generic, the line is for every type it takes, with its bounds.
+    private string conformHint(const Goal goal, const(TypeParam)[] open, ref Substitution bound, Site site)
+    {
+        if (_hinting || _trials > 0) return "";
+        _hinting = true;
+        scope (exit) _hinting = false;
+        auto tried = bound.dup;
+        auto found = satisfy(goal, open, tried, site, null);
+        if (!found.holds) return "";
+        auto args = goal.args.map!(a => _types.substitute(a, tried)).array;
+        auto line = "`conform %s: %s`".format(_types.describe(goal.self), _declarer.describe(Bound(goal.decl, args)));
+        if (auto general = generalConformance(goal, found.witnesses)) line = general;
+        return "; it has the functions, so %s is all that's missing".format(line);
+    }
+
+    /// The `conform` line for every type the generic function `witnesses[0]` stands for takes, as
+    /// in `conform Box<T>: Json when T: Json`, or null when it isn't generic in that type.
+    private string generalConformance(const Goal goal, const(Witness)[] witnesses)
+    {
+        if (witnesses.length == 0 || !witnesses[0].func.isValid) return null;
+        auto func = witnesses[0].func;
+        auto funcParams = _resolutions.typeParamsOf(func);
+        auto interface_ = _resolutions.declarations.interfaces[goal.decl];
+        auto declared = signatureOf(interface_.functions[0].id);
+        auto at = declared.params.countUntil!(p => _types.mentionsParameter(p, interface_.self.id));
+        auto signature = signatureOf(func);
+        if (at < 0 || at >= signature.params.length || declared.params[at] != _types.parameter(interface_.self.id, "Self")) return null;
+        auto pattern = signature.params[at];
+        if (!mentionsAny(pattern, funcParams) || _types.isParameter(pattern)) return null;
+        // What the interface's parameters are for that type, read off the function's signature.
+        Substitution self;
+        self[interface_.self.id] = pattern;
+        Substitution args;
+        bindParams(_types.substitute(symbolType(SymbolId(interface_.functions[0].id)), self), symbolType(SymbolId(func)),
+            interface_.typeParams, args);
+        if (interface_.typeParams.any!(p => p.id !in args)) return null;
+        string[] when;
+        foreach (param; funcParams)
+        {
+            if (!_types.mentionsParameter(pattern, param.id)) continue;
+            auto written = _resolutions.declarations.typeParams[param.id].bounds.length;
+            auto bounds = _typing.bounds.get(param.id, null);
+            auto shown = bounds[0 .. min(written, bounds.length)].filter!(b => b.valid).map!(b => _declarer.describe(b)).array;
+            if (shown.length > 0) when ~= "%s: %-(%s & %)".format(param.name, shown);
+        }
+        auto bound = Bound(goal.decl, interface_.typeParams.map!(p => cast() args[p.id]).array);
+        return "`conform %s: %s%s`".format(_types.describe(pattern), _declarer.describe(bound),
+            when.length == 0 ? "" : " when %-(%s, %)".format(when));
     }
 
     /// Reports `later` when it and `earlier`, of the same interface, could apply to one type.
@@ -4252,14 +4609,14 @@ private final class TypeChecker
         return type;
     }
 
-    /// Looks for what makes the types in `bound` satisfy the bounds of `func`'s type parameters, as
-    /// calls from `site` would find it. A bound whose type isn't in `bound` yet is left pending, and
-    /// one whose interface has type arguments that aren't known yet binds them from the function
-    /// found. `stack` holds the goals this search is already inside.
-    private Conformance conformanceOf(Id!FunctionDecl func, ref Substitution bound, Site site, const(Goal)[] stack = null)
+    /// Looks up what makes the types in `bound` satisfy the bounds of `func`'s type parameters, as
+    /// calls from `site` see them, among the conformances. A bound whose type isn't in `bound` yet
+    /// is left pending, and one whose interface has type arguments that aren't known yet binds them
+    /// from the conformance found. `depth` is how many conformances' `when` bounds this is inside.
+    private Conformance conformanceOf(Id!FunctionDecl func, ref Substitution bound, Site site, size_t depth = 0)
     {
         auto params = _resolutions.typeParamsOf(func);
-        if (!bound.byValue.any!(v => mentionsAny(v, params))) return conformanceOf(func, params, null, null, bound, site, stack);
+        if (!bound.byValue.any!(v => mentionsAny(v, params))) return conformanceOf(func, params, null, null, bound, site, depth);
 
         // In a call from `func`'s own body, what `bound` says is in terms of the same type
         // parameters it binds, and the search substitutes again for the ones it finds. So the
@@ -4272,7 +4629,7 @@ private final class TypeChecker
             renaming[param.id] = _types.parameter(standIns[i].id, param.name);
             if (auto known = param.id in bound) renamed[standIns[i].id] = *known;
         }
-        auto result = conformanceOf(func, params, standIns, renaming, renamed, site, stack);
+        auto result = conformanceOf(func, params, standIns, renaming, renamed, site, depth);
         foreach (i, param; params)
         {
             if (param.id !in bound && standIns[i].id in renamed) bound[param.id] = renamed[standIns[i].id];
@@ -4283,7 +4640,7 @@ private final class TypeChecker
     /// `conformanceOf`, with each of `func`'s type parameters `params` standing for the one
     /// `renaming` gives in `bound`, which are `open`; with no `renaming`, they stand for themselves.
     private Conformance conformanceOf(Id!FunctionDecl func, const(TypeParam)[] params, const(TypeParam)[] open,
-        Substitution renaming, ref Substitution bound, Site site, const(Goal)[] stack)
+        Substitution renaming, ref Substitution bound, Site site, size_t depth)
     {
         Conformance result;
         auto supplied = _resolutions.boundFunctions.get(func, null);
@@ -4319,7 +4676,7 @@ private final class TypeChecker
                     decided[start .. end] = true;
                     continue;
                 }
-                auto found = satisfy(goal, open, bound, site, stack);
+                auto found = lookUp(goal, open, bound, site, depth);
                 if (found.pending) continue;
                 if (found.tooDeep) return found;
                 if (found.failure !is null)
@@ -4441,7 +4798,7 @@ private final class TypeChecker
                     return tried;
                 }
             }
-            auto needs = conformanceOf(f, tried.binding, site, stack);
+            auto needs = conformanceOf(f, tried.binding, site);
             tried.witnesses = needs.witnesses;
             tried.tooDeep = needs.tooDeep;
             if (needs.failure !is null) tried.trial.problem = needs.tooDeep ? needs.failure : needs.failure.replace("\n", "\n    ");
@@ -5774,69 +6131,27 @@ private final class TypeChecker
         bool found() const => use.found;
     }
 
-    /// What `for` yields from a `type` that isn't an array, with the functions calls at the loop
-    /// would choose. There has to be a `next(r): (T, type)?`. When a `length(r): Int` and an
-    /// `opIndex(r, i: Int): T` both take a `type` as well, it loops by index, and otherwise steps.
-    /// Each has to take exactly `type`, and `T` is the element type. `Type.init` when neither way is there.
+    /// What `for` yields from a `type` that isn't an array or an interval: the element of the
+    /// type's conformance to the prelude's `Range`, whose `next` steps it. Inside a generic
+    /// function, a type parameter's bounds say whether it's a `Range`. `Type.init` when there's
+    /// no prelude.
     private Type loopElement(const Expr for_, const Expr iterable, Type type, BodyContext ctx)
     {
-        auto index = placeholder(iterable.span);
-        auto length = syntaxFunction(for_, iterable.span, "length", "`for`", [iterable], [type], ctx, false, true);
-        auto at = syntaxFunction(for_, iterable.span, "opIndex", "`for`", [iterable, index], [type, _types.int_], ctx, false, true);
-        auto next = syntaxFunction(for_, iterable.span, "next", "`for`", [iterable], [type], ctx, false);
-        if (length.failed || at.failed || next.failed) return _types.error;
-        if (length.found && at.found)
+        auto range = rangeDecl();
+        if (!range.isValid) return Type.init;
+        if (!_loopElement.id.isValid) _loopElement = TypeParam(_ids.next!TypeParam, "T", iterable.span);
+        Substitution bound;
+        auto found = lookUp(Goal(range, type, [_types.parameter(_loopElement.id, "T")]), [_loopElement], bound, ctx.site, 0);
+        if (!found.holds || _loopElement.id !in bound)
         {
-            if (!takesExactly("length", length, [type], iterable.span)
-                || !takesExactly("opIndex", at, [type, _types.int_], iterable.span))
-            {
-                return _types.error;
-            }
-            if (length.signature.ret != _types.int_)
-            {
-                _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span,
-                    "`for` loops over `%s` by index with a `length` that returns `Int`, but `%s` returns `%s`"
-                        .format(_types.describe(type), describeUse("length", length), _types.describe(length.signature.ret)));
-                return _types.error;
-            }
-            if (!next.found)
-            {
-                _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span,
-                    ("`for` needs a `next` for `%s`: a `length` and an `opIndex` alone don't make it loopable; "
-                        ~ "write a `next`, or loop over `iterate()` of it").format(_types.describe(type)));
-                return _types.error;
-            }
-            if (!takesExactly("next", next, [type], iterable.span)) return _types.error;
-            if (stepParts(next, type, at.signature.ret, iterable.span).length != 2) return _types.error;
-            _typing.loops[for_.id] = LoopFunctions(length.use, at.use);
-            auto loopId = for_.id;
-            noteSyntaxUse(ctx.site, iterable.span, length);
-            noteSyntaxUse(ctx.site, iterable.span, at);
-            return at.signature.ret;
+            _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span, "`for` loops over a `Range`, and `%s` isn't one: %s"
+                .format(_types.describe(type), found.failure is null ? "nothing says what it gives" : found.failure));
+            return _types.error;
         }
-
-        if (!next.found) return Type.init;
-        if (!takesExactly("next", next, [type], iterable.span)) return _types.error;
-        auto parts = stepParts(next, type, Type.init, iterable.span);
-        if (parts.length != 2) return _types.error;
-        _typing.loops[for_.id] = LoopFunctions(FunctionUse.init, FunctionUse.init, next.use);
-        noteSyntaxUse(ctx.site, iterable.span, next);
-        return parts[0];
-    }
-
-    /// The element and rest of what `next` returns for a `type`, which has to be `(T, type)?`, with
-    /// `T` the `element` when that's given. Empty, after reporting it, when it isn't.
-    private immutable(Type)[] stepParts(SyntaxUse next, Type type, Type element, Span span)
-    {
-        auto result = next.signature.ret;
-        auto step = _types.isOption(result) ? _types.optionInner(result) : Type.init;
-        auto parts = step != Type.init && _types.isTuple(step) ? _types.tupleElements(step) : null;
-        if (parts.length == 2 && parts[1] == type && (element == Type.init || parts[0] == element)) return parts;
-        _collector.reportError(DiagnosticCode.InvalidOperand, span,
-            "`for` steps `%s` with a `next` that returns `(%s, %s)?`, but `%s` returns `%s`".format(_types.describe(type),
-                element == Type.init ? "T" : _types.describe(element), _types.describe(type),
-                describeUse("next", next), _types.describe(result)));
-        return null;
+        auto next = found.witnesses[0];
+        _typing.loops[for_.id] = LoopFunctions(FunctionUse(next.func, next.typeArgs, next.witnesses));
+        noteUse(ctx.site, iterable.span, next.func, next.typeArgs, next.witnesses);
+        return bound[_loopElement.id];
     }
 
     /// The function `name` that `syntax` at `at` calls with `args`, chosen as a call is from the
@@ -5845,10 +6160,8 @@ private final class TypeChecker
     /// for a value with no expression, which the caller checks. The rest are checked against their
     /// parameters. Not found when no function takes them, which is reported when `required`;
     /// failed when finding one reported an error.
-    /// With `indexing`, for the functions a `for` would loop by index with, one whose bounds fail
-    /// isn't found either, so the loop steps instead.
     private SyntaxUse syntaxFunction(const Expr at, Span span, string name, string syntax, const(Expr)[] args,
-        Type[] typed, BodyContext ctx, bool required = true, bool indexing = false)
+        Type[] typed, BodyContext ctx, bool required = true)
     {
         SyntaxUse failed;
         failed.failed = true;
@@ -5957,7 +6270,6 @@ private final class TypeChecker
         auto conformance = conformanceOf(function_, bound, ctx.site);
         if (conformance.failure !is null)
         {
-            if (indexing) return SyntaxUse.init;
             typeUnchecked();
             _collector.reportError(conformance.tooDeep ? DiagnosticCode.BoundSearchTooDeep : DiagnosticCode.UnsatisfiedBound, span,
                 "%s calls `%s`, and `%s` %s".format(syntax, name, overloadLabel(function_), conformance.failure));
@@ -5973,20 +6285,6 @@ private final class TypeChecker
             else checkArgument(arg, found.signature.params[i], ctx);
         }
         return found;
-    }
-
-    /// Whether `use` takes exactly `params`, reporting it when not, since a `for` doesn't convert
-    /// what it passes.
-    private bool takesExactly(string name, const SyntaxUse use, const(Type)[] params, Span span)
-    {
-        if (use.signature.params == params) return true;
-        auto describe(const(Type)[] types) => types.length == 1
-            ? "`%s`".format(_types.describe(types[0]))
-            : "`(%s)`".format(types.map!(t => _types.describe(t)).join(", "));
-        _collector.reportError(DiagnosticCode.InvalidOperand, span,
-            "`for` calls a `%s` that takes exactly %s, but `%s` takes %s"
-                .format(name, describe(params), describeUse(name, use), describe(use.signature.params)));
-        return false;
     }
 
     /// A function that syntax uses, as an error message names it, with its signature.

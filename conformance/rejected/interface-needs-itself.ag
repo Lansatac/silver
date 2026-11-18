@@ -1,7 +1,8 @@
-// A function that takes a T? doesn't make T a Json through itself.
+// A function that takes a T? doesn't make T a Json through a conformance that would need itself.
 interface Json { def toJson(value: Self): String }
 def toJson<T: Json>(x: T?): String => "option"
 def encode<T: Json>(item: T): String => toJson(item)
+conform Int: Json
 
 def main(): Unit {
     printl(encode(1))

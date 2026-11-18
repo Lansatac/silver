@@ -1,10 +1,1 @@
-T0043: `evens` returns `Filtered<[Int], Int>`, which isn't an `Indexed<Int>`: no `length` in scope takes `Filtered<[Int], Int>`
-    intrinsics.array.length<T>([T]) takes `[T]` there, not `Filtered<[Int], Int>`
-    intrinsics.interval.length(Interval<Int>) takes `Interval<Int>` there, not `Filtered<[Int], Int>`
-    intrinsics.interval.length(Interval<Int8>) takes `Interval<Int8>` there, not `Filtered<[Int], Int>`
-    intrinsics.interval.length(Interval<Int16>) takes `Interval<Int16>` there, not `Filtered<[Int], Int>`
-    intrinsics.interval.length(Interval<Int32>) takes `Interval<Int32>` there, not `Filtered<[Int], Int>`
-    intrinsics.interval.length(Interval<UInt>) takes `Interval<UInt>` there, not `Filtered<[Int], Int>`
-    intrinsics.interval.length(Interval<UInt8>) takes `Interval<UInt8>` there, not `Filtered<[Int], Int>`
-    intrinsics.interval.length(Interval<UInt16>) takes `Interval<UInt16>` there, not `Filtered<[Int], Int>`
-    intrinsics.interval.length(Interval<UInt32>) takes `Interval<UInt32>` there, not `Filtered<[Int], Int>`
+T0043: `evens` returns `Filtered<[Int], Int>`, which isn't an `Indexed<Int>`: no conformance says so
