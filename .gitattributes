@@ -1,2 +1,4 @@
 # LF everywhere, so Windows checkouts and the Linux dev container see the same files.
 * text=auto eol=lf
+# A program's input is given byte for byte, line endings and all.
+*.stdin -text

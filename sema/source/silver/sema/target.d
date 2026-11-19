@@ -24,7 +24,7 @@ enum Intrinsic
 {
     print,
     printl,
-    read,
+    readLine,
     length,
     panic,
     assert_,

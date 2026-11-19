@@ -43,8 +43,8 @@ while count < limit {
 `while val` evaluates its initializer before each iteration, and ends on `None`. The name is in scope only in the body.
 
 ```silver
-while val line = read() {
-    print(line)
+while val line = read()! {
+    printl(line)
 }
 ```
 

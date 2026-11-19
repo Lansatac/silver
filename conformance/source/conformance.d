@@ -5,7 +5,7 @@ version (unittest)
     import std.algorithm : canFind, filter, map, sort;
     import std.array : array, join;
     import std.conv : to;
-    import std.file : dirEntries, exists, mkdirRecurse, readText, rmdirRecurse, SpanMode, tempDir, write;
+    import std.file : dirEntries, exists, mkdirRecurse, readBytes = read, readText, rmdirRecurse, SpanMode, tempDir, write;
     import std.parallelism : taskPool;
     import std.path : baseName, buildNormalizedPath, buildPath, dirName, dirSeparator, stripExtension;
     import std.process : environment, pipeProcess, Redirect, thisProcessID, wait;
@@ -269,7 +269,7 @@ version (unittest)
         auto process = pipeProcess([exePath], Redirect.stdin | Redirect.stdout | Redirect.stderrToStdout);
         if (c.inputPath !is null)
         {
-            process.stdin.rawWrite(readText(c.inputPath).normalizeNewlines);
+            process.stdin.rawWrite(readBytes(c.inputPath));
         }
         process.stdin.close();
         auto output = process.stdout.byChunk(4096).join;
@@ -290,7 +290,7 @@ version (unittest)
         synchronized
         {
             auto original = stdin;
-            stdin = File(c.inputPath, "r");
+            stdin = File(c.inputPath, "rb");
             scope (exit) stdin = original;
             evaluator.run();
         }

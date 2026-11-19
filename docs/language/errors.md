@@ -191,6 +191,30 @@ val c = factorial(count - used) ?? 1     // or chooses a value
 
 The exceptions are the operations the language itself defines as panicking. An arithmetic operator inside a library function behaves as it does anywhere, and so do the functions that are those operations by another name: `at`, `opIndex` and `opIndexAssign` in the prelude, and `powInt` in `std.math`, which is exponentiation without a symbol. Using a `Ref` from inside its own `update` is a misuse of the cell, and panics too. `panic` and `assert` are there to panic.
 
+### IoError
+
+The prelude's `IoError` is what can go wrong between the program and the outside world:
+
+```silver
+type IoError = NotUtf8 | ReadFailed(reason: String)
+```
+
+- `NotUtf8` is input that isn't UTF-8. It carries nothing, as `decode` returns a bare `None`.
+- `ReadFailed` carries the system's message, such as `Is a directory`, and no error number, since those differ between systems. A kind of failure that programs want to tell apart becomes a member of its own.
+
+A function returns only the members it can produce, so a `match` on its result lists only those, and stays complete as `IoError` grows. `?` widens them into `IoError`, or into any list that holds them.
+
+```silver
+def read(): String? ! NotUtf8 | ReadFailed
+
+match read() {
+    Ok(Some(line)) => printl(line)
+    Ok(None) => printl("the end")
+    Error(NotUtf8) => printl("that line wasn't text")
+    Error(ReadFailed(reason)) => printl("can't read: {reason}")
+}
+```
+
 ## main
 
 `main` returns `Unit`, or `Unit ! E` for any `E`.
@@ -212,7 +236,7 @@ error: Missing(port)
 
 - How a function names a list of errors it receives, as a helper that describes a `Negative | Overflow` would. A list is written only after `!` today, so the helper takes a declared sum.
 - The exit statuses, 1 and 101, which are placeholders until program arguments and exit codes are designed.
-- What `IoError` is, and `read()` returning `String? ! IoError` so that the end of input and a failure to read are told apart. Input that isn't UTF-8 is one of those failures.
+- Whether `print` reports a failure to write, as a `WriteFailed` member of `IoError`. It panics today.
 - Whether other maths written for speed counts as arithmetic under the standard library's rule, as `powInt` does.
 - A record of where an error was passed on by `?`, printed when it reaches `main` or a `!`.
 
@@ -222,6 +246,5 @@ Two proposals build on this: [checked operations](../proposals/checked-operation
 
 The implementation matches this description, except:
 
-- `read()` returns `String?`, since `IoError` isn't designed.
 - `Ok` and `Error` can't be passed as function values, as `Some` can't.
 - With an [invariant](user-types.md#current-implementation) on a type, which is to be removed, what's expected of `x!` or `x?` also picks a member over its sum, so `val c: Circle = Circle(1.0)!` builds the member.

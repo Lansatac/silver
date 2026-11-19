@@ -675,10 +675,44 @@ final class Evaluator
         return cast(ulong) value <= cast(ulong) T.max;
     }
 
+    /// A line of input as `readLine` in `intrinsics.io` gives it, matching the runtime's
+    /// `silver_readLine`: 0 and the line without its ending, 1 at the end of input, 2 for a line
+    /// that isn't UTF-8, or 3 and the OS's message.
+    private Value readLine()
+    {
+        import std.stdio : readln, StdioException;
+        import std.utf : UTFException, validate;
+
+        Value result(long status, string text = "") => Value(Record(0, [Value(status), Value(text)]));
+
+        if (_testing) return result(1);
+        string line;
+        while (true)
+        {
+            try
+            {
+                line = readln();
+                break;
+            }
+            catch (StdioException e)
+            {
+                enum interrupted = 4;
+                if (e.errno != interrupted) return result(3, e.msg.idup);
+            }
+        }
+        if (line.length == 0) return result(1);
+        if (line[$ - 1] == '\n')
+        {
+            line = line[0 .. $ - 1];
+            if (line.length > 0 && line[$ - 1] == '\r') line = line[0 .. $ - 1];
+        }
+        try validate(line);
+        catch (UTFException) return result(2);
+        return result(0, line);
+    }
+
     private Value evaluate(const Expr e, const IntrinsicCall call, Frame frame)
     {
-        import std.stdio : readln;
-
         auto args = all(call.args, frame);
         final switch (call.intrinsic)
         {
@@ -688,11 +722,8 @@ final class Evaluator
             case Intrinsic.printl:
                 write(formatted(args[0], call.args[0].type), true);
                 return Value(Unit());
-            case Intrinsic.read:
-                if (_testing) return Value(Record(0, null));
-                auto line = readln();
-                if (line.length == 0) return Value(Record(0, null));
-                return Value(Record(1, [Value(line)]));
+            case Intrinsic.readLine:
+                return readLine();
             case Intrinsic.panic:
                 throw new CodedException(DiagnosticCode.ExplicitPanic, args[0].as!string);
             case Intrinsic.exitWithError:

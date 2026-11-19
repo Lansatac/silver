@@ -106,7 +106,18 @@ Operations that can fail return an option under their own names, and aren't spel
 
 ## Input
 
-`read()` returns the next line of input, including its newline, or `None` at the end of input.
+`read()` returns the next line of input without its `\n` or `\r\n`, or `None` at the end of input. Its type is `String? ! NotUtf8 | ReadFailed`, with the errors of [`IoError`](errors.md#ioerror).
+
+```silver
+def main(): Unit ! IoError {
+    while val line = read()? {
+        printl("[{line}]")
+    }
+}
+```
+
+- A final line needs no ending, and an empty line is `Some("")`.
+- A line that isn't UTF-8 is `NotUtf8`. It's consumed, so the next `read()` goes on after it.
 
 ## Planned forms
 
@@ -122,6 +133,5 @@ Operations that can fail return an option under their own names, and aren't spel
 ## Current implementation
 
 - Everything above is available on both backends, except as listed here.
-- `read()` doesn't check its input, so a `String` read from input that isn't UTF-8 breaks the rule under Validity.
 - The conversion from bytes that `std.string` uses without checking is private to the standard library.
 - The planned forms above aren't available.

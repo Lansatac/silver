@@ -58,6 +58,22 @@ unittest
         ~ "    val now = nowNanos()\n    printl(now > 1600000000000000000)\n}").should.equal("4\n1024\ntrue\n");
 }
 
+@("read reports input it can't read as ReadFailed, with the OS's message")
+unittest
+{
+    // Windows can't open a directory as a file.
+    version (Posix)
+    {
+        import std.file : tempDir;
+        import std.stdio : File, stdin;
+
+        auto original = stdin;
+        stdin = File(tempDir, "rb");
+        scope (exit) stdin = original;
+        runMain("printl(read())").should.equal("Error(ReadFailed(Is a directory))\n");
+    }
+}
+
 @("calling a native the interpreter doesn't have is a diagnostic, not a crash")
 unittest
 {

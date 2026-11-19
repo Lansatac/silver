@@ -1,0 +1,5 @@
+// Input that isn't UTF-8 is an error `?` passes on, and `main` reports it.
+def main(): Unit ! IoError {
+    while val line = read()? { printl(line) }
+    printl("not reached")
+}

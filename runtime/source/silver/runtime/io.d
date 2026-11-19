@@ -1,6 +1,6 @@
-/// The prelude's `print`, `printl` and `read`. `print` and `printl` take `Any`, so there's one
-/// function per argument type, named `silver_<intrinsic>_<type>`. Values are formatted with
-/// `to!string`, as the interpreter does, so both backends print the same thing.
+/// The prelude's `print` and `printl`, and the `readLine` under `read`. `print` and `printl` take
+/// `Any`, so there's one function per argument type, named `silver_<intrinsic>_<type>`. Values are
+/// formatted with `to!string`, as the interpreter does, so both backends print the same thing.
 /// Every integer type widens to `int` or `uint` first.
 module silver.runtime.io;
 
@@ -32,24 +32,48 @@ void silver_printl_string(const(char)* data, size_t length) { output(data[0 .. l
 void silver_printl_unit() { output("()", true); }
 void silver_printl_char(uint value) { output([cast(dchar) value].to!string, true); }
 
-/// A line from stdin including its newline, or false at end of input. The line is copied into a
-/// buffer (see `silver.runtime.buffer`), since every String on the heap must be in one.
-bool silver_read(const(char)** data, size_t* length)
+/// A line from stdin, as `readLine` in `intrinsics.io` takes it: 0 and the line without its `\n`
+/// or `\r\n`, 1 at the end of input, 2 for a line that isn't UTF-8 (consumed), or 3 and the OS's
+/// message. The String is copied into a buffer (see `silver.runtime.buffer`), since every String
+/// on the heap must be in one.
+int silver_readLine(const(char)** data, size_t* length)
 {
+    import std.stdio : StdioException;
+    import std.utf : UTFException, validate;
+
+    enum line = 0, end = 1, notUtf8 = 2, failed = 3;
     SavedRegisters saved = void;
     silver_save_registers(&saved);
+    *data = null;
+    *length = 0;
     // A test has no input.
-    if (testing)
-    {
-        *data = null;
-        *length = 0;
-        return false;
-    }
+    if (testing) return end;
     try
     {
-        auto line = readln();
-        newString(line, data, length);
-        return line.length > 0;
+        string text;
+        while (true)
+        {
+            try
+            {
+                text = readln();
+                break;
+            }
+            catch (StdioException e)
+            {
+                enum interrupted = 4;
+                if (e.errno != interrupted)
+                {
+                    newString(e.msg, data, length);
+                    return failed;
+                }
+            }
+        }
+        if (text.length == 0) return end;
+        text = withoutEnding(text);
+        try validate(text);
+        catch (UTFException) return notUtf8;
+        newString(text, data, length);
+        return line;
     }
     catch (OutOfMemoryError)
     {
@@ -58,8 +82,17 @@ bool silver_read(const(char)** data, size_t* length)
     catch (Exception e)
     {
         panic("couldn't read input: " ~ e.msg);
-        return false;
     }
+    return failed;
+}
+
+/// `text` without the `\n` or `\r\n` that ends it.
+private string withoutEnding(string text)
+{
+    if (text.length == 0 || text[$ - 1] != '\n') return text;
+    text = text[0 .. $ - 1];
+    if (text.length > 0 && text[$ - 1] == '\r') text = text[0 .. $ - 1];
+    return text;
 }
 
 private void output(lazy const(char)[] text, bool newline)

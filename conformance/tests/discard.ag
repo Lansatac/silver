@@ -4,8 +4,8 @@ def noisy(name: String): Int {
 }
 
 def firstTwo(): String? {
-    _ = read()?
-    val second = read()?
+    _ = read()!?
+    val second = read()!?
     Some(second)
 }
 
@@ -41,7 +41,7 @@ def main(): Unit {
     printl(if val _ = some => "some" else "none")
     printl(if val _ = none => "some" else "none")
     mutable val lines = 0
-    while val _ = read() {
+    while val _ = read()! {
         lines += 1
     }
     printl(lines)

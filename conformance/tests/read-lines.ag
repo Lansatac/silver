@@ -1,0 +1,13 @@
+// A line's `\n` or `\r\n` is dropped, a final line needs no ending, and a line that isn't UTF-8 is
+// consumed, so reading goes on after it.
+def main(): Unit {
+    mutable val going = true
+    while going {
+        match read() {
+            Ok(Some(line)) => printl("[{line}]")
+            Ok(None) => { going = false }
+            Error(NotUtf8) => printl("not UTF-8")
+            Error(ReadFailed(reason)) => panic(reason)
+        }
+    }
+}

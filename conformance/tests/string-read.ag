@@ -1,21 +1,20 @@
 val tag: String = "line: "
 
 def main(): Unit {
-    val first = read() ?? "missing"
-    val second = read() ?? "missing"
-    val third = read() ?? "missing"
+    val first = read()! ?? "missing"
+    val second = read()! ?? "missing"
+    val third = read()! ?? "missing"
 
-    print(tag ~ first)
-    print(second ~ tag ~ first)
-    printl(first == "first\n")
+    printl(tag ~ first)
+    printl(second ~ tag ~ first)
+    printl(first == "first")
     printl(first < second)
     printl(second > "é")
     printl(second < third)
-    print("[" ~ third ~ "]")
-    printl("")
+    printl("[" ~ third ~ "]")
 
     // The input ran out
-    val end = read()
+    val end = read()!
     printl(end == None)
     printl(end)
     printl(end ?? "fallback")

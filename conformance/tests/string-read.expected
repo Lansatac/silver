@@ -1,6 +1,5 @@
 line: first
-sécond
-line: first
+sécondline: first
 true
 true
 false
@@ -10,4 +9,4 @@ true
 None
 fallback
 done
-None
+Ok(None)

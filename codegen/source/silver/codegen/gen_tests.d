@@ -9,7 +9,7 @@ import std.algorithm : canFind, count, endsWith, filter, map, startsWith;
 import std.array : join;
 import std.file : mkdirRecurse, rmdirRecurse, tempDir, write;
 import std.path : buildPath;
-import std.process : execute;
+import std.process : escapeShellCommand, escapeShellFileName, execute, executeShell;
 import std.stdio : writeln;
 import std.string : indexOf, replace;
 import std.uuid : randomUUID;
@@ -59,9 +59,10 @@ struct Run
 
 /// Generates IR for `source` and, if clang and dmd are available, links and runs it. Returns
 /// false without running when a tool is missing, so the caller can skip its checks on the
-/// result. A link failure fails the test and keeps the IR on disk for inspection.
-bool compileAndRun(string source, out Run run, Optimization optimization = Optimization.none, string file = __FILE__,
-    size_t line = __LINE__)
+/// result. `inputPath` is the program's standard input, if it has one. A link failure fails the
+/// test and keeps the IR on disk for inspection.
+bool compileAndRun(string source, out Run run, Optimization optimization = Optimization.none, string inputPath = null,
+    string file = __FILE__, size_t line = __LINE__)
 {
     string[] libraries;
     auto ir = generateSource(source, libraries, file, line);
@@ -86,7 +87,8 @@ bool compileAndRun(string source, out Run run, Optimization optimization = Optim
             ~ "\n--- IR\n" ~ ir, file, line);
     }
 
-    auto result = execute([exePath]);
+    auto result = inputPath is null ? execute([exePath])
+        : executeShell(escapeShellCommand(exePath) ~ " < " ~ escapeShellFileName(inputPath));
     run = Run(result.status, result.output.replace("\r\n", "\n"));
     rmdirRecurse(directory);
     return true;
@@ -157,6 +159,20 @@ unittest
 
     run.status.should.equal(0);
     run.output.should.equal("42\n");
+}
+
+@("codegen's read reports input it can't read as ReadFailed, with the OS's message")
+unittest
+{
+    // Windows can't make a directory a program's standard input.
+    version (Posix)
+    {
+        Run run;
+        if (!compileAndRun("def main(): Unit {\n    printl(read())\n}", run, Optimization.none, tempDir)) return;
+
+        run.status.should.equal(0);
+        run.output.should.equal("Error(ReadFailed(Is a directory))\n");
+    }
 }
 
 @("codegen declares each runtime function once, and suffixes an Any argument with its type")

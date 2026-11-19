@@ -1168,8 +1168,8 @@ private final class Generator
         {
             case Intrinsic.print, Intrinsic.printl:
                 return emitPrint(call);
-            case Intrinsic.read:
-                return emitRead();
+            case Intrinsic.readLine:
+                return emitReadLine();
             case Intrinsic.panic:
                 return emitExplicitPanic(call.args[0], e.span);
             case Intrinsic.exitWithError:
@@ -1211,14 +1211,14 @@ private final class Generator
         assert(0, "lowering only passes primitives to an intrinsic's Any");
     }
 
-    /// A line of input, as a `String?`: the runtime says whether there was one, and hands the
-    /// String back through the out slots.
-    private Fragment emitRead()
+    /// A line of input, as the `(Int32, String)` of a status and the line or the OS's message: the
+    /// runtime returns the status and hands the String back through the out slots.
+    private Fragment emitReadLine()
     {
         _function.usesOutSlots = true;
-        auto present = callRuntime("silver_read", [FunctionState.outData, FunctionState.outLength]);
+        auto status = callRuntime("silver_readLine", [FunctionState.outData, FunctionState.outLength]);
         auto text = loadOutSlice();
-        return present.then(text).withOperands(present.value ~ text.operands);
+        return status.then(text).withOperands(status.value ~ text.operands);
     }
 
     /// The String or array a runtime call has just written to the out slots.
