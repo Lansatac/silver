@@ -43,7 +43,7 @@ enum DiagnosticCode : string
     /// A type named where a bound wants an interface.
     NotAnInterface = "S0027",
     /// A cycle of forward imports that never settles on what a module passes on by a name.
-    UnsettledForwardCycle = "S0028",
+    ForwardCycle = "S0028",
     /// A `conform` whose type is one of the type parameters it introduces.
     ConformsTypeParameter = "S0029",
     /// An interface that requires itself, directly or through others.

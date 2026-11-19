@@ -251,7 +251,6 @@ unittest
     analyzedGeneric("    val e = empty()").shouldReport(DiagnosticCode.CannotInferTypeArgument, At("empty", 2));
     analyzedGeneric("    val w = wrap(None)").shouldReport(DiagnosticCode.UntypedNone, At("None", 2));
     analyzedGeneric("    val i = identity(x => x)").shouldReport(DiagnosticCode.CannotInferTypeArgument, At("identity", 2));
-    analyzedGeneric(`    val f = first("abc")`).shouldReport(DiagnosticCode.TypeMismatch, At(`"abc"`, 1));
 }
 
 @("written type arguments skip inference, and have to be all of them")

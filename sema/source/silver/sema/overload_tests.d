@@ -322,18 +322,21 @@ unittest
     a.shouldCall(At("toJson", 3), At("toJson", 2, "json"));
 }
 
-@("a call that functions of two imported modules fit equally well is ambiguous")
+@("a call that functions of two imported modules fit equally well is ambiguous, and one that fits better is chosen")
 unittest
 {
     auto files = [
         "a.ag": "module a\ndef f(x: Int): Unit => ()\ndef g(x: Int?): Unit => ()\ndef h<T>(x: T): Unit => ()",
         "b.ag": "module b\ndef f(x: Int): Unit => ()\ndef g(x: Int?): Unit => ()\ndef h(x: Int?): Unit => ()",
     ];
-    foreach (call; ["f", "g", "h"])
+    foreach (call; ["f", "g"])
     {
         analyzed("import a\nimport b\ndef main(): Unit {\n    " ~ call ~ "(1)\n}", files)
             .shouldReport(DiagnosticCode.AmbiguousName, At(call, 1));
     }
+    auto h = analyzed("import a\nimport b\ndef main(): Unit {\n    h(1)\n}", files);
+    h.shouldHaveNoDiagnostics();
+    h.shouldCall(At("h", 1), At("h", 1, "a"));
 }
 
 @("a conformance chooses among imported modules by fit as a call does")

@@ -4,7 +4,7 @@ interface Counted {
     def count(self: Self): Int
 }
 
-def first<R: Counted>(range: R): Int? => if count(range) == 0 => None else Some(count(range))
+def front<R: Counted>(range: R): Int? => if count(range) == 0 => None else Some(count(range))
 
 def total<R: Counted>(range: R): Int => count(range) * 2
 

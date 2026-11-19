@@ -1,3 +1,0 @@
-module forward_support.swingv
-
-val x: String = "v"

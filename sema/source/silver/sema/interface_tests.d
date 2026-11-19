@@ -392,7 +392,7 @@ unittest
     enum two = "module two\nimport foo\ndef toJson(f: Foo): String => \"two\"\n";
     auto files = ["json.ag": json, "foo.ag": foo, "one.ag": one, "two.ag": two];
     analyzed("import json\nimport foo\nimport one\nimport two\nconform Foo: Json\ndef main(): Unit => ()", files)
-        .onlyMessage(DiagnosticCode.UnmetConformance).should.contain("a `toJson` in more than one imported module (one, two) takes `Foo`");
+        .onlyMessage(DiagnosticCode.UnmetConformance).should.contain("more than one `toJson` takes `Foo` equally well: `one.toJson(Foo)` and `two.toJson(Foo)`; declare one in this module");
     analyzed("import json\nimport foo\nimport one\nimport two\ndef toJson(f: Foo): String => one.toJson(f)\nconform Foo: Json\n"
         ~ "def main(): Unit {\n    val a = encode(Foo(1))\n}", files).shouldHaveNoDiagnostics();
 }

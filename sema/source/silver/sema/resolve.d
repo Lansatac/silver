@@ -618,6 +618,9 @@ private final class NameResolver
     private Forward[][string][string] _forwards;
     private SideTable!(Id!Expr, Id!AliasDecl) _aliasedInstances;
     private ForwardImport[][string] _forwardImports;
+    /// The `forward import`s that close a cycle of forwards, by where they're written. Each is
+    /// reported, and forwards nothing.
+    private bool[Span] _cyclicForwards;
     private ListedImport[][string] _listedImports;
     private SideTable!(Id!ConformDecl, Id!FunctionDecl) _conformances;
     private SideTable!(Id!Expr, Test) _tests;
@@ -641,6 +644,7 @@ private final class NameResolver
         {
             declareModule(mod.name, mod, (preludeName in program.modules) !is null);
         }
+        reportForwardCycles(modules);
         forwardNames(modules);
         foreach (mod; modules)
         {
@@ -685,7 +689,6 @@ private final class NameResolver
     /// a target's own nearer declarations hide what it forwards from farther away.
     private void forwardNames(R)(R modules)
     {
-        Forward[][string][string] previous;
         foreach (pass; 0 .. 2 * modules.length + 2)
         {
             auto first = pass == 0;
@@ -697,7 +700,7 @@ private final class NameResolver
                     decl.kind.match!(
                         (const ImportStmt forward) {
                             auto target = forward.path.join(".");
-                            if (!forward.forward || target !in _moduleScopes) return;
+                            if (!forward.forward || target !in _moduleScopes || decl.span in _cyclicForwards) return;
                             if (first) _forwardImports[mod.name] ~= ForwardImport(target, forward.names.map!(n => n.name).array, decl.span);
                             foreach (selected; forward.names)
                             {
@@ -718,31 +721,56 @@ private final class NameResolver
                 }
             }
             auto settled = sameForwards(next, _forwards);
-            previous = _forwards;
             _forwards = next;
             if (settled) return;
         }
-        reportUnsettled(previous);
+        assert(false, "forwards with no cycle settle");
     }
 
-    /// Reports each name that a module passes on differently in the last two passes of a cycle
-    /// of forwards that never settled, at a forward of it. Only the forwarding modules can fix it.
-    private void reportUnsettled(Forward[][string][string] previous)
+    /// Reports each `forward import` that leads back to its own module through the forwards of
+    /// the modules it forwards, and records it so it forwards nothing.
+    private void reportForwardCycles(R)(R modules)
     {
-        foreach (m; _forwards.keys.sort)
+        ForwardImport[][string] edges;
+        foreach (mod; modules)
         {
-            foreach (name; _forwards[m].keys.sort)
+            foreach (decl; mod.declarations)
             {
-                auto now = exportOrigins(m, name).sort.array;
-                auto then = _forwards;
-                _forwards = previous;
-                auto before = exportOrigins(m, name).sort.array;
-                _forwards = then;
-                if (now == before) continue;
-                _collector.reportError(DiagnosticCode.UnsettledForwardCycle, _forwards[m][name][0].span,
-                    ("what '%s' passes on as '%s' depends on what a cycle of forwards gives it back, which never "
-                        ~ "settles; forward '%s' through only one side of the cycle").format(m, name, name));
+                decl.kind.match!(
+                    (const ImportStmt i) {
+                        auto target = i.path.join(".");
+                        if (i.forward && target in _moduleScopes) edges[mod.name] ~= ForwardImport(target, null, decl.span);
+                    },
+                    (_) {},
+                );
             }
+        }
+        enum Visit { unseen, open, done }
+        Visit[string] state;
+        string[] path;
+        void visit(string m)
+        {
+            state[m] = Visit.open;
+            path ~= m;
+            foreach (forward; edges.get(m, null))
+            {
+                auto seen = state.get(forward.target, Visit.unseen);
+                if (seen == Visit.unseen) visit(forward.target);
+                else if (seen == Visit.open)
+                {
+                    auto cycle = path[path.countUntil(forward.target) .. $] ~ forward.target;
+                    _cyclicForwards[forward.span] = true;
+                    _collector.reportError(DiagnosticCode.ForwardCycle, forward.span,
+                        ("A forward can't lead back to the module that forwards it, and this one does: %-(%s forwards %); "
+                            ~ "make one of them a plain `import`").format(cycle));
+                }
+            }
+            path = path[0 .. $ - 1];
+            state[m] = Visit.done;
+        }
+        foreach (mod; modules)
+        {
+            if (state.get(mod.name, Visit.unseen) == Visit.unseen) visit(mod.name);
         }
     }
 

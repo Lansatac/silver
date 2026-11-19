@@ -1,6 +1,6 @@
 module forward_support.right
 
-forward import forward_support.left
+import forward_support.left
 
 def fromRight(): String => "right, then {fromLeft()}"
 def side(x: String): String => "right String"

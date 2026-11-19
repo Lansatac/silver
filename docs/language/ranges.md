@@ -1,10 +1,8 @@
 # Ranges
 
-A range is an immutable value that can be stepped: `next` gives its first item and the rest of the range, or `None` at the end. `for` loops over any range, and `std.range` has lazy adapters such as `map` and `filter` and consumers such as `array` that turn a chain back into data.
+A range is an immutable value that can be stepped: `next` gives its first item and the rest of the range, or `None` at the end. `for` loops over any range, and `std.range`, which the prelude forwards, has lazy adapters such as `map` and `filter` and consumers such as `array` that turn a chain back into data.
 
 ```silver
-import std.range
-
 val big = [1, 2, 3].map(x => x * 2).filter(x => x > 2).array()    // [4, 6]
 ```
 
@@ -58,7 +56,7 @@ chain.array()     // prints <1> to <5> again, gives [30, 40, 50]
 - An adapter's result is its own named type, which a `val` infers. It's a range exactly when its source is, as `conform Mapped<R, T, U>: Range<U> when R: Range<T>` says.
 - Consuming a chain again runs its functions again. `array()` is how a result is kept.
 - A function passed to an adapter runs where the chain is consumed, so that's where it panics or has its effect.
-- A chain built in one module can be stepped in another that doesn't import `std.range`, since its conformance is a fact about its type.
+- A chain built in one module can be stepped in any other, since its conformance is a fact about its type.
 
 ## Consumers
 
@@ -84,7 +82,6 @@ These are listed in the [ranges proposal](../proposals/ranges.md#open-questions)
 
 ## Current implementation
 
-- `std.range` has to be imported. The prelude will forward it once imported functions are ranked as one overload set (see [Functions](functions.md#current-implementation)), since until then a module that imports its own `first` or `map` would find two.
 - Not built yet, as designed in the proposal: `Sized` and `Indexed`, and `count`, `last` and `array` taking a length or indexing when the range has one; `take`, `drop`, `zip`, `enumerate`, `step`, `takeWhile`, `dropWhile`, `flatMap` and `append`; `iterate`, `unfold` and `repeat`; `any`, `all`, `find`, `last`, `contains`, `isEmpty` and `splitAt`; and the erased form `Seq<T>`. `sum`, `min`, `max`, `sorted`, `sortedBy`, `Backward` and `reversed` come after those.
 - Passing a type that isn't a range to an adapter says so, but doesn't yet suggest `iterate()` for a type with a `length` and an `opIndex`.
 - Assigning a chain where an array is expected is a type mismatch that doesn't yet suggest `array()`.

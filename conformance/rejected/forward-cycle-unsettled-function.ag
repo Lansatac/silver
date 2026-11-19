@@ -1,7 +1,0 @@
-// Each of `swing2a` and `swing2b` lists `pick` from the other, which hides the `pick(Int)` its
-// blanket forward brings, so what either passes on alternates with what the other does.
-import forward_support.swing2a
-
-def main(): Unit {
-    printl(pick(1))
-}

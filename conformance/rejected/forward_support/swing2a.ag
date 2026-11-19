@@ -1,4 +1,0 @@
-module forward_support.swing2a
-
-forward import forward_support.swing2b : pick
-forward import forward_support.swing2f

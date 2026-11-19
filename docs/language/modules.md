@@ -194,10 +194,8 @@ Inside the forwarding module, its own functions come first, and what it forwards
 - Renamed imports aren't available.
 - Packages aren't implemented. A program is compiled whole from unnamed roots, given with `-I`, and a module's name is its whole path under one: `import a.b` loads `<root>/a/b.ag`. There are no parts, no list of what a package uses, and no difference between a program and a library.
 - The compiler's package is named `intrinsics`, and `intrinsic def` is also allowed in `std` and the prelude.
-- The prelude is the module `prelude`, which the compiler always loads. It forwards the `intrinsics` modules, declares `Of` itself, and doesn't forward `std` modules yet.
+- The prelude is the module `prelude`, which the compiler always loads. It forwards the `intrinsics` modules and `std.range`, declares `Of` itself, and doesn't forward the other `std` modules yet.
 - Two functions of the same parameters aren't a duplicate when one's bounds ask for everything the other's do and more, and a type satisfies an interface through the functions a module can see, so those have to be imported or forwarded: see [Interfaces](interfaces.md#current-implementation).
-- A call still chooses among imported functions one import at a time, with what an import forwards ranked as its own, as [Functions](functions.md#current-implementation) describes. So two functions can be ambiguous through two imports and not through a facade that forwards both, and inside a forwarding module its forwards are a group apart from its other imports.
-- Forward imports can still form a cycle. Each module in it gives its importers what the others give it, and a cycle that never settles is an error at the forward.
 - An explicit duplicate of functions is reported where it's written, and a call that fits both is then reported as ambiguous too.
 - What two blanket forwards bring as functions of the same parameters is reported at a call or a plain or qualified use of the name, but where a bound's search or a function value meets it, as their own error (`T0043`, `T0034`).
 - A sum's members travel with it only when each is written as a plain name that the sum's module declares or forwards.

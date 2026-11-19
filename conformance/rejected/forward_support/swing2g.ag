@@ -1,3 +1,0 @@
-module forward_support.swing2g
-
-def pick(y: Int): String => "g"

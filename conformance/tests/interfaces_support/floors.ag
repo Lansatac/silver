@@ -7,35 +7,12 @@ interface Indexed<T> {
     def opIndex(value: Self, index: Int): T
 }
 
-type Mapped<R, T, U>(source: R, transform: (T) -> U)
-def map<R: Range<T>, T, U>(source: R, transform: (T) -> U): Mapped<R, T, U> => Mapped(source, transform)
-def next<R: Range<T>, T, U>(m: Mapped<R, T, U>): (U, Mapped<R, T, U>)? {
-    val (item, rest) = next(m.source)?
-    (m.transform(item), Mapped(rest, m.transform))
-}
+// std.range's `Mapped`, made indexed here when its source is.
 def length<R: Indexed<T>, T, U>(m: Mapped<R, T, U>): Int => length(m.source)
 def opIndex<R: Indexed<T>, T, U>(m: Mapped<R, T, U>, index: Int): U => m.transform(m.source[index])
 
-type Filtered<R, T>(source: R, keep: (T) -> Bool)
-def filter<R: Range<T>, T>(source: R, keep: (T) -> Bool): Filtered<R, T> => Filtered(source, keep)
-def next<R: Range<T>, T>(f: Filtered<R, T>): (T, Filtered<R, T>)? {
-    mutable val source = f.source
-    while val step = next(source) {
-        val (item, rest) = step
-        if f.keep(item) { return (item, Filtered(rest, f.keep)) }
-        source = rest
-    }
-    None
-}
-
 type Countdown(from: Int)
 def next(c: Countdown): (Int, Countdown)? => if c.from == 0 => None else (c.from, Countdown(c.from - 1))
-
-def array<R: Range<T>, T>(range: R): [T] {
-    mutable val result: [T] = []
-    for item in range { result ~= [item] }
-    result
-}
 
 // What another module calls: its result is the `Mapped` the body builds, whatever `R` is.
 def squares<R: Range<Int>>(r: R): Range<Int> => r.map(x => x * x)
@@ -45,7 +22,5 @@ def odds(xs: [Int]): Range<Int> => xs.filter(x => x % 2 == 1)
 def labelled(n: Int): String => name(numbered(n)) ~ ", doubled {numbered(n) * 2}"
 
 conform [T]: Indexed<T>
-conform Mapped<R, T, U>: Range<U> when R: Range<T>
 conform Mapped<R, T, U>: Indexed<U> when R: Indexed<T>
-conform Filtered<R, T>: Range<T> when R: Range<T>
 conform Countdown: Range<Int>

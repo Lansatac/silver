@@ -12,4 +12,4 @@ def count<T>(xs: [T]): Int => length(xs)
 // Its own `first` is one more overload beside the forwarded ones, which still rank as one group inside.
 def first(text: String): String => "own {text}"
 
-def firsts(): String => "{first([4, 5])} {first(Bag(3))} {first("x")}"
+def firsts(): String => "{first([4, 5])} {front(Bag(3))} {first("x")}"

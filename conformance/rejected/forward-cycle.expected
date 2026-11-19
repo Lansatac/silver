@@ -1,0 +1,1 @@
+S0028: A forward can't lead back to the module that forwards it, and this one does: forward_support.loopa forwards forward_support.loopb forwards forward_support.loopc forwards forward_support.loopa; make one of them a plain `import`

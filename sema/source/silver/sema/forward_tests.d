@@ -111,15 +111,15 @@ unittest
     beside.shouldCall(At("pick", 1), At("pick", 1, "a"));
 }
 
-@("two imports whose functions fit equally well are named by the import")
+@("two imports whose functions fit equally well are ambiguous, named by the modules that declare them")
 unittest
 {
     auto files = library.dup;
     files["c.ag"] = "module c\ndef pick(x: Int): Int => 7";
     auto a = analyzed("import selected\nimport c\ndef main(): Unit => printl(pick(1))", files);
     a.shouldReport(DiagnosticCode.AmbiguousName, At("pick", 1));
-    assert(a.collector.errors.front.message.canFind("(selected, c)"));
-    assert(a.collector.errors.front.message.canFind("`selected.pick(...)`"));
+    assert(a.collector.errors.front.message.canFind("(a, c)"));
+    assert(a.collector.errors.front.message.canFind("`a.pick(...)`"));
 }
 
 @("a conformance finds a function that a forward brings")
@@ -146,7 +146,7 @@ unittest
         .shouldReport(DiagnosticCode.UnknownModuleMember, At("nope", 1, "worse"));
 }
 
-@("a cycle of forward imports ends, and each module gives what all of them have")
+@("a cycle of forward imports is an error at the forward that closes it")
 unittest
 {
     auto files = [
@@ -154,10 +154,8 @@ unittest
         "y.ag": "module y\nforward import z\ndef fromY(): Int => 2",
         "z.ag": "module z\nforward import x\ndef fromZ(): Int => 3\nprivate def fromX(): Int => 0",
     ];
-    auto a = analyzed("import z\ndef main(): Unit => printl(fromX() + fromY() + z.fromZ() + z.fromX())", files);
-    a.shouldHaveNoDiagnostics();
-    a.shouldResolve(At("fromX", 1), At("fromX", 1, "x"));
-    a.shouldResolve(At("fromX", 2), At("fromX", 1, "x"));
+    auto a = analyzed("import z\ndef main(): Unit => ()", files);
+    a.shouldReport(DiagnosticCode.ForwardCycle, At("forward import x", 1, "z"));
 }
 
 @("a forwarded name that the module also declares as something else is reported")

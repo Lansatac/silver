@@ -1,1 +1,1 @@
-T0051: `Thing` can't be a `Json`: a `toJson` in more than one imported module (interfaces_support.one, interfaces_support.two) takes `Thing`; declare one in this module that calls the one you mean
+T0051: `Thing` can't be a `Json`: more than one `toJson` takes `Thing` equally well: `interfaces_support.one.toJson(Thing)` and `interfaces_support.two.toJson(Thing)`; declare one in this module that calls the one you mean
