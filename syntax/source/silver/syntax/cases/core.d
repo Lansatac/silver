@@ -4,11 +4,11 @@ version (unittest):
 
 enum Outcome
 {
-    /// The grammar accepts it, and it lowers to exactly `Case.ast`.
+    /// It parses to exactly `Case.ast`.
     parsesAs,
-    /// The grammar accepts it, and it lowers without error.
+    /// It parses.
     accepts,
-    /// The grammar rejects it.
+    /// It doesn't parse.
     rejects,
 }
 

@@ -35,7 +35,6 @@ immutable Case[] postfix = [
     ]),
 ];
 
-/// Grammar only: IndexArgs isn't lowered yet.
 immutable Case[] indexing = [
     parsesAs("a = xs[0]", "(assign a (index xs 0))"),
     parsesAs("a = xs[i + 1][j]", "(assign a (index (index xs (Add i 1)) j))"),

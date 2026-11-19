@@ -21,7 +21,7 @@ immutable Case[] discards = [
 immutable Case[] assignments = [
     parsesAs("a=b", "(assign a b)"),
 
-    // Compound assignment is lowered to plain assignment.
+    // Compound assignment is parsed as plain assignment.
     parsesAs("a += 3", "(assign a (Add a 3))"),
     parsesAs("a -= 3", "(assign a (Subtract a 3))"),
     parsesAs("a *= 3", "(assign a (Multiply a 3))"),

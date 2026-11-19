@@ -92,7 +92,6 @@ immutable Case[] constructors = [
     parsesAs("a = Some(1, 2)", "(assign a (call Some 1 2))"),
 ];
 
-/// Grammar only: CollectionLiteral isn't lowered yet.
 immutable Case[] collectionLiterals = [
     parsesAs("a = []", "(assign a (array))"),
     parsesAs("a = [1]", "(assign a (array 1))"),

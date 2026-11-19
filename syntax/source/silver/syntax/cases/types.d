@@ -48,7 +48,7 @@ immutable Case[] typeDeclarations = [
     rejects("val private = 1"),
 ];
 
-/// Sema decides what an uppercase name means, so lowering treats it as a plain name.
+/// Sema decides what an uppercase name means, so parsing treats it as a plain name.
 immutable Case[] typeConstruction = [
     parsesAs("val p = Point(1, 2)", "(val p (call Point 1 2))"),
     parsesAs("val o = Origin", "(val o Origin)"),
@@ -257,7 +257,7 @@ immutable Case[] errorUnions = [
     parsesAs("if val Error(e) = p => e", "(match p (Error(e) e) (_ ()))"),
 ];
 
-/// The grammar takes an invariant without `else`, so lowering can say it's missing.
+/// An invariant without `else` gets an error saying it's missing.
 immutable Case[] invariantsWithoutElse = [
     rejectsDeclaration("type Span(low: Int, high: Int) invariant low <= high"),
     rejectsDeclaration("type S = C(r: Float) invariant (r > 0.0) | N"),

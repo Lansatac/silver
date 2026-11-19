@@ -17,6 +17,10 @@ immutable Case[] operators = [
     parsesAs("a = b <= c", "(assign a (LessEqual b c))"),
     parsesAs("a = b > c", "(assign a (Greater b c))"),
     parsesAs("a = b >= c", "(assign a (GreaterEqual b c))"),
+    rejects("a = b > = c"), // `>=` and `>>` are written with no space
+    rejects("val x = a > > b"),
+    parsesAs("a = b!= c", "(assign a (NotEqual b c))"),
+    parsesAs("a = xs?..b", "(assign a (.. (? xs) b))"),
     rejects("a = b < c < d"), // comparisons don't chain
     rejects("a = b == c == d"),
     rejects("a = b != c == d"),

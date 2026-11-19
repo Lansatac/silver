@@ -2257,3 +2257,161 @@ private TypeParam[] mentioned(TypeParam[] params, const(Field)[] fields)
     }
     return result;
 }
+
+@("parse throws, naming the source, on invalid source")
+unittest
+{
+    import std.exception : collectException;
+    import silver.syntax.parse : parse;
+
+    auto error = collectException!ParseException(parse("val = 1", "test", new NodeIds, "math.ag"));
+    assert(error !is null);
+    assert(error.diagnostic.span.file == "math.ag");
+    assert(collectException!ParseException(parse("def f(a", "test", new NodeIds)) !is null);
+}
+@("only an option type can leave out a mutable val's initializer")
+unittest
+{
+    import std.exception : collectException;
+    import silver.syntax.parse : parse;
+
+    auto error = collectException!ParseException(parse("def f(): Unit {\n    mutable val x: Int\n}", "test", new NodeIds));
+    assert(error !is null);
+    assert(error.diagnostic.code == DiagnosticCode.ParseError);
+    assert(collectException!ParseException(parse("def f(): Unit {\n    mutable val x: Int?\n}", "test", new NodeIds)) is null);
+}
+
+@("node spans exclude the spacing after them")
+unittest
+{
+    import std.sumtype : match;
+    import silver.syntax.parse : parse;
+
+    auto source = "def f(): Int => if c /* why */ { 1 } // one\n else { 2 }";
+    auto m = parse(source, "test", new NodeIds);
+    auto body = m.declarations[0].kind.match!(
+        (const FunctionDecl f) => f.body,
+        _ => null,
+    );
+    auto ifExpr = (*body).kind.match!(
+        (const IfExpr i) => i,
+        _ => IfExpr.init,
+    );
+    string text(Span s) => source[s.start .. s.end];
+
+    assert(text(ifExpr.condition.span) == "c");
+    assert(text(ifExpr.trueBody.span) == "{ 1 }");
+    assert(text((*body).span) == "if c /* why */ { 1 } // one\n else { 2 }");
+}
+
+@("an `if type`'s span for its type is the type's name")
+unittest
+{
+    import std.sumtype : match;
+    import silver.syntax.parse : parse;
+
+    auto source = "def f<R>(r: R): Int => if type  R: Sized => 1 else 2";
+    auto m = parse(source, "test", new NodeIds);
+    auto body = m.declarations[0].kind.match!(
+        (const FunctionDecl f) => f.body,
+        _ => null,
+    );
+    auto test = (*body).kind.match!(
+        (const IfExpr i) => i.test,
+        _ => null,
+    );
+    assert(test !is null);
+    assert(source[test.span.start .. test.span.end] == "R");
+    assert(test.name == "R");
+}
+
+@("a binary expression's span includes parentheses around its operands")
+unittest
+{
+    import std.sumtype : match;
+    import silver.syntax.parse : parse;
+
+    auto source = "def f(): Int => (a) * (b + c) - d";
+    auto m = parse(source, "test", new NodeIds);
+    auto body = m.declarations[0].kind.match!(
+        (const FunctionDecl f) => f.body,
+        _ => null,
+    );
+    auto left = (*body).kind.match!(
+        (const BinaryExpr b) => b.left,
+        _ => null,
+    );
+    string text(Span s) => source[s.start .. s.end];
+
+    assert(text((*body).span) == "(a) * (b + c) - d");
+    assert(text(left.span) == "(a) * (b + c)");
+}
+
+@("a module names at most one native library, and a native's symbol and library and a test's name are plain strings")
+unittest
+{
+    import std.exception : collectException;
+    import silver.syntax.parse : parse;
+
+    void rejected(string source)
+    {
+        auto error = collectException!ParseException(parse(source, "test", new NodeIds));
+        assert(error !is null, source);
+        assert(error.diagnostic.code == DiagnosticCode.ParseError, source);
+    }
+
+    rejected("native library \"a\"\nnative library \"b\"");
+    rejected("native library \"{name}\"");
+    rejected("native library \"\"");
+    rejected("native(\"\") def f(): Int");
+    rejected("native(\"f{x}\") def f(): Int");
+    rejected("test \"\" {}");
+    rejected("test \"a{1}\" {}");
+    assert(collectException!ParseException(parse("native library \"a\"\nnative(\"b\") def f(): Int", "test", new NodeIds)) is null);
+}
+
+@("a character literal holds one character")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.exception : collectException;
+    import silver.syntax.parse : parse;
+
+    ParseException error(string literal) =>
+        collectException!ParseException(parse("val a: Char = " ~ literal, "test", new NodeIds));
+
+    assert(error(`'a'`) is null);
+    assert(error(`'\u{1F600}'`) is null);
+    assert(error(`''`).diagnostic.message.canFind("exactly one character"));
+    assert(error(`'ab'`).diagnostic.message.canFind("exactly one character"));
+    assert(error(`'\u{D800}'`).diagnostic.message.canFind("scalar value"));
+}
+
+@("a \\u{...} escape names a Unicode scalar value")
+unittest
+{
+    import std.exception : collectException;
+    import silver.syntax.parse : parse;
+
+    ParseException error(string literal) =>
+        collectException!ParseException(parse("val a: String = " ~ literal, "test", new NodeIds));
+
+    assert(error(`"\u{10FFFF}\u{D7FF}\u{E000}"`) is null);
+    assert(error(`"\u{110000}"`).diagnostic.code == DiagnosticCode.ParseError);
+    assert(error(`"\u{D800}"`).diagnostic.code == DiagnosticCode.ParseError);
+    assert(error(`"\u{dfff}"`).diagnostic.code == DiagnosticCode.ParseError);
+}
+
+@("only `=` assigns to a tuple of targets")
+unittest
+{
+    import std.exception : collectException;
+    import silver.syntax.parse : parse;
+
+    ParseException error(string statement) =>
+        collectException!ParseException(parse("def f(): Unit {\n    " ~ statement ~ "\n}", "test", new NodeIds));
+
+    assert(error("(a, b) = (1, 2)") is null);
+    assert(error("(a, b) += (1, 2)").diagnostic.code == DiagnosticCode.ParseError);
+    assert(error("(a, _) ~= ([1], [2])").diagnostic.code == DiagnosticCode.ParseError);
+}
