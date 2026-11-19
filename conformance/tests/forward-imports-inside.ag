@@ -4,5 +4,5 @@ import forward_support.together
 def main(): Unit {
     printl(firsts())
     printl(first([1, 2]))
-    printl(first(Bag(6)))
+    printl(front(Bag(6)))
 }

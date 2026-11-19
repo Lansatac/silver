@@ -15,16 +15,16 @@ def area(shape: Shape): Size => match shape {
 }
 
 def main(): Unit {
-    // The array's `first` and the bounded one are ranked as one module's, with the facade's own.
+    // The array's `first`, the facade's own and the prelude's are ranked together; the array's fits best.
     printl(first([1, 2, 3]))
-    printl(first(Tally(4)))
+    printl(front(Tally(4)))
     printl(first("text"))
     val empty: [Int] = []
     printl(first(empty))
 
     // Through the facade, as if it declared them.
     printl(forward_support.facade.first([7]))
-    printl(forward_support.facade.first(Pile(2)))
+    printl(forward_support.facade.front(Pile(2)))
     printl(forward_support.facade.limit + limit)
     val pile: forward_support.facade.Pile = Pile(5)
     printl(total(pile))

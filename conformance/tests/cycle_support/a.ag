@@ -1,5 +1,0 @@
-module cycle_support.a
-
-forward import cycle_support.b
-
-def who(x: Int): String => "a"

@@ -28,7 +28,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
 | [Errors](language/errors.md) | `T ! E`, `?` and `!` on errors, what panics, `main` | Implemented, except `read()` returning an error |
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, `a..b` as an `Interval` | Implemented, except that element assignment always copies |
-| [Ranges](language/ranges.md) | `Range`, sources of your own, `std.range` adapters and consumers | Partial: `map`, `filter`, `first`, `rest`, `array`, `fold` and `count`; `std.range` needs an import |
+| [Ranges](language/ranges.md) | `Range`, sources of your own, `std.range` adapters and consumers | Partial: `map`, `filter`, `first`, `rest`, `array`, `fold` and `count` |
 | [Maps](language/maps.md) | `[K: V]`, lookup and update, insertion order, keys | Designed, not implemented |
 | [Strings](language/strings.md) | Text, interpolation, characters, cutting, `std.string` | Partial: `read()` doesn't check for UTF-8; no raw or multi-line strings |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
@@ -36,7 +36,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
 | [Interfaces](language/interfaces.md) | Interfaces, declared conformance, bounds, `if type`, interface names as parameter and result types | Partial: every module sees every conformance; no interface types as values |
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
-| [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: no packages or renamed imports, and the prelude doesn't forward `std` modules yet |
+| [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: no packages or renamed imports, and the prelude forwards only `std.range` of the `std` modules |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the standard library's natives |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, `panics`, the test runner | Partial: no companion files, `--filter` or `--format json` |
 

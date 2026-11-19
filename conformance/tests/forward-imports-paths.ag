@@ -3,14 +3,14 @@
 import forward_support.outer
 import forward_support.facade
 import forward_support.arrays
-import forward_support.ranges : first, Shape, Circle
+import forward_support.ranges : front, Shape, Circle
 import forward_support.left
 import forward_support.right : fromRight
 
 def main(): Unit {
     // `arrays` alone has only the array's `first`; beside the facade it changes nothing.
     printl(first([1, 2, 3]))
-    printl(first(Pile(4)))
+    printl(front(Pile(4)))
     printl(first("text"))
     printl(limit)
     val shape: Shape = Circle(2)

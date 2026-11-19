@@ -637,12 +637,11 @@ private final class TypeChecker
     }
 
     /// What every module exports as functions named `name`. Each round works out every module's
-    /// from what the last round gave, so the order modules are checked in never changes it. A
-    /// cycle of forwards that doesn't settle is reported at a forward of each module it unsettles.
+    /// from what the last round gave, so the order modules are checked in never changes it.
     private const(Id!FunctionDecl)[][string] exportTable(string name)
     {
         auto modules = _resolutions.moduleScopes.keys.sort.array;
-        const(Id!FunctionDecl)[][string] current, previous;
+        const(Id!FunctionDecl)[][string] current;
         foreach (m; modules) current[m] = _resolutions.publicFunctions(m, name);
         foreach (_; 0 .. modules.length + 2)
         {
@@ -658,18 +657,9 @@ private final class TypeChecker
                 next[m] = nearest(entries);
             }
             if (modules.all!(m => sameSet(next[m], current[m]))) return next;
-            previous = current;
             current = next;
         }
-        foreach (m; modules.filter!(m => !sameSet(current[m], previous.get(m, null))))
-        {
-            auto forwards = _resolutions.forwardImports.get(m, null).find!(f => f.names.length == 0 || f.names.canFind(name));
-            if (forwards.empty) continue;
-            _collector.reportError(DiagnosticCode.UnsettledForwardCycle, forwards.front.span,
-                ("what '%s' passes on as '%s' depends on what a cycle of forwards gives it back, which never settles; "
-                    ~ "forward '%s' through only one side of the cycle").format(m, name, name));
-        }
-        return current;
+        assert(false, "forwards with no cycle settle");
     }
 
     private static bool sameSet(const(Id!FunctionDecl)[] a, const(Id!FunctionDecl)[] b)
@@ -3281,71 +3271,28 @@ private final class TypeChecker
         if (!tried.joiner.any!(t => t.fitsAll) && tried.joiner.any!(t => t.againstExpected)) tried = fitAll(Type.init);
         groups = tried;
         auto own = groups[0].filter!(t => t.fitsAll).array;
-        auto imported = own.length > 0 ? null : rankedImports(groups[1 .. $].map!(g => g.filter!(t => t.fitsAll).array).array);
+        auto imported = own.length > 0 ? null : mergedImports(groups[1 .. $]);
         // An argument whose type is already an error fits anything, so it would only add to it.
         auto reportable = !typed.any!(t => t != Type.init && _types.mentionsError(t));
 
         if (own.length > 0) return bestTrial(own, name.span, spelled, reportable);
-        if (imported.length == 1) return bestTrial(imported[0], name.span, spelled, reportable);
-        if (imported.length > 1)
-        {
-            if (reportable) reportImportedOverloads(name.span, spelled, importsOf(candidates, imported.map!(g => functionsOf(g))));
-            return Id!FunctionDecl.init;
-        }
+        if (imported.length > 0) return bestTrial(imported, name.span, spelled, reportable);
         if (reportable) reportNoOverload(name.span, spelled, groups);
         return Id!FunctionDecl.init;
     }
 
-    /// The fitting trials of the imported modules that have any, a list per module, narrowed to
-    /// the modules with a function that fits every argument exactly and isn't generic when some
-    /// have one.
-    private const(Trial[])[] rankedImports(const(Trial[])[] fitting)
+    /// The trials of the imported groups that fit, each function once, ranked together whichever
+    /// import brings it.
+    private const(Trial)[] mergedImports(const(Trial[])[] groups)
     {
-        auto imported = fitting.filter!(g => g.length > 0).array;
-        auto exact = imported.filter!(g => g.any!(t => fitsExactly(t))).array;
-        return agreeing!(t => t.func)(exact.length > 0 ? exact : imported);
-    }
-
-    /// `groups`, each one import's functions that fit, without those whose functions another has
-    /// too: imports that lead to the same functions agree, however else they differ.
-    private static G[] agreeing(alias functionOf, G)(G[] groups)
-    {
-        bool covered(size_t i)
+        const(Trial)[] merged;
+        foreach (trial; groups.joiner)
         {
-            foreach (j, other; groups)
-            {
-                if (j == i || !groups[i].all!(t => other.any!(u => functionOf(u) == functionOf(t)))) continue;
-                if (groups[i].length < other.length || j < i) return true;
-            }
-            return false;
+            if (trial.fitsAll && !merged.canFind!(t => t.func == trial.func)) merged ~= trial;
         }
-        return groups.length.iota.filter!(i => !covered(i)).map!(i => groups[i]).array;
+        return merged;
     }
 
-    private static Id!FunctionDecl[] functionsOf(const(Trial)[] trials)
-    {
-        return trials.map!(t => cast() t.func).array;
-    }
-
-    /// The import that brought each of `groups`, which hold functions of `candidates`' imported
-    /// groups and are in their order.
-    private string[] importsOf(R)(const Candidates candidates, R groups)
-    {
-        string[] names;
-        size_t next = 1;
-        foreach (group; groups)
-        {
-            auto at = next;
-            while (at < candidates.groups.length && !group.all!(f => candidates.groups[at].canFind(f))) at++;
-            if (at < candidates.sources.length)
-            {
-                names ~= candidates.sources[at];
-                next = at + 1;
-            }
-            else names ~= _resolutions.declarations.functionModules[group[0]];
-        }
-        return names;
-    }
 
     /// Whether `functions` are declared in more than one module, so a message has to say which.
     private bool acrossModules(R)(R functions)
@@ -3774,6 +3721,15 @@ private final class TypeChecker
         return bTakes && !aTakes;
     }
 
+    /// Whether `a` is the more specific of two functions that fit alike: it isn't generic and `b`
+    /// is, or `b` takes everything it takes and more.
+    private bool moreSpecific(Id!FunctionDecl a, Id!FunctionDecl b)
+    {
+        auto aGeneric = isGenericFunction(a), bGeneric = isGenericFunction(b);
+        if (aGeneric != bGeneric) return bGeneric;
+        return aGeneric && accepts(b, a) && !accepts(a, b);
+    }
+
     private bool isGenericFunction(Id!FunctionDecl f)
     {
         return _resolutions.typeParamsOf(f).length > 0;
@@ -3839,13 +3795,6 @@ private final class TypeChecker
             "No `%s` takes these arguments:\n    %-(%s\n    %)".format(spelled, lines));
     }
 
-    /// Reports a call that functions of more than one imported module fit.
-    private void reportImportedOverloads(Span span, string spelled, const(string)[] modules)
-    {
-        _collector.reportError(DiagnosticCode.AmbiguousName, span,
-            "This call fits a `%s` in more than one imported module (%s); qualify it, as in `%s.%s(...)`"
-                .format(spelled, modules.join(", "), modules[0], spelled));
-    }
 
     /// Gives each argument of a call that couldn't be chosen a type, without reporting it again.
     private void typeUnchosen(const CallExpr call, const(Type)[] typed, BodyContext ctx)
@@ -3863,6 +3812,12 @@ private final class TypeChecker
         if (expected == _types.error) return _types.error;
         if (expected == Type.init || !_types.isFunction(expected))
         {
+            // The current module's functions come first, as for a call.
+            if (candidates.groups[0].length == 1)
+            {
+                _typing.chosenSymbols[name.id] = SymbolId(candidates.groups[0][0]);
+                return namedValue(name, SymbolId(candidates.groups[0][0]), expected, site);
+            }
             reportOverloadedValue(name);
             return _types.error;
         }
@@ -3875,19 +3830,13 @@ private final class TypeChecker
         const(Id!FunctionDecl)[] fits = matching[0];
         if (fits.length == 0)
         {
-            auto imported = agreeing!(f => f)(matching[1 .. $].filter!(g => g.length > 0).array);
-            if (imported.length > 1)
-            {
-                auto modules = importsOf(candidates, imported);
-                _collector.reportError(DiagnosticCode.AmbiguousName, name.span,
-                    "A `%s` in more than one imported module (%s) is a `%s`; qualify it, as in `%s.%s`"
-                        .format(spelled, modules.join(", "), _types.describe(expected), modules[0], spelled));
-                return _types.error;
-            }
-            if (imported.length == 1) fits = imported[0];
+            foreach (f; matching[1 .. $].joiner) if (!fits.canFind(f)) fits ~= f;
         }
-        // A function that isn't generic is more specific than one that is.
-        if (fits.length > 1 && fits.any!(f => !isGenericFunction(f))) fits = fits.filter!(f => !isGenericFunction(f)).array;
+        if (fits.length > 1)
+        {
+            auto best = fits.filter!(f => fits.all!(g => g == f || moreSpecific(f, g))).array;
+            if (best.length == 1) fits = best;
+        }
         if (fits.length != 1)
         {
             auto across = acrossModules(candidates.groups.joiner);
@@ -4910,19 +4859,10 @@ private final class TypeChecker
         auto pool = groups.length > 0 ? fitting(groups[0]) : null;
         if (pool.length == 0 && groups.length > 1)
         {
-            auto imported = groups[1 .. $].map!(g => fitting(g)).filter!(g => g.length > 0).array;
-            auto exact = imported.filter!(g => g.any!(t => fitsExactly(t.trial))).array;
-            if (exact.length > 0) imported = exact;
-            imported = agreeing!(t => t.trial.func)(imported);
-            if (imported.length > 1)
+            foreach (each; groups[1 .. $].map!(g => fitting(g)).joiner)
             {
-                auto modules = importsOf(candidates, imported.map!(g => g.map!(t => t.trial.func).array));
-                result.failure = ("a `%s` in more than one imported module (%-(%s, %)) takes %s; declare one in this module that "
-                    ~ "calls the one you mean").format(name, modules, arguments());
-                result.ambiguous = true;
-                return result;
+                if (!pool.canFind!(t => t.trial.func == each.trial.func)) pool ~= each;
             }
-            if (imported.length == 1) pool = imported[0];
         }
         if (pool.length == 0)
         {
@@ -4946,7 +4886,8 @@ private final class TypeChecker
             auto unbeaten = pool.filter!(t => !pool.any!(u => beats(u.trial, t.trial))).map!(t => t.trial.func).array;
             auto across = acrossModules(unbeaten);
             auto tied = unbeaten.map!(f => "`" ~ overloadLabel(f, across) ~ "`").array;
-            result.failure = "more than one `%s` takes %s equally well: %-(%s and %)".format(name, arguments(), tied);
+            result.failure = "more than one `%s` takes %s equally well: %-(%s and %)".format(name, arguments(), tied)
+                ~ (across ? "; declare one in this module that calls the one you mean" : "");
             result.ambiguous = true;
             return result;
         }
@@ -6280,17 +6221,6 @@ private final class TypeChecker
             return failed;
         }
 
-        auto imported = rankedImports(trials[1 .. $]);
-        if (fitting.groups[0].length == 0 && imported.length > 1)
-        {
-            typeTheRest();
-            auto modules = importsOf(*lookup, imported.map!(g => functionsOf(g)));
-            _collector.reportError(DiagnosticCode.AmbiguousName, span,
-                ("%s could use `%s` from more than one imported module (%s); declare one in this module that "
-                    ~ "calls the one you mean, as in `def %s(...) => %s.%s(...)`")
-                    .format(syntax, name, modules.join(", "), name, modules[0], name));
-            return failed;
-        }
         auto named = Expr(Id!Expr.init, span, ExprKind(Identifier(name)));
         auto function_ = chooseFunction(named, name, null, fitting, call, typed, false, ctx);
         if (!function_.isValid)

@@ -1,0 +1,6 @@
+module forward_support.loopc
+
+// A plain import of a module that forwards this one is fine; this forward closes the cycle.
+import forward_support.loopa
+forward import forward_support.loopa
+def later(): Int => 2

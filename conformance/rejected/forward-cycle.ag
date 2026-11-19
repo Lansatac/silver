@@ -1,0 +1,5 @@
+import forward_support.loopa
+
+def main(): Unit {
+    printl(sooner())
+}

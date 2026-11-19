@@ -1,0 +1,4 @@
+module forward_support.loopb
+
+forward import forward_support.loopc : later
+def sooner(): Int => 1

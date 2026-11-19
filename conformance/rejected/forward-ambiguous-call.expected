@@ -1,1 +1,1 @@
-S0003: This call fits a `same` in more than one imported module (forward_support.some, forward_support.two); qualify it, as in `forward_support.some.same(...)`
+S0003: This call fits a `same` of more than one module (forward_support.one, forward_support.two) equally well: `forward_support.one.same(Int)` and `forward_support.two.same(Int)`; import the one you mean and qualify it, as in `forward_support.one.same(...)`
