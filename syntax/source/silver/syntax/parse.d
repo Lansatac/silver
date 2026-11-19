@@ -3,6 +3,7 @@ module silver.syntax.parse;
 import silver.ast : Module, NodeIds, Diagnostic, DiagnosticException;
 import silver.syntax.lower : lower;
 import silver.syntax.cst : parseCst;
+static import silver.syntax.parser;
 
 /// Thrown when Silver source code fails to parse.
 class ParseException : DiagnosticException
@@ -13,11 +14,39 @@ class ParseException : DiagnosticException
     }
 }
 
+enum ParserChoice
+{
+    handWritten,
+    pegged,
+}
+
+/// Which parser `parse` uses. `SILVER_PARSER=pegged` picks Pegged's, until it's removed.
+__gshared ParserChoice defaultParser = ParserChoice.handWritten;
+
+shared static this()
+{
+    import std.process : environment;
+
+    if (environment.get("SILVER_PARSER") == "pegged") defaultParser = ParserChoice.pegged;
+}
+
 /// Parses Silver source into an AST, taking node IDs from `ids`.
 /// Throws: ParseException if the source does not parse.
 Module parse(string source, string moduleName, NodeIds ids, string file = "<input>")
 {
-    return lower(parseCst(source, file), moduleName, ids, file);
+    return parseWith(defaultParser, source, moduleName, ids, file);
+}
+
+/// Parses as `parse` does, with the parser `choice`.
+Module parseWith(ParserChoice choice, string source, string moduleName, NodeIds ids, string file = "<input>")
+{
+    final switch (choice)
+    {
+    case ParserChoice.handWritten:
+        return silver.syntax.parser.parseModule(source, moduleName, ids, file);
+    case ParserChoice.pegged:
+        return lower(parseCst(source, file), moduleName, ids, file);
+    }
 }
 
 @("an empty string hole is a parse error that points at the hole and says how to write a brace")

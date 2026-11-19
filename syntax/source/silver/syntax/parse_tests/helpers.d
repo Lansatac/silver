@@ -5,10 +5,10 @@ version (unittest):
 import fluent.asserts;
 import silver.ast : BlockExpr, FunctionDecl, Module, NodeIds, printDecl, printExpr, printModuleDeclaration, printNativeLibrary,
     printStmt;
-import silver.syntax.parse : parse, ParseException;
+import silver.syntax.parse : parseWith, ParseException, ParserChoice;
 import silver.syntax.cases.core;
 
-/// Adds one unittest per case in `tables`, checking what `parse` produces.
+/// Adds one unittest per case in `tables`, checking what each parser produces.
 /// Tests are named `table: source`.
 mixin template AstCases(tables...)
 {
@@ -28,44 +28,58 @@ mixin template AstCases(tables...)
     }
 }
 
-/// Failures are reported at the case's line in its table.
+/// Failures are reported at the case's line in its table, naming the parser.
 void checkAst(Case c)
 {
+    import std.traits : EnumMembers;
+
+    static foreach (parser; EnumMembers!ParserChoice)
+    {
+        checkAst(c, parser);
+    }
+}
+
+private void checkAst(Case c, ParserChoice parser)
+{
+    import std.conv : to;
+
     final switch (c.outcome)
     {
     case Outcome.parsesAs:
-        should(printCase(parseCase(c), c), c.file, c.line).equal(c.ast);
+        should(printCase(parseCase(c, parser), c), c.file, c.line).equal(c.ast).because(parser.to!string);
         break;
     case Outcome.accepts:
-        parseCase(c);
+        parseCase(c, parser);
         break;
     case Outcome.rejects:
         try
         {
-            parse(moduleSource(c), "test", new NodeIds, "test");
+            parseWith(parser, moduleSource(c), "test", new NodeIds, "test");
         }
         catch (ParseException)
         {
             return;
         }
-        throw new Exception("expected a parse error", c.file, c.line);
+        throw new Exception(parser.to!string ~ ": expected a parse error", c.file, c.line);
     }
 }
 
 /// Rethrows any parse failure from the case's line, naming the stage.
-private Module parseCase(Case c)
+private Module parseCase(Case c, ParserChoice parser)
 {
+    import std.conv : to;
+
     try
     {
-        return parse(moduleSource(c), "test", new NodeIds, "test");
+        return parseWith(parser, moduleSource(c), "test", new NodeIds, "test");
     }
     catch (ParseException e)
     {
-        throw new Exception("grammar rejected it: " ~ e.msg, c.file, c.line);
+        throw new Exception(parser.to!string ~ " rejected it: " ~ e.msg, c.file, c.line);
     }
     catch (Exception e)
     {
-        throw new Exception("lowering failed: " ~ e.msg, c.file, c.line, e);
+        throw new Exception(parser.to!string ~ " failed: " ~ e.msg, c.file, c.line, e);
     }
 }
 
