@@ -1,0 +1,62 @@
+module std.range
+
+// A range whose items are its source's, each passed through `transform`. Nothing runs until it's stepped.
+type Mapped<R, T, U>(source: R, transform: (T) -> U)
+
+def map<R: Range<T>, T, U>(source: R, transform: (T) -> U): Mapped<R, T, U> => Mapped(source, transform)
+
+def next<R: Range<T>, T, U>(m: Mapped<R, T, U>): (U, Mapped<R, T, U>)? {
+    val (item, after) = next(m.source)?
+    (m.transform(item), Mapped(after, m.transform))
+}
+
+conform Mapped<R, T, U>: Range<U> when R: Range<T>
+
+// A range of its source's items for which `keep` is true.
+type Filtered<R, T>(source: R, keep: (T) -> Bool)
+
+def filter<R: Range<T>, T>(source: R, keep: (T) -> Bool): Filtered<R, T> => Filtered(source, keep)
+
+def next<R: Range<T>, T>(f: Filtered<R, T>): (T, Filtered<R, T>)? {
+    mutable val remaining = f.source
+    while val step = next(remaining) {
+        val (item, after) = step
+        if f.keep(item) { return (item, Filtered(after, f.keep)) }
+        remaining = after
+    }
+    None
+}
+
+conform Filtered<R, T>: Range<T> when R: Range<T>
+
+def first<R: Range<T>, T>(range: R): T? {
+    val (item, _) = next(range)?
+    item
+}
+
+// The range after its first item, or the range itself when it's empty.
+def rest<R: Range<T>, T>(range: R): R {
+    if val step = next(range) {
+        val (_, after) = step
+        return after
+    }
+    range
+}
+
+def array<R: Range<T>, T>(range: R): [T] {
+    mutable val result: [T] = []
+    for item in range { result ~= [item] }
+    result
+}
+
+def fold<R: Range<T>, T, A>(range: R, initial: A, combine: (A, T) -> A): A {
+    mutable val result = initial
+    for item in range { result = combine(result, item) }
+    result
+}
+
+def count<R: Range<T>, T>(range: R): Int {
+    mutable val n = 0
+    for _ in range { n = n + 1 }
+    n
+}

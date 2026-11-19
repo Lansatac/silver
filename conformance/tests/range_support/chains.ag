@@ -1,0 +1,6 @@
+module range_support.chains
+
+import std.range
+
+// A chain built here and stepped by the importer, which never imports std.range itself.
+def evensDoubled(xs: [Int]): Filtered<Mapped<[Int], Int, Int>, Int> => xs.map(x => x * 2).filter(x => x % 4 == 0)

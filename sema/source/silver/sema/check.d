@@ -5555,6 +5555,21 @@ private final class TypeChecker
         auto bounded = sum ? Id!FunctionDecl.init : g.func;
         bindCall(binding, signature, signature.ret, params, bounded, call, expected, ctx, false);
         auto checked = binding.checked;
+        // A parameter only a bound decides is unknown because the bound failed, so that's the error.
+        if (bounded.isValid && params.any!(p => p.id !in binding.bound))
+        {
+            if (binding.bound.byValue.any!(t => _types.mentionsError(t)))
+            {
+                foreach (p; params) if (p.id !in binding.bound) binding.bound[p.id] = _types.error;
+            }
+            auto tried = binding.bound.dup;
+            auto early = conformanceOf(bounded, tried, ctx.site);
+            if (early.failure !is null && !early.tooDeep)
+            {
+                reportUnsatisfied(g.span, g.spelled, early);
+                foreach (p; params) if (p.id !in binding.bound) binding.bound[p.id] = _types.error;
+            }
+        }
         reportUnbound(expr, g, params, sum, signature, args, typed, hasReceiver, binding.bound, expected);
         auto bound = binding.bound;
         Conformance conformance;

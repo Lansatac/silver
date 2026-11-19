@@ -1,0 +1,69 @@
+// std.range's first slice: map and filter as lazy adapters, and consumers that step.
+
+import std.range
+import range_support.chains
+
+type Countdown(from: Int)
+def next(c: Countdown): (Int, Countdown)? => if c.from == 0 => None else (c.from, Countdown(c.from - 1))
+conform Countdown: Range<Int>
+
+def noisy(x: Int): Int {
+    print("<{x}>")
+    x * 10
+}
+
+def total<R: Range<Int>>(r: R): Int => r.fold(0, (a, b) => a + b)
+
+def described<R: Range<T>, T>(r: R): [String] => r.map(x => "[{x}]").array()
+
+def main(): () {
+    val xs = [1, 2, 3, 4, 5]
+
+    // Over arrays, strings, intervals and a source of one's own.
+    printl(xs.map(x => x * x).array())
+    printl(xs.filter(x => x % 2 == 1).array())
+    printl("a-b-c".filter(c => c != '-').array())
+    printl((3..7).map(x => x + 100).array())
+    printl(Countdown(4).map(x => x * 2).filter(x => x != 4).array())
+
+    // Each item goes through the whole chain before the next starts, and nothing runs until pulled.
+    val chain = xs.map(noisy).filter(x => x > 20)
+    printl("built")
+    printl(chain.first())
+    printl(chain.array())
+
+    // Consumers.
+    printl(xs.first())
+    printl(xs.filter(x => x > 9).first())
+    printl(xs.rest())
+    printl(xs.rest().rest().first())
+    printl(Countdown(0).rest().array())
+    printl(xs.count())
+    printl("héllo".count())
+    printl(xs.filter(x => x > 2).count())
+    printl(xs.fold(0, (a, b) => a + b))
+    printl(xs.fold("", (s, x) => "{s}{x}"))
+    printl(Countdown(3).fold(1, (a, b) => a * b))
+
+    // Empty ranges.
+    val none: [Int] = []
+    printl(none.map(x => x + 1).array())
+    printl(none.first())
+    printl(none.rest())
+    printl(none.count())
+    printl(none.fold(7, (a, b) => a + b))
+
+    // A for over a chain steps it.
+    for s in xs.map(x => "#{x}").filter(s => s != "#3") { print(s) }
+    printl("")
+
+    // Chains through generic functions, and a chain of chains.
+    printl(total(xs.map(x => x * 3)))
+    printl(total(Countdown(4).filter(x => x > 1)))
+    printl(described(Countdown(2)))
+    printl(xs.map(x => x + 1).map(x => x * 2).filter(x => x > 6).map(x => "{x}!").array())
+
+    // A chain from another module, stepped here.
+    printl(evensDoubled(xs).array())
+    for y in evensDoubled([2, 3, 4]) { printl(y) }
+}
