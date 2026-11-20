@@ -216,17 +216,38 @@ int compileAndRun(string programFile, const Packages packages, Optimization opti
     return wait(spawnProcess([exePath]));
 }
 
-/// Runs the tests in the file or directory at `path`, reports them, and returns 0 if they all passed.
-int test(string path, const Packages packages, Backend backend, Optimization optimization)
+/// How `silver test` reports.
+enum TestFormat
+{
+    text,
+    /// One JSON document, for tools.
+    json,
+}
+
+/// Runs the tests in the file or directory at `path` that `filters` selects, reports them on
+/// stdout as `format` says, and returns 0 if they all passed.
+int test(string path, const Packages packages, Backend backend, Optimization optimization,
+    const string[] filters = null, TestFormat format = TestFormat.text)
+{
+    string report;
+    auto status = testReport(path, packages, backend, optimization, filters, format, report);
+    write(report);
+    return status;
+}
+
+/// What `test` does, with the report in `text` rather than on stdout.
+int testReport(string path, const Packages packages, Backend backend, Optimization optimization,
+    const string[] filters, TestFormat format, out string text)
 {
     import std.algorithm : map;
-    import silver.testing : report, runFile, succeeded, TestBackend, testFiles;
+    import silver.testing : jsonReport, report, runFile, succeeded, TestBackend, testFiles;
 
     auto testBackend = backend == Backend.both ? TestBackend.both
         : backend == Backend.llvm ? TestBackend.llvm : TestBackend.interpreter;
-    auto runs = testFiles(path).map!(file => runFile(file, packages, testBackend, tempDir, optimization)).array;
-    write(report(runs));
-    return succeeded(runs) ? 0 : 1;
+    auto runs = testFiles(path).map!(file => runFile(file, packages, testBackend, tempDir, optimization, filters)).array;
+    auto filtered = filters.length > 0;
+    text = format == TestFormat.json ? jsonReport(runs, testBackend, filtered) : report(runs, filtered);
+    return succeeded(runs, filtered) ? 0 : 1;
 }
 
 /// A path in the temp directory, unique to this process, named after `programFile`.
@@ -308,8 +329,10 @@ immutable usage = "Usage: silver [OPTION]... <file>         run <file>\n"
     ~ "       silver test [OPTION]... <path>    run the tests in <path>, a file or a directory";
 
 /// What's wrong with the command line `args` (after its options were taken) and those options, or null.
-/// `args[1]` is `build` or `test` for those commands, and the file is what follows.
-string commandLineMistake(string[] args, string outputPath, bool optimize, Backend backend)
+/// `args[1]` is `build` or `test` for those commands, and the file is what follows. `format` is
+/// what `--format` gave, or null without it.
+string commandLineMistake(string[] args, string outputPath, bool optimize, Backend backend,
+    const string[] filters = null, string format = null)
 {
     immutable command = args.length >= 2 && (args[1] == "build" || args[1] == "test") ? args[1] : "";
     immutable building = command == "build";
@@ -332,6 +355,22 @@ string commandLineMistake(string[] args, string outputPath, bool optimize, Backe
     {
         return "-O applies to compiled programs: use it with `silver build`, or with `-b llvm`"
             ~ (testing ? " or `-b both`" : "");
+    }
+    if (filters.length > 0 && !testing)
+    {
+        return "--filter applies to `silver test`, which is what runs tests.";
+    }
+    foreach (filter; filters)
+    {
+        if (filter.empty) return "--filter needs part of a test's name: an empty one would select every test.";
+    }
+    if (format !is null && !testing)
+    {
+        return "--format applies to `silver test`, which is what writes a report.";
+    }
+    if (format !is null && format != "text" && format != "json")
+    {
+        return "`" ~ format ~ "` isn't a format for `silver test`: there's text, the default, and json.";
     }
     return null;
 }
@@ -361,6 +400,170 @@ unittest
     assert(!writeFile(buildPath(tempDir, "silver-no-such-directory", "x.ll"), "x"));
 }
 
+@("--filter and --format are for silver test, and take a name and a known format")
+unittest
+{
+    import std.algorithm : canFind;
+
+    auto test = ["silver", "test", "a.ag"];
+    assert(commandLineMistake(test, "", false, Backend.interpreter, ["x", "y"], "json") is null);
+    assert(commandLineMistake(test, "", false, Backend.interpreter, null, "text") is null);
+    assert(commandLineMistake(["silver", "a.ag"], "", false, Backend.interpreter, ["x"]).canFind("--filter applies"));
+    assert(commandLineMistake(["silver", "build", "a.ag"], "", false, Backend.interpreter, null, "json").canFind("--format applies"));
+    assert(commandLineMistake(test, "", false, Backend.interpreter, ["x", ""]).canFind("empty one"));
+    assert(commandLineMistake(test, "", false, Backend.interpreter, null, "xml").canFind("there's text, the default, and json"));
+}
+
+version (unittest)
+{
+    /// A fresh directory under the temp dir holding `files` (name to text). The caller removes it.
+    private string testDirectory(string name, string[string] files)
+    {
+        auto directory = buildPath(tempDir, "silver-driver-" ~ name);
+        if (directory.exists) rmdirRecurse(directory);
+        mkdirRecurse(directory);
+        foreach (file, text; files) std.file.write(buildPath(directory, file), text);
+        return directory;
+    }
+
+    /// What `silver test` reports for `path` with `filters` in `format` on `backend`, with each
+    /// location relative to `path` or the directory it is in, and its exit status in `status`. False
+    /// without running when a compiled backend has no toolchain.
+    private bool tested(string path, Backend backend, const string[] filters, TestFormat format,
+        out string report, out int status)
+    {
+        import std.array : replace;
+
+        Toolchain toolchain;
+        if (backend != Backend.interpreter && findToolchain(toolchain) !is null) return false;
+        Packages packages;
+        assert(describePackages(null, null, null, null, packages) is null);
+        status = testReport(path, packages, backend, Optimization.none, filters, format, report);
+        report = report.replace((path.isDir ? path : path.dirName) ~ dirSeparator, "");
+        return true;
+    }
+
+    private immutable filterFixture = [
+        "shape.ag": "def area(n: Int): Int => n * n\ntest \"area of one\" => expect(area(1) == 1)\n"
+            ~ "test \"area of two\" => expect(area(2) == 5)\ntest \"Area of three\" => expect(area(3) == 9)",
+        "shape.test.ag": "test \"area from the companion\" => expect(area(4) == 16)",
+        "other.ag": "test \"other\" => expect(true)",
+    ];
+}
+
+@("--filter runs the tests whose name contains any filter, case-sensitively, across a directory and its companions, on every backend")
+unittest
+{
+    auto directory = testDirectory("filter", filterFixture.dup);
+    scope (exit) rmdirRecurse(directory);
+
+    foreach (backend; [Backend.interpreter, Backend.llvm, Backend.both])
+    {
+        string report;
+        int status;
+        if (!tested(buildPath(directory, "shape.ag"), backend, ["area of"], TestFormat.text, report, status)) continue;
+        assert(report == "FAIL \"area of two\" at shape.ag(3,6)\n    shape.ag(3,23): Expectation failed: area(2) == 5\n"
+            ~ "        left: 4\n        right: 5\n1 passed, 1 failed, 2 filtered out\n", report);
+        assert(status == 1);
+
+        assert(tested(directory, backend, ["one", "companion", "other"], TestFormat.text, report, status));
+        assert(report == "3 passed, 0 failed, 2 filtered out\n", report);
+        assert(status == 0);
+
+        assert(tested(directory, backend, ["area of one", "Other"], TestFormat.text, report, status));
+        assert(report == "1 passed, 0 failed, 4 filtered out\n", report);
+
+        assert(tested(directory, backend, ["nothing"], TestFormat.text, report, status));
+        assert(report == "No tests match the filter\n" && status == 1, report);
+    }
+}
+
+@("--format json reports every test and the summary as one document, alike on every backend")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.array : replace;
+
+    auto directory = testDirectory("json", filterFixture.dup);
+    scope (exit) rmdirRecurse(directory);
+    auto expected = `{
+  "version": 1,
+  "backend": "BACKEND",
+  "files": [
+    {
+      "file": "shape.ag",
+      "problem": null,
+      "diagnostics": []
+    }
+  ],
+  "tests": [
+    {
+      "name": "area of two",
+      "file": "shape.ag",
+      "line": 3,
+      "column": 6,
+      "status": "failed",
+      "failures": [
+        {
+          "kind": "expectation",
+          "file": "shape.ag",
+          "line": 3,
+          "column": 23,
+          "text": "Expectation failed: area(2) == 5\n    left: 4\n    right: 5",
+          "message": null,
+          "source": "area(2) == 5",
+          "left": "4",
+          "right": "5"
+        }
+      ],
+      "output": ""
+    },
+    {
+      "name": "area from the companion",
+      "file": "shape.test.ag",
+      "line": 1,
+      "column": 6,
+      "status": "passed",
+      "failures": [],
+      "output": ""
+    }
+  ],
+  "summary": {
+    "tests": 2,
+    "passed": 1,
+    "failed": 1,
+    "panicked": 0,
+    "filteredOut": 2,
+    "filesNotRun": 0,
+    "succeeded": false
+  }
+}
+`;
+    foreach (backend; [Backend.interpreter, Backend.llvm, Backend.both])
+    {
+        string report;
+        int status;
+        if (!tested(buildPath(directory, "shape.ag"), backend, ["two", "companion"], TestFormat.json, report, status)) continue;
+        auto name = backend == Backend.interpreter ? "interpreter" : backend == Backend.llvm ? "llvm" : "both";
+        assert(report == expected.replace("BACKEND", name), report);
+        assert(status == 1);
+
+        assert(tested(directory, backend, ["nothing"], TestFormat.json, report, status));
+        assert(report.canFind(`"tests": []`) && report.canFind(`"filteredOut": 5`) && report.canFind(`"succeeded": false`));
+        assert(status == 1);
+    }
+
+    string report;
+    int status;
+    std.file.write(buildPath(directory, "broken.ag"), "test \"t\" => expect(missing)");
+    assert(tested(directory, Backend.interpreter, null, TestFormat.json, report, status));
+    assert(report.canFind(`"file": "broken.ag",
+      "problem": "it has errors",
+      "diagnostics": [
+        "broken.ag(1,20): Error S0002: Unknown name 'missing'`), report);
+    assert(report.canFind(`"filesNotRun": 1`) && status == 1);
+}
+
 /// Runs the driver with the command line `args`, returning the exit status.
 int run(string[] args)
 {
@@ -372,6 +575,8 @@ int run(string[] args)
     bool emitCore;
     Backend backend;
     bool optimize;
+    string[] filters;
+    string format;
     GetoptResult arguments;
     if (auto mistake = takeOptimization(args, optimize))
     {
@@ -393,6 +598,9 @@ int run(string[] args)
         ~ " -O2 is the same, and -O0 is the default, no optimization", &optimize,
     "emit-llvm", "build: write LLVM IR instead of an executable, optimized with -O", &emitLlvm,
     "emit-core", "print the Core the program lowers to instead of running it", &emitCore,
+    "filter", "test: run only the tests whose name contains this, case-sensitively; given more than once,"
+        ~ " those matching any of them", &filters,
+    "format", "test: how to report: text (default), or json, one JSON document on stdout", &format,
     );
     }
     catch (Exception e)
@@ -405,7 +613,7 @@ int run(string[] args)
         defaultGetoptPrinter("The Silver interpreter and compiler.\n" ~ usage, arguments.options);
         return 0;
     }
-    if (auto mistake = commandLineMistake(args, outputPath, optimize, backend))
+    if (auto mistake = commandLineMistake(args, outputPath, optimize, backend, filters, format))
     {
         stderr.writeln(mistake);
         return 1;
@@ -428,7 +636,8 @@ int run(string[] args)
             stderr.writefln("'%s' doesn't exist!", programFile);
             return 1;
         }
-        return test(programFile, packages, backend, optimization);
+        return test(programFile, packages, backend, optimization, filters,
+            format == "json" ? TestFormat.json : TestFormat.text);
     }
 	if(!programFile.exists || !programFile.isFile)
 	{

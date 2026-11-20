@@ -123,7 +123,84 @@ FAIL "first element" at lookup.ag(12,6)
 
 Each failed test lists its failures in the order they happened, so a panic, or `?` finding `None` or an error, comes last. The exit status is 0 only when every test ran and passed.
 
-`--filter` selects tests by name. The interpreter is the default, with a flag to compile or to use both.
+The interpreter is the default: `-b llvm` compiles the tests, and `-b both` runs them both ways and fails a test the two backends disagree on.
+
+### Choosing tests
+
+`--filter text` runs only the tests whose name contains `text`, matched case-sensitively. Given more than once, it runs the tests that match any of them:
+
+```
+silver test --filter "area of" shapes/              # "area of one", "area of two", not "Area of three"
+silver test --filter one --filter companion shape.ag
+```
+
+- It matches the test's name alone, not its file. With a directory, it applies to every file under it, and with a file, to that file's tests and its companion's together.
+- Every file is still loaded and checked, so a file with errors is reported whether or not any of its tests would have been chosen. A file none of whose tests is chosen isn't compiled.
+- The summary counts the tests left out: `1 passed, 1 failed, 2 filtered out`.
+- A filter that chooses no test at all is a failure, `No tests match the filter` with exit status 1, so a misspelt name can't pass unnoticed.
+- An empty filter is a mistake rather than a way to choose every test.
+
+### Reporting for tools
+
+`--format json` writes one JSON document to standard output and nothing else, for editors and CI. `--format text` is the default. The exit status is the same either way. A mistake on the command line is still reported on standard error, with nothing on standard output.
+
+```
+{
+  "version": 1,
+  "backend": "interpreter",
+  "files": [
+    { "file": "lookup.ag", "problem": null, "diagnostics": [] }
+  ],
+  "tests": [
+    {
+      "name": "first element",
+      "file": "lookup.ag",
+      "line": 12,
+      "column": 6,
+      "status": "panicked",
+      "failures": [
+        {
+          "kind": "expectation",
+          "file": "lookup.ag",
+          "line": 14,
+          "column": 5,
+          "text": "Expectation failed: value.size > 0\n    left: 0\n    right: 0",
+          "message": null,
+          "source": "value.size > 0",
+          "left": "0",
+          "right": "0"
+        },
+        {
+          "kind": "panic",
+          "file": "lookup.ag",
+          "line": 15,
+          "column": 5,
+          "text": "Index is out of range",
+          "message": null,
+          "source": null,
+          "left": null,
+          "right": null
+        }
+      ],
+      "output": "looking up a\n"
+    }
+  ],
+  "summary": {
+    "tests": 4, "passed": 3, "failed": 0, "panicked": 1,
+    "filteredOut": 0, "filesNotRun": 0, "succeeded": false
+  }
+}
+```
+
+(Written here with some objects on one line; the real document puts each member on a line of its own.)
+
+- `version` is 1. It changes when the shape changes in a way a tool would have to know about; a new member can be added without changing it.
+- `backend` is `interpreter`, `llvm` or `both`.
+- `files` has every file the run looked at. `problem` says why its tests didn't run, or is null, and `diagnostics` holds what loading and checking it reported, as text.
+- `tests` has every test that ran, passing ones included, in the order they ran. `status` is `passed`, `failed`, or `panicked` when a panic or a crash ended the test. `output` is what it printed, even when it passed.
+- Each failure has the same members, null where they don't apply. `kind` is `expectation`, `stopped` (`?` found `None` or an error), `panic`, `crash` or `disagreement`. `file`, `line` and `column` say where it happened; a panic in the runtime itself has none. `text` is what the text report shows after the location. `message` is the message given to `expect` or `assert`, `source` the condition as written (for `stopped`, the operand of `?`), and `left` and `right` the two sides of a failed comparison, formatted as `print` would show them. A failed `assert` is a `panic` with `source`, `left` and `right` filled in.
+- With `-b both`, a test the backends agree on is reported once, as either would report it. A test they disagree on is `failed` with a single failure of kind `disagreement`, which has `interpreter` and `llvm` members, each holding that backend's `status`, `failures` and `output`; the test's own `output` is then null.
+- `summary` counts the tests by status, the tests no filter chose, and the files whose tests didn't run. `succeeded` is true exactly when the exit status is 0.
 
 ## Library hooks
 
@@ -149,4 +226,6 @@ Matchers, fixtures, property testing, snapshots and reporters belong in librarie
 - Companion files are available on both backends. `silver test` loads only the companion of the file it runs, beside it, and its tests run after the file's own. A directory's companions run with their modules, and naming a companion runs its module.
 - A companion can't have a `module` line, a `native library` (it has its module's), a `forward import`, a `def main` or a `conform` declaration (`L0007`), and a module in the program only because a companion imports it can't declare a conformance (`L0008`). A companion's function named like one of its module's is `S0033`. Running or building a companion, or testing one with no module beside it, is `L0006`, and a companion that can't be read as text is `L0009`.
 - A companion of a module of `lang` is in `lang` too: it imports nothing outside `lang` (`L0005`) and doesn't see the prelude.
-- `--filter`, `--format json` and the library hooks aren't available yet.
+- `--filter` and `--format json` are available on every backend, `-b both` included.
+- The JSON report's `message`, `source`, `left` and `right` are read back from the text of the failure, so a formatted value containing a line that starts with four spaces and `right: ` or `left: ` can be split in the wrong place. `text` is always exact.
+- The library hooks aren't available yet.

@@ -3,7 +3,7 @@
 /// module turns what each one says into the same results, so they're reported alike.
 module silver.testing.runner;
 
-import std.algorithm : all, filter, map, sort, sum;
+import std.algorithm : all, any, canFind, filter, map, sort, sum;
 import std.array : array, join;
 import std.conv : to;
 import std.file : dirEntries, exists, isDir, readText, remove, SpanMode, write;
@@ -32,14 +32,20 @@ enum TestBackend
 struct TestResult
 {
     string name;
-    /// Where the test is declared, as `file(line,column)`.
-    string location;
+    /// Where the test is declared.
+    string file;
+    size_t line, column;
     /// Each failure in order, each saying where it happened. A panic, or `?` on `None`, is last.
     string[] failures;
     /// What the test printed.
     string output;
+    /// With `-b both`, when the backends disagree: what each found, the interpreter's first.
+    TestResult[] backends;
 
     bool passed() const => failures.length == 0;
+
+    /// Where the test is declared, as `file(line,column)`.
+    string location() const => "%s(%s,%s)".format(file, line, column);
 }
 
 /// The tests of one file.
@@ -51,6 +57,15 @@ struct FileRun
     string[] diagnostics;
     /// Why the tests couldn't run, when they couldn't.
     string problem;
+    /// How many of its tests no filter selected.
+    size_t unselected;
+}
+
+/// Whether `--filter` with `filters` selects the test named `name`: any of them is part of the
+/// name, matched case-sensitively, and no filters select every test.
+bool selects(const string[] filters, string name)
+{
+    return filters.length == 0 || filters.any!(f => name.canFind(f));
 }
 
 /// Every `.ag` file at `path`: the file itself, or each one under the directory, in order. A
@@ -65,8 +80,9 @@ string[] testFiles(string path)
 /// Runs the tests that `file` and its companion test file declare, though not those of the
 /// modules it imports, loaded with `packages`. A companion is run as its module. A compiled run
 /// keeps its files in `workDirectory` while it runs, and is optimized as `optimization` says.
+/// Only the tests that `filters` selects run, and the file is loaded and checked even if none is.
 FileRun runFile(string file, const Packages packages, TestBackend backend, string workDirectory,
-    Optimization optimization = Optimization.none)
+    Optimization optimization = Optimization.none, const string[] filters = null)
 {
     if (isCompanionFile(file) && exists(companionModuleFile(file))) file = companionModuleFile(file);
     auto run = FileRun(file);
@@ -100,6 +116,9 @@ FileRun runFile(string file, const Packages packages, TestBackend backend, strin
         run.problem = "it can't be lowered yet";
         return run;
     }
+    auto selected = lowered.tests.filter!(t => selects(filters, t.name)).array;
+    run.unselected = lowered.tests.length - selected.length;
+    lowered.tests = selected;
     if (lowered.tests.length == 0) return run;
 
     TestResult[] compiledResults;
@@ -133,7 +152,10 @@ private TestResult[] interpreted(CoreProgram lowered, const SourceMap sources)
         auto failures = run.failures.dup;
         if (run.panic !is null) failures ~= "panic: %s: %s".format(located(run.panic.span, sources), run.panic.message);
         if (run.crash !is null) failures ~= "The interpreter failed: " ~ run.crash;
-        results ~= TestResult(test.name, located(test.span, sources), failures, run.output);
+        auto result = declared(test.name, test.span, sources);
+        result.failures = failures;
+        result.output = run.output;
+        results ~= result;
     }
     return results;
 }
@@ -167,7 +189,7 @@ private string compiled(const CoreProgram lowered, const SourceMap sources, stri
     if (!linked.succeeded) return "linking failed:\n" ~ linked.output;
     scope (exit) remove(exePath);
 
-    results = lowered.tests.map!(t => TestResult(t.name, located(t.span, sources))).array;
+    results = lowered.tests.map!(t => declared(t.name, t.span, sources)).array;
     size_t next = 0;
     while (next < results.length)
     {
@@ -247,7 +269,7 @@ private TestResult[] agreed(TestResult[] interpreted, TestResult[] compiled)
         }
         auto failures = ["The backends disagree."]
             ~ described("Interpreted", test) ~ described("Compiled", other);
-        results ~= TestResult(test.name, test.location, failures, null);
+        results ~= TestResult(test.name, test.file, test.line, test.column, failures, null, [test, other]);
     }
     return results;
 }
@@ -260,6 +282,13 @@ private string[] described(string backend, const TestResult result)
     return [lines.join("\n")];
 }
 
+/// A result for the test named `name` declared at `span`, which hasn't failed yet.
+private TestResult declared(string name, Span span, const SourceMap sources)
+{
+    auto location = sources.locate(span);
+    return TestResult(name, span.file, location.line, location.column);
+}
+
 /// `file(line,column)`, as a panic's location is written.
 private string located(Span span, const SourceMap sources)
 {
@@ -268,8 +297,8 @@ private string located(Span span, const SourceMap sources)
 }
 
 /// What `runs` found: each failure with its values and output, and a summary last. Passing tests
-/// aren't listed.
-string report(const FileRun[] runs)
+/// aren't listed. `filtered` says whether `--filter` chose the tests.
+string report(const FileRun[] runs, bool filtered = false)
 {
     string text;
     foreach (run; runs)
@@ -287,15 +316,19 @@ string report(const FileRun[] runs)
     auto total = runs.map!(r => r.results.length).sum;
     auto failed = runs.map!(r => r.results.filter!(t => !t.passed).array.length).sum;
     auto unrun = runs.filter!(r => r.problem !is null).array.length;
-    if (total == 0 && unrun == 0) return text ~ "No tests found\n";
+    auto unselected = runs.map!(r => r.unselected).sum;
+    if (total == 0 && unrun == 0) return text ~ (filtered ? "No tests match the filter\n" : "No tests found\n");
     text ~= "%s passed, %s failed".format(total - failed, failed);
+    if (unselected > 0) text ~= ", %s filtered out".format(unselected);
     if (unrun > 0) text ~= ", and %s %s couldn't run".format(unrun, unrun == 1 ? "file" : "files");
     return text ~ "\n";
 }
 
-/// Whether every test in `runs` ran and passed.
-bool succeeded(const FileRun[] runs)
+/// Whether every test in `runs` ran and passed. When `--filter` chose the tests, as `filtered`
+/// says, it has to have chosen at least one, so that a filter matching nothing isn't a success.
+bool succeeded(const FileRun[] runs, bool filtered = false)
 {
+    if (filtered && runs.all!(r => r.results.length == 0)) return false;
     return runs.all!(r => r.problem is null && r.results.all!(t => t.passed));
 }
 
@@ -321,7 +354,7 @@ unittest
 unittest
 {
     assert(report([FileRun("a.ag")]) == "No tests found\n");
-    auto run = FileRun("a.ag", [TestResult("ok", "a.ag(1,6)"), TestResult("bad", "a.ag(2,6)", ["a.ag(2,13): x\n    left: 1"], "out\n")]);
+    auto run = FileRun("a.ag", [TestResult("ok", "a.ag", 1, 6), TestResult("bad", "a.ag", 2, 6,["a.ag(2,13): x\n    left: 1"], "out\n")]);
     assert(report([run, FileRun("b.ag", null, ["b.ag(1,1): Error"], "it has errors")]) ==
         "FAIL \"bad\" at a.ag(2,6)\n    a.ag(2,13): x\n        left: 1\n    Output:\n        out\n"
         ~ "b.ag(1,1): Error\nThe tests in b.ag didn't run: it has errors\n1 passed, 1 failed, and 1 file couldn't run\n");
