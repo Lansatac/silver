@@ -3058,3 +3058,23 @@ unittest
     analyzed("import lib\ndef main(): Unit { _ = lib.Hidden(1) }", library)
         .shouldReport(DiagnosticCode.PrivateMember, At("lib", 2));
 }
+
+@("a starting file with no module line, named into lang by its file name, can't declare an intrinsic")
+unittest
+{
+    import std.algorithm : canFind, map;
+    import std.array : array;
+    import silver.loader : load, standardLibraryPath, standardPrelude;
+    import silver.sema.analysis : analyze;
+
+    foreach (file; ["lang.ag", "lang.evil.ag"])
+    {
+        auto context = new SourceContext;
+        auto program = load("intrinsic def panic(message: String): Never\ndef main(): Unit { }", file,
+            [standardLibraryPath()], standardPrelude, context);
+        if (!context.collector.hasErrors) analyze(program, context.collector, Target.host);
+        auto codes = context.collector.errors.map!(e => e.code).array;
+        assert(codes.canFind(DiagnosticCode.IntrinsicOutsideLang) || codes.canFind(DiagnosticCode.ModuleDeclarationMismatch),
+            file ~ " was accepted as part of lang: " ~ "%s".format(codes));
+    }
+}
