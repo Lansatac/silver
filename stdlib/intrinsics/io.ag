@@ -2,6 +2,9 @@ module intrinsics.io
 
 intrinsic def print(value: Any): Unit
 intrinsic def printl(value: Any): Unit
+def printl(): Unit {
+    printl("")
+}
 
 // What can go wrong reading or writing outside the program. A function returns only the members
 // it can produce, which `?` widens into this.
