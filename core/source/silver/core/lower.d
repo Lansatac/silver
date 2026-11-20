@@ -217,6 +217,8 @@ private final class Lowering
     /// The functions lowering makes up, by what they're for, so each is made once.
     private size_t[Type] _equalities;
     private size_t[Type] _formats;
+    private size_t[Type] _hashes;
+    private size_t _hashCombine = noFunction;
     /// A constructor used as a value, by its type and the function type it has.
     private size_t[Type][Id!(ast.TypeDecl)] _constructors;
     /// Each lambda's function, by the instance it was lowered in and the lambda, so a closure of
@@ -227,6 +229,8 @@ private final class Lowering
     /// Whether the program compares function values, which is when each lambda with captures
     /// needs a `captureEquality`.
     private bool _comparesFunctions;
+    /// Likewise, whether it hashes function values, when each needs a `captureHash`.
+    private bool _hashesFunctions;
     private size_t[Id!(ast.FunctionDecl)] _nativeWrappers;
     /// An intrinsic used as a value, by the instance it is.
     private size_t[InstanceKey] _intrinsicWrappers;
@@ -338,6 +342,40 @@ private final class Lowering
             functions[_slots[key]] = lowered;
         }
         if (_comparesFunctions) compareCaptures();
+        if (_hashesFunctions) hashCaptures();
+    }
+
+    /// Gives each lambda with captures a `captureHash`, once every function is lowered, as
+    /// `compareCaptures` does.
+    private void hashCaptures()
+    {
+        foreach (slot; _lambdaTypes.keys.sort)
+        {
+            if (functions[slot].captures.length == 0) continue;
+            auto hasher = captureHashFunction(slot);
+            functions[slot].captureHash = hasher;
+        }
+        assert(_pending.length == 0, "hashing is derived, and calls nothing that's lowered from source");
+    }
+
+    /// The function hashing the captures of a closure of the lambda at `target`, in order.
+    private size_t captureHashFunction(size_t target)
+    {
+        auto lambda = functions[target];
+        _span = lambda.body.span;
+        _moduleName = lambda.moduleName;
+        auto span = _span;
+        auto closure = new Local("f", _lambdaTypes[target]);
+        Expr[] parts;
+        foreach (i, capture; lambda.captures)
+        {
+            parts ~= hashOf(Expr(capture.type, span, ExprKind(Capture(boxed(use(closure, span)), target, i))));
+        }
+        auto body = combined(parts, span);
+        auto slot = reserveSlot();
+        functions[slot] = Function("hash.captures." ~ lambda.name, _moduleName, [closure], null, types.uint_, body,
+            FunctionOrigin.derived);
+        return slot;
     }
 
     /// Gives each lambda with captures a `captureEquality`. It's made only once every function is
@@ -2068,6 +2106,8 @@ private final class Lowering
                 return updateCell(args[0], args[1], span);
             case Intrinsic.uncheckedChar:
                 return Expr(types.char_, span, ExprKind(Convert(boxed(args[0]))));
+            case Intrinsic.hash:
+                return hashOf(args[0]);
             case Intrinsic.assert_, Intrinsic.expect:
                 assert(0, "`assert` and `expect` are expanded from what's written, and sema rejects them as values");
             case Intrinsic.exitWithError:
@@ -2359,6 +2399,119 @@ private final class Lowering
             }
         }
         functions[slot] = Function("format." ~ types.describe(type), _moduleName, [v], null, types.string_, body,
+            FunctionOrigin.derived);
+        return slot;
+    }
+
+    /// `value`'s hash, a `UInt` that's the same for equal values.
+    private Expr hashOf(Expr value)
+    {
+        auto type = value.type;
+        auto span = value.span;
+        if (type == types.never) return value;
+        if (type == types.unit)
+        {
+            return Expr(types.uint_, span, ExprKind(Block([eval(value)], boxed(intLiteral(types.uint_, 0, span)))));
+        }
+        if (types.isFunction(type)) _hashesFunctions = true;
+        if (isPrimitive(type) || types.isFunction(type) || isCellType(type)) return prim(PrimOp.Hash, types.uint_, value);
+        // A type that writes its own `opHash` will be hashed by it here (silver-njy.5). `Map` is
+        // the first, combining its entries' hashes in an order that doesn't depend on theirs.
+        return Expr(types.uint_, span, ExprKind(Call(hashFunction(type), [value])));
+    }
+
+    /// `parts`, each a hash, mixed in order into one.
+    private Expr combined(Expr[] parts, Span span)
+    {
+        auto hash = intLiteral(types.uint_, 0, span);
+        foreach (part; parts) hash = combine(hash, part);
+        return hash;
+    }
+
+    private Expr combine(Expr hash, Expr part)
+    {
+        return Expr(types.uint_, part.span, ExprKind(Call(hashCombineFunction(), [hash, part])));
+    }
+
+    /// The function mixing a part's hash into the hash so far, as FxHash does: rotate, xor with
+    /// the part, multiply. `Hash` has already mixed each primitive's bits, so this needn't.
+    private size_t hashCombineFunction()
+    {
+        if (_hashCombine != noFunction) return _hashCombine;
+        auto span = _span;
+        _hashCombine = reserveSlot();
+        auto hash = new Local("hash", types.uint_);
+        auto part = new Local("part", types.uint_);
+        Expr n(ulong value) => intLiteral(types.uint_, value, span);
+        Expr op(PrimOp o, Expr a, Expr b) => prim(o, types.uint_, a, b);
+        auto rotated = op(PrimOp.BitOr, op(PrimOp.ShiftLeft, use(hash, span), n(5)),
+            op(PrimOp.ShiftRight, use(hash, span), n(59)));
+        auto body = op(PrimOp.WrappingMultiply, op(PrimOp.BitXor, rotated, use(part, span)), n(0x517cc1b727220a95));
+        functions[_hashCombine] = Function("hash.combine", _moduleName, [hash, part], null, types.uint_, body,
+            FunctionOrigin.derived);
+        return _hashCombine;
+    }
+
+    /// The function hashing a value of `type`: its fields or elements in order, or a sum's tag
+    /// and then its payload.
+    private size_t hashFunction(Type type)
+    {
+        if (auto existing = type in _hashes) return *existing;
+        if (types.depth(type) > instanceNestingLimit) reportTypeNesting(type);
+        auto slot = reserveSlot();
+        _hashes[type] = slot;
+
+        auto span = _span;
+        auto v = new Local("value", type);
+        Expr value() => use(v, span);
+        Expr n(ulong x) => intLiteral(types.uint_, x, span);
+
+        Expr body;
+        if (types.isArray(type) || type == types.emptyArray)
+        {
+            auto lengthOf = Expr(types.int_, span, ExprKind(Length(boxed(value()))));
+            auto hash = temp("hash", types.uint_, true);
+            Stmt[] statements = [let(hash, combine(n(0), Expr(types.uint_, span, ExprKind(Convert(boxed(lengthOf))))))];
+            if (type != types.emptyArray)
+            {
+                auto element = types.arrayElement(type);
+                auto label = newLabel();
+                auto i = temp("i", types.int_, true);
+                auto at = Expr(element, span, ExprKind(Index(boxed(value()), boxed(use(i, span)))));
+                statements ~= [
+                    let(i, intLiteral(types.int_, 0, span)),
+                    eval(loop(boxed(block(span, [
+                        breakUnless(prim(PrimOp.Less, types.bool_, use(i, span), lengthOf), label),
+                        assign(hash, combine(use(hash, span), hashOf(at))),
+                        assign(i, prim(PrimOp.Add, types.int_, use(i, span), intLiteral(types.int_, 1, span))),
+                    ])), span, label)),
+                ];
+            }
+            body = Expr(types.uint_, span, ExprKind(Block(statements, boxed(use(hash, span)))));
+        }
+        else if (isSum(type) || types.isOption(type) || types.isErrorUnion(type))
+        {
+            auto count = memberCount(type);
+            Expr chain;
+            foreach_reverse (i; 0 .. count)
+            {
+                auto member = hasPayload(type, i) ? combine(n(i), hashOf(payload(value(), i))) : n(i);
+                chain = i == count - 1 ? member
+                    : Expr(types.uint_, span, ExprKind(If(boxed(isMember(value(), i)), boxed(member), boxed(chain))));
+            }
+            body = chain;
+        }
+        else if (types.isTuple(type) || types[type].match!((const NominalData _) => true, _ => false))
+        {
+            Expr[] parts;
+            foreach (i, fieldType; fieldTypes(type)) parts ~= hashOf(field(value(), i, fieldType));
+            body = combined(parts, span);
+        }
+        else
+        {
+            return notLowered!size_t("hashing a `%s`".format(types.describe(type)));
+        }
+        functions[slot] = Function("hash." ~ types.describe(type), _moduleName, [v], null, types.uint_, body,
             FunctionOrigin.derived);
         return slot;
     }
@@ -3262,6 +3415,39 @@ def format.[Int](value: [Int]): String {
     }
     Concat(text, "]")
 }`);
+}
+
+@("hashing mixes fields and elements in order, after an array's length and a sum's tag, and Hash only takes primitives")
+unittest
+{
+    auto result = loweredFunction(`import std.internal.hash
+type Shape = Circle(radius: Float) | Blank
+def f(points: [(Int, String)], s: Shape?): UInt => hash(points) ^ hash(s)`, "f");
+    print(result.program).should.equal(
+`def f(points: [(Int, String)], s: Shape?): UInt BitXor(hash.[(Int, String)](points), hash.Shape?(s))
+
+def hash.[(Int, String)](value: [(Int, String)]): UInt {
+    let mutable hash: UInt = hash.combine(0, UInt(length(value)))
+    let mutable i: Int = 0
+    loop {
+        if (Not(Less(i, length(value)))) break else ()
+        hash = hash.combine(hash, hash.(Int, String)(value[i]))
+        i = Add(i, 1)
+    }
+    hash
+}
+
+def hash.combine(hash: UInt, part: UInt): UInt WrappingMultiply(BitXor(BitOr(ShiftLeft(hash, 5), ShiftRight(hash, 59)), part), 5871781006564002453)
+
+def hash.(Int, String)(value: (Int, String)): UInt hash.combine(hash.combine(0, Hash(value.0)), Hash(value.1))
+
+def hash.Shape?(value: Shape?): UInt if (is#0(value)) 0 else hash.combine(1, hash.Shape(payload#1(value)))
+
+def hash.Shape(value: Shape): UInt if (is#0(value)) hash.combine(0, hash.Circle(payload#0(value))) else hash.combine(1, hash.Blank(payload#1(value)))
+
+def hash.Blank(value: Blank): UInt 0
+
+def hash.Circle(value: Circle): UInt hash.combine(0, Hash(value.0))`);
 }
 
 @("each instance of a generic function is lowered once, with its type arguments filled in")

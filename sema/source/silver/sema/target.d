@@ -36,6 +36,7 @@ enum Intrinsic
     uncheckedChar,
     bytes,
     uncheckedString,
+    hash,
     /// Not in the prelude: lowering calls it when `main` returns an error, to print it and exit.
     exitWithError,
 }

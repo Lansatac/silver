@@ -15,3 +15,16 @@ int silver_string_compare(const(char)* a, size_t aLength, const(char)* b, size_t
     if (order != 0) return order;
     return aLength < bLength ? -1 : aLength > bLength;
 }
+
+/// A String's hash: FNV-1a over its bytes, then mixed by MurmurHash3's finalizer, as the
+/// interpreter's is. Codegen mixes other primitives' bits with the finalizer itself.
+ulong silver_hash_string(const(ubyte)* bytes, size_t length)
+{
+    ulong hash = 0xcbf29ce484222325;
+    foreach (b; bytes[0 .. length]) hash = (hash ^ b) * 0x100000001b3;
+    hash ^= hash >> 33;
+    hash *= 0xff51afd7ed558ccd;
+    hash ^= hash >> 33;
+    hash *= 0xc4ceb9fe1a85ec53;
+    return hash ^ (hash >> 33);
+}

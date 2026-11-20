@@ -1,0 +1,139 @@
+// Every type has a structural hash, which equal values share. What the hashes are isn't
+// printed, since they needn't be the same on both backends.
+import std.internal.hash
+import std.ref
+
+type Point(x: Int, y: Int)
+type Marker
+type Shape = Circle(radius: Float) | Square(side: Int) | Blank
+type Tree = Leaf | Node(left: Tree, value: Int, right: Tree)
+type Chain(value: Int, next: Chain?)
+type Named(name: String, tags: [String], at: Point?)
+type Holder(cell: Ref<Int>)
+type Looped(value: Int, next: Ref<Looped?>)
+type Handler(name: String, run: (Int) -> Int)
+
+def same<T>(a: T, b: T): Bool => hash(a) == hash(b)
+
+// Whether no two of `values` hash alike.
+def distinct<T>(values: [T]): Bool {
+    for i in 0..length(values) {
+        for j in 0..i {
+            if hash(values[i]) == hash(values[j]) {
+                return false
+            }
+        }
+    }
+    true
+}
+
+def tree(depth: Int, value: Int): Tree =>
+    if depth == 0 => Leaf else Node(tree(depth - 1, value * 2), value, tree(depth - 1, value * 2 + 1))
+
+def chain(n: Int): Chain? => if n == 0 => None else Chain(n, chain(n - 1))
+
+def adder(n: Int): (Int) -> Int => x => x + n
+def increment(x: Int): Int => x + 1
+def parsed(text: String): Int ! String => if text == "1" => 1 else Error("not one: {text}")
+
+def main(): Unit {
+    printl("primitives")
+    printl(same(42, 40 + 2))
+    printl(same(-1, 0 - 1))
+    printl(same(Int8(-3), Int8(-3)))
+    printl(same(UInt(7), UInt(7)))
+    printl(same(true, 1 == 1))
+    printl(same('a', 'a'))
+    printl(same((), ()))
+    printl(distinct([0, 1, 2, 3, -1, 1000000, 9223372036854775807]))
+    printl(distinct([UInt8(0), UInt8(1), UInt8(255)]))
+    printl(hash(true) != hash(false))
+    printl(distinct(['a', 'b', 'é', '€']))
+
+    printl("floats")
+    printl(same(0.0, -0.0))
+    printl(same(1.5, 3.0 / 2.0))
+    printl(distinct([0.0, 1.0, -1.0, 0.5, 1e300, 0.0 / 0.0]))
+
+    printl("strings")
+    printl(same("hello", "hel" ~ "lo"))
+    printl(same("", ""))
+    printl(same("héllo wörld", "héllo " ~ "wörld"))
+    printl(distinct(["", "a", "b", "ab", "ba", "aa", "hello", "hellp"]))
+
+    printl("arrays")
+    printl(same([1, 2, 3], [1, 2] ~ [3]))
+    val empty: [Int] = []
+    printl(same(empty, []))
+    printl(distinct([[], [1], [1, 2], [2, 1], [1, 1], [0]]))
+    printl(distinct([[[1], []], [[], [1]], [[1]]]))
+
+    printl("tuples")
+    printl(same((1, "a"), (1, "a")))
+    printl(distinct([(1, 2), (2, 1), (1, 1), (2, 2)]))
+    printl(same(((1, 2), (3, 4)), ((1, 2), (3, 4))))
+
+    printl("options and error unions")
+    printl(same(Some(1), Some(1)))
+    val none: Int? = None
+    printl(same(none, None))
+    printl(distinct([None, Some(0), Some(1)]))
+    printl(same(parsed("1"), parsed("1")))
+    printl(same(parsed("2"), parsed("2")))
+    printl(hash(parsed("1")) != hash(parsed("2")))
+
+    printl("products")
+    printl(same(Point(1, 2), Point(1, 2)))
+    printl(hash(Point(1, 2)) != hash(Point(2, 1)))
+    printl(same(Marker, Marker))
+    printl(same(Named("a", ["x", "y"], Some(Point(0, 0))), Named("a", ["x"] ~ ["y"], Some(Point(0, 0)))))
+    printl(distinct([Named("a", [], None), Named("b", [], None), Named("a", ["a"], None), Named("a", [], Some(Point(0, 0)))]))
+
+    printl("sums")
+    printl(same(Circle(1.0), Circle(1.0)))
+    printl(same(Circle(0.0), Circle(-0.0)))
+    printl(same(Blank, Blank))
+    val shapes: [Shape] = [Circle(1.0), Square(1), Blank, Circle(2.0), Square(2)]
+    printl(distinct(shapes))
+
+    printl("recursive types")
+    printl(same(tree(4, 1), tree(4, 1)))
+    printl(distinct([tree(3, 1), tree(3, 2), tree(4, 1), Leaf]))
+    printl(same(chain(1000), chain(1000)))
+    printl(hash(chain(1000)) != hash(chain(999)))
+
+    printl("refs")
+    val cell = Ref(1)
+    val copy = cell
+    printl(same(cell, copy))
+    printl(same(Holder(cell), Holder(copy)))
+    val before = hash(cell)
+    cell.set(2)
+    printl(hash(cell) == before)
+    printl(distinct([Ref(1), Ref(1), Ref(1)]))
+    // A cell that leads back to itself is hashed without following it.
+    val loop = Ref<Looped?>(None)
+    val looped = Looped(1, loop)
+    loop.set(Some(looped))
+    printl(same(looped, Looped(1, loop)))
+
+    printl("function values")
+    printl(same(increment, increment))
+    val inc: (Int) -> Int = increment
+    printl(same(inc, increment))
+    printl(same(adder(1), adder(1)))
+    printl(hash(adder(1)) != hash(adder(2)))
+    printl(hash(adder(1)) != hash(inc))
+    printl(same(Handler("h", adder(3)), Handler("h", adder(3))))
+    val captured = Ref(0)
+    val reads = () => get(captured)
+    printl(same(reads, reads))
+    printl(same([adder(1), inc], [adder(1), inc]))
+    // Two lambdas are different functions, however alike.
+    printl(hash(() => 1) != hash(() => 1))
+    printl(hash(Some(adder(1))) != hash(Some(adder(2))))
+
+    printl("hash as a value")
+    val hashPoint: (Point) -> UInt = hash
+    printl(hashPoint(Point(3, 4)) == hash(Point(3, 4)))
+}

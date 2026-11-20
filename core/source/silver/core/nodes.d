@@ -71,9 +71,12 @@ struct Function
     /// equal captures, as `(a: F, b: F): Bool` reading them with `Capture`. `noFunction` when
     /// nothing is captured, or the program compares no function values.
     size_t captureEquality = noFunction;
+    /// Likewise, the derived function hashing a closure's captures, as `(f: F): UInt` reading them
+    /// with `Capture`. `noFunction` when nothing is captured, or the program hashes no function values.
+    size_t captureHash = noFunction;
 }
 
-/// A `Function.captureEquality` that there isn't.
+/// A `Function.captureEquality` or `captureHash` that there isn't.
 enum size_t noFunction = size_t.max;
 
 enum FunctionOrigin
@@ -83,8 +86,8 @@ enum FunctionOrigin
     /// A lambda or nested `def`, lifted out of the function it was written in. It's only called
     /// through a closure, which carries its captures.
     lambda,
-    /// Made up by lowering: structural equality, formatting, or a constructor or native used as
-    /// a value.
+    /// Made up by lowering: structural equality, hashing, formatting, or a constructor or native
+    /// used as a value.
     derived,
 }
 
@@ -211,6 +214,10 @@ enum PrimOp
     /// An integer, `Float`, `Bool` or function value as a String, the way `print` shows it: a
     /// function value as its function's `printedName`.
     Format,
+    /// An integer, `Float`, `Bool`, `Char`, String, `Ref` or function value as a `UInt` hash, with
+    /// its bits mixed. `0.0` and `-0.0` hash alike. A `Ref` hashes by which cell it is, and a
+    /// function value by its function and, when that has a `captureHash`, what it gives.
+    Hash,
 }
 
 struct Prim

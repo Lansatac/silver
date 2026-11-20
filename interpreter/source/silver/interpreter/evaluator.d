@@ -401,6 +401,8 @@ final class Evaluator
                 return Value(!args[0].as!bool);
             case PrimOp.Format:
                 return Value(formatted(args[0], prim.args[0].type));
+            case PrimOp.Hash:
+                return Value(cast(long) hashed(args[0]));
             default:
                 break;
         }
@@ -438,6 +440,27 @@ final class Evaluator
         auto compare = _program.functions[a.target].captureEquality;
         if (compare == noFunction) return true;
         return invoke(compare, [Value(a), Value(b)], null, null).as!bool;
+    }
+
+    /// `PrimOp.Hash`, computed as the runtime does for everything but a `Ref` and a function
+    /// value, whose identities differ between the backends.
+    private ulong hashed(Value value)
+    {
+        return value.match!(
+            (bool b) => mixHash(b),
+            (long n) => mixHash(n),
+            // `0.0 == -0.0`, so both hash as `0.0`.
+            (double x) => mixHash(x == 0.0 ? 0 : *cast(ulong*) &x),
+            (string text) => hashBytes(cast(const(ubyte)[]) text),
+            (CellValue cell) => mixHash(cast(size_t) cast(void*) cell),
+            (Closure closure) {
+                auto captures = _program.functions[closure.target].captureHash;
+                auto hash = captures == noFunction ? 0
+                    : cast(ulong) invoke(captures, [Value(closure)], null, null).as!long;
+                return mixHash(closure.target ^ hash);
+            },
+            (_) => assert(0, "lowering hashes only primitives, Refs and function values with `Hash`"),
+        );
     }
 
     private static Value concat(Value[] parts)
@@ -731,7 +754,8 @@ final class Evaluator
             case Intrinsic.bytes, Intrinsic.uncheckedString:
                 return Value(byteString(args[0]));
             case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect, Intrinsic.uncheckedChar:
-                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, and the others operations on a Cell");
+            case Intrinsic.hash:
+                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, `hash` a derived function, and the others operations on a Cell");
             case Intrinsic.panics:
                 auto work = args[0].as!Closure;
                 try invoke(work.target, [], work.captures, null);
@@ -926,4 +950,22 @@ private NoTrace noTrace;
 static this()
 {
     noTrace = new NoTrace;
+}
+
+/// `x` with its bits mixed, by MurmurHash3's finalizer, as codegen's `@silver.hash.mix` does.
+private ulong mixHash(ulong x)
+{
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccd;
+    x ^= x >> 33;
+    x *= 0xc4ceb9fe1a85ec53;
+    return x ^ (x >> 33);
+}
+
+/// A String's hash: FNV-1a over its bytes, then mixed, as `silver_hash_string` does.
+private ulong hashBytes(const(ubyte)[] bytes)
+{
+    ulong hash = 0xcbf29ce484222325;
+    foreach (b; bytes) hash = (hash ^ b) * 0x100000001b3;
+    return mixHash(hash);
 }

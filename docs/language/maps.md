@@ -112,3 +112,4 @@ Looking up, adding, replacing and removing a key take time that grows with the l
 ## Current implementation
 
 - Map literals parse, but are rejected. Nothing else on this page is available yet.
+- Every type already has the structural hash keys will be found by, on both backends: equal values hash alike, `0.0` and `-0.0` included, a `Ref` hashes by which cell it is, and a function value by its function and captures. It's `hash` in `std.internal.hash`, for the standard library, and isn't meant to be imported elsewhere. A type can't replace it yet.

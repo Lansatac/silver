@@ -234,9 +234,9 @@ private immutable sliceScalars = ["ptr", "i64"];
 /// takes after its params.
 private immutable closureScalars = ["ptr", "ptr"];
 /// A constant for each function used as a value: the code a closure calls, the String a function
-/// value prints as, then its `captureEquality`, or null. Two closures are of one function when
-/// they point to one descriptor.
-private immutable descriptorScalars = ["ptr", "ptr", "i64", "ptr"];
+/// value prints as, then its `captureEquality` and its `captureHash`, each or null. Two closures
+/// are of one function when they point to one descriptor.
+private immutable descriptorScalars = ["ptr", "ptr", "i64", "ptr", "ptr"];
 
 private final class Generator
 {
@@ -262,6 +262,8 @@ private final class Generator
     private string[size_t] _descriptors;
     /// Whether `@silver.function.equal` has been defined.
     private bool _functionEquality;
+    /// Whether `@silver.function.hash` and `@silver.hash.mix` have been defined.
+    private bool _functionHash, _hashMix;
     private bool[Type] _boxed;
     /// The name of each struct type, by what it's made of, and their definitions.
     private string[immutable(string)[]] _structs;
@@ -1048,8 +1050,9 @@ private final class Generator
         _descriptors[target] = name;
         auto printed = stringConstant(func.printedName);
         auto compare = func.captureEquality == noFunction ? "null" : mangled(func.captureEquality);
-        _globals ~= "%s = private constant %s { ptr %s, ptr %s, i64 %s, ptr %s }".format(name, structOf(descriptorScalars),
-            code, printed[0], printed[1], compare);
+        auto hasher = func.captureHash == noFunction ? "null" : mangled(func.captureHash);
+        _globals ~= "%s = private constant %s { ptr %s, ptr %s, i64 %s, ptr %s, ptr %s }".format(name,
+            structOf(descriptorScalars), code, printed[0], printed[1], compare, hasher);
         return name;
     }
 
@@ -1072,6 +1075,69 @@ private final class Generator
                 ~ "  ret i1 %result\nequal:\n  ret i1 true\nunequal:\n  ret i1 false\n}\n";
         }
         return _function.result("call i1 %s(ptr %s, ptr %s, ptr %s, ptr %s)".format(name, a[0], a[1], b[0], b[1]));
+    }
+
+    /// The hash of the function value `f`: its descriptor's address, with what its `captureHash`,
+    /// if it has one, gives, mixed.
+    private Fragment emitFunctionHash(const string[] f)
+    {
+        enum name = "@silver.function.hash";
+        auto mix = hashMix();
+        if (!_functionHash)
+        {
+            _functionHash = true;
+            _thunkDefinitions ~= "define private i64 %s(ptr %%f, ptr %%f.env) {\n.entry:\n".format(name)
+                ~ "  %%field = getelementptr %s, ptr %%f, i32 0, i32 4\n".format(structOf(descriptorScalars))
+                ~ "  %hasher = load ptr, ptr %field\n"
+                ~ "  %none = icmp eq ptr %hasher, null\n"
+                ~ "  br i1 %none, label %done, label %captures\ncaptures:\n"
+                ~ "  %held = call i64 %hasher(ptr %f, ptr %f.env)\n"
+                ~ "  br label %done\ndone:\n"
+                ~ "  %captured = phi i64 [ 0, %.entry ], [ %held, %captures ]\n"
+                ~ "  %code = ptrtoint ptr %f to i64\n"
+                ~ "  %both = xor i64 %code, %captured\n"
+                ~ "  %%hash = call i64 %s(i64 %%both)\n".format(mix)
+                ~ "  ret i64 %hash\n}\n";
+        }
+        return _function.result("call i64 %s(ptr %s, ptr %s)".format(name, f[0], f[1]));
+    }
+
+    /// MurmurHash3's finalizer, which `PrimOp.Hash` mixes a primitive's bits with, as the
+    /// interpreter's `mixHash` does.
+    private string hashMix()
+    {
+        enum name = "@silver.hash.mix";
+        if (!_hashMix)
+        {
+            _hashMix = true;
+            _thunkDefinitions ~= "define private i64 %s(i64 %%x) {\n.entry:\n".format(name)
+                ~ "  %s1 = lshr i64 %x, 33\n  %x1 = xor i64 %x, %s1\n  %m1 = mul i64 %x1, -49064778989728563\n"
+                ~ "  %s2 = lshr i64 %m1, 33\n  %x2 = xor i64 %m1, %s2\n  %m2 = mul i64 %x2, -4265267296055464877\n"
+                ~ "  %s3 = lshr i64 %m2, 33\n  %x3 = xor i64 %m2, %s3\n  ret i64 %x3\n}\n";
+        }
+        return name;
+    }
+
+    /// `PrimOp.Hash` of `value`, of the primitive, `Ref` or function type `type`.
+    private Fragment emitHash(Type type, const string[] value, Span span)
+    {
+        auto types = _program.types;
+        if (type == types.string_) return callRuntime("silver_hash_string", value);
+        if (types.isFunction(type)) return emitFunctionHash(value);
+        Fragment bits;
+        if (type in _program.cellContents) bits = _function.convert("ptrtoint", "ptr", value[0], "i64");
+        else if (types.isInteger(type)) bits = widened(type, value[0], span);
+        else if (type == types.bool_) bits = _function.convert("zext", "i1", value[0], "i64");
+        else if (type == types.char_) bits = _function.convert("zext", llvmType(type, span), value[0], "i64");
+        else
+        {
+            assert(type == types.float_, "lowering hashes only primitives, Refs and function values with `Hash`");
+            // `0.0 == -0.0`, so both hash as `0.0`.
+            auto zero = _function.result("fcmp oeq double %s, 0.0".format(value[0]));
+            auto chosen = _function.result("select i1 %s, double 0.0, double %s".format(zero.value, value[0]));
+            bits = zero.then(chosen).then(_function.convert("bitcast", "double", chosen.value, "i64"));
+        }
+        return bits.then(_function.result("call i64 %s(i64 %s)".format(hashMix(), bits.value)));
     }
 
     /// Capture `capture.index` of a closure of the lambda `capture.target`, from its environment.
@@ -1178,7 +1244,8 @@ private final class Generator
                 // A String and a `[UInt8]` have one layout, so the value is already the other.
                 return emitExpr(call.args[0]);
             case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect, Intrinsic.uncheckedChar:
-                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, and the others operations on a Cell");
+            case Intrinsic.hash:
+                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, `hash` a derived function, and the others operations on a Cell");
             case Intrinsic.panics:
                 return emitPanics(call.args[0], e.span);
         }
@@ -1368,6 +1435,9 @@ private final class Generator
                 return arguments.then(emitAppend(slices[0], slices[1], llvmType(elementOf(e.type), e.span)));
             case PrimOp.Format:
                 return arguments.then(emitFormat(operandType, operands[0], e.span));
+            case PrimOp.Hash:
+                auto width = operandType == types.string_ || types.isFunction(operandType) ? 2 : 1;
+                return arguments.then(emitHash(operandType, each(width)[0], e.span));
             default:
                 break;
         }
@@ -1444,7 +1514,7 @@ private final class Generator
             case PrimOp.Equal, PrimOp.NotEqual, PrimOp.Less, PrimOp.LessEqual, PrimOp.Greater, PrimOp.GreaterEqual:
                 auto predicate = comparison(prim.op, isFloat, isInteger && !signed);
                 return instruction((isFloat ? "fcmp " : "icmp ") ~ predicate, both);
-            case PrimOp.Concat, PrimOp.Append, PrimOp.Format:
+            case PrimOp.Concat, PrimOp.Append, PrimOp.Format, PrimOp.Hash:
                 assert(0, "handled by the caller");
         }
     }
