@@ -1,0 +1,33 @@
+// An array read as xs[i - k] with k too large to be part of an x86 address, so optimized code
+// works out xs - 8k before the loop and keeps only that, which is outside the array's block, while
+// the loop allocates. The array has to survive every collection in between: when it didn't, the
+// program crashed or read memory the allocations had reused.
+def make(n: Int): [Int] {
+    mutable val xs: [Int] = []
+    for i in 0..n { xs ~= [i] }
+    xs
+}
+
+def noise(i: Int): Int {
+    if i % 2000 != 0 { return 0 }
+    mutable val junk = [-1]
+    for j in 0..10 { junk = junk ~ junk }
+    mutable val more: [Int] = []
+    for j in 0..200 { more ~= junk }
+    more[0] + 1
+}
+
+def walk(n: Int, k: Int): Int {
+    val xs = make(n)
+    mutable val sum = 0
+    for i in k..n + k { sum += xs[i - k] + noise(i) }
+    sum
+}
+
+def main(): Unit {
+    mutable val wrong = 0
+    for round in 0..4 {
+        if walk(20000, 300000000) != 20000 * 19999 / 2 { wrong += 1 }
+    }
+    printl(wrong)
+}

@@ -1,6 +1,6 @@
 module silver.codegen.gen;
 
-import std.algorithm : all, canFind, count, filter, fold, map;
+import std.algorithm : all, any, canFind, count, filter, fold, map;
 import std.array : array, join;
 import std.format : format;
 import std.sumtype : match;
@@ -120,6 +120,10 @@ private struct Slots
     string[const Local] pointers;
     /// The `alloca` of each stack slot, for the top of the entry block.
     string[] allocas;
+    /// What `keepAlive` keeps where each loop is left, by label, and which loops can be left: what
+    /// `Lifetimes` found.
+    const(Local)[][size_t] kept;
+    bool[size_t] left;
     private Slot[] _slots;
     /// How many slots are named after each local name, so a reused name gets a slot of its own.
     private int[string] _named;
@@ -182,9 +186,16 @@ private struct Lifetimes
     /// The locals named in each statement being walked, innermost last.
     private size_t[][] _statements;
     private OpenLoop[] _loops;
+    /// For each loop, by label, the locals declared before it that it names, which are what
+    /// `keepAlive` keeps where it's left.
+    size_t[][size_t] kept;
+    /// The loops something leaves other than by an error: a `Break` to or past it, a `Continue`
+    /// past it, or a `Return` in it.
+    bool[size_t] left;
 
     private struct OpenLoop
     {
+        size_t label;
         size_t entry;
         size_t[] named;
     }
@@ -227,25 +238,46 @@ private struct Lifetimes
         _statements.length--;
     }
 
-    void beginLoop()
+    void beginLoop(size_t label)
     {
         _clock++;
-        _loops ~= OpenLoop(_clock);
+        _loops ~= OpenLoop(label, _clock);
     }
 
     void endLoop()
     {
-        import std.algorithm : max;
+        import std.algorithm : canFind, max;
 
         _clock++;
         auto loop = _loops[$ - 1];
         _loops.length--;
+        size_t[] outside;
         foreach (i; loop.named)
         {
             if (starts[i] >= loop.entry) continue;
             ends[i] = max(ends[i], _clock);
             if (_loops.length > 0) _loops[$ - 1].named ~= i;
+            if (!outside.canFind(i)) outside ~= i;
         }
+        kept[loop.label] = outside;
+    }
+
+    /// A `Break` to the loop `label` (`inclusive`) or a `Continue` of it, which leaves every loop
+    /// inside it.
+    void jump(size_t label, bool inclusive)
+    {
+        foreach_reverse (ref loop; _loops)
+        {
+            if (loop.label == label && !inclusive) return;
+            left[loop.label] = true;
+            if (loop.label == label) return;
+        }
+    }
+
+    /// A `Return`, which leaves every loop.
+    void leaveAll()
+    {
+        foreach (ref loop; _loops) left[loop.label] = true;
     }
 }
 
@@ -266,6 +298,12 @@ private final class FunctionState
     const(string)[] returnScalars;
     /// The blocks of each loop being generated, by its label.
     LoopTargets[size_t] loops;
+    /// The labels of the loops the code being generated is in, innermost last.
+    size_t[] open;
+    /// The function's own index, and for one that calls itself in tail position, the params it
+    /// keeps alive where it returns without doing so (see `emitTail`).
+    size_t index;
+    const(Local)[] tailKept;
     /// Whether the function has the runtime hand back a String or buffer, which comes through
     /// these two slots, allocated once at the top of the function.
     bool usesOutSlots;
@@ -402,7 +440,9 @@ private final class Generator
     /// On every Silver function. Nothing unwinds through one: a panic exits, or in a test jumps,
     /// and the runtime's functions are `nothrow`. The unwind tables stay, for a debugger and for
     /// a D `Error` leaving the runtime, which `nothrow` doesn't rule out.
-    private enum functionAttributes = "attributes #0 = { nounwind uwtable }\n";
+    private enum functionAttributes = "attributes #0 = { nounwind uwtable }\n"
+        // `keepAlive`'s asm.
+        ~ "attributes #1 = { nounwind willreturn memory(inaccessiblemem: readwrite) }\n";
 
     /// `silver_main`, which the runtime calls once druntime has started.
     private string emitEntry()
@@ -490,9 +530,11 @@ private final class Generator
             receive = receive.then(receiveCaptures(func));
         }
 
+        _function.index = index;
+        if (calls(func.body, index)) _function.tailKept = func.params.filter!(p => !p.mutable).array;
         auto body = isStruct(returnType)
-            ? emitInto(func.body, _function.returnScalars, FunctionState.resultSlot)
-            : emitExpr(func.body);
+            ? emitInto(func.body, _function.returnScalars, FunctionState.resultSlot, true)
+            : emitTail(func.body);
         auto whole = Fragment.label(".entry")
             .then(stackCheck)
             .then(receive)
@@ -690,12 +732,14 @@ private final class Generator
     /// `e` runs can read: a new local's slot, or memory that has just been allocated. So a record
     /// with a field replaced is copied there whole and the field written over it, and each arm of
     /// an `If` writes its own value there.
-    private Fragment emitInto(const Expr e, const string[] layout, string pointer)
+    private Fragment emitInto(const Expr e, const string[] layout, string pointer, bool tail = false)
     {
+        Fragment leaf(Fragment code) => tail ? keepingParams(e, code) : code;
+
         Fragment whole()
         {
             auto source = sourceOf(e, layout);
-            return source.code.then(write(source, layout, pointer));
+            return leaf(source.code.then(write(source, layout, pointer)));
         }
 
         return e.kind.match!(
@@ -704,8 +748,8 @@ private final class Generator
                 auto object = emitInto(*update.object, layout, pointer);
                 auto at = storedAt(e.type, update.index, e.span);
                 auto replacement = emitHeld(e.type, update.index, *update.value, e.span);
-                if (at.count == 0) return object.then(replacement).withValue(null);
-                return object.then(replacement).then(storeScalars(layout, pointer, at.offset, replacement.operands));
+                if (at.count == 0) return leaf(object.then(replacement).withValue(null));
+                return leaf(object.then(replacement).then(storeScalars(layout, pointer, at.offset, replacement.operands)));
             },
             (const Construct construct) {
                 // A record around one value is laid out as that value is.
@@ -717,13 +761,13 @@ private final class Generator
                 {
                     code = code.then(isEmpty(fields[i]) ? emitExpr(field).withValue(null) : emitInto(field, layout, pointer));
                 }
-                return code;
+                return leaf(code);
             },
             (const Block block) {
                 if (block.result is null) return whole();
                 Fragment statements;
                 foreach (statement; block.statements) statements = statements.then(emitStmt(statement));
-                return statements.then(emitInto(*block.result, layout, pointer));
+                return statements.then(emitInto(*block.result, layout, pointer, tail));
             },
             (const If if_) {
                 auto condition = emitExpr(*if_.condition);
@@ -732,8 +776,8 @@ private final class Generator
                 auto mergeLabel = _function.newLabel("merge");
                 return condition
                     .then(Fragment.branch(condition.value, thenLabel, elseLabel))
-                    .then(Fragment.label(thenLabel)).then(emitInto(*if_.trueBody, layout, pointer)).then(Fragment.jump(mergeLabel))
-                    .then(Fragment.label(elseLabel)).then(emitInto(*if_.falseBody, layout, pointer)).then(Fragment.jump(mergeLabel))
+                    .then(Fragment.label(thenLabel)).then(emitInto(*if_.trueBody, layout, pointer, tail)).then(Fragment.jump(mergeLabel))
+                    .then(Fragment.label(elseLabel)).then(emitInto(*if_.falseBody, layout, pointer, tail)).then(Fragment.jump(mergeLabel))
                     .then(Fragment.label(mergeLabel));
             },
             _ => whole(),
@@ -827,6 +871,8 @@ private final class Generator
         }
         trace(lifetimes, func.body);
         foreach (i, local; lifetimes.locals) slots.allocate(local, lifetimes.types[i], lifetimes.starts[i], lifetimes.ends[i]);
+        foreach (label, indices; lifetimes.kept) slots.kept[label] = indices.map!(i => lifetimes.locals[i]).array;
+        slots.left = lifetimes.left;
         return slots;
     }
 
@@ -845,8 +891,8 @@ private final class Generator
             (const FloatLit _) {},
             (const StringLit _) {},
             (const LocalRef use) => lifetimes.use(use.local),
-            (const Break _) {},
-            (const Continue _) {},
+            (const Break jump) => lifetimes.jump(jump.label, true),
+            (const Continue jump) => lifetimes.jump(jump.label, false),
             (const Call call) => all(call.args),
             (const CallClosure call) {
                 trace(lifetimes, *call.callee);
@@ -867,11 +913,14 @@ private final class Generator
                 if (block.result !is null) trace(lifetimes, *block.result);
             },
             (const Loop loop) {
-                lifetimes.beginLoop();
+                lifetimes.beginLoop(loop.label);
                 trace(lifetimes, *loop.body);
                 lifetimes.endLoop();
             },
-            (const Return return_) => trace(lifetimes, *return_.value),
+            (const Return return_) {
+                lifetimes.leaveAll();
+                trace(lifetimes, *return_.value);
+            },
             (const Construct construct) => all(construct.fields),
             (const Field field) => trace(lifetimes, *field.object),
             (const Update update) {
@@ -1813,12 +1862,18 @@ private final class Generator
     /// none, and the phis take `undef` from wherever its dead block ends.
     private Fragment emit(const Expr e, const If if_)
     {
+        return emitIf(e, if_, &emitExpr);
+    }
+
+    /// An `If` whose arms are generated by `arm`.
+    private Fragment emitIf(const Expr e, const If if_, Fragment delegate(const Expr) arm)
+    {
         auto condition = emitExpr(*if_.condition);
         auto thenLabel = _function.newLabel("then");
         auto elseLabel = _function.newLabel("else");
         auto mergeLabel = _function.newLabel("merge");
-        auto trueBody = Fragment.label(thenLabel).then(emitExpr(*if_.trueBody));
-        auto falseBody = Fragment.label(elseLabel).then(emitExpr(*if_.falseBody));
+        auto trueBody = Fragment.label(thenLabel).then(arm(*if_.trueBody));
+        auto falseBody = Fragment.label(elseLabel).then(arm(*if_.falseBody));
         auto code = condition
             .then(Fragment.branch(condition.value, thenLabel, elseLabel))
             .then(trueBody).then(Fragment.jump(mergeLabel))
@@ -1841,26 +1896,107 @@ private final class Generator
         return block.result is null ? statements.withValue(null) : statements.then(emitExpr(*block.result));
     }
 
+    /// `e` where its value is what the function returns. LLVM can turn a function that calls
+    /// itself in tail position into a loop, the call becoming a jump back to its start, and then
+    /// its params are locals of that loop: they're kept (see `keepAlive`) wherever the value comes
+    /// back other than from such a call, which is where that loop is left, and the calls stay in
+    /// tail position.
+    private Fragment emitTail(const Expr e)
+    {
+        if (_function.tailKept.length == 0) return emitExpr(e);
+        return e.kind.match!(
+            (const If if_) => emitIf(e, if_, &emitTail),
+            (const Block block) {
+                Fragment statements;
+                foreach (statement; block.statements) statements = statements.then(emitStmt(statement));
+                if (block.result is null) return statements.then(keepAlive(_function.tailKept, e.span)).withValue(null);
+                return statements.then(emitTail(*block.result));
+            },
+            (_) => keepingParams(e, emitExpr(e)),
+        );
+    }
+
+    /// `value`, the value of `e` in tail position, then the params kept there.
+    private Fragment keepingParams(const Expr e, Fragment value)
+    {
+        if (_function.tailKept.length == 0 || isSelfCall(e)) return value;
+        return value.then(keepAlive(_function.tailKept, e.span)).withOperands(value.operands);
+    }
+
     private Fragment emit(const Expr e, const Loop loop)
     {
         auto targets = LoopTargets(_function.newLabel("loop"), _function.newLabel("loop.end"));
         _function.loops[loop.label] = targets;
+        _function.open ~= loop.label;
+        auto body = emitExpr(*loop.body);
+        _function.open.length--;
+        auto kept = keptBy(loop.label);
+        // A loop nothing leaves has no end to keep them at, and can't be vectorized anyway.
+        auto atHead = (loop.label in _function.slots.left) is null ? keepAlive(kept, e.span) : Fragment.init;
         return Fragment.jump(targets.head)
             .then(Fragment.label(targets.head))
-            .then(emitExpr(*loop.body))
+            .then(atHead)
+            .then(body)
             .then(Fragment.jump(targets.head))
             .then(Fragment.label(targets.end))
+            .then(keepAlive(kept, e.span))
             .withValue(null);
     }
 
     private Fragment emit(const Expr e, const Break jump)
     {
-        return leaveTo(_function.loops[jump.label].end);
+        return keepLeaving(jump.label, e.span).then(leaveTo(_function.loops[jump.label].end));
     }
 
     private Fragment emit(const Expr e, const Continue jump)
     {
-        return leaveTo(_function.loops[jump.label].head);
+        return keepLeaving(jump.label, e.span).then(leaveTo(_function.loops[jump.label].head));
+    }
+
+    private const(Local)[] keptBy(size_t label)
+    {
+        auto kept = label in _function.slots.kept;
+        return kept is null ? null : *kept;
+    }
+
+    /// What the loops inside the one labelled `label` keep, for a jump that leaves them all
+    /// without passing their ends.
+    private Fragment keepLeaving(size_t label, Span span)
+    {
+        Fragment code;
+        foreach_reverse (open; _function.open)
+        {
+            if (open == label) break;
+            code = code.then(keepAlive(keptBy(open), span));
+        }
+        return code.withValue(null);
+    }
+
+    /// Makes LLVM keep each of `locals`' pointers, as its slot holds them now, somewhere until this
+    /// point. The collector is conservative and finds an object only through a pointer into it,
+    /// while LLVM may keep only a pointer derived from one: a loop reading `xs[i - k]` can hold
+    /// `xs - 8k`, which is in no block of ours, and drop `xs`. Each `asm` is opaque, so the value
+    /// it's given has to be kept in a register or the frame up to it, which the collector scans;
+    /// it touches no memory LLVM can see, so nothing else is held back. A loop keeps the locals
+    /// declared before it that it names where it's left, which is outside it, so a loop with no
+    /// call in it is optimized as before.
+    private Fragment keepAlive(const(Local)[] locals, Span span)
+    {
+        Fragment code;
+        foreach (local; locals)
+        {
+            auto slot = _function.slots[local];
+            if (slot is null) continue;
+            auto layout = scalarsOf(local.type, span);
+            foreach (i, scalar; layout)
+            {
+                if (scalar != "ptr") continue;
+                auto value = loadScalars(layout, slot, i, 1);
+                code = code.then(value).then(Fragment.instruction(
+                    "call void asm sideeffect \"\", \"r\"(ptr %s) #1".format(value.value)));
+            }
+        }
+        return code.withValue(null);
     }
 
     private Fragment emit(const Expr e, const Return return_)
@@ -1870,16 +2006,19 @@ private final class Generator
         Fragment leave;
         if (scalars.length > 1)
         {
-            value = emitInto(*return_.value, scalars, FunctionState.resultSlot);
+            value = emitInto(*return_.value, scalars, FunctionState.resultSlot, true);
             leave = Fragment.jump(FunctionState.returnBlock);
         }
         else
         {
-            value = emitExpr(*return_.value);
+            value = emitTail(*return_.value);
             auto operands = operandsOf(*return_.value, value.operands, scalars.length);
             leave = Fragment.ret(structOf(scalars), operands.length == 0 ? null : operands[0]);
         }
-        return value.then(leave)
+        // Every loop it's in is left without passing its end.
+        Fragment kept;
+        foreach_reverse (open; _function.open) kept = kept.then(keepAlive(keptBy(open), e.span));
+        return value.then(kept).then(leave)
             .then(Fragment.label(_function.newLabel("after.return")))
             .withValue(null);
     }
@@ -1952,6 +2091,52 @@ private final class Generator
             },
             _ => false,
         );
+    }
+
+    /// Whether `e` calls the function `index` anywhere.
+    private static bool calls(const Expr e, size_t index)
+    {
+        bool any(const Expr[] exprs) => exprs.any!(expr => calls(expr, index));
+        bool inStmt(const Stmt s) => s.kind.match!(
+            (const Let let) => calls(let.value, index),
+            (const Assign assign) => calls(assign.value, index),
+            (const AssignElement assign) => calls(assign.index, index) || calls(assign.value, index),
+            (const Eval eval) => calls(eval.expr, index),
+        );
+
+        return e.kind.match!(
+            (const Call call) => call.target == index || any(call.args),
+            (const CallClosure call) => calls(*call.callee, index) || any(call.args),
+            (const MakeClosure closure) => any(closure.captures),
+            (const ForeignCall call) => any(call.args),
+            (const IntrinsicCall call) => any(call.args),
+            (const Prim prim) => any(prim.args),
+            (const Convert convert) => calls(*convert.value, index),
+            (const If if_) => calls(*if_.condition, index) || calls(*if_.trueBody, index) || calls(*if_.falseBody, index),
+            (const Block block) => block.statements.any!(s => inStmt(s)) || (block.result !is null && calls(*block.result, index)),
+            (const Loop loop) => calls(*loop.body, index),
+            (const Return return_) => calls(*return_.value, index),
+            (const Construct construct) => any(construct.fields),
+            (const Field field) => calls(*field.object, index),
+            (const Update update) => calls(*update.object, index) || calls(*update.value, index),
+            (const Inject inject) => inject.payload !is null && calls(*inject.payload, index),
+            (const IsMember test) => calls(*test.subject, index),
+            (const Payload payload) => calls(*payload.subject, index),
+            (const ArrayLit literal) => any(literal.elements),
+            (const Index index_) => calls(*index_.array, index) || calls(*index_.index, index),
+            (const Slice slice) => calls(*slice.array, index) || calls(*slice.start, index) || calls(*slice.end, index),
+            (const Length length) => calls(*length.array, index),
+            (const Cell cell) => any(cell.args),
+            (const Capture capture) => calls(*capture.closure, index),
+            (const TestFailure failure) => calls(*failure.message, index),
+            _ => false,
+        );
+    }
+
+    /// Whether `e` is a call of the function being generated, which LLVM may make a jump.
+    private bool isSelfCall(const Expr e)
+    {
+        return e.kind.match!((const Call call) => call.target == _function.index, _ => false);
     }
 
     /// Whether evaluating `e` can't assign a local: it's made only of reads and of building values.
