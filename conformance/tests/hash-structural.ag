@@ -6,6 +6,8 @@ import std.ref
 type Point(x: Int, y: Int)
 type Marker
 type Shape = Circle(radius: Float) | Square(side: Int) | Blank
+type Color = Red | Green | Blue | Yellow
+type Wrapped(value: Int)
 type Tree = Leaf | Node(left: Tree, value: Int, right: Tree)
 type Chain(value: Int, next: Chain?)
 type Named(name: String, tags: [String], at: Point?)
@@ -20,6 +22,18 @@ def distinct<T>(values: [T]): Bool {
     for i in 0..length(values) {
         for j in 0..i {
             if hash(values[i]) == hash(values[j]) {
+                return false
+            }
+        }
+    }
+    true
+}
+
+// Whether no two of `values` have hashes alike in their low 5 bits.
+def distinctLow<T>(values: [T]): Bool {
+    for i in 0..length(values) {
+        for j in 0..i {
+            if hash(values[i]) % 32 == hash(values[j]) % 32 {
                 return false
             }
         }
@@ -110,6 +124,7 @@ def main(): Unit {
     val before = hash(cell)
     cell.set(2)
     printl(hash(cell) == before)
+    // Hashed by address, so this and the other checks that such hashes differ fail about once in 2^64.
     printl(distinct([Ref(1), Ref(1), Ref(1)]))
     // A cell that leads back to itself is hashed without following it.
     val loop = Ref<Looped?>(None)
@@ -132,6 +147,11 @@ def main(): Unit {
     // Two lambdas are different functions, however alike.
     printl(hash(() => 1) != hash(() => 1))
     printl(hash(Some(adder(1))) != hash(Some(adder(2))))
+
+    printl("low bits")
+    // A trie takes its first level from the low bits, so those differ too.
+    printl(distinctLow([Red, Green, Blue, Yellow]))
+    printl(distinctLow([Wrapped(0), Wrapped(1), Wrapped(2), Wrapped(3)]))
 
     printl("hash as a value")
     val hashPoint: (Point) -> UInt = hash

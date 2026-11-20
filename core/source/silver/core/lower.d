@@ -2107,7 +2107,10 @@ private final class Lowering
             case Intrinsic.uncheckedChar:
                 return Expr(types.char_, span, ExprKind(Convert(boxed(args[0]))));
             case Intrinsic.hash:
-                return hashOf(args[0]);
+                // `hash.combine` ends in a multiply, which leaves the low bits weak, so the result
+                // is mixed once more: a trie takes its first level from them.
+                auto hash = hashOf(args[0]);
+                return hash.type == types.never ? hash : prim(PrimOp.Hash, types.uint_, hash);
             case Intrinsic.assert_, Intrinsic.expect:
                 assert(0, "`assert` and `expect` are expanded from what's written, and sema rejects them as values");
             case Intrinsic.exitWithError:
@@ -3417,14 +3420,14 @@ def format.[Int](value: [Int]): String {
 }`);
 }
 
-@("hashing mixes fields and elements in order, after an array's length and a sum's tag, and Hash only takes primitives")
+@("hashing mixes fields and elements in order, after an array's length and a sum's tag, and mixes the result once more")
 unittest
 {
     auto result = loweredFunction(`import std.internal.hash
 type Shape = Circle(radius: Float) | Blank
 def f(points: [(Int, String)], s: Shape?): UInt => hash(points) ^ hash(s)`, "f");
     print(result.program).should.equal(
-`def f(points: [(Int, String)], s: Shape?): UInt BitXor(hash.[(Int, String)](points), hash.Shape?(s))
+`def f(points: [(Int, String)], s: Shape?): UInt BitXor(Hash(hash.[(Int, String)](points)), Hash(hash.Shape?(s)))
 
 def hash.[(Int, String)](value: [(Int, String)]): UInt {
     let mutable hash: UInt = hash.combine(0, UInt(length(value)))

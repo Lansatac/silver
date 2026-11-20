@@ -91,7 +91,8 @@ The order means a program prints the same map the same way on every run and with
 Any type can be a key, including tuples, options, arrays, maps and declared types. Keys are found by `==` and the type's `opHash`, so two keys are the same key exactly when they're equal, including for a type that replaces its equality (see [Equality and hashing](functions.md#equality-and-hashing)). Since values never change, a key can't change while a map holds it.
 
 - `0.0` and `-0.0` are one key, since they're equal.
-- `NaN` isn't equal to itself, so a `NaN` key can be added but never found, and each `m[nan] = v` adds another entry.
+- `NaN` isn't equal to itself, so a `NaN` key can be added but never found, and each `m[nan] = v` adds another entry. The same goes for any key with a `NaN` inside it.
+- A function value is found as `==` compares it: by its function and captures. A lambda that calls `f` is a different key from `f` itself.
 
 ## Equality and printing
 
