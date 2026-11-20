@@ -1,5 +1,5 @@
-// For the standard library's own modules, and not meant to be imported elsewhere.
-module std.internal.hash
+// Not forwarded by the prelude: for the standard library's own modules.
+module intrinsics.hash
 
 // A hash of `value` that's the same for equal values, which is what a map finds its keys by. It's
 // worked out from the value's structure, as `==` is, and needn't be the same on both backends.

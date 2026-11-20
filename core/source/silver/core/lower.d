@@ -3423,7 +3423,7 @@ def format.[Int](value: [Int]): String {
 @("hashing mixes fields and elements in order, after an array's length and a sum's tag, and mixes the result once more")
 unittest
 {
-    auto result = loweredFunction(`import std.internal.hash
+    auto result = loweredFunction(`import intrinsics.hash
 type Shape = Circle(radius: Float) | Blank
 def f(points: [(Int, String)], s: Shape?): UInt => hash(points) ^ hash(s)`, "f");
     print(result.program).should.equal(
