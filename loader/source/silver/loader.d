@@ -1582,3 +1582,71 @@ unittest
     load("import std.random", "main.ag", Packages(withStandardLibrary([])), standardPrelude, context);
     context.collector.errors.array.map!(e => e.code).array.should.equal([DiagnosticCode.ImportOutsideUses]);
 }
+
+@("a file with no module line in a package's directory is a program of its own, so its main doesn't make the package one")
+unittest
+{
+    auto directory = makeModuleDirectory("packages-script-in-library", [
+        "geo/shapes.ag": "module geo.shapes\ndef area(x: Int): Int => x * x",
+        "geo/example.ag": "import geo.shapes\ndef main(): Unit { }",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto packages = Packages([Package("geo", buildPath(directory, "geo"))], ["geo"]);
+    auto context = new SourceContext;
+    load("import geo.shapes\ndef main(): Unit { }", "main.ag", packages, null, context);
+    context.collector.errors.array.map!(e => cast(string) e.code ~ ": " ~ e.message).array.should.equal([]);
+
+    // Nor does the starting file, run from the package's directory.
+    auto started = buildPath(directory, "geo", "example.ag");
+    context = new SourceContext;
+    load(readText(started), started, packages, null, context);
+    context.collector.errors.array.map!(e => cast(string) e.code ~ ": " ~ e.message).array.should.equal([]);
+}
+
+@("a directory in a package's directory named as a module file isn't read as one")
+unittest
+{
+    auto directory = makeModuleDirectory("packages-directory-named-ag", ["geo/shapes.ag": "module geo.shapes"]);
+    scope (exit) rmdirRecurse(directory);
+    mkdirRecurse(buildPath(directory, "geo", "data.ag"));
+
+    auto context = new SourceContext;
+    load("import geo.shapes", "main.ag", Packages([Package("geo", buildPath(directory, "geo"))], ["geo"]), null, context);
+    context.collector.errors.array.map!(e => cast(string) e.code ~ ": " ~ e.message).array.should.equal([]);
+}
+
+version (Posix)
+@("a directory in a used package that can't be listed is reported with a code, not thrown")
+unittest
+{
+    import std.exception : assertNotThrown;
+    import std.file : getAttributes, setAttributes;
+
+    auto directory = makeModuleDirectory("packages-unlistable", ["geo/shapes.ag": "module geo.shapes"]);
+    auto locked = buildPath(directory, "geo", "locked");
+    mkdirRecurse(locked);
+    auto attributes = getAttributes(locked);
+    setAttributes(locked, 0);
+    scope (exit)
+    {
+        setAttributes(locked, attributes);
+        rmdirRecurse(directory);
+    }
+
+    auto context = new SourceContext;
+    assertNotThrown(load("import geo.shapes", "main.ag", Packages([Package("geo", buildPath(directory, "geo"))], ["geo"]),
+        null, context));
+}
+
+@("a file with no module line may be named as a package it uses, since a package's own name isn't a module")
+unittest
+{
+    auto directory = makeModuleDirectory("packages-script-named-as-package", ["geo/shapes.ag": "module geo.shapes"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto context = new SourceContext;
+    load("import geo.shapes\ndef main(): Unit { }", buildPath(directory, "geo.ag"),
+        Packages([Package("geo", buildPath(directory, "geo"))], ["geo"]), null, context);
+    context.collector.errors.array.map!(e => cast(string) e.code ~ ": " ~ e.message).array.should.equal([]);
+}
