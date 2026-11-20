@@ -1,6 +1,7 @@
 /// Tests of the standard library itself: what the prelude makes visible and what a `std` module
 /// provides. These are the unit tests that name the stdlib's modules, so reorganizing stdlib/ may
-/// change them; every other test uses modules of its own.
+/// change them; every other test uses modules of its own, except the Ref tests (ref_tests.d and
+/// core's lowering test), which import std.ref because a local Ref would collide with the real one.
 module silver.sema.stdlib_tests;
 
 version (unittest):
