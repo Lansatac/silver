@@ -234,11 +234,13 @@ private def isUtf8(data: [UInt8]): Bool {
     true
 }
 
-def join(parts: [String], separator: String): String {
+def join(parts: Range<String>, separator: String): String {
     mutable val result = ""
-    for i in 0..length(parts) {
-        if i > 0 { result ~= separator }
-        result ~= parts[i]
+    mutable val first = true
+    for part in parts {
+        if !first { result ~= separator }
+        result ~= part
+        first = false
     }
     result
 }
@@ -246,7 +248,9 @@ def join(parts: [String], separator: String): String {
 test "join joins strings with separator" {
     expect(join(["a", "b", "c"], ", ") == "a, b, c")
     expect(join(["a", "b", "c"], "") == "abc")
-    expect(join([], ", ") == "")
+    val none: [String] = []
+    expect(join(none, ", ") == "")
+    expect([1, 2, 3].map(n => "{n}").join("+") == "1+2+3")
 }
 
 test "contains finds a part anywhere" {
