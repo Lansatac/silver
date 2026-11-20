@@ -17,6 +17,18 @@ struct Packages
 {
     Package[] declared;
     string[] scriptUses;
+    /// How the build says to list `used` among what the package `user` uses, or a file with no
+    /// `module` line uses when `user` is null, added to the messages that need it. Null for nothing.
+    string function(string user, string used) usesHint;
+    /// How the build says to declare a package named `name`, likewise.
+    string function(string name) packageHint;
+}
+
+/// The package of the file started from when it has no `module` line, by its module's name. It
+/// can't be a package's name, as a script can be named as a package it uses.
+string scriptPackage(string moduleName)
+{
+    return "(" ~ moduleName ~ ")";
 }
 
 /// Parses `source` (read from `file`) and everything it needs: `lang`, the module `prelude` names
@@ -57,7 +69,7 @@ Program load(string source, string file, const Packages packages, string prelude
     auto start = new Module;
     auto startName = baseName(file).stripExtension;
     *start = parse(source, startName, new NodeIds(ModuleKey.of(startName, source)), file);
-    auto layout = Layout(packages.declared, packages.scriptUses);
+    auto layout = Layout(packages.declared, packages.scriptUses, packages.usesHint, packages.packageHint);
     if (auto declaration = start.declaration)
     {
         start.name = declaration.path.join(".");
@@ -83,8 +95,9 @@ Program load(string source, string file, const Packages packages, string prelude
     }
     else
     {
-        layout.script = start.name;
-        program.packageOf[start.name] = start.name;
+        layout.script = scriptPackage(start.name);
+        layout.scriptModule = start.name;
+        program.packageOf[start.name] = layout.script;
     }
     // A file with no module line is named after itself, so `lang.ag` would be `lang` too.
     if (isInLang(start.name) && !sameFile(file, langModulePath(start.name.split("."))))
@@ -223,8 +236,12 @@ private struct Layout
 {
     const(Package)[] declared;
     const(string)[] scriptUses;
-    /// The module name of the starting file when it has no `module` line, and so is a package of its own.
+    string function(string, string) usesHint;
+    string function(string) packageHint;
+    /// The package of the starting file when it has no `module` line, and so is a package of its
+    /// own, as `scriptPackage` names it, and its module's name.
     string script;
+    string scriptModule;
 
     /// Where the module `chain` would be, and why it isn't if it isn't.
     Location locate(const string[] chain) const
@@ -249,7 +266,8 @@ private struct Layout
         }
         if (found.package_ is null)
         {
-            found.problem = format("no package is named '%s', or by any longer start of '%s'", chain[0], chain.join("."));
+            found.problem = format("no package is named '%s', or by any longer start of '%s'%s", chain[0],
+                chain.join("."), hint(packageHint is null ? null : packageHint(chain[0])));
         }
         else if (length == chain.length)
         {
@@ -296,11 +314,12 @@ private struct Layout
         auto uses = usesOf(from);
         auto listed = uses.length == 0 ? "uses no package but `" ~ langPackage ~ "`"
             : "uses only " ~ uses.map!(u => "'" ~ u ~ "'").join(", ");
+        auto suggested = hint(usesHint is null ? null : usesHint(from == script ? null : from, to));
         return from == script
             ? format("'%s' is a file with no `module` line, so a program of its own that %s, and it can't import '%s', "
-                ~ "from the package '%s'\nList '%s' among what it uses", importing, listed, name, to, to)
-            : format("The package '%s' %s, so '%s' can't import '%s', from the package '%s'\nList '%s' among what '%s' uses",
-                from, listed, importing, name, to, to, from);
+                ~ "from the package '%s'\nList '%s' among what it uses%s", importing, listed, name, to, to, suggested)
+            : format("The package '%s' %s, so '%s' can't import '%s', from the package '%s'\nList '%s' among what '%s' "
+                ~ "uses%s", from, listed, importing, name, to, to, from, suggested);
     }
 
     /// Reports what makes the packages impossible to follow, and returns whether nothing does.
@@ -314,7 +333,7 @@ private struct Layout
         }
         bool[string] seen;
         string[string] parentOf;
-        foreach (ref p; declared)
+        foreach (i, ref p; declared)
         {
             if (p.name.length > 0 && !validName(p.name))
                 problem(DiagnosticCode.InvalidPackages, format("'%s' isn't a package name: it's one or more names "
@@ -326,12 +345,21 @@ private struct Layout
                 problem(DiagnosticCode.InvalidPackages, format("There are two packages named '%s'", p.name));
             seen[p.name] = true;
             if (!exists(p.directory) || !isDir(p.directory))
+            {
                 problem(DiagnosticCode.InvalidPackages, format("The package '%s' is at %s, which isn't a directory",
                     p.name, p.directory));
-            if (script !is null && p.name == script)
-                problem(DiagnosticCode.InvalidPackages, format("The file started from, with no `module` line, is a "
-                    ~ "program named '%s', which is also the name of the package at %s\nRename one of them",
-                    script, p.directory));
+                continue;
+            }
+            // The unnamed package of a test's fixtures may hold anything.
+            if (p.name.length == 0) continue;
+            foreach (ref other; declared[0 .. i])
+            {
+                if (other.name.length == 0 || !exists(other.directory) || !isDir(other.directory)) continue;
+                if (within(p.directory, other.directory) || within(other.directory, p.directory))
+                    problem(DiagnosticCode.InvalidPackages, format("The package '%s' is at %s and '%s' at %s, and "
+                        ~ "a package's directory can't be inside another's, or be another's: a file in both would "
+                        ~ "be a module of each", other.name, other.directory, p.name, p.directory));
+            }
         }
         void checkList(string owner, const string[] list, string what)
         {
@@ -342,7 +370,8 @@ private struct Layout
                         ~ "package uses `%s` without listing it", owner, entry, what, langPackage));
                 else if (entry.length == 0 || named(entry) is null)
                     problem(DiagnosticCode.InvalidPackages, format("%s lists '%s' among what it %s, and there's no "
-                        ~ "package of that name", owner, entry, what));
+                        ~ "package of that name%s", owner, entry, what,
+                        hint(packageHint is null || entry.length == 0 ? null : packageHint(entry))));
             }
         }
         foreach (ref p; declared)
@@ -363,7 +392,7 @@ private struct Layout
                 parentOf[part] = p.name;
             }
         }
-        if (script !is null) checkList(format("'%s', the file with no `module` line,", script), scriptUses, "uses");
+        if (script !is null) checkList(format("'%s', the file with no `module` line,", scriptModule), scriptUses, "uses");
         return ok;
     }
 
@@ -413,23 +442,26 @@ private struct Layout
                 if (main[0] is null) continue;
                 context.collector.reportError(DiagnosticCode.UsesProgram, main[1],
                     format("'%s' declares `main`, so the package '%s' is a program, and %s can't use it: nothing can "
-                        ~ "depend on a program", main[0], used,
-                        user == script ? format("'%s', the file started from,", user) : format("the package '%s'", user)));
+                        ~ "depend on a program", main[0], used, user == script
+                            ? format("'%s', the file started from,", scriptModule) : format("the package '%s'", user)));
             }
         }
     }
 
     /// The first module of the package `name`, by name, that declares `main`, and where; or null.
-    /// Every `.ag` file under the package's directory is read, other than companion test files and
-    /// those whose names put them in another package.
+    /// Every `.ag` file under the package's directory with a `module` line is read, other than
+    /// companion test files and those whose names put them in another package. A file with no
+    /// `module` line is a program of its own and not one of the package's modules.
     Tuple!(string, Span) mainOf(string name, SourceContext context) const
     {
-        import std.file : dirEntries, SpanMode;
         import std.path : pathSplitter, relativePath;
+        import silver.syntax.parse : ParseException;
 
         auto package_ = named(name);
         if (package_ is null || !exists(package_.directory) || !isDir(package_.directory)) return typeof(return).init;
-        foreach (path; dirEntries(package_.directory, "*.ag", SpanMode.depth).map!(e => e.name).array.sort)
+        immutable why = format("It was read because every module of a package that's used is, to check that the "
+            ~ "package '%s' isn't a program", name);
+        foreach (path; filesUnder(package_.directory, name, why, context))
         {
             if (isCompanionFile(path)) continue;
             auto chain = segmentsOf(name) ~ pathSplitter(relativePath(absolutePath(path.stripExtension),
@@ -443,11 +475,23 @@ private struct Layout
             catch (Exception e)
             {
                 context.collector.reportError(DiagnosticCode.UnreadableFile, Span(path, 0, 0),
-                    format("'%s', in the package '%s', can't be read: %s", path, name, e.msg));
+                    format("'%s' can't be read: %s\n%s", path, e.msg, why));
                 continue;
             }
             context.sources.add(path, text);
-            auto read = parsed(chain.join("."), text, path);
+            const(Module)* read;
+            try
+            {
+                read = parsed(chain.join("."), text, path);
+            }
+            catch (ParseException e)
+            {
+                // One with no module line isn't the package's, so what's wrong with it is its own business.
+                if (startsWithModuleLine(text))
+                    context.collector.reportError(e.diagnostic.code, e.diagnostic.span, e.diagnostic.message ~ "\n" ~ why);
+                continue;
+            }
+            if (read.declaration is null) continue;
             foreach (declaration; read.declarations)
             {
                 auto main = declaration.kind.match!(
@@ -458,6 +502,64 @@ private struct Layout
         }
         return typeof(return).init;
     }
+}
+
+/// `text` prefixed by a new line, or nothing when `text` is null.
+private string hint(string text)
+{
+    return text is null ? "" : "\n" ~ text;
+}
+
+/// Whether the directory `inner` is `outer` or inside it.
+private bool within(string inner, string outer)
+{
+    import std.algorithm : startsWith;
+    import std.path : dirSeparator, filenameCmp;
+
+    auto a = buildNormalizedPath(absolutePath(inner));
+    auto b = buildNormalizedPath(absolutePath(outer));
+    return filenameCmp(a, b) == 0 || (a.length > b.length && filenameCmp(a[0 .. b.length], b) == 0
+        && a[b.length .. $].startsWith(dirSeparator));
+}
+
+/// Every regular `.ag` file under `directory`, sorted. A directory that can't be listed is reported,
+/// with `why` it was read, and skipped.
+private string[] filesUnder(string directory, string package_, string why, SourceContext context)
+{
+    import std.file : dirEntries, SpanMode;
+
+    string[] files;
+    string[] directories;
+    try
+    {
+        foreach (entry; dirEntries(directory, SpanMode.shallow, false))
+        {
+            if (entry.isDir) directories ~= entry.name;
+            else if (entry.isFile && extension(entry.name) == ".ag") files ~= entry.name;
+        }
+    }
+    catch (Exception e)
+    {
+        context.collector.reportError(DiagnosticCode.UnreadableFile, Span(),
+            format("The directory %s, in the package '%s', can't be read: %s\n%s", directory, package_, e.msg, why));
+    }
+    foreach (inner; directories.sort) files ~= filesUnder(inner, package_, why, context);
+    return files.sort.release;
+}
+
+/// Whether the first line of `text` that isn't blank or a `//` comment is a `module` line.
+private bool startsWithModuleLine(string text)
+{
+    import std.algorithm : startsWith;
+    import std.string : lineSplitter, strip;
+
+    foreach (line; text.lineSplitter)
+    {
+        auto stripped = line.strip;
+        if (stripped.length == 0 || stripped.startsWith("//")) continue;
+        return stripped.startsWith("module ");
+    }
+    return false;
 }
 
 /// The segments of the package name `name`, and none for the unnamed one.
@@ -544,6 +646,9 @@ string describePackages(const string[] declared, const string[] uses, const stri
         }
     }
     packages.declared = withStandardLibrary(packages.declared);
+    packages.usesHint = (user, used) => user is null
+        ? format("Give `--uses %s` to list it", used) : format("Give `--uses %s=%s` to list it", user, used);
+    packages.packageHint = name => format("Give `--package %s=<directory>` to declare one", name);
     return null;
 }
 
@@ -865,7 +970,7 @@ unittest
     ownModules(program).length.should.equal(3);
 }
 
-@("load reports an import that isn't on any import path and keeps going")
+@("load reports an import that no package has, and keeps going")
 unittest
 {
     auto directory = makeModuleDirectory("missing", ["a.ag": "module a\ndef a(): Int => 1"]);
@@ -965,7 +1070,7 @@ unittest
     ownModules(program).should.equal(["main"]);
 }
 
-@("load reports a prelude that isn't on any import path")
+@("load reports a prelude that no package has")
 unittest
 {
     auto context = new SourceContext;
@@ -1376,7 +1481,7 @@ unittest
     program.modules["silver.core.lower"].span.file.should.equal(buildPath(directory, "core", "source", "lower.ag"));
     program.packageOf["silver.app"].should.equal("silver");
     program.packageOf["silver.core.tree.node"].should.equal("silver.core");
-    program.packageOf["main"].should.equal("main");
+    program.packageOf["main"].should.equal(scriptPackage("main"));
     program.packageOf[langPackage].should.equal(langPackage);
 }
 
@@ -1513,7 +1618,7 @@ unittest
 @("a description that can't be followed is reported, and nothing more is loaded")
 unittest
 {
-    auto directory = makeModuleDirectory("packages-invalid", ["a/x.ag": "module a.x", "b/x.ag": "", "c/x.ag": ""]);
+    auto directory = makeModuleDirectory("packages-invalid", ["a/x.ag": "module a.x", "a/deeper/y.ag": "", "b/x.ag": "", "c/x.ag": ""]);
     scope (exit) rmdirRecurse(directory);
 
     string[] problems(Packages packages, string file = "main.ag")
@@ -1532,7 +1637,12 @@ unittest
     problems(Packages([a, Package("b", buildPath(directory, "gone"))], ["a"]))[0].should.contain("isn't a directory");
     problems(Packages([a, Package("b.", buildPath(directory, "b"))], ["a"]))[0].should.contain("isn't a package name");
     problems(Packages([a, Package("lang.extra", buildPath(directory, "b"))], ["a"]))[0].should.contain("L0004:");
-    problems(Packages([a, Package("main", buildPath(directory, "b"))], ["a"]))[0].should.contain("also the name of the package");
+    problems(Packages([a, Package("main", buildPath(directory, "b"))], ["a"])).length.should.equal(0);
+    problems(Packages([a, Package("inner", buildPath(directory, "a", "deeper"))], ["a"]))[0]
+        .should.contain("L0013: The package 'a' is at");
+    problems(Packages([Package("inner", buildPath(directory, "a", "deeper")), a], ["a"]))[0]
+        .should.contain("can't be inside another's");
+    problems(Packages([a, Package("again", a.directory)], ["a"]))[0].should.contain("or be another's");
 
     auto c = Package("c", buildPath(directory, "c"));
     problems(Packages([Package("a", a.directory, [], ["b"]), Package("c", c.directory, [], ["b"]), b], ["a"]))[0]
@@ -1649,4 +1759,47 @@ unittest
     load("import geo.shapes\ndef main(): Unit { }", buildPath(directory, "geo.ag"),
         Packages([Package("geo", buildPath(directory, "geo"))], ["geo"]), null, context);
     context.collector.errors.array.map!(e => cast(string) e.code ~ ": " ~ e.message).array.should.equal([]);
+}
+
+@("a syntax error in a module of a used package that nothing imports says why the file was read, and a broken script there isn't read")
+unittest
+{
+    auto directory = makeModuleDirectory("packages-broken", [
+        "geo/shapes.ag": "module geo.shapes",
+        "geo/demo.ag": "// a demo\ndef = broken",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto packages = Packages([Package("geo", buildPath(directory, "geo"))], ["geo"]);
+
+    auto context = new SourceContext;
+    load("import geo.shapes", "main.ag", packages, null, context);
+    context.collector.errors.empty.should.equal(true);
+
+    write(buildPath(directory, "geo", "broken.ag"), "module geo.broken\ndef = broken");
+    context = new SourceContext;
+    load("import geo.shapes", "main.ag", packages, null, context);
+    auto errors = context.collector.errors.array;
+    errors.map!(e => e.code).array.should.equal([DiagnosticCode.ParseError]);
+    errors[0].span.file.should.equal(buildPath(directory, "geo", "broken.ag"));
+    errors[0].message.should.contain("to check that the package 'geo' isn't a program");
+}
+
+@("what the command line describes names the option that fixes what's missing")
+unittest
+{
+    auto directory = makeModuleDirectory("packages-hints", ["geo/shapes.ag": "module geo.shapes\nimport std.math"]);
+    scope (exit) rmdirRecurse(directory);
+
+    string[] problems(string source, string[] uses)
+    {
+        Packages packages;
+        assert(describePackages(["geo=" ~ buildPath(directory, "geo")], uses, [], null, packages) is null);
+        auto context = new SourceContext;
+        load(source, "main.ag", packages, null, context);
+        return context.collector.errors.map!(e => e.message.idup).array;
+    }
+    problems("import geo.shapes", [])[0].should.contain("\nGive `--uses geo` to list it");
+    problems("import geo.shapes", ["geo"])[0].should.contain("\nGive `--uses geo=std` to list it");
+    problems("import shapes.circle", [])[0].should.contain("\nGive `--package shapes=<directory>` to declare one");
+    problems("def f(): Int => 1", ["nope"])[0].should.contain("\nGive `--package nope=<directory>` to declare one");
 }

@@ -122,6 +122,12 @@ version (unittest)
         return text.replace("\r\n", "\n");
     }
 
+    /// Where `c`'s own package options would be.
+    string packagesFile(Case c)
+    {
+        return buildPath(dirName(c.sourcePath), baseName(c.sourcePath).stripExtension ~ ".packages");
+    }
+
     /// The packages `c` is loaded with. A case's `.packages`, when it has one, holds its command
     /// line's package options, one to a line, with directories taken from the case's own. Otherwise
     /// each `*_support` directory beside the case is a package using the standard library, and the
@@ -132,7 +138,7 @@ version (unittest)
         import std.string : indexOf;
 
         auto directory = dirName(c.sourcePath);
-        auto described = buildPath(directory, baseName(c.sourcePath).stripExtension ~ ".packages");
+        auto described = packagesFile(c);
         string[][string] options;
         if (exists(described))
         {
@@ -373,7 +379,8 @@ version (unittest)
             return statement.startsWith("import ") && !statement.startsWith("import std");
         }
 
-        if (c.inputPath !is null)
+        // A bundle's members are loaded with the bundle's packages, not their own.
+        if (c.inputPath !is null || exists(packagesFile(c)))
         {
             return false;
         }

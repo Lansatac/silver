@@ -24,8 +24,9 @@ struct Analyzed
     Id!Module[string] moduleIds;
 }
 
-/// Analyzes `entry` as main.ag. `files` (by file name, e.g. "a/b.ag") are written to a
-/// temporary import path, searched before the stdlib. `prelude` is the prelude, as a build names it.
+/// Analyzes `entry` as main.ag. `files` (by file name, e.g. "a/b.ag") are written to a temporary
+/// directory, the unnamed package of a test's fixtures, beside the standard library. `prelude` is
+/// the prelude, as a build names it.
 Analyzed analyzed(string entry, string[string] files = null, Target target = Target.host, bool testing = false,
     string prelude = standardPrelude)
 {

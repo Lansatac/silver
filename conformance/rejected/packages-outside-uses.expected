@@ -1,2 +1,3 @@
 L0010: The package 'shapes.render' uses no package but `lang`, so 'shapes.render.text' can't import 'shapes.circle', from the package 'shapes'
 List 'shapes' among what 'shapes.render' uses
+Give `--uses shapes.render=shapes` to list it
