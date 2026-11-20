@@ -1,4 +1,4 @@
-module intrinsics.testing
+module lang.testing
 
 
 // In a test, records a failure when `condition` is false, shown as `assert` shows it, and carries on.

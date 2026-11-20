@@ -1,4 +1,4 @@
-module intrinsics.array
+module lang.array
 
 // The element at `index`, as `values[index]` reads it.
 def at<T>(values: [T], index: Int): T => values[index]

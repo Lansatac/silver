@@ -2643,8 +2643,7 @@ unittest
 {
     analyzed("native def f(mutable x: Int): Unit\ndef main(): Unit { }")
         .shouldReport(DiagnosticCode.MutableNativeParameter, At("x", 1));
-    analyzed("import std.extra\ndef main(): Unit { }", ["std/extra.ag": "module std.extra\nintrinsic def print(mutable x: Int): Unit"])
-        .shouldReport(DiagnosticCode.MutableNativeParameter, At("x", 1, "std.extra"));
+    inLang("intrinsic def print(mutable x: Int): Unit").should.equal([DiagnosticCode.MutableNativeParameter]);
 }
 
 @("a native's signature has only types with a C equivalent")
@@ -2669,22 +2668,23 @@ unittest
     }
 }
 
-@("an intrinsic is declared only in the standard library, and only for one the compiler implements")
+@("an intrinsic is declared only in lang, and only for one the compiler implements")
 unittest
 {
+    analyzed("import std.extra\ndef main(): Unit { }", ["std/extra.ag": "module std.extra\nintrinsic def printl(value: Any): Unit"])
+        .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("printl", 1, "std.extra"));
+    analyzed("import language\ndef main(): Unit { }", ["language.ag": "module language\nintrinsic alias CLong"])
+        .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("CLong", 1, "language"));
     analyzed("intrinsic def print(value: Any): Unit\ndef main(): Unit { }")
-        .shouldReport(DiagnosticCode.IntrinsicOutsideStandardLibrary, At("print", 1));
+        .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("print", 1));
     analyzed("intrinsic alias CLong\ndef main(): Unit { }")
-        .shouldReport(DiagnosticCode.IntrinsicOutsideStandardLibrary, At("CLong", 1));
+        .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("CLong", 1));
     analyzed("import stdx\ndef main(): Unit { }", ["stdx.ag": "module stdx\nintrinsic def printl(value: Any): Unit"])
-        .shouldReport(DiagnosticCode.IntrinsicOutsideStandardLibrary, At("printl", 1, "stdx"));
+        .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("printl", 1, "stdx"));
 
-    analyzed("import std.extra\ndef main(): Unit { }", ["std/extra.ag": "module std.extra\nintrinsic def sqrt(x: Float): Float"])
-        .shouldReport(DiagnosticCode.UnknownIntrinsic, At("sqrt", 1, "std.extra"));
-    analyzed("import std.extra\ndef main(): Unit { }", ["std/extra.ag": "module std.extra\nintrinsic alias CWord"])
-        .shouldReport(DiagnosticCode.UnknownIntrinsic, At("CWord", 1, "std.extra"));
-    analyzed("import std.extra\ndef main(): Unit { }", ["std/extra.ag": "module std.extra\nintrinsic def panic(message: String): Never"])
-        .shouldHaveNoDiagnostics();
+    inLang("intrinsic def sqrt(x: Float): Float").should.equal([DiagnosticCode.UnknownIntrinsic]);
+    inLang("intrinsic alias CWord").should.equal([DiagnosticCode.UnknownIntrinsic]);
+    inLang("intrinsic def panic(message: String): Never").length.should.equal(0);
 }
 
 @("assert takes a Bool and optionally a String message, and can only be called")

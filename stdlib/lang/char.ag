@@ -1,0 +1,11 @@
+module lang.char
+
+private intrinsic def uncheckedChar(n: Int): Char
+
+// The Char whose value is `n`, if `n` is a Unicode scalar value: at most 10FFFF and not a surrogate.
+def toChar(n: Int): Char? {
+    if n < 0 || n > 0x10FFFF || (n >= 0xD800 && n <= 0xDFFF) {
+        return None
+    }
+    uncheckedChar(n)
+}

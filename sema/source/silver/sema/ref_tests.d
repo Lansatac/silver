@@ -75,11 +75,11 @@ unittest
     analyzedRef("    val r = Ref(1)\n    r.set(true)").shouldReport(DiagnosticCode.TypeMismatch, At("true", 1));
 }
 
-@("an intrinsic type is only for the standard library, and only one the compiler implements")
+@("an intrinsic type is only for lang, and only one the compiler implements")
 unittest
 {
     analyzed("intrinsic type Ref<T>(value: T)\ndef main(): Unit => ()")
-        .shouldReport(DiagnosticCode.IntrinsicOutsideStandardLibrary, At("Ref", 1));
-    analyzed("import std.mine\ndef main(): Unit => ()", ["std/mine.ag": "module std.mine\nintrinsic type Cell<T>(value: T)"])
-        .shouldReport(DiagnosticCode.UnknownIntrinsic, At("Cell", 1, "std.mine"));
+        .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("Ref", 1));
+    import fluent.asserts : should;
+    inLang("intrinsic type Cell<T>(value: T)").should.equal([DiagnosticCode.UnknownIntrinsic]);
 }

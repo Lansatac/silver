@@ -32,7 +32,7 @@ void silver_printl_string(const(char)* data, size_t length) { output(data[0 .. l
 void silver_printl_unit() { output("()", true); }
 void silver_printl_char(uint value) { output([cast(dchar) value].to!string, true); }
 
-/// A line from stdin, as `readLine` in `intrinsics.io` takes it: 0 and the line without its `\n`
+/// A line from stdin, as `readLine` in `lang.io` takes it: 0 and the line without its `\n`
 /// or `\r\n`, 1 at the end of input, 2 for a line that isn't UTF-8 (consumed), or 3 and the OS's
 /// message. The String is copied into a buffer (see `silver.runtime.buffer`), since every String
 /// on the heap must be in one.

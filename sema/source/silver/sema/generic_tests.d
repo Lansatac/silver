@@ -455,12 +455,11 @@ unittest
 @("an intrinsic is a value like any function, unless it takes an Any")
 unittest
 {
-    // Intrinsics of the test's own, reached qualified, so the prelude's overloads take no part.
-    auto files = ["std/extra.ag": "module std.extra\nintrinsic def length<T>(values: [T]): Int\nintrinsic def print(value: Any): Unit"];
-    Analyzed inMain(string body) => analyzed("import std.extra\ndef main(): Unit {\n" ~ body ~ "\n}", files);
-    inMain("    val qf: ([Int]) -> Int = std.extra.length<Int>").shouldHaveNoDiagnostics();
-    inMain("    val qf: ([Bool]) -> Int = std.extra.length").shouldHaveNoDiagnostics();
-    inMain("    val qf = std.extra.print").shouldReport(DiagnosticCode.NotSupportedYet, At("std", 2));
+    // Reached qualified, so the other overloads that `lang` forwards take no part.
+    Analyzed inMain(string body) => analyzed("import lang.array\nimport lang.io\ndef main(): Unit {\n" ~ body ~ "\n}");
+    inMain("    val qf: ([Int]) -> Int = lang.array.length<Int>").shouldHaveNoDiagnostics();
+    inMain("    val qf: ([Bool]) -> Int = lang.array.length").shouldHaveNoDiagnostics();
+    inMain("    val qf = lang.io.print").shouldReport(DiagnosticCode.NotSupportedYet, At("lang", 3));
 }
 
 @("a constructor pattern sees an instance's fields, and coverage works on instances")

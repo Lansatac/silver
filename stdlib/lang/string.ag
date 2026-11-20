@@ -1,0 +1,105 @@
+module lang.string
+
+// The bytes of `text`, which the array shares with it.
+intrinsic def bytes(text: String): [UInt8]
+// `data` as a String, for a caller that knows it's UTF-8.
+private intrinsic def uncheckedString(data: [UInt8]): String
+private intrinsic def uncheckedChar(n: Int): Char
+// The first character of `text` and the rest of it, or `None` when it's empty. This is what makes
+// a String something `for` steps through.
+def next(text: String): (Char, String)? {
+    val data = bytes(text)
+    if length(data) == 0 {
+        return None
+    }
+    val first = Int(data[0])
+    if first < 0x80 {
+        return (uncheckedChar(first), uncheckedString(data[1..]))
+    }
+    val size = if first < 0xE0 => 2 else if first < 0xF0 => 3 else 4
+    mutable val value = if size == 2 => first & 0x1F else if size == 3 => first & 0x0F else first & 0x07
+    mutable val i = 1
+    while i < size {
+        value = (value << 6) | (Int(data[i]) & 0x3F)
+        i += 1
+    }
+    (uncheckedChar(value), uncheckedString(data[size..]))
+}
+
+// `data` as a String, or `None` if it isn't UTF-8.
+def decode(data: [UInt8]): String? {
+    if !isUtf8(data) {
+        return None
+    }
+    uncheckedString(data)
+}
+
+// The part of `text` from its byte `from` up to its byte `to`. Panics unless `from` and `to` are
+// in order within `text` and each falls between two characters, so the part is UTF-8 too.
+def slice(text: String, from: Int, to: Int): String {
+    val data = bytes(text)
+    if from < 0 || from > to || to > length(data) {
+        panic("Slice is out of range")
+    }
+    if !between(data, from) || !between(data, to) {
+        panic("Slice doesn't fall between characters")
+    }
+    uncheckedString(data[from..to])
+}
+
+// Whether `at` is the end of `data` or a character's first byte, the only one that isn't `10xxxxxx`.
+private def between(data: [UInt8], at: Int): Bool => at == length(data) || (data[at] & 0xC0) != 0x80
+
+// Whether `data` is well-formed UTF-8: no stray or missing continuation bytes, no encoding longer
+// than it needs to be, no surrogates and nothing above 10FFFF.
+private def isUtf8(data: [UInt8]): Bool {
+    val size = length(data)
+    mutable val i = 0
+    while i < size {
+        val first = Int(data[i])
+        if first < 0x80 {
+            i += 1
+            continue
+        }
+        val count = if first >= 0xC2 && first <= 0xDF => 2
+            else if first >= 0xE0 && first <= 0xEF => 3
+            else if first >= 0xF0 && first <= 0xF4 => 4
+            else 0
+        if count == 0 || i + count > size {
+            return false
+        }
+        // The second byte's range rules out the overlong forms, surrogates and values past 10FFFF.
+        val lowest = if first == 0xE0 => 0xA0 else if first == 0xF0 => 0x90 else 0x80
+        val highest = if first == 0xED => 0x9F else if first == 0xF4 => 0x8F else 0xBF
+        val second = Int(data[i + 1])
+        if second < lowest || second > highest {
+            return false
+        }
+        mutable val k = 2
+        while k < count {
+            if (data[i + k] & 0xC0) != 0x80 {
+                return false
+            }
+            k += 1
+        }
+        i += count
+    }
+    true
+}
+
+
+test "slice cuts between characters" {
+    expect(slice("silver", 1, 4) == "ilv")
+    expect(slice("silver", 0, 6) == "silver")
+    expect(slice("silver", 6, 6) == "")
+    expect(slice("caf\u{e9}!", 3, 5) == "\u{e9}")
+    expect(slice("\u{1f600}x", 4, 5) == "x")
+}
+
+test "slice panics outside the text or inside a character" {
+    expect(panics(() => slice("silver", 2, 1)) == Some("Slice is out of range"))
+    expect(panics(() => slice("silver", -1, 2)) == Some("Slice is out of range"))
+    expect(panics(() => slice("silver", 0, 7)) == Some("Slice is out of range"))
+    expect(panics(() => slice("caf\u{e9}", 4, 5)) == Some("Slice doesn't fall between characters"))
+    expect(panics(() => slice("caf\u{e9}", 0, 4)) == Some("Slice doesn't fall between characters"))
+}

@@ -1,1 +1,1 @@
-T0001: Type `prelude.Interval<Int>` is not assignable to type `Interval`
+T0001: Type `lang.Interval<Int>` is not assignable to type `Interval`

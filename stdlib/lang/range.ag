@@ -1,8 +1,8 @@
-module intrinsics.range
+module lang.range
 
-import intrinsics.array
-import intrinsics.interval
-import intrinsics.string
+import lang.array
+import lang.interval
+import lang.string
 
 // What `for` loops over: something that gives its first item and the rest, until it gives `None`.
 interface Range<T> {

@@ -1,16 +1,8 @@
 // Questions about a Char, and the conversions that can fail or change one.
 module std.char
 
-// `n` as a Char, for a caller that has checked it's a scalar value.
-private intrinsic def uncheckedChar(n: Int): Char
-
-// The Char whose value is `n`, if `n` is a Unicode scalar value: at most 10FFFF and not a surrogate.
-def toChar(n: Int): Char? {
-    if n < 0 || n > 0x10FFFF || (n >= 0xD800 && n <= 0xDFFF) {
-        return None
-    }
-    uncheckedChar(n)
-}
+// `toChar(n)`, the Char whose value is `n`, if `n` is a Unicode scalar value.
+forward import lang.char : toChar
 
 // One of the ten digits `0` to `9`.
 def isDigit(c: Char): Bool => c >= '0' && c <= '9'
@@ -26,10 +18,10 @@ def isWhitespace(c: Char): Bool {
 }
 
 // `c` in upper case if it's one of `a` to `z`, and unchanged otherwise.
-def toAsciiUpper(c: Char): Char => if c >= 'a' && c <= 'z' => uncheckedChar(Int(c) - 32) else c
+def toAsciiUpper(c: Char): Char => if c >= 'a' && c <= 'z' => toChar(Int(c) - 32) ?? c else c
 
 // `c` in lower case if it's one of `A` to `Z`, and unchanged otherwise.
-def toAsciiLower(c: Char): Char => if c >= 'A' && c <= 'Z' => uncheckedChar(Int(c) + 32) else c
+def toAsciiLower(c: Char): Char => if c >= 'A' && c <= 'Z' => toChar(Int(c) + 32) ?? c else c
 
 test "toChar takes every scalar value" {
     expect(toChar(97) == Some('a'))

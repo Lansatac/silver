@@ -31,7 +31,7 @@ def small(x: Bool): String => "Bool {x}"
 
 def wrapped(x: Int?): String => describe(x)
 
-// Calls this module's `printl` when it fits, and the prelude's otherwise.
+// Calls this module's `printl` when it fits, and lang's otherwise.
 def printl(p: Point): Unit => printl("({p.x}, {p.y})")
 
 // An overload of an imported name.

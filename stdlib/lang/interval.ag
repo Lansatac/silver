@@ -1,4 +1,4 @@
-module intrinsics.interval
+module lang.interval
 
 
 // What `a..b` builds outside a slice or a `for`: the integers from `from` up to but not including

@@ -1,7 +1,7 @@
 def print(value: Int): Int => value * 2
 
 def main(): Unit {
-    prelude.printl(print(4))
-    prelude.print("done")
+    lang.printl(print(4))
+    lang.print("done")
     printl("")
 }

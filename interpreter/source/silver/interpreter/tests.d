@@ -7,7 +7,7 @@ version (unittest)
     import silver.ast : formatDiagnostic, SourceContext;
     import silver.core : lowerProgram;
     import silver.interpreter.evaluator : Evaluator;
-    import silver.loader : load, standardLibraryPath;
+    import silver.loader : load, standardLibraryPath, standardPrelude;
     import silver.sema : analyze;
 
     /// Runs `source` as the driver does, failing on anything the loader or sema reports.
@@ -17,7 +17,7 @@ version (unittest)
         import std.array : join;
 
         auto context = new SourceContext;
-        auto program = load(source, "test", [standardLibraryPath()], context);
+        auto program = load(source, "test", [standardLibraryPath()], standardPrelude, context);
         auto analysis = analyze(program, context.collector);
         assert(!context.collector.hasErrors, context.collector.errors
                 .map!(d => formatDiagnostic(d, context.sources)).join("\n"));

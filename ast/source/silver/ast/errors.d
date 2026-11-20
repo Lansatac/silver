@@ -35,7 +35,7 @@ enum DiagnosticCode : string
     PrivateTypeExposed = "S0021",
     RecursiveAlias = "S0022",
     AliasIsNotAValue = "S0023",
-    IntrinsicOutsideStandardLibrary = "S0024",
+    IntrinsicOutsideLang = "S0024",
     /// An `intrinsic def` or `intrinsic alias` the compiler doesn't implement.
     UnknownIntrinsic = "S0025",
     /// An interface named where a type is wanted.

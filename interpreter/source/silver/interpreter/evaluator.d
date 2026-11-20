@@ -698,7 +698,7 @@ final class Evaluator
         return cast(ulong) value <= cast(ulong) T.max;
     }
 
-    /// A line of input as `readLine` in `intrinsics.io` gives it, matching the runtime's
+    /// A line of input as `readLine` in `lang.io` gives it, matching the runtime's
     /// `silver_readLine`: 0 and the line without its ending, 1 at the end of input, 2 for a line
     /// that isn't UTF-8, or 3 and the OS's message.
     private Value readLine()

@@ -6,10 +6,10 @@
 module std.string
 
 import std.char
-
-// `data` as a String, for a caller that knows it's UTF-8. Every use below cuts a String where
-// another String matched or where a character ended, so the pieces are UTF-8 too.
-private intrinsic def uncheckedString(data: [UInt8]): String
+// Every slice below cuts a String where another String matched or where a character ended.
+import lang.string : slice
+// `decode(data)`, `data` as a String, or `None` if it isn't UTF-8.
+forward import lang.string : decode
 
 def isEmpty(text: String): Bool => length(bytes(text)) == 0
 
@@ -35,7 +35,7 @@ def stripPrefix(text: String, prefix: String): String? {
     if !startsWith(text, prefix) {
         return None
     }
-    uncheckedString(bytes(text)[length(bytes(prefix))..])
+    slice(text, length(bytes(prefix)), length(bytes(text)))
 }
 
 // `text` without `suffix` at its end, or `None` if it doesn't end with it.
@@ -44,14 +44,14 @@ def stripSuffix(text: String, suffix: String): String? {
         return None
     }
     val data = bytes(text)
-    uncheckedString(data[..length(data) - length(bytes(suffix))])
+    slice(text, 0, length(data) - length(bytes(suffix)))
 }
 
 // What comes before and after the first `separator` in `text`, or `None` if it isn't there.
 def splitOnce(text: String, separator: String): (String, String)? {
     val data = bytes(text)
     val at = find(data, bytes(separator))?
-    (uncheckedString(data[..at]), uncheckedString(data[at + length(bytes(separator))..]))
+    (slice(text, 0, at), slice(text, at + length(bytes(separator)), length(data)))
 }
 
 // The characters at the beginning of `text` that `keep` accepts, and everything after them.
@@ -65,7 +65,7 @@ def splitWhile(text: String, keep: (Char) -> Bool): (String, String) {
         rest = after
     }
     val data = bytes(text)
-    (uncheckedString(data[..length(data) - length(bytes(rest))]), rest)
+    (slice(text, 0, length(data) - length(bytes(rest))), rest)
 }
 
 // `text` without the white space at its beginning.
@@ -84,12 +84,12 @@ def trimEnd(text: String): String {
         while start > 0 && (data[start] & 0xC0) == 0x80 {
             start -= 1
         }
-        if !isBlank(uncheckedString(data[start..end])) {
+        if !isBlank(slice(text, start, end)) {
             break
         }
         end = start
     }
-    uncheckedString(data[..end])
+    slice(text, 0, end)
 }
 
 // `text` without the white space at either end.
@@ -125,14 +125,6 @@ def lines(text: String): [String] {
         rest = after
     }
     found
-}
-
-// `data` as a String, or `None` if it isn't UTF-8.
-def decode(data: [UInt8]): String? {
-    if !isUtf8(data) {
-        return None
-    }
-    uncheckedString(data)
 }
 
 // The Int that `text` writes in decimal: digits `0` to `9`, with `-` before them for a negative
@@ -195,43 +187,6 @@ private def isBlank(text: String): Bool {
         return isWhitespace(c)
     }
     false
-}
-
-// Whether `data` is well-formed UTF-8: no stray or missing continuation bytes, no encoding longer
-// than it needs to be, no surrogates and nothing above 10FFFF.
-private def isUtf8(data: [UInt8]): Bool {
-    val size = length(data)
-    mutable val i = 0
-    while i < size {
-        val first = Int(data[i])
-        if first < 0x80 {
-            i += 1
-            continue
-        }
-        val count = if first >= 0xC2 && first <= 0xDF => 2
-            else if first >= 0xE0 && first <= 0xEF => 3
-            else if first >= 0xF0 && first <= 0xF4 => 4
-            else 0
-        if count == 0 || i + count > size {
-            return false
-        }
-        // The second byte's range rules out the overlong forms, surrogates and values past 10FFFF.
-        val lowest = if first == 0xE0 => 0xA0 else if first == 0xF0 => 0x90 else 0x80
-        val highest = if first == 0xED => 0x9F else if first == 0xF4 => 0x8F else 0xBF
-        val second = Int(data[i + 1])
-        if second < lowest || second > highest {
-            return false
-        }
-        mutable val k = 2
-        while k < count {
-            if (data[i + k] & 0xC0) != 0x80 {
-                return false
-            }
-            k += 1
-        }
-        i += count
-    }
-    true
 }
 
 def join(parts: Range<String>, separator: String): String {

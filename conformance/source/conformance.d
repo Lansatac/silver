@@ -16,7 +16,7 @@ version (unittest)
     import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, Toolchain;
     import silver.core : lowerProgram, CoreProgram = Program;
     import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed;
-    import silver.loader : load, standardLibraryPath;
+    import silver.loader : load, standardLibraryPath, standardPrelude;
     import silver.sema : analyze, Analysis, Target;
     import silver.testing : report, runFile, TestBackend;
 
@@ -122,7 +122,7 @@ version (unittest)
     /// Loads and analyzes `c`. Returns why that failed, or null if it worked.
     string loadAndAnalyze(Case c, SourceContext context, out Program program, out Analysis analysis)
     {
-        program = load(readText(c.sourcePath), c.sourcePath, [standardLibraryPath(), dirName(c.sourcePath)], context);
+        program = load(readText(c.sourcePath), c.sourcePath, [standardLibraryPath(), dirName(c.sourcePath)], standardPrelude, context);
         if (!context.collector.hasErrors)
         {
             analysis = analyze(program, context.collector, Target.host);

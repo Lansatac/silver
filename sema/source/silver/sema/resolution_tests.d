@@ -9,7 +9,7 @@ import std.format : format;
 import std.sumtype : match;
 
 import silver.ast;
-import silver.loader : load, standardLibraryPath;
+import silver.loader : load, standardLibraryPath, standardPrelude;
 import silver.sema.analysis;
 import silver.sema.resolve;
 import silver.sema.target : Target;
@@ -25,9 +25,9 @@ struct Analyzed
 }
 
 /// Analyzes `entry` as main.ag. `files` (by file name, e.g. "a/b.ag") are written to a
-/// temporary import path, searched before the stdlib, so a "prelude.ag" among them replaces the
-/// stdlib's prelude.
-Analyzed analyzed(string entry, string[string] files = null, Target target = Target.host, bool testing = false)
+/// temporary import path, searched before the stdlib. `prelude` is the prelude, as a build names it.
+Analyzed analyzed(string entry, string[string] files = null, Target target = Target.host, bool testing = false,
+    string prelude = standardPrelude)
 {
     import std.file : mkdirRecurse, readText, rmdirRecurse, tempDir, write;
     import std.path : buildPath, dirName;
@@ -44,7 +44,7 @@ Analyzed analyzed(string entry, string[string] files = null, Target target = Tar
     }
 
     auto context = new SourceContext;
-    auto program = load(entry, "main.ag", [directory, standardLibraryPath()], context);
+    auto program = load(entry, "main.ag", [directory, standardLibraryPath()], prelude, context);
     assert(!context.collector.hasErrors, "The test program failed to load");
 
     Analyzed a;
@@ -513,18 +513,43 @@ def main(): Unit => ()");
     a.shouldHaveNoDiagnostics();
 }
 
+/// The codes of the errors in a module of `lang` holding `declarations`. Only the compiler's
+/// directory has `lang`'s modules, so this one is added to the program after loading.
+const(DiagnosticCode)[] inLang(string declarations)
+{
+    import std.algorithm : map;
+    import std.array : array;
+    import silver.syntax.parse : parse;
+
+    auto context = new SourceContext;
+    auto program = load("def main(): Unit { }", "main.ag", [standardLibraryPath()], standardPrelude, context);
+    auto source = "module lang.extra\n" ~ declarations;
+    context.sources.add("extra.ag", source);
+    auto extra = new Module;
+    *extra = parse(source, "lang.extra", new NodeIds(ModuleKey.of("lang.extra", source)), "extra.ag");
+    program.modules["lang.extra"] = extra;
+    analyze(program, context.collector, Target.host);
+    return context.collector.errors.map!(e => e.code).array;
+}
+
 /// A module of the test's own, for a test that needs a module with a path to import.
 enum shapes = ["geo/shapes.ag": "module geo.shapes\ndef area(width: Float, height: Float): Float => width * height\n"
     ~ "def perimeter(width: Float, height: Float): Float => 2 * (width + height)"];
 
-/// A prelude of the test's own, which replaces the stdlib's.
-enum greetingPrelude = ["prelude.ag": "module prelude\ndef greet(times: Int): Int => times"];
+/// A prelude of the test's own, which `withGreeting` names in place of the stdlib's.
+enum greetingPrelude = ["kit/greeting.ag": "module kit.greeting\ndef greet(times: Int): Int => times"];
+
+/// `entry` analyzed with `files` beside it and `kit.greeting` as its prelude.
+Analyzed withGreeting(string entry, string[string] files = greetingPrelude)
+{
+    return analyzed(entry, files, Target.host, false, "kit.greeting");
+}
 
 @("name resolution finds prelude functions without an import")
 unittest
 {
-    auto a = analyzed("def main(): Unit {\n    val n = greet(1)\n}", greetingPrelude);
-    a.shouldResolve(At("greet", 1), At("greet", 1, "prelude"));
+    auto a = withGreeting("def main(): Unit {\n    val n = greet(1)\n}");
+    a.shouldResolve(At("greet", 1), At("greet", 1, "kit.greeting"));
     a.shouldHaveNoDiagnostics();
 }
 
@@ -745,20 +770,36 @@ unittest
 {
     auto files = greetingPrelude.dup;
     files["lib.ag"] = "module lib\ndef greet(times: Int): Int => 0";
-    auto bare = analyzed("import lib\ndef main(): Unit {\n    val n = greet(1)\n}", files);
+    auto bare = withGreeting("import lib\ndef main(): Unit {\n    val n = greet(1)\n}", files);
     bare.shouldReport(DiagnosticCode.AmbiguousName, At("greet", 1));
 
-    auto qualified = analyzed("import lib\ndef main(): Unit {\n    val n = prelude.greet(1)\n}", files);
-    qualified.shouldResolve(At("greet", 1), At("greet", 1, "prelude"));
+    auto qualified = withGreeting("import lib\ndef main(): Unit {\n    val n = kit.greeting.greet(1)\n}", files);
+    qualified.shouldResolve(At("greet", 1), At("greet", 1, "kit.greeting"));
     qualified.shouldHaveNoDiagnostics();
 }
 
 @("name resolution accepts an explicit import of the prelude")
 unittest
 {
-    auto a = analyzed("import prelude\ndef main(): Unit {\n    val n = greet(1)\n}", greetingPrelude);
-    a.shouldResolve(At("greet", 1), At("greet", 1, "prelude"));
+    auto a = withGreeting("import kit.greeting\ndef main(): Unit {\n    val n = greet(1)\n}");
+    a.shouldResolve(At("greet", 1), At("greet", 1, "kit.greeting"));
     a.shouldHaveNoDiagnostics();
+}
+
+@("every module sees lang whatever its prelude, and the prelude's names only through the prelude")
+unittest
+{
+    auto greeting = withGreeting("def main(): Unit {\n    printl(greet(1))\n    lang.printl(2)\n}");
+    greeting.shouldHaveNoDiagnostics();
+    greeting.shouldResolve(At("printl", 1), At("printl", 1, "lang.io"));
+    greeting.shouldResolve(At("printl", 2), At("printl", 1, "lang.io"));
+
+    analyzed("def main(): Unit => printl(1)", null, Target.host, false, null).shouldHaveNoDiagnostics();
+    // `Of` is the standard prelude's, so a program built with another doesn't see it.
+    withGreeting("def f(of: Of<Int>): Int => 1\ndef main(): Unit { }").shouldReport(DiagnosticCode.UnknownType, At("Of", 1));
+    // A module named `prelude` is an ordinary one, which only an import brings.
+    analyzed("def main(): Unit {\n    val n = greet(1)\n}", ["prelude.ag": "module prelude\ndef greet(times: Int): Int => times"])
+        .shouldReport(DiagnosticCode.UnknownName, At("greet", 1));
 }
 
 @("name resolution reports a module or package used as a value")

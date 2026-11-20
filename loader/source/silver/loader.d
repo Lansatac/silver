@@ -1,6 +1,6 @@
 module silver.loader;
 
-import std.array : join;
+import std.array : join, split;
 import std.file : exists, readText;
 import std.format : format;
 import std.path : absolutePath, baseName, buildNormalizedPath, buildPath, dirName, stripExtension;
@@ -10,21 +10,24 @@ import std.typecons : Tuple;
 import silver.ast;
 import silver.syntax.parse : parse;
 
-/// Parses `source` (read from `file`) and everything it needs: prelude.ag if an import
-/// path has one, and every imported module, transitively.
+/// Parses `source` (read from `file`) and everything it needs: `lang`, the module `prelude` names
+/// unless it's null, and every imported module, transitively. `lang`'s modules are read from
+/// `standardLibraryPath()` alone, and the others from `importPaths`.
 /// Each file's text is added to `context.sources`, so errors can be reported even if loading fails.
-/// An import that isn't on any import path is reported to `context.collector` and skipped.
+/// An import that isn't on any import path is reported to `context.collector` and skipped, and so
+/// is a prelude that isn't.
 ///
 /// Every imported file must start with a `module` line matching the path it was imported by.
 /// `file` may leave it out, and is then named after the file and can't be imported. If it has
 /// one, the line must match the end of `file`'s path, and the rest of that path is searched for
 /// imports first.
 /// Throws: ParseException.
-Program load(string source, string file, string[] importPaths, SourceContext context)
+Program load(string source, string file, string[] importPaths, string prelude, SourceContext context)
 {
     context.sources.add(file, source);
     Program program;
     program.sources = context.sources;
+    program.prelude = prelude;
     auto start = new Module;
     auto startName = baseName(file).stripExtension;
     *start = parse(source, startName, new NodeIds(ModuleKey.of(startName, source)), file);
@@ -38,6 +41,12 @@ Program load(string source, string file, string[] importPaths, SourceContext con
                 format("Module '%s' must be in a file at %s.ag",
                     start.name, declaration.path.join("/")));
         }
+        else if (isInLang(start.name) && !sameFile(file, findModule(declaration.path, importPaths)))
+        {
+            context.collector.reportError(DiagnosticCode.ModuleDeclarationMismatch, declaration.span,
+                format("Module '%s' belongs to `%s`, which ships with the compiler, so it must be the file at %s",
+                    start.name, langPackage, buildPath(standardLibraryPath() ~ declaration.path) ~ ".ag"));
+        }
         else
         {
             importPaths = root ~ importPaths;
@@ -48,11 +57,22 @@ Program load(string source, string file, string[] importPaths, SourceContext con
 
     // Modules whose imports haven't been followed yet.
     Module*[] unscanned = [start];
-    auto preludePath = findModule(["prelude"], importPaths);
-    if (preludePath !is null && "prelude" !in program.modules)
+    foreach (i, implicit; [langPackage, prelude])
     {
-        program.modules["prelude"] = parseModuleFile(preludePath, ["prelude"], context);
-        unscanned ~= program.modules["prelude"];
+        if (implicit is null || implicit in program.modules) continue;
+        auto chain = implicit.split(".");
+        auto path = findModule(chain, importPaths);
+        if (path !is null)
+        {
+            program.modules[implicit] = parseModuleFile(path, chain, context);
+            unscanned ~= program.modules[implicit];
+        }
+        else if (i == 1)
+        {
+            context.collector.reportError(DiagnosticCode.ModuleNotFound, Span(file, 0, 0),
+                format("The prelude, '%s', wasn't found: there's no %s.ag\nPaths searched: %s",
+                    prelude, chain.join("/"), importPaths.join("\n")));
+        }
     }
 
     while (unscanned.length > 0)
@@ -98,7 +118,7 @@ Program load(string source, string file, string[] importPaths, SourceContext con
     return program;
 }
 
-/// Directory holding Silver's standard library (prelude.ag, math.ag, ...).
+/// Directory holding `lang` and the standard library that ships with the compiler.
 /// For now it's the repo's stdlib/, found relative to this source file; this is the
 /// place to add an environment variable or install-relative lookup later.
 string standardLibraryPath()
@@ -106,9 +126,15 @@ string standardLibraryPath()
     return buildNormalizedPath(dirName(__FILE_FULL_PATH__), "..", "..", "..", "stdlib");
 }
 
-/// The path of the module `chain` on the first import path that has it, or null.
+/// The prelude a build names when it's told of no other: the standard library's. The compiler
+/// itself never names it, and only imports the prelude `load` is given.
+enum standardPrelude = "std.prelude";
+
+/// The path of the module `chain` on the first import path that has it, or null. A module of
+/// `lang` is looked for only where the compiler's own is.
 private string findModule(string[] chain, string[] importPaths)
 {
+    if (isInLang(chain.join("."))) importPaths = [standardLibraryPath()];
     foreach (importPath; importPaths)
     {
         auto path = buildPath(importPath ~ chain) ~ ".ag";
@@ -182,6 +208,13 @@ private string rootOf(string file, const string[] chain)
     return buildPath(parts[0 .. $ - chain.length]);
 }
 
+/// Whether `a` and `b` name the same file, and false when `b` is null.
+private bool sameFile(string a, string b)
+{
+    import std.path : filenameCmp;
+    return b !is null && filenameCmp(buildNormalizedPath(absolutePath(a)), buildNormalizedPath(absolutePath(b))) == 0;
+}
+
 version (unittest)
 {
     import fluent.asserts;
@@ -209,6 +242,13 @@ version (unittest)
         }
         return directory;
     }
+
+    /// The names of `program`'s modules outside `lang`, sorted.
+    string[] ownModules(const Program program)
+    {
+        import std.algorithm : filter;
+        return program.modules.keys.filter!(name => !isInLang(name)).array.sort.array;
+    }
 }
 
 @("load includes transitive imports")
@@ -218,10 +258,10 @@ unittest
         ["a.ag": "module a\nimport b", "b.ag": "module b\ndef b(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("import a", "main.ag", [directory], new SourceContext);
+    auto program = load("import a", "main.ag", [directory], null, new SourceContext);
     assert("a" in program.modules);
     assert("b" in program.modules);
-    program.modules.length.should.equal(3);
+    ownModules(program).length.should.equal(3);
 }
 
 @("load follows forward imports, and a cycle of them ends")
@@ -232,8 +272,8 @@ unittest
             "c.ag": "module c\ndef c(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("import a", "main.ag", [directory], new SourceContext);
-    program.modules.keys.sort.array.should.equal(["a", "b", "c", "main"]);
+    auto program = load("import a", "main.ag", [directory], null, new SourceContext);
+    ownModules(program).should.equal(["a", "b", "c", "main"]);
 }
 
 @("load maps a dotted import to a directory")
@@ -242,7 +282,7 @@ unittest
     auto directory = makeModuleDirectory("dotted", ["a/b.ag": "module a.b\ndef b(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("import a.b", "main.ag", [directory], new SourceContext);
+    auto program = load("import a.b", "main.ag", [directory], null, new SourceContext);
     assert("a.b" in program.modules);
     program.modules["a.b"].name.should.equal("a.b");
 }
@@ -254,8 +294,8 @@ unittest
         ["a.ag": "module a\nimport b", "b.ag": "module b\nimport a"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("import a", "main.ag", [directory], new SourceContext);
-    program.modules.length.should.equal(3);
+    auto program = load("import a", "main.ag", [directory], null, new SourceContext);
+    ownModules(program).length.should.equal(3);
 }
 
 @("load reports an import that isn't on any import path and keeps going")
@@ -268,7 +308,7 @@ unittest
 import nope
 import a";
     auto context = new SourceContext;
-    auto program = load(source, "main.ag", [directory], context);
+    auto program = load(source, "main.ag", [directory], null, context);
 
     auto errors = context.collector.errors.array;
     errors.length.should.equal(1);
@@ -287,7 +327,7 @@ unittest
 
     auto context = new SourceContext;
     load("import nope
-import a", "main.ag", [directory], context);
+import a", "main.ag", [directory], null, context);
 
     context.collector.errors.array.length.should.equal(2);
     foreach (diagnostic; context.collector.errors)
@@ -302,14 +342,13 @@ unittest
     import std.array : array;
 
     auto directory = makeModuleDirectory("ids",
-        ["prelude.ag": "module prelude\ndef p(): Int => 1", "a.ag": "module a\ndef a(): Int => 2"]);
+        ["base.ag": "module base\ndef p(): Int => 1", "a.ag": "module a\ndef a(): Int => 2"]);
     scope (exit) rmdirRecurse(directory);
 
     auto program = load("import a
-def main(): Unit => ()", "main.ag", [directory], new SourceContext);
-    auto modules = program.modules.byValue.map!(m => *m).array;
-    modules.length.should.equal(3);
-    assert(idProblems(modules) == []);
+def main(): Unit => ()", "main.ag", [directory], "base", new SourceContext);
+    ownModules(program).should.equal(["a", "base", "main"]);
+    assert(idProblems(program.modules.byValue.map!(m => *m).array) == []);
 }
 
 @("load shares an imported module between programs until its file changes")
@@ -320,41 +359,139 @@ unittest
     auto directory = makeModuleDirectory("shared", ["a.ag": "module a\ndef a(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto first = load("import a", "main.ag", [directory], new SourceContext);
-    auto second = load("import a\ndef main(): Unit => ()", "main.ag", [directory], new SourceContext);
+    auto first = load("import a", "main.ag", [directory], null, new SourceContext);
+    auto second = load("import a\ndef main(): Unit => ()", "main.ag", [directory], null, new SourceContext);
     assert(first.modules["a"] is second.modules["a"]);
     assert(first.modules["main"] !is second.modules["main"]);
 
     write(buildPath(directory, "a.ag"), "module a\ndef a(): Int => 2");
-    auto changed = load("import a", "main.ag", [directory], new SourceContext);
+    auto changed = load("import a", "main.ag", [directory], null, new SourceContext);
     assert(changed.modules["a"] !is first.modules["a"]);
     assert(changed.modules["a"].id != first.modules["a"].id);
 }
 
-@("standardLibraryPath holds prelude.ag")
+@("standardLibraryPath holds lang and the standard prelude")
 unittest
 {
-    assert(exists(buildPath(standardLibraryPath(), "prelude.ag")));
+    assert(exists(buildPath(standardLibraryPath(), langPackage ~ ".ag")));
+    assert(exists(buildPath(standardLibraryPath() ~ standardPrelude.split(".")) ~ ".ag"));
 }
 
-@("load includes the prelude when an import path has one")
+@("load includes the prelude it's given, whatever its name")
 unittest
 {
-    auto directory = makeModuleDirectory("prelude", ["prelude.ag": "module prelude\ndef p(): Int => 1"]);
+    auto directory = makeModuleDirectory("prelude", ["kit/base.ag": "module kit.base\ndef p(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("def x(): Int => 1", "main.ag", [directory], new SourceContext);
-    assert("prelude" in program.modules);
+    auto program = load("def x(): Int => 1", "main.ag", [directory], "kit.base", new SourceContext);
+    ownModules(program).should.equal(["kit.base", "main"]);
+    program.prelude.should.equal("kit.base");
 }
 
-@("load works without a prelude")
+@("load includes no prelude when it's given none, and a module named prelude is ordinary")
 unittest
 {
-    auto directory = makeModuleDirectory("no-prelude", ["a.ag": "module a\ndef a(): Int => 1"]);
+    auto directory = makeModuleDirectory("no-prelude", ["prelude.ag": "module prelude\ndef p(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
-    auto program = load("def x(): Int => 1", "main.ag", [directory], new SourceContext);
-    program.modules.keys.should.equal(["main"]);
+    auto program = load("def x(): Int => 1", "main.ag", [directory], null, new SourceContext);
+    ownModules(program).should.equal(["main"]);
+}
+
+@("load reports a prelude that isn't on any import path")
+unittest
+{
+    auto context = new SourceContext;
+    load("def x(): Int => 1", "main.ag", [], "kit.base", context);
+
+    auto errors = context.collector.errors.array;
+    errors.length.should.equal(1);
+    errors[0].code.should.equal(DiagnosticCode.ModuleNotFound);
+    errors[0].message.should.contain("The prelude, 'kit.base', wasn't found");
+    errors[0].span.should.equal(Span("main.ag", 0, 0));
+}
+
+@("load always brings lang, and only from the compiler's own directory")
+unittest
+{
+    auto directory = makeModuleDirectory("lang-replaced",
+        ["lang.ag": "module lang\ndef fake(): Int => 1", "lang/io.ag": "module lang.io\ndef fake(): Int => 1"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto program = load("import lang.io", "main.ag", [directory], null, new SourceContext);
+    program.modules[langPackage].span.file.should.equal(buildPath(standardLibraryPath(), "lang.ag"));
+    program.modules["lang.io"].span.file.should.equal(buildPath(standardLibraryPath(), "lang", "io.ag"));
+}
+
+@("load refuses a starting module that claims to be in lang from somewhere else")
+unittest
+{
+    auto directory = makeModuleDirectory("lang-claimed", ["lang/evil.ag": ""]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto context = new SourceContext;
+    load("module lang.evil", buildPath(directory, "lang", "evil.ag"), [], null, context);
+    auto errors = context.collector.errors.array;
+    errors.length.should.equal(1);
+    errors[0].code.should.equal(DiagnosticCode.ModuleDeclarationMismatch);
+    errors[0].message.should.contain("ships with the compiler");
+}
+
+@("load accepts lang's own modules as the starting file, as `silver test` runs them")
+unittest
+{
+    auto path = buildPath(standardLibraryPath(), "lang", "char.ag");
+    auto context = new SourceContext;
+    load(readText(path), path, [], null, context);
+    context.collector.diagnostics.length.should.equal(0);
+}
+
+@("nothing in lang imports another package")
+unittest
+{
+    import std.file : dirEntries, SpanMode;
+    import std.regex : matchFirst, regex;
+
+    auto lang = buildPath(standardLibraryPath(), langPackage);
+    auto files = dirEntries(lang, "*.ag", SpanMode.depth).map!(e => e.name).array ~ [lang ~ ".ag"];
+    auto anImport = regex(`^\s*(forward\s+)?import\s+([A-Za-z0-9_.]+)`, "m");
+    foreach (file; files)
+    {
+        foreach (line; readText(file).split("\n"))
+        {
+            auto found = line.matchFirst(anImport);
+            if (!found.empty) assert(isInLang(found[2]), file ~ " imports " ~ found[2]);
+        }
+    }
+}
+
+@("the compiler names no module outside lang")
+unittest
+{
+    import std.algorithm : canFind, endsWith, filter, startsWith;
+    import std.string : strip;
+    import std.file : dirEntries, SpanMode;
+    import std.regex : matchFirst, regex;
+
+    // The standard library's prelude is named only where a build picks it, as `standardPrelude`.
+    // Tests may name what they like, so only what comes before a `version (unittest)` is read.
+    auto root = buildNormalizedPath(standardLibraryPath(), "..");
+    auto named = regex(`"(std|prelude|intrinsics)(\.[A-Za-z0-9_.]*)?"`);
+    foreach (package_; ["ast", "syntax", "loader", "sema", "core", "interpreter", "codegen"])
+    {
+        foreach (file; dirEntries(buildPath(root, package_, "source"), "*.d", SpanMode.depth)
+            .map!(e => e.name).filter!(f => !f.endsWith("_tests.d") && !f.canFind("cases")))
+        {
+            auto text = readText(file);
+            auto end = text.indexOf("version (unittest)");
+            foreach (line; (end < 0 ? text : text[0 .. end]).split("\n"))
+            {
+                if (line.canFind("enum standardPrelude") || line.strip.startsWith("//")) continue;
+                auto found = line.matchFirst(named);
+                assert(found.empty, file ~ " names " ~ found.hit);
+            }
+        }
+    }
 }
 
 @("load records an imported module's text and throws its parse error")
@@ -367,7 +504,7 @@ unittest
     auto badPath = buildPath(directory, "bad.ag");
     try
     {
-        load("import bad", "main.ag", [directory], context);
+        load("import bad", "main.ag", [directory], null, context);
         assert(false, "Expected a parse error");
     }
     catch (ParseException e)
@@ -384,7 +521,7 @@ unittest
     scope (exit) rmdirRecurse(directory);
 
     auto context = new SourceContext;
-    auto program = load("import a.b", "main.ag", [directory], context);
+    auto program = load("import a.b", "main.ag", [directory], null, context);
 
     auto errors = context.collector.errors.array;
     errors.length.should.equal(1);
@@ -402,7 +539,7 @@ unittest
     scope (exit) rmdirRecurse(directory);
 
     auto context = new SourceContext;
-    load("import a.b", "main.ag", [directory], context);
+    load("import a.b", "main.ag", [directory], null, context);
 
     auto errors = context.collector.errors.array;
     errors.length.should.equal(1);
@@ -418,7 +555,7 @@ unittest
     scope (exit) rmdirRecurse(directory);
 
     auto context = new SourceContext;
-    auto program = load("module app.tool", buildPath(directory, "app", "tool.ag"), [], context);
+    auto program = load("module app.tool", buildPath(directory, "app", "tool.ag"), [], null, context);
     context.collector.diagnostics.length.should.equal(0);
     assert("app.tool" in program.modules);
     program.modules["app.tool"].name.should.equal("app.tool");
@@ -427,7 +564,7 @@ unittest
 @("load names an undeclared entry module by its file name")
 unittest
 {
-    auto program = load("def main(): Unit => ()", "script.ag", [], new SourceContext);
+    auto program = load("def main(): Unit => ()", "script.ag", [], null, new SourceContext);
     assert("script" in program.modules);
 }
 
@@ -441,7 +578,7 @@ unittest
 
     auto context = new SourceContext;
     auto program = load("module std.math\nimport std.common", buildPath(directory, "std", "math.ag"),
-        [], context);
+        [], null, context);
     context.collector.diagnostics.length.should.equal(0);
     assert("std.common" in program.modules);
 }
@@ -458,7 +595,7 @@ unittest
     if (!package_.all!isLower) return;
 
     auto context = new SourceContext;
-    load("module " ~ package_ ~ ".tool", "tool.ag", [], context);
+    load("module " ~ package_ ~ ".tool", "tool.ag", [], null, context);
     context.collector.diagnostics.length.should.equal(0);
 }
 
@@ -467,7 +604,7 @@ unittest
 {
     auto source = "module std.maths";
     auto context = new SourceContext;
-    load(source, buildPath("lib", "std", "math.ag"), [], context);
+    load(source, buildPath("lib", "std", "math.ag"), [], null, context);
 
     auto errors = context.collector.errors.array;
     errors.length.should.equal(1);
@@ -484,10 +621,10 @@ unittest
 
     auto context = new SourceContext;
     auto program = load("module app.main\nimport app.helper", buildPath(directory, "app", "main.ag"),
-        [], context);
+        [], null, context);
 
     context.collector.diagnostics.length.should.equal(0);
-    program.modules.keys.sort.array.should.equal(["app.helper", "app.main"]);
+    ownModules(program).should.equal(["app.helper", "app.main"]);
 }
 
 @("load reports an import of an undeclared starting module, at the import")
@@ -498,7 +635,7 @@ unittest
     scope (exit) rmdirRecurse(directory);
 
     auto context = new SourceContext;
-    load("import helper", buildPath(directory, "script.ag"), [directory], context);
+    load("import helper", buildPath(directory, "script.ag"), [directory], null, context);
 
     auto errors = context.collector.errors.array;
     errors.length.should.equal(1);

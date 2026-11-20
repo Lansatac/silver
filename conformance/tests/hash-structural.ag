@@ -1,6 +1,6 @@
 // Every type has a structural hash, which equal values share. What the hashes are isn't
 // printed, since they needn't be the same on both backends.
-import intrinsics.hash
+import lang.hash
 import std.ref
 
 type Point(x: Int, y: Int)

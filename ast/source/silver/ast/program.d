@@ -5,11 +5,14 @@ import silver.ast.id : Id;
 import silver.ast.nodes : FunctionDecl, Module;
 import silver.ast.span : Span;
 
-/// Every module a program needs, parsed: the file it was started from, the prelude, and
-/// every module imported (transitively). None of them is special; the program's entry
-/// point is whichever module defines `main`.
+/// Every module a program needs, parsed: the file it was started from, `lang`, the prelude, and
+/// every module imported (transitively). The program's entry point is whichever module defines
+/// `main`.
 struct Program
 {
+    /// The module every module outside `lang` imports without saying so, as the build named it,
+    /// or null for none.
+    string prelude;
     /// By dotted name, e.g. "std.math". A file without a `module` line is named after the file.
     /// Pointers because with `Module[string]`, dmd's unittest build of this package
     /// fails to link (a missing `__equals!(Expr, Expr)` instance).
@@ -25,6 +28,17 @@ auto sortedModules(const ref Program program)
     import std.algorithm;
     import std.range;
     return program.modules.byKey.array.sort!((a, b) => a < b).map!(k => *program.modules[k]);
+}
+
+/// The package the compiler knows by name, which ships with it. Its root module is imported by
+/// every other module without saying so, and only its modules may declare intrinsics.
+enum langPackage = "lang";
+
+/// Whether the module `name` belongs to `lang`.
+bool isInLang(string name)
+{
+    import std.algorithm : startsWith;
+    return name == langPackage || name.startsWith(langPackage ~ ".");
 }
 
 /// A top-level `def main` somewhere in a program.

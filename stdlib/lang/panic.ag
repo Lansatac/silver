@@ -1,4 +1,4 @@
-module intrinsics.panic
+module lang.panic
 
 // Stops the program with `message`, for what can't happen.
 intrinsic def panic(message: String): Never

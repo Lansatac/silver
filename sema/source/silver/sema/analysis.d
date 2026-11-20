@@ -560,14 +560,14 @@ Analysis analyze(const ref Program program, Collector collector, Target target =
 
 version (unittest)
 {
-    import silver.loader : load, standardLibraryPath;
+    import silver.loader : load, standardLibraryPath, standardPrelude;
 
     /// Loads `source` as the entry module (with the real stdlib) and analyzes it.
     /// Load errors fail the test, so a test only ever sees sema's diagnostics.
     Collector analyzeSource(string source)
     {
         auto context = new SourceContext;
-        auto program = load(source, "main.ag", [standardLibraryPath()], context);
+        auto program = load(source, "main.ag", [standardLibraryPath()], standardPrelude, context);
         assert(!context.collector.hasErrors, "The test program failed to load");
         analyze(program, context.collector);
         return context.collector;

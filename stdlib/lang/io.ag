@@ -1,4 +1,4 @@
-module intrinsics.io
+module lang.io
 
 intrinsic def print(value: Any): Unit
 intrinsic def printl(value: Any): Unit

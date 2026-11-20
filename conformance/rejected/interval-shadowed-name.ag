@@ -1,4 +1,4 @@
-// Where a module has an `Interval` of its own, an error names the prelude's in full.
+// Where a module has an `Interval` of its own, an error names lang's in full.
 type Interval(low: Int, high: Int)
 
 def main(): Unit {

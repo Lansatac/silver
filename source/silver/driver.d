@@ -10,7 +10,7 @@ import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, 
 import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, optimizeIr, Toolchain;
 import silver.core : lowerProgram, printCore = print;
 import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed, RuntimeError;
-import silver.loader : load, standardLibraryPath;
+import silver.loader : load, standardLibraryPath, standardPrelude;
 import silver.sema : analyze, Analysis, Target;
 
 /// Loads and analyzes `programFile`. Problems go to `context.collector`, which the caller
@@ -19,7 +19,7 @@ Analysis loadAndAnalyze(string programFile, string[] importPaths, SourceContext 
 {
     try
     {
-        program = load(programFile.readText, programFile, importPaths, context);
+        program = load(programFile.readText, programFile, importPaths, standardPrelude, context);
     }
     catch (DiagnosticException e)
     {

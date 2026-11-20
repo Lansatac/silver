@@ -9,6 +9,7 @@ import std.algorithm : canFind;
 import silver.ast : DiagnosticCode;
 import silver.sema.check_tests : shouldHaveType;
 import silver.sema.resolution_tests;
+import silver.sema.target : Target;
 
 /// `body` in `main`, after `declarations`.
 private Analyzed analyzedWith(string declarations, string body)
@@ -366,10 +367,10 @@ unittest
 unittest
 {
     // The prelude's `show(Any)` fits a `Point` too, as the real prelude's `printl(Any)` does.
-    auto prelude = ["prelude.ag": "module prelude\nforward import console",
+    auto prelude = ["kit/base.ag": "module kit.base\nforward import console",
         "console.ag": "module console\ndef show(value: Any): Unit => ()"];
     auto a = analyzed("type Point(x: Int, y: Int)\ndef show(p: Point): Unit => show(\"({p.x}, {p.y})\")\n"
-        ~ "def main(): Unit => show(Point(1, 2))", prelude);
+        ~ "def main(): Unit => show(Point(1, 2))", prelude, Target.host, false, "kit.base");
     a.shouldHaveNoDiagnostics();
     a.shouldCall(At("show", 2), At("show", 1, "console"));
     a.shouldCall(At("show", 3), At("show", 1));

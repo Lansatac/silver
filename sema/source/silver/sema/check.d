@@ -2326,25 +2326,25 @@ private final class TypeChecker
         return expected;
     }
 
-    /// The prelude's `Range`, which `for` loops over, or an invalid ID when there's no prelude.
+    /// `lang`'s `Range`, which `for` loops over, or an invalid ID when `lang` isn't loaded.
     private Id!InterfaceDecl rangeDecl()
     {
-        auto prelude = "intrinsics.range" in _resolutions.moduleScopes;
+        auto prelude = "lang.range" in _resolutions.moduleScopes;
         auto symbol = prelude is null ? null : (*prelude).resolveLocalType("Range");
         if (symbol is null) return Id!InterfaceDecl.init;
         return (*symbol).match!((const Id!InterfaceDecl decl) => decl, _ => Id!InterfaceDecl.init);
     }
 
-    /// The prelude's `Interval`, which `a..b` builds, or an invalid ID when there's no prelude.
+    /// `lang`'s `Interval`, which `a..b` builds, or an invalid ID when `lang` isn't loaded.
     private Id!TypeDecl intervalDecl()
     {
-        auto prelude = "intrinsics.interval" in _resolutions.moduleScopes;
+        auto prelude = "lang.interval" in _resolutions.moduleScopes;
         auto symbol = prelude is null ? null : (*prelude).resolveLocalType("Interval");
         if (symbol is null) return Id!TypeDecl.init;
         return (*symbol).match!((const Id!TypeDecl decl) => decl, _ => Id!TypeDecl.init);
     }
 
-    /// Names the prelude's `Interval` in full when a module declares one of its own, so an error
+    /// Names `lang`'s `Interval` in full when a module declares one of its own, so an error
     /// that mentions both tells them apart.
     private void qualifyShadowedInterval()
     {
@@ -2356,7 +2356,7 @@ private final class TypeChecker
             auto own = symbol is null ? Id!TypeDecl.init : (*symbol).match!((const Id!TypeDecl d) => d, _ => Id!TypeDecl.init);
             if (own.isValid && own != prelude)
             {
-                _types.rename(prelude, "prelude.Interval");
+                _types.rename(prelude, "lang.Interval");
                 return;
             }
         }
@@ -2374,7 +2374,7 @@ private final class TypeChecker
         if (!decl.isValid)
         {
             _collector.reportError(DiagnosticCode.UnknownType, span,
-                "`a..b` builds an `Interval`, which the prelude declares, and there's no prelude");
+                "`a..b` builds an `Interval`, which `lang` declares, and `lang` isn't loaded");
             return _types.error;
         }
         return _types.nominal(decl, "Interval", [element]);
@@ -6161,9 +6161,9 @@ private final class TypeChecker
     }
 
     /// What `for` yields from a `type` that isn't an array or an interval: the element of the
-    /// type's conformance to the prelude's `Range`, whose `next` steps it. Inside a generic
+    /// type's conformance to `lang`'s `Range`, whose `next` steps it. Inside a generic
     /// function, a type parameter's bounds say whether it's a `Range`. `Type.init` when there's
-    /// no prelude.
+    /// no `lang`.
     private Type loopElement(const Expr for_, const Expr iterable, Type type, BodyContext ctx)
     {
         auto range = rangeDecl();

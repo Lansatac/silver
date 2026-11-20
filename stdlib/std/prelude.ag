@@ -1,0 +1,7 @@
+// Everything here is visible in every module without an import, beside what `lang` provides.
+module std.prelude
+
+forward import std.range
+
+// Says which type is meant to a function that takes no value of it, as in `fromJson(Of<Point>, text)`.
+type Of<T>

@@ -1,0 +1,6 @@
+// C's integer types whose width depends on the platform being compiled for.
+module lang.c
+
+// 32 bits on Windows and 64 on Linux.
+intrinsic alias CLong
+intrinsic alias CULong

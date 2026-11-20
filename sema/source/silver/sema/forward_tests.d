@@ -8,6 +8,7 @@ import std.array : array;
 
 import silver.ast : DiagnosticCode;
 import silver.sema.resolution_tests;
+import silver.sema.target : Target;
 
 private enum string[string] library = [
     "a.ag": "module a
@@ -317,10 +318,10 @@ unittest
 unittest
 {
     auto files = [
-        "prelude.ag": "module prelude\nforward import lib",
+        "kit/base.ag": "module kit.base\nforward import lib",
         "lib.ag": "module lib\ndef answer(): Int => 42",
     ];
-    auto a = analyzed("def main(): Unit {\n    _ = answer()\n    _ = prelude.answer()\n}", files);
+    auto a = analyzed("def main(): Unit {\n    _ = answer()\n    _ = kit.base.answer()\n}", files, Target.host, false, "kit.base");
     a.shouldHaveNoDiagnostics();
     a.shouldCall(At("answer", 1), At("answer", 1, "lib"));
     a.shouldCall(At("answer", 2), At("answer", 1, "lib"));

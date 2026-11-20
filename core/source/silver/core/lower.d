@@ -2768,7 +2768,7 @@ version (unittest)
     import std.typecons : Tuple;
     import silver.ast : formatDiagnostic, SourceContext;
     import silver.core.print : print;
-    import silver.loader : load, standardLibraryPath;
+    import silver.loader : load, standardLibraryPath, standardPrelude;
     import silver.sema : analyze, Intrinsic;
 
     alias Lowered = Tuple!(Program, "program", Analysis, "analysis");
@@ -2778,7 +2778,7 @@ version (unittest)
     private Lowered loweredFunction(string source, string name)
     {
         auto context = new SourceContext;
-        auto program = load(source ~ "\ndef main(): () { }", "test", [standardLibraryPath()], context);
+        auto program = load(source ~ "\ndef main(): () { }", "test", [standardLibraryPath()], standardPrelude, context);
         auto analysis = analyze(program, context.collector);
         assert(!context.collector.hasErrors, context.collector.errors
                 .map!(d => formatDiagnostic(d, context.sources)).join("\n"));
@@ -3423,7 +3423,7 @@ def format.[Int](value: [Int]): String {
 @("hashing mixes fields and elements in order, after an array's length and a sum's tag, and mixes the result once more")
 unittest
 {
-    auto result = loweredFunction(`import intrinsics.hash
+    auto result = loweredFunction(`import lang.hash
 type Shape = Circle(radius: Float) | Blank
 def f(points: [(Int, String)], s: Shape?): UInt => hash(points) ^ hash(s)`, "f");
     print(result.program).should.equal(

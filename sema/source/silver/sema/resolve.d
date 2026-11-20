@@ -391,7 +391,7 @@ package final class Scope
 {
     private SymbolId[string] _scopeTable;
     private const Scope _parent;
-    /// The enclosing module's imports, plus the prelude.
+    /// The enclosing module's imports, plus `lang` and the prelude.
     private const(ModuleAccess)[] _imports;
     private const(string)[] _importedModules;
     private TypeSymbol[string] _typeTable;
@@ -586,8 +586,6 @@ private struct Path
 
 private final class NameResolver
 {
-    private enum preludeName = "prelude";
-
     private SideTable!(Id!Expr, SymbolId) _resolutions;
     private SideTable!(Id!TypeExpr, TypeSymbol) _typeResolutions;
     private SideTable!(Id!Expr, Id!FunctionDecl) _callees;
@@ -646,7 +644,7 @@ private final class NameResolver
         auto modules = program.sortedModules;
         foreach (mod; modules)
         {
-            declareModule(mod.name, mod, (preludeName in program.modules) !is null);
+            declareModule(mod.name, mod, implicitImports(program, mod.name));
         }
         reportForwardCycles(modules);
         forwardNames(modules);
@@ -1087,9 +1085,20 @@ private final class NameResolver
         return typeA !is null && typeB !is null && *typeA != *typeB;
     }
 
-    private void declareModule(string name, const Module mod, bool hasPrelude)
+    /// What the module `name` imports without saying so: `lang`, and the prelude the build named
+    /// unless the module is in `lang`, which depends on nothing else.
+    private static ModuleAccess[] implicitImports(const Program program, string name)
     {
-        ModuleAccess[] imports = hasPrelude && name != preludeName ? [ModuleAccess(preludeName, true)] : [];
+        ModuleAccess[] imports;
+        if (name != langPackage && langPackage in program.modules) imports ~= ModuleAccess(langPackage, true);
+        auto prelude = program.prelude;
+        if (prelude !is null && name != prelude && !isInLang(name) && prelude in program.modules)
+            imports ~= ModuleAccess(prelude, true);
+        return imports;
+    }
+
+    private void declareModule(string name, const Module mod, ModuleAccess[] imports)
+    {
         if (mod.library !is null) _nativeLibraries[name] = mod.library.name;
         foreach (decl; mod.declarations)
         {
@@ -1271,28 +1280,19 @@ private final class NameResolver
         }
     }
 
-    /// Reports an intrinsic declared outside the standard library, or one the compiler doesn't implement.
+    /// Reports an intrinsic declared outside `lang`, or one the compiler doesn't implement.
     private void checkIntrinsic(string moduleName, Span nameSpan, string form, bool known)
     {
-        if (!isStandardLibrary(moduleName))
+        if (!isInLang(moduleName))
         {
-            _collector.reportError(DiagnosticCode.IntrinsicOutsideStandardLibrary, nameSpan,
-                "`%s` is only available in the standard library".format(form));
+            _collector.reportError(DiagnosticCode.IntrinsicOutsideLang, nameSpan,
+                "`%s` is only available in `%s`".format(form, langPackage));
         }
         else if (!known)
         {
             _collector.reportError(DiagnosticCode.UnknownIntrinsic, nameSpan,
                 "The compiler has no `%s` with this name".format(form));
         }
-    }
-
-    private static bool isStandardLibrary(string moduleName)
-    {
-        return moduleName == preludeName
-        || moduleName == "std"
-        || moduleName.startsWith("std.")
-        || moduleName == "intrinsics"
-        || moduleName.startsWith("intrinsics.");
     }
 
     private void resolveAliases(string name, const Module mod)

@@ -1,0 +1,11 @@
+// The package the compiler knows. Every module sees what this one forwards without an import,
+// whatever its prelude.
+module lang
+
+forward import lang.array
+forward import lang.interval
+forward import lang.io
+forward import lang.panic
+forward import lang.range
+forward import lang.string : bytes, next
+forward import lang.testing

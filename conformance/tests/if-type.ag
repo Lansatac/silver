@@ -29,7 +29,7 @@ def middle<R, T>(r: R, fallback: T): T =>
 // Asked again in a function that doesn't ask, through its own instance.
 def through<U>(u: U): Int => measure(u)
 
-// The prelude's own conformances answer too.
+// lang's own conformances answer too.
 def first<R, T>(r: R, fallback: T): T =>
     if type R: Range<T> {
         match next(r) {
