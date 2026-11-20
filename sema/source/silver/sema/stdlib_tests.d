@@ -72,10 +72,10 @@ private string[] hiddenByFacades(string fixtures, string[] modules)
     import std.array : join;
     import std.sumtype : match;
     import silver.ast;
-    import silver.loader : load, Packages, standardPackage, standardPrelude, withStandardLibrary;
+    import silver.loader : load, Packages, standardPrelude, withStandardLibrary;
     import silver.sema.analysis : analyze;
 
-    auto roots = Packages(withStandardLibrary(fixtures is null ? [] : [Package(null, fixtures)]), [standardPackage]);
+    auto roots = Packages(withStandardLibrary(fixtures is null ? [] : [Package(null, fixtures)]));
     auto context = new SourceContext;
     auto program = load(modules.map!(m => "import " ~ m ~ "\n").join, "main.ag", roots, standardPrelude, context);
     assert(!context.collector.hasErrors, "The modules failed to load");

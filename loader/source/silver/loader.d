@@ -113,6 +113,10 @@ Program load(string source, string file, const Packages packages, string prelude
     program.modules[start.name] = start;
     program.entryModule = start.name;
     if (!layout.described(context)) return program;
+    if (prelude !is null && !isInLang(prelude))
+    {
+        if (auto owner = layout.locate(prelude.split(".")).package_) layout.preludePackage = owner.name;
+    }
 
     // Modules whose imports haven't been followed yet.
     Module*[] unscanned = [start];
@@ -242,6 +246,9 @@ private struct Layout
     /// own, as `scriptPackage` names it, and its module's name.
     string script;
     string scriptModule;
+    /// The package the prelude is in, which every package and script uses without listing it, or
+    /// null when there's no prelude or it's in no package.
+    string preludePackage;
 
     /// Where the module `chain` would be, and why it isn't if it isn't.
     Location locate(const string[] chain) const
@@ -294,12 +301,14 @@ private struct Layout
         return null;
     }
 
-    /// What the package `name` lists as using.
+    /// What the package `name` uses: what it lists, and the prelude's package.
     const(string)[] usesOf(string name) const
     {
-        if (script !is null && name == script) return scriptUses;
         auto found = named(name);
-        return found is null ? [] : found.uses;
+        const(string)[] listed = script !is null && name == script ? scriptUses : found is null ? [] : found.uses;
+        if (preludePackage is null || name == preludePackage || isInLang(name) || listed.canFind(preludePackage))
+            return listed;
+        return listed ~ preludePackage;
     }
 
     /// Whether a module of the package `from` may import from the package `to`.
@@ -311,9 +320,8 @@ private struct Layout
     /// Why the module `importing`, of the package `from`, can't import `name`, of the package `to`.
     string outsideUses(string from, string importing, string name, string to) const
     {
-        auto uses = usesOf(from);
-        auto listed = uses.length == 0 ? "uses no package but `" ~ langPackage ~ "`"
-            : "uses only " ~ uses.map!(u => "'" ~ u ~ "'").join(", ");
+        auto uses = ["`" ~ langPackage ~ "`"] ~ usesOf(from).map!(u => "'" ~ u ~ "'").array;
+        auto listed = "uses no package but " ~ (uses.length == 1 ? uses[0] : uses[0 .. $ - 1].join(", ") ~ " and " ~ uses[$ - 1]);
         auto suggested = hint(usesHint is null ? null : usesHint(from == script ? null : from, to));
         return from == script
             ? format("'%s' is a file with no `module` line, so a program of its own that %s, and it can't import '%s', "
@@ -635,8 +643,8 @@ string describePackages(const string[] declared, const string[] uses, const stri
             }
             if (at <= 0)
                 return i == 0
-                    ? format("--uses takes a package and what it uses, as `--uses app=geometry,std`, or for a file "
-                        ~ "with no `module` line only what it uses, as `--uses geometry,std`, not `%s`", option)
+                    ? format("--uses takes a package and what it uses, as `--uses app=geometry`, or for a file "
+                        ~ "with no `module` line only what it uses, as `--uses geometry`, not `%s`", option)
                     : format("--parts takes a package and its parts, as `--parts silver=silver.core`, not `%s`", option);
             auto owner = find(option[0 .. at]);
             if (owner is null)
@@ -916,10 +924,10 @@ version (unittest)
     }
 
     /// The standard library, and `directory` as the unnamed package of a test's fixtures unless it's
-    /// null, with a starting file that has no `module` line using the standard library.
+    /// null.
     Packages loose(string directory)
     {
-        return Packages(withStandardLibrary(directory is null ? [] : [Package(null, directory)]), [standardPackage]);
+        return Packages(withStandardLibrary(directory is null ? [] : [Package(null, directory)]));
     }
 }
 
@@ -1502,7 +1510,7 @@ unittest
     auto errors = context.collector.errors.array;
     errors.map!(e => e.code).array.should.equal([DiagnosticCode.ImportOutsideUses, DiagnosticCode.ImportOutsideUses]);
     errors[0].span.start.should.equal(source.indexOf("import units"));
-    errors[0].message.should.contain("'main' is a file with no `module` line, so a program of its own that uses only 'geometry'");
+    errors[0].message.should.contain("'main' is a file with no `module` line, so a program of its own that uses no package but `lang` and 'geometry'");
     errors[1].span.file.should.equal(buildPath(directory, "geometry", "area.ag"));
     errors[1].message.should.contain("The package 'geometry' uses no package but `lang`, so 'geometry.area' can't import "
         ~ "'units.length', from the package 'units'");
@@ -1679,7 +1687,7 @@ unittest
 unittest
 {
     auto context = new SourceContext;
-    auto program = load("import std.random", "main.ag", Packages(withStandardLibrary([]), [standardPackage]),
+    auto program = load("import std.random", "main.ag", Packages(withStandardLibrary([])),
         standardPrelude, context);
     context.collector.diagnostics.length.should.equal(0);
     program.packageOf["std.random"].should.equal(standardPackage);
@@ -1688,9 +1696,51 @@ unittest
     context = new SourceContext;
     load("def f(): Int => 1", "main.ag", Packages(withStandardLibrary([])), standardPrelude, context);
     context.collector.diagnostics.length.should.equal(0);
-    context = new SourceContext;
+}
+
+@("every package and script uses the prelude's package without listing it, and listing it changes nothing")
+unittest
+{
+    auto context = new SourceContext;
     load("import std.random", "main.ag", Packages(withStandardLibrary([])), standardPrelude, context);
+    context.collector.diagnostics.length.should.equal(0);
+
+    auto directory = makeModuleDirectory("packages-prelude-implicit", [
+        "geo/shapes.ag": "module geo.shapes\nimport std.math",
+        "base/prelude.ag": "module base.prelude",
+        "base/extra.ag": "module base.extra",
+        "kit/tool.ag": "module kit.tool\nimport base.extra",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto geo = Package("geo", buildPath(directory, "geo"));
+    context = new SourceContext;
+    load("import geo.shapes\nimport std.math", "main.ag", Packages(withStandardLibrary([geo]), ["geo"]),
+        standardPrelude, context);
+    context.collector.diagnostics.length.should.equal(0);
+    context = new SourceContext;
+    load("import geo.shapes", "main.ag", Packages(withStandardLibrary([Package("geo", geo.directory, ["std"])]),
+        ["geo", "std"]), standardPrelude, context);
+    context.collector.diagnostics.length.should.equal(0);
+
+    // The package is the prelude's, whatever it's named, and std is then listed like any other.
+    auto packages = Packages(withStandardLibrary([Package("base", buildPath(directory, "base")),
+        Package("kit", buildPath(directory, "kit"))]), ["kit"]);
+    context = new SourceContext;
+    load("import kit.tool\nimport base.extra", "main.ag", packages, "base.prelude", context);
+    context.collector.diagnostics.length.should.equal(0);
+    context = new SourceContext;
+    load("import std.random", "main.ag", packages, "base.prelude", context);
     context.collector.errors.array.map!(e => e.code).array.should.equal([DiagnosticCode.ImportOutsideUses]);
+}
+
+@("a module of lang can't import the prelude's package")
+unittest
+{
+    auto context = new SourceContext;
+    auto lang = langModulePath(["lang", "io"]);
+    load("module lang.io\nimport std.math", lang, Packages(withStandardLibrary([])), standardPrelude, context);
+    context.collector.errors.array.map!(e => e.code).canFind(DiagnosticCode.LangImportsOutside).should.equal(true);
 }
 
 @("a file with no module line in a package's directory is a program of its own, so its main doesn't make the package one")
@@ -1787,19 +1837,23 @@ unittest
 @("what the command line describes names the option that fixes what's missing")
 unittest
 {
-    auto directory = makeModuleDirectory("packages-hints", ["geo/shapes.ag": "module geo.shapes\nimport std.math"]);
+    auto directory = makeModuleDirectory("packages-hints", [
+        "geo/shapes.ag": "module geo.shapes\nimport units.length",
+        "units/length.ag": "module units.length",
+    ]);
     scope (exit) rmdirRecurse(directory);
 
     string[] problems(string source, string[] uses)
     {
         Packages packages;
-        assert(describePackages(["geo=" ~ buildPath(directory, "geo")], uses, [], null, packages) is null);
+        assert(describePackages(["geo=" ~ buildPath(directory, "geo"), "units=" ~ buildPath(directory, "units")], uses,
+            [], null, packages) is null);
         auto context = new SourceContext;
-        load(source, "main.ag", packages, null, context);
+        load(source, "main.ag", packages, standardPrelude, context);
         return context.collector.errors.map!(e => e.message.idup).array;
     }
     problems("import geo.shapes", [])[0].should.contain("\nGive `--uses geo` to list it");
-    problems("import geo.shapes", ["geo"])[0].should.contain("\nGive `--uses geo=std` to list it");
+    problems("import geo.shapes", ["geo"])[0].should.contain("\nGive `--uses geo=units` to list it");
     problems("import shapes.circle", [])[0].should.contain("\nGive `--package shapes=<directory>` to declare one");
     problems("def f(): Int => 1", ["nope"])[0].should.contain("\nGive `--package nope=<directory>` to declare one");
 }

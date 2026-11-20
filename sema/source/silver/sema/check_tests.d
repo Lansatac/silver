@@ -3127,14 +3127,14 @@ unittest
 {
     import std.algorithm : canFind, map;
     import std.array : array;
-    import silver.loader : load, Packages, standardPackage, standardPrelude, withStandardLibrary;
+    import silver.loader : load, Packages, standardPrelude, withStandardLibrary;
     import silver.sema.analysis : analyze;
 
     foreach (file; ["lang.ag", "lang.evil.ag"])
     {
         auto context = new SourceContext;
         auto program = load("intrinsic def panic(message: String): Never\ndef main(): Unit { }", file,
-            Packages(withStandardLibrary([]), [standardPackage]), standardPrelude, context);
+            Packages(withStandardLibrary([])), standardPrelude, context);
         if (!context.collector.hasErrors) analyze(program, context.collector, Target.host);
         auto codes = context.collector.errors.map!(e => e.code).array;
         assert(codes.canFind(DiagnosticCode.NotInLang),

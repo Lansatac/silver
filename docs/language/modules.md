@@ -40,9 +40,18 @@ core/source/tree/node.ag      module silver.core.tree.node
 ```
 
 - An import is found by the package whose name is the longest prefix of the module's name, and then by the remaining segments as folders. `silver` and `silver.core` can both be packages, in unrelated directories.
-- A package lists the packages it uses, and imports only from those and itself. The list has no cycles.
+- A package lists the packages it uses, and imports only from those, itself, `lang` and the prelude's package. The list has no cycles.
+- Every package and every file with no `module` line uses the package the prelude belongs to without listing it, just as every module imports the prelude without naming it. With the standard prelude that's `std`, so a file that imports `std.math` needs nothing more, and listing `std` too changes nothing. A build that names another prelude has its package used instead, and `std` is then listed like any other. The prelude's package doesn't use itself, and `lang` uses nothing.
 - A package with a `main` is a program, and nothing can depend on it. Every other package is a library, whether or not it's the one being built.
 - A file with no `module` line, run directly, is a program of its own: one module, named after the file.
+
+```silver
+// hello.ag, with no module line
+import std.math                         // the prelude's package: needs no listing
+import geometry.area                    // another package: hello.ag has to list `geometry`
+
+def main(): Unit { print(floor(2.5)) }
+```
 
 How a package is written down, and where a package's source comes from, belong to the `silver` tool and aren't part of the language.
 
@@ -194,21 +203,21 @@ Inside the forwarding module, its own functions come first, and what it forwards
 - Until there's a way to describe a package, `silver` is given them on the command line. `--package name=directory` declares one, `--uses name=a,b` lists what the package `name` uses, `--uses a,b` lists what a file with no `module` line uses, and `--parts name=a,b` lists a package's parts. Each can be repeated, and a list given twice adds up. The standard library is the package `std` in the compiler's directory, unless `--package std=...` puts another in its place.
 
   ```
-  silver --uses std hello.ag
-  silver --package geometry=lib/geometry --uses geometry=std --uses geometry,std app.ag
-  silver --package app=src --package geometry=lib/geometry --uses app=geometry,std src/main.ag
+  silver hello.ag
+  silver --package geometry=lib/geometry --uses geometry app.ag
+  silver --package app=src --package geometry=lib/geometry --uses app=geometry src/main.ag
   silver --package silver=source --package silver.core=core/source --parts silver=silver.core
-      --uses silver=silver.core,std --uses silver.core=std source/app.ag
-  silver test --package geometry=lib/geometry --uses geometry=std lib/geometry
+      --uses silver=silver.core source/app.ag
+  silver test --package geometry=lib/geometry lib/geometry
   ```
 
-- Nothing but `lang` is used without being listed, so a package or a file that imports a module of `std` lists `std`: a file `hello.ag` that imports `std.math` runs as `silver --uses std hello.ag`. The prelude is imported into every module whatever its package lists.
+- `std` is used without being listed, as the package of `std.prelude`, so a file `hello.ag` that imports `std.math` runs as `silver hello.ag`, and `silver test`, `silver build` and a companion test file see it the same way. Giving `--uses std` as well is allowed and changes nothing.
 - A package's own name isn't a module's: in a package `geometry`, `import geometry` isn't found (`L0001`), since a module's path under the directory can't be empty. `lang` is the exception, whose module `lang` is the compiler's.
 - A starting file with a `module` line has to be the file its package and the rest of its name say, and one whose name no package's starts is an error, as is an imported file whose `module` line isn't the name it was imported by (all `L0003`).
 - An import from a package that the importing module's package doesn't list is `L0010`, and isn't followed. A part imports its parent, or another part, only by listing it, as for any package.
 - A package that uses a program is `L0011`, reported at the program's `main`. Every `.ag` file with a `module` line under a used package's directory is read to find one, other than companion test files, so a `main` in a module nothing imports still counts. A file there with no `module` line is a program of its own and doesn't count, so a script can sit beside the modules it uses. A syntax error in a module that's read only for this says so, and a directory that can't be read is `L0009`.
 - Lists of what packages use that form a cycle are `L0012`. A description that can't be followed is `L0013`: a list naming a package that isn't declared or `lang`, two packages of one name, a directory that isn't one, two packages whose directories are the same or one inside the other, or a part listed by two parents or listing parts of its own. Declaring a package in `lang` is `L0004`. A file with no `module` line may be named as a package, even one it uses, since a package's own name isn't a module's.
-- Messages about what isn't listed or declared end with the option that fixes it, as "Give `--uses std` to list it".
+- Messages about what isn't listed or declared end with the option that fixes it, as "Give `--uses geometry` to list it".
 - Parts are checked as above and mean nothing else yet: what the parts of a package share isn't built.
 - `lang` is the module `lang` and the modules under it, read only from the compiler's own directory. What every module sees without an import, whatever the prelude, is what the module `lang` forwards: `lang.array`, `lang.interval`, `lang.io`, `lang.ord`, `lang.panic`, `lang.range`, `lang.testing`, and `bytes` and `next` from `lang.string`. `lang`'s other modules are reached by importing them, or through the `std` modules that forward them, as `std.ref` does `lang.ref`.
 - A module named as part of `lang`, by its `module` line or, without one, by its file name, is an error (`L0004`) unless it is the compiler's own file, so a program can't add to `lang` or replace it. An import in a module of `lang` of anything outside `lang` is an error too (`L0005`).

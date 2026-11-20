@@ -1,5 +1,4 @@
 --package levels_support=levels_support
 --package forward_support=forward_support
---uses levels_support=forward_support,std
---uses forward_support=std
---uses levels_support,std
+--uses levels_support=forward_support
+--uses levels_support

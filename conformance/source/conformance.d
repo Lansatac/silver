@@ -130,8 +130,7 @@ version (unittest)
 
     /// The packages `c` is loaded with. A case's `.packages`, when it has one, holds its command
     /// line's package options, one to a line, with directories taken from the case's own. Otherwise
-    /// each `*_support` directory beside the case is a package using the standard library, and the
-    /// case uses them all and the standard library.
+    /// each `*_support` directory beside the case is a package, and the case uses them all.
     Packages packagesFor(Case c)
     {
         import std.file : isDir;
@@ -158,9 +157,8 @@ version (unittest)
                 auto name = baseName(entry.name);
                 support ~= name;
                 options["--package"] ~= name ~ "=" ~ name;
-                options["--uses"] ~= name ~ "=std";
             }
-            options["--uses"] ~= (support.sort.release ~ "std").join(",");
+            if (support.length > 0) options["--uses"] ~= support.sort.release.join(",");
         }
         Packages packages;
         auto mistake = describePackages(options.get("--package", null), options.get("--uses", null),

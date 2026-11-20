@@ -20,7 +20,7 @@ import silver.ast;
 import silver.codegen.gen : generate;
 import silver.codegen.toolchain : executablePath, findToolchain, linkExecutable, Optimization, Toolchain;
 import silver.core : lowerProgram;
-import silver.loader : load, Packages, standardPackage, standardPrelude, withStandardLibrary;
+import silver.loader : load, Packages, standardPrelude, withStandardLibrary;
 import silver.sema : analyze;
 
 /// IR for `source`, loaded as main.ag with the real stdlib. Load or sema errors fail the test,
@@ -35,7 +35,7 @@ string generateSource(string source, string file = __FILE__, size_t line = __LIN
 string generateSource(string source, out string[] libraries, string file = __FILE__, size_t line = __LINE__)
 {
     auto context = new SourceContext;
-    auto program = load(source, "main.ag", Packages(withStandardLibrary([]), [standardPackage]), standardPrelude, context);
+    auto program = load(source, "main.ag", Packages(withStandardLibrary([])), standardPrelude, context);
     if (!context.collector.hasErrors)
     {
         auto analysis = analyze(program, context.collector);

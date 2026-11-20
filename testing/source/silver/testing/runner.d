@@ -15,7 +15,7 @@ import silver.ast : DiagnosticException, formatDiagnostic, Program, SourceContex
 import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, Toolchain;
 import silver.core : lowerTests, CoreProgram = Program;
 import silver.interpreter.evaluator : Evaluator;
-import silver.loader : companionModuleFile, companionOf, isCompanionFile, load, Packages, standardPackage, standardPrelude,
+import silver.loader : companionModuleFile, companionOf, isCompanionFile, load, Packages, standardPrelude,
     withStandardLibrary;
 import silver.sema : analyze, Analysis, Target;
 
@@ -366,10 +366,10 @@ version (unittest)
     import std.file : mkdirRecurse, rmdirRecurse, tempDir;
     import silver.ast : Package;
 
-    /// The standard library and `directory` as a test's unnamed package, used by a file with no `module` line.
+    /// The standard library, and `directory` as a test's unnamed package.
     Packages fixtures(string directory)
     {
-        return Packages(withStandardLibrary([Package(null, directory)]), [standardPackage]);
+        return Packages(withStandardLibrary([Package(null, directory)]));
     }
 
     /// A fresh directory under the temp dir holding `files` (path to text). The caller removes it.

@@ -9,7 +9,7 @@ These documents describe the language as designed. Where the implementation does
 - `silver <file>` runs a program with the interpreter, and `silver -b llvm <file>` compiles it and runs the result.
 - `silver build <file>` compiles it to an executable, which `-o` names. With `--emit-llvm` it writes the LLVM IR instead.
 - `silver test <path>` runs tests: see [Testing](language/testing.md#running-tests).
-- `--package name=directory` declares a [package](language/modules.md#packages), `--uses name=a,b` lists what it uses, `--uses a,b` what a file with no `module` line uses, and `--parts name=a,b` its parts: see [Modules](language/modules.md#current-implementation). The standard library is the package `std`, and a file that imports from it lists it, as `silver --uses std hello.ag`.
+- `--package name=directory` declares a [package](language/modules.md#packages), `--uses name=a,b` lists what it uses, `--uses a,b` what a file with no `module` line uses, and `--parts name=a,b` its parts: see [Modules](language/modules.md#current-implementation). The standard library is the package `std`, which every package and file uses without listing it, as the prelude's package.
 
 Silver is designed to be compiled a package at a time. A package compiles to its signatures, the bodies of its generic and inlinable functions, and object code. A package that uses it instantiates those generics itself and is rebuilt when the package changes. There is no stable binary interface: a compiled package can't be swapped without rebuilding what uses it. Today every program is still compiled whole.
 

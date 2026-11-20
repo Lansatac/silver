@@ -2869,7 +2869,7 @@ version (unittest)
     import std.typecons : Tuple;
     import silver.ast : formatDiagnostic, SourceContext;
     import silver.core.print : print;
-    import silver.loader : load, Packages, standardPackage, standardPrelude, withStandardLibrary;
+    import silver.loader : load, Packages, standardPrelude, withStandardLibrary;
     import silver.sema : analyze, Intrinsic;
 
     alias Lowered = Tuple!(Program, "program", Analysis, "analysis");
@@ -2879,7 +2879,7 @@ version (unittest)
     private Lowered loweredFunction(string source, string name)
     {
         auto context = new SourceContext;
-        auto program = load(source ~ "\ndef main(): () { }", "test", Packages(withStandardLibrary([]), [standardPackage]), standardPrelude, context);
+        auto program = load(source ~ "\ndef main(): () { }", "test", Packages(withStandardLibrary([])), standardPrelude, context);
         assert(!context.collector.hasErrors, context.collector.errors
                 .map!(d => formatDiagnostic(d, context.sources)).join("\n"));
         auto analysis = analyze(program, context.collector);

@@ -42,6 +42,7 @@ The lines that describe a package here, as `package silver.core at core/source`,
 ### Dependencies
 
 - A package lists the packages it uses, and may import only from those and itself.
+- Every package and every script uses the prelude's package without listing it, as every module imports the prelude without naming it (decided). With the standard prelude that's `std`, so `silver hello.ag` can import `std.math`. The compiler doesn't name `std` for this: it's whatever package the build's prelude is in. `lang` is still exempt from lists, and still imports nothing outside itself.
 - The list has no cycles.
 - Until a manifest exists, the list and each package's directory can be given to the compiler directly, as `--package lib=path/to/lib`.
 
@@ -101,6 +102,7 @@ So `xs.map(f)` needs no import, the functions behind it are plain Silver in `std
 - **A package says whether it's a program.** Explicit, and one more thing to write that `main` already says.
 - **A script belongs to the package of its directory.** It would see what that package shares among its parts, but a file tried out inside a library couldn't conform anything the library can't.
 - **The prelude belongs to the compiler and forwards the standard library.** One fewer setting, and the compiler would then load `std` for every program.
+- **The standard library listed like any other package.** One rule with no exception, but nearly every file imports from it, so a script couldn't run without being told so, while the prelude it already sees comes from the same package.
 - **Nothing in scope but `lang`.** No prelude to choose, and every module that maps over an array imports the range functions.
 - **`intrinsics` or `core` as the compiler's package.** `intrinsics` names the smaller part of what's there once `Interval`, `Range` and the built-in types' conformances are in it. `core` is the usual name for this layer and is also what the compiler calls its own tree.
 

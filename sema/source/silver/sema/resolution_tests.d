@@ -9,7 +9,7 @@ import std.format : format;
 import std.sumtype : match;
 
 import silver.ast;
-import silver.loader : load, Packages, standardPackage, standardPrelude, withStandardLibrary;
+import silver.loader : load, Packages, standardPrelude, withStandardLibrary;
 import silver.sema.analysis;
 import silver.sema.resolve;
 import silver.sema.target : Target;
@@ -45,7 +45,7 @@ Analyzed analyzed(string entry, string[string] files = null, Target target = Tar
     }
 
     auto context = new SourceContext;
-    auto program = load(entry, "main.ag", Packages(withStandardLibrary([Package(null, directory)]), [standardPackage]), prelude, context);
+    auto program = load(entry, "main.ag", Packages(withStandardLibrary([Package(null, directory)])), prelude, context);
     assert(!context.collector.hasErrors, "The test program failed to load");
 
     Analyzed a;
@@ -523,7 +523,7 @@ const(DiagnosticCode)[] inLang(string declarations)
     import silver.syntax.parse : parse;
 
     auto context = new SourceContext;
-    auto program = load("def main(): Unit { }", "main.ag", Packages(withStandardLibrary([]), [standardPackage]), standardPrelude, context);
+    auto program = load("def main(): Unit { }", "main.ag", Packages(withStandardLibrary([])), standardPrelude, context);
     auto source = "module lang.extra\n" ~ declarations;
     context.sources.add("extra.ag", source);
     auto extra = new Module;
