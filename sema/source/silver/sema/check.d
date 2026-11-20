@@ -290,7 +290,7 @@ private final class TypeChecker
 
         foreach (mod; programModules)
         {
-            checkOverloads(mod);
+            checkOverloads(mod, mod.companionOf is null ? null : program.modules[mod.companionOf]);
             checkForwardedOverloads(mod.name);
             checkListedOverloads(mod.name);
         }
@@ -3890,11 +3890,13 @@ private final class TypeChecker
                 ? "" : ", as in `val f: %s = %s`".format(_types.describe(_typing.symbolTypes[SymbolId(known.front)]), spelled)));
     }
 
-    /// Reports two functions of one name in `mod` that take the same parameters, and notes which
-    /// functions are overloaded.
-    private void checkOverloads(const Module mod)
+    /// Reports two functions of one name in `mod`, or in `mod` and the module `part` it's the
+    /// companion test file of, that take the same parameters, and notes which functions are overloaded.
+    private void checkOverloads(const Module mod, const(Module)* part)
     {
         Id!FunctionDecl[][string] seen;
+        if (part !is null) foreach (decl; part.declarations) decl.kind.match!(
+            (const FunctionDecl f) { if (f.name != "main") seen[f.name] ~= f.id; }, (_) {});
         foreach (decl; mod.declarations)
         {
             decl.kind.match!(

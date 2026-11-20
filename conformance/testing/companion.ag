@@ -1,0 +1,8 @@
+// companion.test.ag is part of this module: its tests run after these, and it sees what's private here.
+private def double(x: Int): Int => x * 2
+private type Secret(value: Int)
+private val limit: Int = 10
+
+def triple(x: Int): Int => x * 3
+
+test "an inline test runs as well as the companion's" => expect(triple(2) == 6)

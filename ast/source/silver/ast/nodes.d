@@ -29,6 +29,8 @@ struct Module
     ModuleDeclaration* declaration;
     /// `native library "name"`, or null.
     NativeLibrary* library;
+    /// For a companion test file, the name of the module it's part of, and null for a module.
+    string companionOf;
 }
 
 /// `native library "name"`: where every native function in a module is found.

@@ -418,6 +418,16 @@ package final class Scope
         _importedModules = imports.map!(i => i.name).array;
     }
 
+    /// A companion test file's top-level scope, which starts with every declaration of its
+    /// module's, `part`.
+    this(const(ModuleAccess)[] imports, const Scope part)
+    {
+        this(imports);
+        foreach (name, symbol; part._scopeTable) _scopeTable[name] = symbol;
+        foreach (name, type; part._typeTable) _typeTable[name] = type;
+        foreach (name, functions; part._functions) _functions[name] = functions.dup;
+    }
+
     /// A function, lambda, or block scope inside `parent`, seeing the same modules.
     this(const Scope parent)
     {
@@ -644,7 +654,13 @@ private final class NameResolver
         auto modules = program.sortedModules;
         foreach (mod; modules)
         {
-            declareModule(mod.name, mod, implicitImports(program, mod.name));
+            if (mod.companionOf is null) declareModule(mod.name, mod, implicitImports(program, mod.name));
+        }
+        // A companion test file sees its module's declarations as its own, but not the other way round.
+        foreach (mod; modules)
+        {
+            if (mod.companionOf !is null)
+                declareModule(mod.name, mod, implicitImports(program, mod.name), _moduleScopes[mod.companionOf]);
         }
         reportForwardCycles(modules);
         forwardNames(modules);
@@ -1097,7 +1113,9 @@ private final class NameResolver
         return imports;
     }
 
-    private void declareModule(string name, const Module mod, ModuleAccess[] imports)
+    /// Declares `mod`'s top-level names in a scope of its own. A companion test file's scope starts
+    /// with what its module's, `part`, declares.
+    private void declareModule(string name, const Module mod, ModuleAccess[] imports, const Scope part = null)
     {
         if (mod.library !is null) _nativeLibraries[name] = mod.library.name;
         foreach (decl; mod.declarations)
@@ -1129,7 +1147,7 @@ private final class NameResolver
             );
         }
 
-        auto moduleScope = new Scope(imports);
+        auto moduleScope = part is null ? new Scope(imports) : new Scope(imports, part);
         auto visible = moduleScope.importedModules;
         foreach (ref decl; mod.declarations)
         {

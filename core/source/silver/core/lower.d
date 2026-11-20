@@ -42,20 +42,25 @@ Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis, const ast
     return program;
 }
 
-/// The tests written in `program`'s entry module, and every function they call, as a Program to
-/// run for its tests. `analysis` must have no errors.
+/// The tests written in `program`'s entry module and then in its companion test file, if it was
+/// loaded with one, and every function they call, as a Program to run for its tests. `analysis`
+/// must have no errors.
 Program lowerTests(const ref ast.Program program, const Analysis analysis)
 {
     auto lowering = new Lowering(analysis, program.sources);
     TestCase[] tests;
-    foreach (decl; program.modules[program.entryModule].declarations)
+    auto companion = ast.companionName(program.entryModule) in program.modules;
+    foreach (mod; [program.modules[program.entryModule]] ~ (companion is null ? [] : [*companion]))
     {
-        decl.kind.match!(
-            (const ast.FunctionDecl f) {
-                if (f.testName !is null) tests ~= TestCase(f.testName, lowering.slotFor(InstanceKey(f.id)), f.nameSpan);
-            },
-            (_) {},
-        );
+        foreach (decl; mod.declarations)
+        {
+            decl.kind.match!(
+                (const ast.FunctionDecl f) {
+                    if (f.testName !is null) tests ~= TestCase(f.testName, lowering.slotFor(InstanceKey(f.id)), f.nameSpan);
+                },
+                (_) {},
+            );
+        }
     }
     lowering.lowerPending();
     auto lowered = Program(rebindable(analysis.types), lowering.functions, size_t.max, lowering.libraries);

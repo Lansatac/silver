@@ -1,0 +1,2 @@
+// Running a program never loads its companion test file, which has an error of its own here.
+def main(): Unit => printl("ran without its companion")

@@ -15,6 +15,10 @@ enum DiagnosticCode : string
     NotInLang = "L0004",
     /// An import, in a module of `lang`, of a module outside it.
     LangImportsOutside = "L0005",
+    /// A companion test file, `name.test.ag`, started from as a program, or with no `name.ag`.
+    CompanionStarted = "L0006",
+    /// Something in a companion test file that only its module can have.
+    NotInCompanion = "L0007",
 
     DuplicateDeclaration = "S0001",
     UnknownName = "S0002",

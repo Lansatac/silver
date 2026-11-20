@@ -1,0 +1,3 @@
+val broken: Int = "a companion is loaded only by silver test"
+
+def main(): Unit => ()

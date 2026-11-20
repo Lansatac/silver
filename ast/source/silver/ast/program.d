@@ -41,6 +41,13 @@ bool isInLang(string name)
     return name == langPackage || name.startsWith(langPackage ~ ".");
 }
 
+/// What the companion test file of the module `name` is called among a program's modules. No
+/// import can name it, and it's in `lang` when its module is.
+string companionName(string name)
+{
+    return name ~ ".(test)";
+}
+
 /// A top-level `def main` somewhere in a program.
 struct MainFunction
 {

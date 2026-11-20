@@ -15,7 +15,7 @@ import silver.ast : DiagnosticException, formatDiagnostic, Program, SourceContex
 import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, Toolchain;
 import silver.core : lowerTests, CoreProgram = Program;
 import silver.interpreter.evaluator : Evaluator;
-import silver.loader : load, standardLibraryPath, standardPrelude;
+import silver.loader : companionModuleFile, companionOf, isCompanionFile, load, standardLibraryPath, standardPrelude;
 import silver.sema : analyze, Analysis, Target;
 
 /// How `silver test` runs the tests.
@@ -52,26 +52,31 @@ struct FileRun
     string problem;
 }
 
-/// Every `.ag` file at `path`: the file itself, or each one under the directory, in order.
+/// Every `.ag` file at `path`: the file itself, or each one under the directory, in order. A
+/// companion test file is run with its module, so it's left out when the module is there.
 string[] testFiles(string path)
 {
     if (!isDir(path)) return [path];
-    return dirEntries(path, "*.ag", SpanMode.depth).map!(e => e.name).array.sort.release;
+    return dirEntries(path, "*.ag", SpanMode.depth).map!(e => e.name)
+        .filter!(f => !isCompanionFile(f) || !exists(companionModuleFile(f))).array.sort.release;
 }
 
-/// Runs the tests that `file` declares, though not those of the modules it imports, with
-/// `importPaths` searched before the standard library and the file's own directory. A compiled
-/// run keeps its files in `workDirectory` while it runs, and is optimized as `optimization` says.
+/// Runs the tests that `file` and its companion test file declare, though not those of the
+/// modules it imports, with `importPaths` searched before the standard library and the file's own
+/// directory. A companion is run as its module. A compiled run keeps its files in `workDirectory`
+/// while it runs, and is optimized as `optimization` says.
 FileRun runFile(string file, const string[] importPaths, TestBackend backend, string workDirectory,
     Optimization optimization = Optimization.none)
 {
+    if (isCompanionFile(file) && exists(companionModuleFile(file))) file = companionModuleFile(file);
     auto run = FileRun(file);
     auto context = new SourceContext;
     Program program;
     Analysis analysis;
     try
     {
-        program = load(readText(file), file, importPaths.dup ~ [standardLibraryPath(), dirName(file)], standardPrelude, context);
+        program = load(readText(file), file, importPaths.dup ~ [standardLibraryPath(), dirName(file)], standardPrelude, context,
+            companionOf(file));
         if (!context.collector.hasErrors) analysis = analyze(program, context.collector, Target.host, true);
     }
     catch (DiagnosticException e)
@@ -322,4 +327,89 @@ unittest
         "FAIL \"bad\" at a.ag(2,6)\n    a.ag(2,13): x\n        left: 1\n    Output:\n        out\n"
         ~ "b.ag(1,1): Error\nThe tests in b.ag didn't run: it has errors\n1 passed, 1 failed, and 1 file couldn't run\n");
     assert(succeeded([FileRun("a.ag", [TestResult("ok")])]) && !succeeded([run]));
+}
+
+version (unittest)
+{
+    import std.file : mkdirRecurse, rmdirRecurse, tempDir;
+
+    /// A fresh directory under the temp dir holding `files` (path to text). The caller removes it.
+    private string testDirectory(string name, string[string] files)
+    {
+        auto directory = buildPath(tempDir, "silver-runner-" ~ name);
+        if (exists(directory)) rmdirRecurse(directory);
+        foreach (path, text; files)
+        {
+            mkdirRecurse(dirName(buildPath(directory, path)));
+            write(buildPath(directory, path), text);
+        }
+        return directory;
+    }
+
+    /// The codes of what running the tests of `file` reported, which has to stop them running.
+    private string[] reportedCodes(string file)
+    {
+        import std.regex : matchFirst;
+
+        auto run = runFile(file, [], TestBackend.interpreter, tempDir);
+        assert(run.problem == "it has errors", run.problem);
+        return run.diagnostics.map!(d => d.matchFirst(`Error ([A-Z]\d{4})`)[1]).array;
+    }
+}
+
+@("a companion test file's helpers and imports reach neither its module's own code nor its module's importers")
+unittest
+{
+    import std.algorithm : canFind;
+
+    auto directory = testDirectory("companion-hidden", [
+        "app/shape.ag": "module app.shape\nimport app.user\ndef area(): Int => helper() + e()\ntest \"t\" => expect(use() == 2)",
+        "app/shape.test.ag": "import extra\ndef helper(): Int => e()\nval answer: Int = 3\ntest \"u\" => expect(helper() == 1)",
+        "app/user.ag": "module app.user\nimport app.shape\ndef use(): Int => helper() + app.shape.answer",
+        "extra.ag": "module extra\ndef e(): Int => 1",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto run = runFile(buildPath(directory, "app", "shape.ag"), [directory], TestBackend.interpreter, tempDir);
+    assert(run.problem == "it has errors");
+    auto shown = run.diagnostics.join("\n");
+    assert(shown.canFind("shape.ag(3,20): Error S0002: Unknown name 'helper'"), shown);
+    assert(shown.canFind("shape.ag(3,31): Error S0002: Unknown name 'e'"), shown);
+    assert(shown.canFind("user.ag(3,19): Error S0002: Unknown name 'helper'"), shown);
+    assert(shown.canFind("user.ag(3,30): Error S0004: Module 'app.shape' has no 'answer'"), shown);
+    assert(run.diagnostics.length == 4, shown);
+}
+
+@("a companion test file's function, constant, type or test is a duplicate of its module's of the same name or parameters")
+unittest
+{
+    auto directory = testDirectory("companion-duplicates", [
+        "shape.ag": "def area(x: Int): Int => x\nval side: Int = 1\ntype Box(n: Int)\ntest \"t\" => expect(true)",
+        "shape.test.ag": "def area(y: Int): Int => y\ndef area(x: Float): Float => x\nval side: Int = 2\ntype Box(m: Int)\n"
+            ~ "test \"t\" => expect(true)",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    assert(reportedCodes(buildPath(directory, "shape.ag")) == ["S0001", "S0001", "T0035", "S0001"]);
+}
+
+@("a companion test file runs with its module, whether its module or it is named, and only by silver test")
+unittest
+{
+    auto directory = testDirectory("companion-named", [
+        "shape.ag": "private def area(): Int => 1\ntest \"inline\" => expect(area() == 1)",
+        "shape.test.ag": "test \"companion\" => expect(area() == 2)",
+        "orphan.test.ag": "test \"lost\" => expect(true)",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    assert(testFiles(directory) == [buildPath(directory, "orphan.test.ag"), buildPath(directory, "shape.ag")]);
+    foreach (named; ["shape.ag", "shape.test.ag"])
+    {
+        auto run = runFile(buildPath(directory, named), [], TestBackend.interpreter, tempDir);
+        assert(run.file == buildPath(directory, "shape.ag"));
+        assert(run.results.map!(r => r.name).array == ["inline", "companion"]);
+        assert(run.results.map!(r => r.passed).array == [true, false]);
+    }
+    assert(reportedCodes(buildPath(directory, "orphan.test.ag")) == ["L0006"]);
 }

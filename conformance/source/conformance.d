@@ -16,7 +16,7 @@ version (unittest)
     import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, Toolchain;
     import silver.core : lowerProgram, CoreProgram = Program;
     import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed;
-    import silver.loader : load, standardLibraryPath, standardPrelude;
+    import silver.loader : isCompanionFile, load, standardLibraryPath, standardPrelude;
     import silver.sema : analyze, Analysis, Target;
     import silver.testing : report, runFile, TestBackend;
 
@@ -46,6 +46,8 @@ version (unittest)
         Case[] result;
         foreach (entry; dirEntries(casesDirectory, "*.ag", SpanMode.shallow))
         {
+            // Loaded with the case it's the companion test file of.
+            if (isCompanionFile(entry.name)) continue;
             auto name = baseName(entry.name).stripExtension;
             auto expectedPath = buildPath(casesDirectory, name ~ ".expected");
             assert(exists(expectedPath), "Missing expected output file for " ~ entry.name);

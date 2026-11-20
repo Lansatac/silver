@@ -3,7 +3,8 @@ module silver.loader;
 import std.array : join, split;
 import std.file : exists, readText;
 import std.format : format;
-import std.path : absolutePath, baseName, buildNormalizedPath, buildPath, dirName, stripExtension;
+import std.algorithm : endsWith;
+import std.path : absolutePath, baseName, buildNormalizedPath, buildPath, dirName, extension, stripExtension;
 import std.sumtype;
 import std.typecons : Tuple;
 
@@ -21,8 +22,12 @@ import silver.syntax.parse : parse;
 /// `file` may leave it out, and is then named after the file and can't be imported. If it has
 /// one, the line must match the end of `file`'s path, and the rest of that path is searched for
 /// imports first.
+///
+/// `companion`, when testing, is the starting file's companion test file, which is loaded as part
+/// of it. A companion can't be the starting file.
 /// Throws: ParseException.
-Program load(string source, string file, string[] importPaths, string prelude, SourceContext context)
+Program load(string source, string file, string[] importPaths, string prelude, SourceContext context,
+    const(Companion)* companion = null)
 {
     context.sources.add(file, source);
     Program program;
@@ -56,11 +61,20 @@ Program load(string source, string file, string[] importPaths, string prelude, S
                 start.declaration is null ? "Rename the file, or give it a `module` line outside `lang`"
                     : "Name the module outside `lang`"));
     }
+    if (isCompanionFile(file))
+    {
+        auto moduleFile = companionModuleFile(file);
+        context.collector.reportError(DiagnosticCode.CompanionStarted, Span(file, 0, 0), exists(moduleFile)
+            ? format("'%s' holds tests of %s, and is loaded with it only by `silver test`", file, moduleFile)
+            : format("'%s' is named as the tests of %s, which doesn't exist\nRename it, or add %s",
+                file, moduleFile, baseName(moduleFile)));
+    }
     program.modules[start.name] = start;
     program.entryModule = start.name;
 
     // Modules whose imports haven't been followed yet.
     Module*[] unscanned = [start];
+    if (companion !is null) unscanned ~= addCompanion(program, start, *companion, context);
     foreach (i, implicit; [langPackage, prelude])
     {
         if (implicit is null || implicit in program.modules) continue;
@@ -94,8 +108,9 @@ Program load(string source, string file, string[] importPaths, string prelude, S
             if (isInLang(current.name) && !isInLang(name))
             {
                 context.collector.reportError(DiagnosticCode.LangImportsOutside, importNode.span,
-                    format("`%s` depends on nothing outside itself, so '%s' can't import '%s'",
-                        langPackage, current.name, name));
+                    format("`%s` depends on nothing outside itself, so %s can't import '%s'", langPackage,
+                        current.companionOf is null ? "'" ~ current.name ~ "'" : "the tests of '" ~ current.companionOf ~ "'",
+                        name));
                 continue;
             }
             // Already loaded, or being loaded further up an import cycle.
@@ -140,6 +155,85 @@ string standardLibraryPath()
 /// The prelude a build names when it's told of no other: the standard library's. The compiler
 /// itself never names it, and only imports the prelude `load` is given.
 enum standardPrelude = "std.prelude";
+
+/// A companion test file and its text. `name.test.ag` is part of the module `name.ag`, and is
+/// loaded only when testing.
+struct Companion
+{
+    string file;
+    string source;
+}
+
+/// The companion test file of `file`, read from beside it, or null if there isn't one.
+Companion* companionOf(string file)
+{
+    if (isCompanionFile(file) || extension(file) != ".ag") return null;
+    auto path = file.stripExtension ~ companionExtension;
+    if (!exists(path)) return null;
+    return new Companion(path, readText(path));
+}
+
+/// Whether `file` is named as a companion test file.
+bool isCompanionFile(string file)
+{
+    auto name = baseName(file);
+    return name.length > companionExtension.length && name.endsWith(companionExtension);
+}
+
+/// The module file that the companion test file `file` is part of.
+string companionModuleFile(string file)
+{
+    return file[0 .. $ - companionExtension.length] ~ ".ag";
+}
+
+private enum companionExtension = ".test.ag";
+
+/// Adds the companion test file `companion` of the module `start` to `program`, and returns it.
+/// Its declarations are private, so only its module sees them, and it names the native library its
+/// module does.
+private Module* addCompanion(ref Program program, const(Module)* start, const Companion companion, SourceContext context)
+{
+    context.sources.add(companion.file, companion.source);
+    auto name = companionName(start.name);
+    auto loaded = new Module;
+    *loaded = parse(companion.source, name, new NodeIds(ModuleKey.of(name, companion.source)), companion.file);
+    loaded.companionOf = start.name;
+
+    void refuse(Span span, string message)
+    {
+        context.collector.reportError(DiagnosticCode.NotInCompanion, span, message);
+    }
+    if (loaded.declaration !is null)
+        refuse(loaded.declaration.span, format("A companion test file has no `module` line: it's part of '%s'", start.name));
+    if (loaded.library !is null)
+        refuse(loaded.library.span, format("A companion test file has no `native library`: it has the one of '%s'", start.name));
+    loaded.library = cast(NativeLibrary*) start.library;
+    foreach (ref decl; loaded.declarations)
+    {
+        auto span = decl.span;
+        decl.kind.match!(
+            (ref FunctionDecl function_) {
+                if (function_.name == "main")
+                    refuse(function_.nameSpan, "A companion test file can't declare `main`, since it's loaded only for tests");
+                function_.isPrivate = true;
+            },
+            (ref TypeDecl type) { type.isPrivate = true; },
+            (ref ConstDecl constant) { constant.isPrivate = true; },
+            (ref AliasDecl alias_) { alias_.isPrivate = true; },
+            (ref InterfaceDecl interface_) { interface_.isPrivate = true; },
+            (ref ImportStmt import_) {
+                if (import_.forward) refuse(span, "A companion test file can't `forward import`, since nothing imports it");
+            },
+            (ref ConformDecl _) {
+                refuse(span, "A companion test file can't declare a conformance: every module would see it while testing, "
+                    ~ "so its module's code wouldn't be the code that ships");
+            },
+        );
+    }
+
+    program.modules[name] = loaded;
+    return loaded;
+}
 
 /// The path of the module `chain` on the first import path that has it, or null. A module of
 /// `lang` is looked for only where the compiler's own is.
@@ -526,10 +620,12 @@ unittest
 @("every module of lang loads as the starting file, as `silver test` runs them, importing only lang")
 unittest
 {
+    import std.algorithm : filter;
     import std.file : dirEntries, SpanMode;
 
     auto lang = buildPath(standardLibraryPath(), langPackage);
-    foreach (path; dirEntries(lang, "*.ag", SpanMode.depth).map!(e => e.name).array ~ [lang ~ ".ag"])
+    foreach (path; dirEntries(lang, "*.ag", SpanMode.depth).map!(e => e.name).filter!(f => !isCompanionFile(f)).array
+        ~ [lang ~ ".ag"])
     {
         auto context = new SourceContext;
         auto program = load(readText(path), path, [], null, context);
@@ -731,4 +827,116 @@ unittest
     errors[0].code.should.equal(DiagnosticCode.MissingModuleDeclaration);
     errors[0].span.file.should.equal(buildPath(directory, "helper.ag"));
     errors[0].message.should.contain("`module script`");
+}
+
+@("load adds the companion test file it's given as part of the starting module, with its declarations private")
+unittest
+{
+    import std.sumtype : match;
+
+    auto companion = Companion("shape.test.ag", "import extra\ndef helper(): Int => 1\ntype Fake(n: Int)\ntest \"t\" => expect(true)");
+    auto directory = makeModuleDirectory("companion", ["extra.ag": "module extra\ndef e(): Int => 1"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto context = new SourceContext;
+    auto program = load("def area(): Int => 1", "shape.ag", [directory], null, context, &companion);
+    context.collector.diagnostics.length.should.equal(0);
+    ownModules(program).should.equal(["extra", "shape", companionName("shape")]);
+    auto loaded = program.modules[companionName("shape")];
+    loaded.companionOf.should.equal("shape");
+    loaded.span.file.should.equal("shape.test.ag");
+    assert(context.sources.has("shape.test.ag"));
+    foreach (decl; loaded.declarations)
+    {
+        assert(decl.kind.match!(
+            (const FunctionDecl f) => f.isPrivate,
+            (const TypeDecl t) => t.isPrivate,
+            (const ImportStmt _) => true,
+            _ => false,
+        ));
+    }
+    assert(idProblems(program.modules.byValue.map!(m => *m).array) == []);
+
+    auto without = load("def area(): Int => 1", "shape.ag", [directory], null, new SourceContext);
+    ownModules(without).should.equal(["shape"]);
+}
+
+@("companionOf reads name.test.ag from beside name.ag, and a companion has none of its own")
+unittest
+{
+    auto directory = makeModuleDirectory("companion-of",
+        ["shape.ag": "", "shape.test.ag": "test \"t\" => expect(true)", "alone.ag": ""]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto found = companionOf(buildPath(directory, "shape.ag"));
+    assert(found !is null);
+    found.file.should.equal(buildPath(directory, "shape.test.ag"));
+    found.source.should.equal("test \"t\" => expect(true)");
+    assert(companionOf(buildPath(directory, "alone.ag")) is null);
+    assert(companionOf(buildPath(directory, "shape.test.ag")) is null);
+    assert(isCompanionFile("a/shape.test.ag") && !isCompanionFile("a/shape.ag") && !isCompanionFile("a/.test.ag"));
+    companionModuleFile(buildPath("a", "shape.test.ag")).should.equal(buildPath("a", "shape.ag"));
+}
+
+@("no import reaches a companion test file")
+unittest
+{
+    auto directory = makeModuleDirectory("companion-import",
+        ["shape.ag": "module shape", "shape.test.ag": "def helper(): Int => 1"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto context = new SourceContext;
+    auto program = load("import shape.test", "main.ag", [directory], null, context);
+    context.collector.errors.array.map!(e => e.code).array.should.equal([DiagnosticCode.ModuleNotFound]);
+    ownModules(program).should.equal(["main"]);
+}
+
+@("load refuses a companion test file as the starting file, whether or not its module is there")
+unittest
+{
+    auto directory = makeModuleDirectory("companion-started", ["shape.ag": ""]);
+    scope (exit) rmdirRecurse(directory);
+
+    foreach (name; ["shape", "gone"])
+    {
+        auto file = buildPath(directory, name ~ ".test.ag");
+        auto context = new SourceContext;
+        load("def main(): Unit => ()", file, [], null, context);
+        auto errors = context.collector.errors.array;
+        errors.length.should.equal(1);
+        errors[0].code.should.equal(DiagnosticCode.CompanionStarted);
+        errors[0].span.should.equal(Span(file, 0, 0));
+        errors[0].message.should.contain(name == "shape" ? "only by `silver test`" : "which doesn't exist");
+    }
+}
+
+@("a companion test file has no module line, native library, main, forward import or conformance")
+unittest
+{
+    import std.algorithm : filter;
+
+    auto source = "module shape\nnative library \"m\"\nforward import other\nconform Int: Sized\ndef main(): Unit => ()";
+    auto companion = Companion("shape.test.ag", source);
+    auto context = new SourceContext;
+    load("module shape", "shape.ag", [], null, context, &companion);
+    auto errors = context.collector.errors.array.filter!(e => e.code != DiagnosticCode.ModuleNotFound).array;
+    errors.map!(e => e.code).array.should.equal([DiagnosticCode.NotInCompanion, DiagnosticCode.NotInCompanion,
+        DiagnosticCode.NotInCompanion, DiagnosticCode.NotInCompanion, DiagnosticCode.NotInCompanion]);
+    errors.map!(e => e.span.start).array.should.equal([source.indexOf("module"), source.indexOf("native"),
+        source.indexOf("forward"), source.indexOf("conform"), source.indexOf("main")]);
+}
+
+@("a companion of a module of lang is in lang, so it imports nothing outside lang")
+unittest
+{
+    auto path = buildPath(standardLibraryPath(), "lang", "char.ag");
+    auto source = "import lang.io\nimport std.ref\ntest \"t\" => expect(true)";
+    auto companion = Companion(buildPath(standardLibraryPath(), "lang", "char.test.ag"), source);
+    auto context = new SourceContext;
+    auto program = load(readText(path), path, [standardLibraryPath()], standardPrelude, context, &companion);
+    auto errors = context.collector.errors.array;
+    errors.map!(e => e.code).array.should.equal([DiagnosticCode.LangImportsOutside]);
+    errors[0].span.start.should.equal(source.indexOf("import std.ref"));
+    errors[0].message.should.contain("the tests of 'lang.char'");
+    assert(isInLang(companionName("lang.char")) && isInLang(companionName(langPackage)));
 }
