@@ -22,8 +22,9 @@ __dummy.html
 # `silver build --emit-llvm` output.
 *.ll
 
-# The compiled runtime library, rebuilt when its sources change.
+# The compiled runtime library, unoptimized and optimized, rebuilt when its sources change.
 runtime/build/
+runtime/build-optimized/
 
 # Experimental Silver programs, kept out of the repo on purpose.
 /exploration/

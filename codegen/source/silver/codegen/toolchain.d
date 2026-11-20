@@ -104,7 +104,7 @@ LinkResult linkExecutable(const Toolchain toolchain, string irPath, string outpu
     Optimization optimization = Optimization.none)
 {
     BuiltRuntime runtime;
-    if (auto failure = buildRuntime(toolchain, runtime))
+    if (auto failure = buildRuntime(toolchain, runtime, optimization))
     {
         return LinkResult(false, failure);
     }
@@ -137,7 +137,7 @@ string[] linkCommand(const Toolchain toolchain, string objPath, const BuiltRunti
     return [toolchain.dmd] ~ linker ~ [objPath, runtime.entryObject, runtime.library] ~ linked ~ ["-of=" ~ outputPath];
 }
 
-/// The compiled runtime, under `runtimePath()/build`.
+/// The compiled runtime, under `runtimeBuildPath`.
 struct BuiltRuntime
 {
     /// Every runtime module except the entry module.
@@ -147,9 +147,34 @@ struct BuiltRuntime
     string entryObject;
 }
 
-/// Builds the runtime unless it's newer than every runtime source. Returns why the build
-/// failed, or null with `runtime` set.
-string buildRuntime(const Toolchain toolchain, out BuiltRuntime runtime)
+/// Where the runtime is built for `optimization`. Each mode has a directory of its own, so
+/// neither build replaces the other's.
+string runtimeBuildPath(Optimization optimization)
+{
+    return buildPath(runtimePath, optimization == Optimization.full ? "build-optimized" : "build");
+}
+
+/// The flags dmd builds the runtime with for `optimization`. Never `-release` or
+/// `-boundscheck=off`: the runtime's own checks stay in every mode.
+string[] runtimeFlags(Optimization optimization)
+{
+    return optimization == Optimization.full ? ["-O", "-inline"] : [];
+}
+
+// One per mode, so an optimized and an unoptimized build in one process don't wait on each other.
+private __gshared Object[Optimization.max + 1] runtimeLocks;
+
+shared static this()
+{
+    foreach (ref lock; runtimeLocks)
+    {
+        lock = new Object;
+    }
+}
+
+/// Builds the runtime for `optimization` unless it's newer than every runtime source. Returns
+/// why the build failed, or null with `runtime` set.
+string buildRuntime(const Toolchain toolchain, out BuiltRuntime runtime, Optimization optimization = Optimization.none)
 {
     import std.algorithm : filter;
 
@@ -167,11 +192,12 @@ string buildRuntime(const Toolchain toolchain, out BuiltRuntime runtime)
         enum libraryName = "libsilver_rt.a";
         enum entryName = "entry.o";
     }
-    auto buildDirectory = buildPath(runtimePath, "build");
+    auto buildDirectory = runtimeBuildPath(optimization);
     runtime = BuiltRuntime(buildPath(buildDirectory, libraryName), buildPath(buildDirectory, entryName));
 
-    // Tests link programs from several threads, and several test processes can run at once.
-    synchronized
+    // Tests link programs from several threads, which the lock serializes, and several test
+    // processes can run at once, which `runDmd` allows for.
+    synchronized (runtimeLocks[optimization])
     {
         auto newestSource = sources.map!(s => timeLastModified(s)).maxElement;
         bool upToDate(string output) => exists(output) && timeLastModified(output) >= newestSource;
@@ -181,26 +207,41 @@ string buildRuntime(const Toolchain toolchain, out BuiltRuntime runtime)
         }
 
         mkdirRecurse(buildDirectory);
-        auto include = "-I" ~ sourceDirectory;
-        if (auto failure = runDmd(toolchain, runtime.library, ["-lib", include] ~ librarySources))
+        auto flags = ["-I" ~ sourceDirectory] ~ runtimeFlags(optimization);
+        if (auto failure = runDmd(toolchain, runtime.library, ["-lib"] ~ flags ~ librarySources, &upToDate))
         {
             return failure;
         }
-        return runDmd(toolchain, runtime.entryObject, ["-c", include, entrySource]);
+        return runDmd(toolchain, runtime.entryObject, ["-c"] ~ flags ~ [entrySource], &upToDate);
     }
 }
 
 /// Runs dmd with `args` to produce `output`. It's built under a name of its own and renamed
-/// into place, so another process never links a half-written file.
-private string runDmd(const Toolchain toolchain, string output, string[] args)
+/// into place, so another process never links a half-written file. When the rename fails (on
+/// Windows a file another process is linking can't be replaced) and `upToDate(output)` holds,
+/// another process built it first, and its build is used.
+private string runDmd(const Toolchain toolchain, string output, string[] args, scope bool delegate(string) upToDate)
 {
+    import std.file : FileException;
+
     auto partial = output ~ "." ~ thisProcessID.to!string;
+    scope (exit) if (exists(partial)) remove(partial);
     auto built = execute([toolchain.dmd] ~ args ~ ["-of=" ~ partial]);
     if (built.status != 0)
     {
         return "building the runtime failed:\n" ~ built.output;
     }
-    rename(partial, output);
+    try
+    {
+        rename(partial, output);
+    }
+    catch (FileException e)
+    {
+        if (!upToDate(output))
+        {
+            return "building the runtime failed: " ~ e.msg;
+        }
+    }
     return null;
 }
 
@@ -256,12 +297,31 @@ unittest
         }
     `);
 
-    auto linked = linkExecutable(toolchain, irPath, exePath);
-    assert(linked.succeeded, linked.output);
-    auto run = execute([exePath]);
-    assert(run.status == 0, run.output);
-    // The runtime writes the platform's newline.
-    assert(run.output.replace("\r\n", "\n") == "42\n2.5\nfalse\nhi()\n", run.output);
+    foreach (optimization; [Optimization.none, Optimization.full])
+    {
+        auto linked = linkExecutable(toolchain, irPath, exePath, [], optimization);
+        assert(linked.succeeded, linked.output);
+        auto run = execute([exePath]);
+        assert(run.status == 0, run.output);
+        // The runtime writes the platform's newline.
+        assert(run.output.replace("\r\n", "\n") == "42\n2.5\nfalse\nhi()\n", run.output);
+
+        BuiltRuntime runtime;
+        assert(buildRuntime(toolchain, runtime, optimization) is null);
+        assert(dirName(runtime.library) == runtimeBuildPath(optimization), runtime.library);
+        assert(dirName(runtime.entryObject) == runtimeBuildPath(optimization), runtime.entryObject);
+    }
+}
+
+@("the optimized runtime has a build directory of its own and keeps the runtime's checks")
+unittest
+{
+    import std.algorithm : canFind;
+
+    assert(runtimeBuildPath(Optimization.none) != runtimeBuildPath(Optimization.full));
+    assert(runtimeFlags(Optimization.none) == []);
+    assert(runtimeFlags(Optimization.full) == ["-O", "-inline"]);
+    assert(!runtimeFlags(Optimization.full).canFind!(f => f == "-release" || f.canFind("boundscheck")));
 }
 
 @("the link command names each native library the way the platform's linker takes it")
