@@ -1,0 +1,65 @@
+type Wide(a0: Int, a1: Int, a2: Int, a3: Int, a4: Int, a5: Int, a6: Int, a7: Int, a8: Int, a9: Int, a10: Int, a11: Int,
+    a12: Int, a13: Int, a14: Int, a15: Int, a16: Int, a17: Int, a18: Int, a19: Int, a20: Int, a21: Int, a22: Int, a23: Int,
+    a24: Int, a25: Int, a26: Int, a27: Int, a28: Int, a29: Int, a30: Int, a31: Int)
+
+def zero(): Wide => Wide(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+def total(w: Wide): Int => w.a0 + w.a1 + w.a2 + w.a3 + w.a4 + w.a5 + w.a6 + w.a7 + w.a8 + w.a9 + w.a10 + w.a31
+
+// A frame holds only the products live at once, not one for each local, so this goes as deep
+// compiled as interpreted.
+def walk(w: Wide, n: Int): Int {
+    if n == 0 { return total(w) }
+    val v0 = w with (a0 = w.a0 + 1)
+    val v1 = v0 with (a1 = v0.a1 + 1)
+    val v2 = v1 with (a2 = v1.a2 + 1)
+    val v3 = v2 with (a3 = v2.a3 + 1)
+    val v4 = v3 with (a4 = v3.a4 + 1)
+    val v5 = v4 with (a5 = v4.a5 + 1)
+    val v6 = v5 with (a6 = v5.a6 + 1)
+    val v7 = v6 with (a7 = v6.a7 + 1)
+    val v8 = v7 with (a8 = v7.a8 + 1)
+    val v9 = v8 with (a9 = v8.a9 + 1)
+    val v10 = v9 with (a10 = v9.a10 + 1)
+    val v11 = v10 with (a31 = v10.a31 + 1)
+    return 1 + walk(v11, n - 1)
+}
+
+def main(): Unit {
+    printl(walk(zero(), 60000))
+
+    // A local read in a loop it was declared outside outlives the locals declared after its
+    // last read in the body.
+    val kept = zero() with (a1 = 5)
+    mutable val sum = 0
+    mutable val i = 0
+    while i < 3 {
+        sum += kept.a1
+        val fresh = zero() with (a1 = 100)
+        sum += fresh.a1
+        i += 1
+    }
+    printl(sum)
+
+    // Locals in the two arms of an `if`, and in blocks one after another, are never live together.
+    mutable val j = 0
+    while j < 2 {
+        val picked = if j == 0 => {
+            val left = zero() with (a2 = 7)
+            left with (a3 = left.a2)
+        } else {
+            val right = zero() with (a3 = 9)
+            right with (a2 = right.a3 + 1)
+        }
+        val first = {
+            val inner = picked with (a4 = picked.a2 + picked.a3)
+            inner.a4
+        }
+        val second = {
+            val inner = picked with (a5 = first * 2)
+            inner.a5 + picked.a4
+        }
+        printl("{first} {second}")
+        j += 1
+    }
+}

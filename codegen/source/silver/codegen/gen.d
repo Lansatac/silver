@@ -111,23 +111,44 @@ private struct Fragment
 }
 
 /// Where each local of one function lives: a pointer for every local that is made of something,
-/// which is its own stack slot, or for a mutable param, its caller's.
+/// which is a stack slot, or for a mutable param, its caller's. Locals whose lifetimes don't
+/// overlap share a slot of their type, so a frame grows with how many values are live at once
+/// rather than with how many locals there are: at -O0 LLVM gives every alloca its own memory, and
+/// ignores lifetime markers.
 private struct Slots
 {
     string[const Local] pointers;
     /// The `alloca` of each stack slot, for the top of the entry block.
     string[] allocas;
-    /// How many locals of each name have a slot, so a reused name gets a slot of its own.
+    private Slot[] _slots;
+    /// How many slots are named after each local name, so a reused name gets a slot of its own.
     private int[string] _named;
 
-    /// A stack slot of `type` for `local`.
-    void allocate(const Local local, string type)
+    private struct Slot
     {
+        string pointer;
+        string type;
+        /// Where the last lifetime of a local in it ends.
+        size_t free;
+    }
+
+    /// A stack slot of `type` for `local`, which is in use from `start` to `end`: one of the slots
+    /// already made that is free by `start`, or a new one. Locals come in order of `start`.
+    void allocate(const Local local, string type, size_t start, size_t end)
+    {
+        foreach (ref slot; _slots)
+        {
+            if (slot.type != type || slot.free >= start) continue;
+            slot.free = end;
+            pointers[local] = slot.pointer;
+            return;
+        }
         auto count = _named.require(local.name, 0);
         _named[local.name] = count + 1;
-        auto slot = count == 0 ? "%%%s.addr".format(local.name) : "%%%s.addr.%s".format(local.name, count);
-        pointers[local] = slot;
-        allocas ~= "  %s = alloca %s".format(slot, type);
+        auto pointer = count == 0 ? "%%%s.addr".format(local.name) : "%%%s.addr.%s".format(local.name, count);
+        _slots ~= Slot(pointer, type, end);
+        pointers[local] = pointer;
+        allocas ~= "  %s = alloca %s".format(pointer, type);
     }
 
     /// `pointer`, which already points at a slot of `local`'s type, as where it lives.
@@ -141,6 +162,90 @@ private struct Slots
     {
         auto pointer = local in pointers;
         return pointer is null ? null : *pointer;
+    }
+}
+
+/// When each local that gets a slot is in use, measured by a clock that ticks at the start and end
+/// of every statement and loop, in the order the code is generated. A local's lifetime starts with
+/// its `Let`, whose value may be written into the slot while it's worked out, and ends with the
+/// statement that last names it, since an expression may read a local in place after evaluating
+/// its other parts. A local named in a loop it was declared outside is in use until the loop ends,
+/// since the next iteration can read it again.
+private struct Lifetimes
+{
+    const(Local)[] locals;
+    string[] types;
+    size_t[] starts;
+    size_t[] ends;
+    private size_t[const Local] _index;
+    private size_t _clock;
+    /// The locals named in each statement being walked, innermost last.
+    private size_t[][] _statements;
+    private OpenLoop[] _loops;
+
+    private struct OpenLoop
+    {
+        size_t entry;
+        size_t[] named;
+    }
+
+    /// `local`, which has a slot of `type`, starting now and lasting at least as long as the
+    /// statement declaring it.
+    void declare(const Local local, string type)
+    {
+        auto at = locals.length;
+        _index[local] = at;
+        locals ~= local;
+        types ~= type;
+        starts ~= _clock;
+        ends ~= _clock;
+        if (_statements.length > 0) _statements[$ - 1] ~= at;
+    }
+
+    /// A read or write of `local`. A local with no slot of its own is ignored.
+    void use(const Local local)
+    {
+        auto at = local in _index;
+        if (at is null) return;
+        if (_statements.length == 0) ends[*at] = size_t.max;
+        else _statements[$ - 1] ~= *at;
+        if (_loops.length > 0) _loops[$ - 1].named ~= *at;
+    }
+
+    void beginStatement()
+    {
+        _clock++;
+        _statements ~= null;
+    }
+
+    void endStatement()
+    {
+        import std.algorithm : max;
+
+        _clock++;
+        foreach (i; _statements[$ - 1]) ends[i] = max(ends[i], _clock);
+        _statements.length--;
+    }
+
+    void beginLoop()
+    {
+        _clock++;
+        _loops ~= OpenLoop(_clock);
+    }
+
+    void endLoop()
+    {
+        import std.algorithm : max;
+
+        _clock++;
+        auto loop = _loops[$ - 1];
+        _loops.length--;
+        foreach (i; loop.named)
+        {
+            if (starts[i] >= loop.entry) continue;
+            ends[i] = max(ends[i], _clock);
+            if (_loops.length > 0) _loops[$ - 1].named ~= i;
+        }
     }
 }
 
@@ -698,33 +803,35 @@ private final class Generator
         return code.withValue(null);
     }
 
-    /// Where every local of `func` lives. Slots are allocated in the order their code will be
-    /// generated, a `Let`'s after its value's, so a reused name is numbered as it's met.
+    /// Where every local of `func` lives. Slots are allocated in the order lifetimes start, so a
+    /// reused name is numbered as its `Let` is met, and a `Let`'s comes before those in its value.
     private Slots planSlots(const Function func)
     {
         Slots slots;
+        Lifetimes lifetimes;
         foreach (param; func.params)
         {
             auto passed = paramTypes(param, func.body.span);
             if (passed.length == 0) continue;
             if (param.mutable) slots.bind(param, incoming(param, 1)[0]);
-            else slots.allocate(param, structOf(passed));
+            else lifetimes.declare(param, structOf(passed));
         }
         foreach (capture; func.captures)
         {
             auto type = llvmType(capture.type, func.body.span);
-            if (type != "void") slots.allocate(capture, type);
+            if (type != "void") lifetimes.declare(capture, type);
         }
-        planSlots(slots, func.body);
+        trace(lifetimes, func.body);
+        foreach (i, local; lifetimes.locals) slots.allocate(local, lifetimes.types[i], lifetimes.starts[i], lifetimes.ends[i]);
         return slots;
     }
 
     /// Every node is listed, so a new kind of Core node can't be skipped by accident.
-    private void planSlots(ref Slots slots, const Expr e)
+    private void trace(ref Lifetimes lifetimes, const Expr e)
     {
         void all(const Expr[] exprs)
         {
-            foreach (ref expr; exprs) planSlots(slots, expr);
+            foreach (ref expr; exprs) trace(lifetimes, expr);
         }
 
         e.kind.match!(
@@ -733,73 +840,83 @@ private final class Generator
             (const IntLit _) {},
             (const FloatLit _) {},
             (const StringLit _) {},
-            (const LocalRef _) {},
+            (const LocalRef use) => lifetimes.use(use.local),
             (const Break _) {},
             (const Continue _) {},
             (const Call call) => all(call.args),
             (const CallClosure call) {
-                planSlots(slots, *call.callee);
+                trace(lifetimes, *call.callee);
                 all(call.args);
             },
             (const MakeClosure closure) => all(closure.captures),
             (const ForeignCall call) => all(call.args),
             (const IntrinsicCall call) => all(call.args),
             (const Prim prim) => all(prim.args),
-            (const Convert convert) => planSlots(slots, *convert.value),
+            (const Convert convert) => trace(lifetimes, *convert.value),
             (const If if_) {
-                planSlots(slots, *if_.condition);
-                planSlots(slots, *if_.trueBody);
-                planSlots(slots, *if_.falseBody);
+                trace(lifetimes, *if_.condition);
+                trace(lifetimes, *if_.trueBody);
+                trace(lifetimes, *if_.falseBody);
             },
             (const Block block) {
-                foreach (ref statement; block.statements) planSlots(slots, statement);
-                if (block.result !is null) planSlots(slots, *block.result);
+                foreach (ref statement; block.statements) trace(lifetimes, statement);
+                if (block.result !is null) trace(lifetimes, *block.result);
             },
-            (const Loop loop) => planSlots(slots, *loop.body),
-            (const Return return_) => planSlots(slots, *return_.value),
+            (const Loop loop) {
+                lifetimes.beginLoop();
+                trace(lifetimes, *loop.body);
+                lifetimes.endLoop();
+            },
+            (const Return return_) => trace(lifetimes, *return_.value),
             (const Construct construct) => all(construct.fields),
-            (const Field field) => planSlots(slots, *field.object),
+            (const Field field) => trace(lifetimes, *field.object),
             (const Update update) {
-                planSlots(slots, *update.object);
-                planSlots(slots, *update.value);
+                trace(lifetimes, *update.object);
+                trace(lifetimes, *update.value);
             },
             (const Inject inject) {
-                if (inject.payload !is null) planSlots(slots, *inject.payload);
+                if (inject.payload !is null) trace(lifetimes, *inject.payload);
             },
-            (const IsMember test) => planSlots(slots, *test.subject),
-            (const Payload payload) => planSlots(slots, *payload.subject),
+            (const IsMember test) => trace(lifetimes, *test.subject),
+            (const Payload payload) => trace(lifetimes, *payload.subject),
             (const ArrayLit literal) => all(literal.elements),
             (const Index index) {
-                planSlots(slots, *index.array);
-                planSlots(slots, *index.index);
+                trace(lifetimes, *index.array);
+                trace(lifetimes, *index.index);
             },
             (const Slice slice) {
-                planSlots(slots, *slice.array);
-                planSlots(slots, *slice.start);
-                planSlots(slots, *slice.end);
+                trace(lifetimes, *slice.array);
+                trace(lifetimes, *slice.start);
+                trace(lifetimes, *slice.end);
             },
-            (const Length length) => planSlots(slots, *length.array),
+            (const Length length) => trace(lifetimes, *length.array),
             (const Cell cell) => all(cell.args),
-            (const Capture capture) => planSlots(slots, *capture.closure),
-            (const TestFailure failure) => planSlots(slots, *failure.message),
+            (const Capture capture) => trace(lifetimes, *capture.closure),
+            (const TestFailure failure) => trace(lifetimes, *failure.message),
         );
     }
 
-    private void planSlots(ref Slots slots, const Stmt s)
+    private void trace(ref Lifetimes lifetimes, const Stmt s)
     {
+        lifetimes.beginStatement();
         s.kind.match!(
             (const Let let) {
-                planSlots(slots, let.value);
                 auto type = llvmType(let.local.type, s.span);
-                if (type != "void") slots.allocate(let.local, type);
+                if (type != "void") lifetimes.declare(let.local, type);
+                trace(lifetimes, let.value);
             },
-            (const Assign assign) => planSlots(slots, assign.value),
+            (const Assign assign) {
+                lifetimes.use(assign.local);
+                trace(lifetimes, assign.value);
+            },
             (const AssignElement assign) {
-                planSlots(slots, assign.index);
-                planSlots(slots, assign.value);
+                lifetimes.use(assign.local);
+                trace(lifetimes, assign.index);
+                trace(lifetimes, assign.value);
             },
-            (const Eval eval) => planSlots(slots, eval.expr),
+            (const Eval eval) => trace(lifetimes, eval.expr),
         );
+        lifetimes.endStatement();
     }
 
     private Fragment emitExpr(const Expr e)

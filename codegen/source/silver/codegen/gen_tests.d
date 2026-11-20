@@ -384,7 +384,7 @@ version (linux)
     }
 }
 
-@("codegen gives a reused name a slot of its own, and a let's slot comes after those in its value")
+@("codegen shares a slot between locals that are never live together, and not with a local in a let's value")
 unittest
 {
     auto source = "def main(): Unit {\n    {\n        val c = 1\n        printl(c)\n    }\n    {\n        val c = 2\n        printl(c)\n    }\n"
@@ -392,8 +392,10 @@ unittest
     auto ir = generateSource(source);
 
     ir.should.contain("store i64 1, ptr %c.addr\n");
-    ir.should.contain("store i64 2, ptr %c.addr.1\n");
-    ir.should.contain("  %c.addr = alloca i64\n  %c.addr.1 = alloca i64\n  %b.addr = alloca i64\n  %a.addr = alloca i64\n");
+    ir.should.contain("store i64 2, ptr %c.addr\n");
+    ir.should.contain("store i64 3, ptr %b.addr\n");
+    ir.should.contain("  %c.addr = alloca i64\n  %b.addr = alloca i64\n");
+    ir.count(" = alloca ").should.equal(2);
 
     Run run;
     if (!compileAndRun(source, run)) return;
