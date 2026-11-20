@@ -234,6 +234,11 @@ private struct Lexer
 
     void run()
     {
+        // A shebang line, so a script can be run as `./script.ag`.
+        if (source.length >= 2 && source[0] == '#' && source[1] == '!')
+        {
+            while (i < source.length && source[i] != '\n' && source[i] != '\r') i++;
+        }
         while (true)
         {
             if (inString)
@@ -679,6 +684,19 @@ unittest
     assert(!separated("a = b ||\n\n    // why\n    c"));
     assert(separated("a = 1\n// between\nb = 2"));
     assert(!separated("a = 1 /*\n*/ b = 2"));
+}
+
+@("a first line starting with #! is skipped, and #! anywhere else is an error")
+unittest
+{
+    with (TokenKind)
+    {
+        assert(kinds("#!/usr/bin/env silver\na") == [identifier, end]);
+        assert(kinds("#!/usr/bin/env silver\r\na\nb") == [identifier, newline, identifier, end]);
+        assert(kinds("#!/usr/bin/env silver") == [end]);
+        assert(lex("a\n#!/usr/bin/env silver").errors.length > 0);
+        assert(lex(" #!/usr/bin/env silver\na").errors.length > 0);
+    }
 }
 
 @("operators lex by the longest match, except that `>` is always one token")

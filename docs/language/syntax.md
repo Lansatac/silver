@@ -11,6 +11,15 @@ A source file has the extension `.ag`. Its top level holds declarations only: `m
 /* a block comment /* which can nest */ */
 ```
 
+A file can start with a shebang line, which is skipped, so a script can be made executable and run as `./script.ag`:
+
+```silver
+#!/usr/bin/env silver
+def main(): Unit => printl("hi")
+```
+
+Only the very start of the file counts: `#!` anywhere else is an error.
+
 ## Names
 
 Case is significant and enforced. A name starting with an uppercase letter is a type or constructor. A name starting with a lowercase letter or `_` is a value, binding or module.

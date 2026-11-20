@@ -398,7 +398,15 @@ version (unittest)
         {
             auto file = "t_" ~ c.name.replace("-", "_");
             auto moduleName = bundlePackage ~ "." ~ file;
-            auto source = ("module " ~ moduleName ~ "\n" ~ readText(c.sourcePath))
+            auto text = readText(c.sourcePath);
+            // A shebang is allowed only at the very start, which the module line takes here.
+            if (text.startsWith("#!"))
+            {
+                import std.string : indexOf;
+                auto end = text.indexOf('\n');
+                text = end < 0 ? "" : text[end .. $];
+            }
+            auto source = ("module " ~ moduleName ~ "\n" ~ text)
                 .replace("\ndef main(", "\ndef " ~ bundleEntry ~ "(");
             write(buildPath(directory, bundlePackage, file ~ ".ag"), source);
             imports ~= "import " ~ moduleName ~ "\n";

@@ -1,0 +1,4 @@
+#!/usr/bin/env silver
+def main(): Unit {
+    printl("shebang skipped")
+}
