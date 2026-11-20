@@ -128,10 +128,9 @@ def main(): Unit ! IoError {
 
 - Whether `split` and `lines` become lazy once [ranges](../proposals/ranges.md) are decided.
 - Case mapping beyond ASCII, which needs Unicode's tables.
-- Whether the unchecked conversion from bytes that `std.string` uses internally becomes public.
 
 ## Current implementation
 
 - Everything above is available on both backends, except as listed here.
-- The conversion from bytes that `std.string` uses without checking is private to the standard library.
+- `decode` and `toChar` are declared in `lang`, which `std.string` and `std.char` forward. `std.string` cuts a String with `lang.string`'s `slice(text, from, to)`, which panics unless both byte offsets fall between characters, so nothing outside `lang` can build a String that isn't UTF-8.
 - The planned forms above aren't available.

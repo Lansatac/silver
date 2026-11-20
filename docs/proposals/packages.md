@@ -1,6 +1,6 @@
 # Proposal: packages
 
-**Status: decided, nothing built.** The rules are described in [Modules](../language/modules.md#packages). This document keeps the reasoning and what was rejected. Today a program is still compiled whole, a module's name is its whole path under an unnamed root, and the compiler's own package is called `intrinsics`. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
+**Status: decided; `lang` and the build's prelude are built, packages aren't.** The rules are described in [Modules](../language/modules.md#packages). This document keeps the reasoning and what was rejected. Today a program is still compiled whole, and a module's name is its whole path under an unnamed root. `lang` is in place: only it may declare intrinsics, and the compiler names no other package. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
 
 ## Summary
 
@@ -80,7 +80,7 @@ The compiler refers to one package by name, `lang`. Everything else, the standar
 - Built-in types, which no module declares, belong to `lang`: arrays, tuples, options, error unions and function types.
 - `lang` and `std` aren't parts of one package. `std` has the rights any library has, so another standard library could stand where it does.
 - The functions syntax calls by name, such as `opIndex`, `length` and `next`, are found as any function is. The compiler depends on the name being in scope and not on a package.
-- By rule 1, the intrinsics `std` holds today move: `std.ref`'s `get`, `set` and `update`, and `std.c`'s aliases. `std` forwards them.
+- By rule 1, the intrinsics `std` held move: `std.ref`'s `Ref`, `get`, `set` and `update`, `std.c`'s aliases, and `std.time`'s runtime native. `std` forwards them. `std.string` and `std.char` used unchecked conversions privately; `lang` gives them checked ones instead (`decode`, `toChar` and a `slice` that panics unless it falls between characters), so `std` can't build a String that isn't UTF-8 any more than other code can.
 
 ### What's in scope without an import (decided)
 

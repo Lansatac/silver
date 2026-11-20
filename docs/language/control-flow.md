@@ -174,5 +174,4 @@ None.
 
 ## Current implementation
 
-- `Range` is declared in `stdlib/intrinsics/range.ag`, where the compiler package is until there is a `lang`.
 - An array and an `Interval` each have a loop of their own, which does what their `next` would. A generic function given one for a type parameter steps it through `next`.

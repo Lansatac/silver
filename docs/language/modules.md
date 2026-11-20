@@ -24,11 +24,9 @@ def computeQualified(): Float => some.library.helper(1.0)
 
 Module-level declarations can appear in any order.
 
-The prelude, which provides names like `print` and `read`, is an ordinary implicit blanket import with no special priority. A conflict with another blanket import is ambiguous, and `prelude.print` disambiguates; an import that lists the name beats it.
+Two modules are imported into every module without being named. `lang`, the [package the compiler knows](#the-package-the-compiler-knows), provides names like `print`, `read` and `length`, whatever the prelude is, and the prelude provides the rest of what every module sees, as `map`. Both are ordinary implicit blanket imports with no special priority. A conflict with another blanket import is ambiguous, and qualifying settles it, as `lang.print`; an import that lists the name beats it.
 
 The prelude declares nothing itself. It's a list of `forward import`s of `std` modules, so everything it provides has a module of its own that can be imported by name. It belongs to the standard library, and the build says which module it is: `std.prelude` unless another is named.
-
-`lang`, the [package the compiler knows](#the-package-the-compiler-knows), is in scope in every module the same way, whatever the prelude is.
 
 ## Packages
 
@@ -193,8 +191,9 @@ Inside the forwarding module, its own functions come first, and what it forwards
 
 - Renamed imports aren't available.
 - Packages aren't implemented. A program is compiled whole from unnamed roots, given with `-I`, and a module's name is its whole path under one: `import a.b` loads `<root>/a/b.ag`. There are no parts, no list of what a package uses, and no difference between a program and a library.
-- The compiler's package is named `intrinsics`, and `intrinsic def` is also allowed in `std` and the prelude.
-- The prelude is the module `prelude`, which the compiler always loads. It forwards the `intrinsics` modules and `std.range`, declares `Of` itself, and doesn't forward the other `std` modules yet.
+- `lang` is the module `lang` and the modules under it, read only from the compiler's own directory. Every other module imports the module `lang`, which forwards `lang.array`, `lang.interval`, `lang.io`, `lang.panic`, `lang.range`, `lang.testing` and `bytes` and `next` from `lang.string`; `lang`'s other modules are reached by importing them or through the `std` modules that forward them, as `std.ref` does `lang.ref`.
+- A module whose `module` line names it part of `lang` is an error unless it is the compiler's own file, so a program can't add to `lang`.
+- The build can't name another prelude yet: `silver` always uses `std.prelude`, which forwards `std.range`, declares `Of` itself, and doesn't forward the other `std` modules yet. A prelude that isn't found is an error.
 - Two functions of the same parameters aren't a duplicate when one's bounds ask for everything the other's do and more, and a type satisfies an interface through the functions a module can see, so those have to be imported or forwarded: see [Interfaces](interfaces.md#current-implementation).
 - An explicit duplicate of functions is reported where it's written, and a call that fits both is then reported as ambiguous too.
 - What two blanket forwards bring as functions of the same parameters is reported at a call or a plain or qualified use of the name, but where a bound's search or a function value meets it, as their own error (`T0043`, `T0034`).

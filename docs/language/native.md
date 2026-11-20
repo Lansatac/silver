@@ -82,11 +82,11 @@ Anything passed to a native function is valid until that call returns. A library
 intrinsic def panic(message: String): Never
 ```
 
-`intrinsic def` declares a function the compiler implements itself. It exists so that built-in operations are ordinary names that can be imported, shadowed and qualified. It is available only inside the standard library. An intrinsic's name says which operation it is, so two intrinsics of one name are an error, except the two forms of `assert`.
+`intrinsic def` declares a function the compiler implements itself. It exists so that built-in operations are ordinary names that can be imported, shadowed and qualified. It is available only inside [`lang`](modules.md#the-package-the-compiler-knows), the package the compiler knows. An intrinsic's name says which operation it is, so two intrinsics of one name are an error, except the two forms of `assert`.
 
-`intrinsic alias Name` declares an alias the compiler defines for the platform being compiled for, which is how `std.c` names the C types whose width varies, such as `CLong`.
+`intrinsic alias Name` declares an alias the compiler defines for the platform being compiled for, which is how `lang.c` declares the C types whose width varies, `CLong` and `CULong`, for `std.c` to forward.
 
-`intrinsic type Name<T>(value: T)` declares a type the compiler implements, which is how `std.ref` declares `Ref`. The parameter list is its constructor's: a value of an intrinsic type has no fields and isn't taken apart by a pattern.
+`intrinsic type Name<T>(value: T)` declares a type the compiler implements, which is how `lang.ref` declares `Ref`, which `std.ref` forwards. The parameter list is its constructor's: a value of an intrinsic type has no fields and isn't taken apart by a pattern.
 
 ## Open questions
 
@@ -101,6 +101,6 @@ intrinsic def panic(message: String): Never
 
 - `native def`, `native("...")`, `native library`, `intrinsic def`, `intrinsic alias`, `intrinsic type` and `std.c` are available. `native type`, `CString` and its conversions aren't, so a native signature can use only the integer types, `Float` and `Bool`, with `Unit` or `Never` also allowed as the return type.
 - The platform being compiled for is always the one the compiler runs on.
-- Compiled programs call natives directly. The interpreter can call only the standard library's natives, which it has built in; calling any other native while interpreting is an error.
+- Compiled programs call natives directly. The interpreter can call only the natives that `lang` and the standard library declare, which it has built in; calling any other native while interpreting is an error.
 - A module's `native library` is passed to the linker when the program calls one of that module's natives or uses one as a value.
 - An intrinsic with an `Any` parameter, such as `print`, can only be called, not used as a value.
