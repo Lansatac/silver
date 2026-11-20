@@ -643,3 +643,14 @@ unittest
     errors[0].span.file.should.equal(buildPath(directory, "helper.ag"));
     errors[0].message.should.contain("`module script`");
 }
+
+@("the check that the compiler names no module outside lang reads all of each file's non-test code")
+unittest
+{
+    // That check stops at a file's first `version (unittest)`. analysis.d has a one-line
+    // `version (unittest) import ...;` near its top, so `analyze` and the rest of the file go unread.
+    auto text = readText(buildPath(standardLibraryPath(), "..", "sema", "source", "silver", "sema", "analysis.d"));
+    auto cut = text.indexOf("version (unittest)");
+    assert(cut < 0 || cut > text.indexOf("Analysis analyze("),
+        "analysis.d is read only up to its first version (unittest), before analyze");
+}
