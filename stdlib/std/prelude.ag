@@ -1,7 +1,6 @@
-// Everything here is visible in every module without an import, beside what `lang` provides.
+// What every module sees without an import, beside what `lang` provides. It declares nothing
+// itself, so each name here can also be imported from the module that declares it.
 module std.prelude
 
+forward import std.of
 forward import std.range
-
-// Says which type is meant to a function that takes no value of it, as in `fromJson(Of<Point>, text)`.
-type Of<T>

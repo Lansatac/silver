@@ -1,0 +1,5 @@
+// A value that stands for a type, for a function that takes no value of the type it's about.
+module std.of
+
+// Says which type is meant to a function that takes no value of it, as in `fromJson(Of<Point>, text)`.
+type Of<T>
