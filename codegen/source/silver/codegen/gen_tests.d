@@ -470,7 +470,7 @@ unittest
     run.output.should.equal("Pair(1, 2.5)\nPair((), true)\nGood(1)\nTag\n");
 }
 
-@("codegen passes and returns a declared type as its fields' scalars, and boxes only one that holds itself")
+@("codegen passes and returns a declared type as its fields' scalars, and boxes only a field that holds the type")
 unittest
 {
     auto source = "type Point(x: Int, y: Int)
@@ -492,8 +492,9 @@ type Node(value: Int, next: Node?)
     auto line = structNamed(ir, "{ i64, i64, i8, i64, i64 }");
     ir.should.contain("define internal " ~ line ~ " @\"main.shift\"(i64 %line.0, i64 %line.1, i1 %line.2, i64 %line.3, i64 %line.4)");
     ir.should.contain("%line.addr = alloca " ~ line);
-    ir.should.contain("%node.addr = alloca ptr");
-    ir.should.contain("getelementptr " ~ structNamed(ir, "{ i64, i8, ptr }"));
+    auto node = structNamed(ir, "{ i64, ptr }");
+    ir.should.contain("%node.addr = alloca " ~ node);
+    ir.should.contain("getelementptr " ~ node);
 
     // A struct is laid out in memory, built to be returned and taken apart after a call, and is
     // never another instruction's operand or result: every line naming one is one of these.
@@ -512,6 +513,51 @@ type Node(value: Int, next: Node?)
     run.output.should.equal("Line(Point(0, 0), Some(Point(3, 4)))
 Node(1, Some(Node(2, None)))
 ");
+}
+
+@("codegen boxes the field that closes a cycle, so a type holding the cyclic one is by value like any other")
+unittest
+{
+    auto source = "import lang.hash
+type Node(value: Int, next: Node?)
+type Pair<A, B>(first: A, second: B)
+def boxedSecond(p: Pair<Node?, Int>): Int => p.second
+def plainSecond(p: Pair<Int, Int>): Int => p.second
+def main(): Unit {
+    val boxed = Pair(Some(Node(1, Node(2, None))), 3)
+    val plain = Pair(1, 2)
+    printl(boxedSecond(boxed) + plainSecond(plain))
+    printl(boxed == boxed with (second = 3))
+    printl(hash(boxed) == hash(Pair(Some(Node(1, Node(2, None))), 3)))
+    printl(boxed.first?.next)
+    printl(plain)
+}";
+    auto ir = generateSource(source);
+
+    // Both pairs are their fields' scalars. Only `Node.next` is a pointer, to a `Node`'s scalars, and
+    // null for `None`.
+    ir.should.contain("define internal i64 @\"main.boxedSecond\"(i1 %p.0, i64 %p.1, ptr %p.2, i64 %p.3)");
+    ir.should.contain("define internal i64 @\"main.plainSecond\"(i64 %p.0, i64 %p.1)");
+    ir.should.contain("%boxed.addr = alloca " ~ structNamed(ir, "{ i8, i64, ptr, i64 }"));
+    ir.should.contain("%plain.addr = alloca " ~ structNamed(ir, "{ i64, i64 }"));
+    auto node = structNamed(ir, "{ i64, ptr }");
+    ir.should.contain("call ptr @silver_alloc(i64 ptrtoint (ptr getelementptr (" ~ node ~ ", ptr null, i32 1) to i64))");
+    ir.should.contain("store ptr null, ptr ");
+    ir.should.contain("@.none.0 = private unnamed_addr constant " ~ node ~ " zeroinitializer");
+    ir.should.contain("define private i1 @\"main.equal.Node.");
+    ir.should.contain("(i64 %a.0, ptr %a.1, i64 %b.0, ptr %b.1)");
+
+    // Derived functions recurse through the box, and check the stack as every function does.
+    auto equality = ir[ir.indexOf("define private i1 @\"main.equal.Node.") .. $];
+    equality = equality[0 .. equality.indexOf("\n}\n")];
+    equality.should.contain("@silver_stack_limit");
+    equality.should.contain(", ptr @.none.0");
+    equality.should.contain("call i1 @\"main.equal.Node?.");
+
+    Run run, optimized;
+    if (!compileAndRun(source, run) || !compileAndRun(source, optimized, Optimization.full)) return;
+    run.output.should.equal("5\ntrue\ntrue\nSome(Node(2, None))\nPair(1, 2)\n");
+    optimized.should.equal(run);
 }
 
 @("codegen names each struct type once, so reaching into a wide product doesn't spell it out")
@@ -614,7 +660,7 @@ unittest
 {
     auto source = "type Node(value: Int, next: Node?)\n"
         ~ "def pick(xs: [Int], node: Node): Int => xs[node.value]\n"
-        ~ "def main(): Unit {\n    printl(pick([10, 20, 30], Node(1, None)))\n    printl(pick([10, 20, 30], Node(3, None)))\n}";
+        ~ "def main(): Unit {\n    printl(pick([10, 20, 30], Node(1, Node(0, None))))\n    printl(pick([10, 20, 30], Node(3, None)))\n}";
     auto ir = generateSource(source);
     ir.should.contain("define internal void @\"main.main\"() #0 {");
     ir.should.contain("attributes #0 = { nounwind uwtable }");

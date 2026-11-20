@@ -1,0 +1,54 @@
+Pair(Some(Node(1, Some(Node(2, Some(Node(3, None)))))), 7)
+Some(2)
+true
+false
+true
+Pair(1, 2)
+Pair(Some(Node(2, Some(Node(3, None)))), 7)
+None
+Node(1, Some(Node(9, Some(Node(3, None)))))
+Node(1, Some(Node(2, Some(Node(3, None)))))
+Node(0, Some(Node(2, Some(Node(3, None)))))
+Node(1, None)
+Node(1, Some(Node(5, Some(Node(2, Some(Node(3, None)))))))
+Node(11, Some(Node(5, Some(Node(2, Some(Node(3, None)))))))
+true
+Node(1, Some(Node(2, Some(Node(3, None)))))
+20000
+true
+true
+[20, 30, 40, 50, 60, 70, 80]
+Some(Tree(40, None, None))
+true
+false
+List(a, Some(List(b, None)))
+3
+Some(Node(3, None))
+Rock(1, Some(Paper(2, Some(Scissors(3, Some(Rock(4, None)))))))
+Some(4)
+true
+Pair(Some(Paper(2, Some(Scissors(3, Some(Rock(4, None)))))), Some(Scissors(3, Some(Rock(4, None)))))
+Deep(0, Some(Some(Deep(1, Some(None)))))
+Some(Some(Deep(1, Some(None))))
+1
+Some(None)
+true
+false
+Attempt(0, Ok(Attempt(1, Error(gave up))))
+Ok(Attempt(1, Error(gave up)))
+true
+Loop(1, Some((2, Loop(3, None))))
+5
+Link(1, Some(Link(2, Some(Link(3, None)))))
+3
+0
+true
+true
+Held(Wrap(Some(Wrap(Some(Wrap(Some(Wrap(None))))))))
+3
+true
+false
+Config(child, false, Some(Config(root, true, None, 0)), 1)
+Some(root)
+Some(root)
+true

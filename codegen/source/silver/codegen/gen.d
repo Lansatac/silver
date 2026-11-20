@@ -369,7 +369,10 @@ private final class Generator
     private bool _functionEquality;
     /// Whether `@silver.function.hash` and `@silver.hash.mix` have been defined.
     private bool _functionHash, _hashMix;
-    private bool[Type] _boxed;
+    /// Whether each field of a declared type is boxed, by the type.
+    private bool[][Type] _boxedFields;
+    /// The zeros a boxed `None` reads its payload from, by the payload's layout.
+    private string[string] _nones;
     /// The name of each struct type, by what it's made of, and their definitions.
     private string[immutable(string)[]] _structs;
     private string[] _structDefinitions;
@@ -697,17 +700,18 @@ private final class Generator
 
         return e.kind.match!(
             (const Update update) {
-                if (!isInline(e.type) || layout.length == 1) return whole();
+                if (layout.length == 1) return whole();
                 auto object = emitInto(*update.object, layout, pointer);
                 auto at = storedAt(e.type, update.index, e.span);
-                auto value = emitExpr(*update.value);
-                auto replacement = at.count == 0 ? null : operandsOf(*update.value, value.operands, at.count);
-                return object.then(value).then(storeScalars(layout, pointer, at.offset, replacement));
+                auto replacement = emitHeld(e.type, update.index, *update.value, e.span);
+                if (at.count == 0) return object.then(replacement).withValue(null);
+                return object.then(replacement).then(storeScalars(layout, pointer, at.offset, replacement.operands));
             },
             (const Construct construct) {
                 // A record around one value is laid out as that value is.
                 auto fields = fieldTypes(e.type);
-                if (!isInline(e.type) || fields.count!(f => !isEmpty(f)) != 1) return whole();
+                if (fields.count!(f => !isEmpty(f)) != 1) return whole();
+                foreach (i; 0 .. fields.length) if (isBoxedField(e.type, i)) return whole();
                 Fragment code;
                 foreach (i, ref field; construct.fields)
                 {
@@ -1909,21 +1913,22 @@ private final class Generator
         auto layout = scalarsOf(assign.local.type, s.span);
 
         const(Expr)[] values;
-        Stored[] targets;
-        if (layout.length > 1 && replacesFields(assign.value, assign.local, values, targets))
+        size_t[] fields;
+        if (layout.length > 1 && replacesFields(assign.value, assign.local, values, fields))
         {
+            auto type = assign.local.type;
             const(string)[][] operands;
             Fragment code;
-            foreach (ref value; values)
+            foreach (i, field; fields)
             {
-                auto evaluated = emitExpr(value);
-                code = code.then(evaluated);
-                operands ~= evaluated.operands;
+                auto held = emitHeld(type, field, values[i], s.span);
+                code = code.then(held);
+                operands ~= held.operands;
             }
-            foreach (i, target; targets)
+            foreach (i, field; fields)
             {
-                if (target.count == 0) continue;
-                code = code.then(storeScalars(layout, slot, target.offset, operandsOf(values[i], operands[i], target.count)));
+                auto target = storedAt(type, field, s.span);
+                code = code.then(storeScalars(layout, slot, target.offset, operands[i]));
             }
             return code;
         }
@@ -1932,17 +1937,17 @@ private final class Generator
     }
 
     /// Whether `e` is `local` with fields replaced, one after another, by values that assign
-    /// nothing. `values` and `targets` are then each replacement and the scalars it replaces, in
-    /// the order they're made.
-    private bool replacesFields(const Expr e, const Local local, ref const(Expr)[] values, ref Stored[] targets)
+    /// nothing. `values` and `fields` are then each replacement and the index of the field it
+    /// replaces, in the order they're made.
+    private bool replacesFields(const Expr e, const Local local, ref const(Expr)[] values, ref size_t[] fields)
     {
         return e.kind.match!(
             (const LocalRef use) => use.local is local,
             (const Update update) {
-                if (!isInline(e.type) || !assignsNothing(*update.value)) return false;
-                if (!replacesFields(*update.object, local, values, targets)) return false;
+                if (!assignsNothing(*update.value)) return false;
+                if (!replacesFields(*update.object, local, values, fields)) return false;
                 values ~= *update.value;
-                targets ~= storedAt(e.type, update.index, e.span);
+                fields ~= update.index;
                 return true;
             },
             _ => false,
@@ -2007,41 +2012,39 @@ private final class Generator
         return emitInto(let.value, scalarsOf(let.local.type, s.span), slot);
     }
 
-    // Records. A tuple or a declared type's value is its fields' scalars, one after another, except
-    // for a declared type that holds itself, whose value is a pointer to them on the heap, which
-    // never change once written.
+    // Records. A tuple or a declared type's value is its fields' scalars, one after another. A field
+    // whose type can hold a value of the declared type itself, with nothing but records, options
+    // and error unions in between, would make those scalars never end, so it is held as a pointer
+    // to its value on the heap, which never changes once written; a boxed option points to its
+    // payload, and is null for `None`. A type's value then stays the same whatever holds it.
 
-    /// Whether a value of the record `type` is its fields, not a pointer to them.
-    private bool isInline(Type type)
+    /// Whether field `index` of the record `type` is held through a pointer.
+    private bool isBoxedField(Type type, size_t index)
     {
-        return _program.types.isTuple(type) || !isBoxed(type);
+        if (_program.types.isTuple(type)) return false;
+        if (auto known = type in _boxedFields) return (*known)[index];
+        bool[] boxed;
+        foreach (field; fieldTypes(type)) boxed ~= reaches(field, type);
+        _boxedFields[type] = boxed;
+        return boxed[index];
     }
 
-    /// Whether the declared type `type` can hold a value of itself with nothing but records, options
-    /// and error unions in between, so that its fields would never end. Each type on such a cycle
-    /// is boxed.
-    private bool isBoxed(Type type)
+    /// Whether a value of `from` holds a value of `type` as part of itself, were no field boxed.
+    private bool reaches(Type from, Type type)
     {
-        if (auto known = type in _boxed) return *known;
         bool[Type] seen;
-        bool reaches(Type from)
+        bool search(Type at)
         {
-            foreach (part; heldInline(from))
-            {
-                if (part == type) return true;
-                if (part in seen) continue;
-                seen[part] = true;
-                if (reaches(part)) return true;
-            }
-            return false;
+            if (at == type) return true;
+            if (at in seen) return false;
+            seen[at] = true;
+            return heldInline(at).canFind!(part => search(part));
         }
 
-        auto boxed = reaches(type);
-        _boxed[type] = boxed;
-        return boxed;
+        return search(from);
     }
 
-    /// The types whose values are part of a value of `type` itself, were no record boxed. An array,
+    /// The types whose values are part of a value of `type` itself, were no field boxed. An array,
     /// a function value, a `Ref` and a sum hold theirs through a pointer.
     private const(Type)[] heldInline(Type type)
     {
@@ -2062,27 +2065,124 @@ private final class Generator
         return *fields;
     }
 
-    /// The scalars of a record's fields, in order, which a boxed record's pointer points to.
+    /// The scalars of a record's fields as they're held, in order.
     private const(string)[] recordScalars(Type type, Span span)
     {
         const(string)[] scalars;
-        foreach (field; fieldTypes(type)) scalars ~= scalarsOf(field, span);
+        foreach (i, field; fieldTypes(type)) scalars ~= isBoxedField(type, i) ? ["ptr"] : scalarsOf(field, span);
         return scalars;
     }
 
-    /// Which of `recordScalars` are field `index`.
+    /// Which of `recordScalars` hold field `index`.
     private Stored storedAt(Type type, size_t index, Span span)
     {
-        auto fields = fieldTypes(type);
         size_t offset = 0;
-        foreach (field; fields[0 .. index]) offset += scalarsOf(field, span).length;
-        return Stored(offset, scalarsOf(fields[index], span).length);
+        foreach (i; 0 .. index) offset += heldCount(type, i, span);
+        return Stored(offset, heldCount(type, index, span));
+    }
+
+    private size_t heldCount(Type type, size_t index, Span span)
+    {
+        return isBoxedField(type, index) ? 1 : scalarsOf(fieldTypes(type)[index], span).length;
     }
 
     private struct Stored
     {
         size_t offset;
         size_t count;
+    }
+
+    /// What a boxed field of type `field` points to: its value, or an option's payload.
+    private const(string)[] boxLayout(Type field, Span span)
+    {
+        return scalarsOf(isOption(field) ? _program.types.optionInner(field) : field, span);
+    }
+
+    /// `e` evaluated, as field `index` of the record `type` holds it. A boxed field read from
+    /// another of its type shares that one's box, which nothing writes to.
+    private Fragment emitHeld(Type type, size_t index, const Expr e, Span span)
+    {
+        if (isBoxedField(type, index) && e.type == fieldTypes(type)[index] && isBoxedFieldRead(e)) return boxOf(e);
+        auto value = emitExpr(e);
+        return value.then(toHeld(type, index, e, value.operands, span));
+    }
+
+    /// `operands`, the value of `e`, as field `index` of the record `type` holds it: the same, or
+    /// a pointer to a copy on the heap.
+    private Fragment toHeld(Type type, size_t index, const Expr e, const string[] operands, Span span)
+    {
+        auto field = fieldTypes(type)[index];
+        auto value = operandsOf(e, operands, scalarsOf(field, span).length);
+        if (!isBoxedField(type, index)) return Fragment(null, value);
+        if (e.type == _program.types.never) return Fragment.constant("undef");
+
+        auto layout = boxLayout(field, span);
+        Fragment copied(const string[] contents)
+        {
+            auto box = alloc(structOf(layout));
+            return box.then(storeScalars(layout, box.value, 0, contents)).withValue(box.value);
+        }
+
+        if (!isOption(field)) return copied(value);
+        if (value[0] == "false") return Fragment.constant("null");
+        if (value[0] == "true") return copied(value[1 .. $]);
+        auto testLabel = _function.newLabel("box.test");
+        auto someLabel = _function.newLabel("box.some");
+        auto doneLabel = _function.newLabel("box.done");
+        auto some = Fragment.label(someLabel).then(copied(value[1 .. $]));
+        return Fragment.jump(testLabel).then(Fragment.label(testLabel))
+            .then(Fragment.branch(value[0], someLabel, doneLabel))
+            .then(some).then(Fragment.jump(doneLabel))
+            .then(Fragment.label(doneLabel))
+            .then(merge(["ptr"], ["null"], testLabel, [some.value], some.endBlock));
+    }
+
+    /// The value of field `index` of the record `type`, from `held`, the operands it's held as.
+    private Fragment fromHeld(Type type, size_t index, const string[] held, Span span)
+    {
+        if (!isBoxedField(type, index)) return Fragment(null, held);
+        auto field = fieldTypes(type)[index];
+        auto layout = boxLayout(field, span);
+        if (!isOption(field)) return loadScalars(layout, held[0], 0, layout.length);
+        auto box = boxedOption(field, held[0], span);
+        auto payload = loadScalars(layout, box.operands[1], 0, layout.length);
+        return box.then(payload).withOperands(box.operands[0] ~ payload.operands);
+    }
+
+    /// The tag of the boxed option `pointer` holds, and where its payload is: for `None`, zeros
+    /// that nothing writes to, so a payload can always be read.
+    private Fragment boxedOption(Type field, string pointer, Span span)
+    {
+        auto layout = boxLayout(field, span);
+        auto tag = _function.result("icmp ne ptr %s, null".format(pointer));
+        auto payload = _function.result("select i1 %s, ptr %s, ptr %s".format(tag.value, pointer, noneOf(layout)));
+        return tag.then(payload).withOperands([tag.value, payload.value]);
+    }
+
+    /// A constant of zeros laid out as `layout`, one for each layout.
+    private string noneOf(const string[] layout)
+    {
+        auto type = structOf(layout);
+        if (auto known = type in _nones) return *known;
+        auto name = "@.none.%s".format(_nones.length);
+        _nones[type] = name;
+        _globals ~= "%s = private unnamed_addr constant %s zeroinitializer".format(name, type);
+        return name;
+    }
+
+    /// The operands that field `field.index` of `field.object` is held as.
+    private Fragment heldOperands(const Expr e, const Field field)
+    {
+        auto type = field.object.type;
+        auto at = storedAt(type, field.index, e.span);
+        auto outer = placeOf(*field.object);
+        if (outer.pointer !is null)
+        {
+            return outer.code.then(loadScalars(outer.layout, outer.pointer, outer.offset + at.offset, at.count));
+        }
+        auto object = emitExpr(*field.object);
+        auto whole = operandsOf(*field.object, object.operands, recordScalars(type, e.span).length);
+        return object.withOperands(whole[at.offset .. at.offset + at.count]);
     }
 
     /// Whether a value of `type` is made of nothing. This doesn't ask for its scalars: a sum asks
@@ -2092,24 +2192,28 @@ private final class Generator
         auto types = _program.types;
         if (type == types.unit || type == types.never || type == types.none) return true;
         if (types.isTuple(type)) return types.tupleElements(type).all!(t => isEmpty(t));
-        if (auto fields = type in _program.recordFields) return !isBoxed(type) && (*fields).all!(f => isEmpty(f));
+        if (auto fields = type in _program.recordFields)
+        {
+            foreach (i, field; *fields)
+            {
+                if (isBoxedField(type, i) || !isEmpty(field)) return false;
+            }
+            return true;
+        }
         return false;
     }
 
     private Fragment emit(const Expr e, const Construct construct)
     {
-        const(string)[][] operands;
-        auto values = emitAll(construct.fields, operands);
+        Fragment code;
         const(string)[] whole;
-        foreach (i, field; fieldTypes(e.type))
+        foreach (i, ref field; construct.fields)
         {
-            whole ~= operandsOf(construct.fields[i], operands[i], scalarsOf(field, e.span).length);
+            auto held = emitHeld(e.type, i, field, e.span);
+            code = code.then(held);
+            whole ~= held.operands;
         }
-        if (isInline(e.type)) return values.withOperands(whole);
-
-        auto layout = recordScalars(e.type, e.span);
-        auto object = alloc(structOf(layout));
-        return values.then(object).then(storeScalars(layout, object.value, 0, whole)).withValue(object.value);
+        return code.withOperands(whole);
     }
 
     /// Scalars `offset` to `offset + count` of the memory `pointer` points to, which is laid out as
@@ -2124,7 +2228,7 @@ private final class Generator
     }
 
     /// Where `e`'s value already is in memory: a local's slot, an array's element, a sum's payload,
-    /// or a field of one of those or of a boxed record. Reading one field of a wide record then
+    /// a boxed field's box, or a field of one of those. Reading one field of a wide record then
     /// loads only that field, and a whole value is copied without becoming operands. When there's
     /// no such place, no code has been generated.
     private Place placeOf(const Expr e)
@@ -2136,13 +2240,14 @@ private final class Generator
             },
             (const Field field) {
                 auto type = field.object.type;
-                auto at = storedAt(type, field.index, e.span);
-                if (!isInline(type))
+                if (isBoxedField(type, field.index))
                 {
-                    auto object = emitExpr(*field.object);
-                    return Place(object.withValue(null), operandOf(*field.object, object), recordScalars(type, e.span),
-                        at.offset, at.count);
+                    if (isOption(e.type)) return Place.init;
+                    auto box = heldOperands(e, field);
+                    auto layout = boxLayout(e.type, e.span);
+                    return Place(box.withValue(null), box.value, layout, 0, layout.length);
                 }
+                auto at = storedAt(type, field.index, e.span);
                 auto outer = placeOf(*field.object);
                 if (outer.pointer is null) return Place.init;
                 return Place(outer.code, outer.pointer, outer.layout, outer.offset + at.offset, at.count);
@@ -2159,6 +2264,12 @@ private final class Generator
                 auto type = payload.subject.type;
                 auto member = scalarsOf(e.type, e.span);
                 if (member.length == 0) return Place.init;
+                if (isBoxedOption(*payload.subject))
+                {
+                    auto held = boxOf(*payload.subject);
+                    auto box = boxedOption(type, held.value, e.span);
+                    return Place(held.then(box).withValue(null), box.operands[1], member, 0, member.length);
+                }
                 if (isOption(type) || isErrorUnion(type))
                 {
                     auto outer = placeOf(*payload.subject);
@@ -2185,34 +2296,45 @@ private final class Generator
     {
         auto place = placeOf(e);
         if (place.pointer !is null) return read(place);
-        auto object = emitExpr(*field.object);
-        auto type = field.object.type;
-        auto at = storedAt(type, field.index, e.span);
-        auto whole = operandsOf(*field.object, object.operands, recordScalars(type, e.span).length);
-        return object.withOperands(whole[at.offset .. at.offset + at.count]);
+        auto held = heldOperands(e, field);
+        return held.then(fromHeld(field.object.type, field.index, held.operands, e.span));
     }
 
-    /// A record's scalars with the field's replaced; a boxed one is copied to a new object.
+    /// Whether `e` reads a field that is a boxed option.
+    private bool isBoxedOption(const Expr e)
+    {
+        return isOption(e.type) && isBoxedFieldRead(e);
+    }
+
+    /// Whether `e` reads a field that is boxed.
+    private bool isBoxedFieldRead(const Expr e)
+    {
+        return e.kind.match!(
+            (const Field field) => isBoxedField(field.object.type, field.index),
+            _ => false,
+        );
+    }
+
+    /// The pointer that `e`, which reads a boxed field, is held as.
+    private Fragment boxOf(const Expr e)
+    {
+        return e.kind.match!(
+            (const Field field) => heldOperands(e, field),
+            _ => assert(0, "only a field is boxed"),
+        );
+    }
+
+    /// A record's scalars with the field's replaced.
     private Fragment emit(const Expr e, const Update update)
     {
         auto object = emitExpr(*update.object);
-        auto value = emitExpr(*update.value);
-        auto code = object.then(value);
         auto type = e.type;
         auto at = storedAt(type, update.index, e.span);
-        if (at.count == 0) return code.withOperands(object.operands);
-        auto layout = recordScalars(type, e.span);
-        auto replacement = operandsOf(*update.value, value.operands, at.count);
-        if (isInline(type))
-        {
-            auto whole = operandsOf(*update.object, object.operands, layout.length);
-            return code.withOperands(whole[0 .. at.offset] ~ replacement ~ whole[at.offset + at.count .. $]);
-        }
-
-        auto copy = alloc(structOf(layout));
-        return code.then(copy).then(move(layout, copy.value, operandOf(*update.object, object)))
-            .then(storeScalars(layout, copy.value, at.offset, replacement))
-            .withValue(copy.value);
+        auto replacement = emitHeld(type, update.index, *update.value, e.span);
+        if (at.count == 0) return object.then(replacement).withOperands(object.operands);
+        auto whole = operandsOf(*update.object, object.operands, recordScalars(type, e.span).length);
+        return object.then(replacement)
+            .withOperands(whole[0 .. at.offset] ~ replacement.operands ~ whole[at.offset + at.count .. $]);
     }
 
     // Sums and options. An option is an `i1` saying whether there's a payload, then the payload's
@@ -2284,6 +2406,12 @@ private final class Generator
     private Fragment emit(const Expr e, const IsMember test)
     {
         auto type = test.subject.type;
+        if (isBoxedOption(*test.subject))
+        {
+            auto box = boxOf(*test.subject);
+            auto comparison = test.member == 1 ? "ne" : "eq";
+            return box.then(_function.result("icmp %s ptr %s, null".format(comparison, box.value)));
+        }
         auto place = placeOf(*test.subject);
         auto subject = place.pointer is null
             ? emitExpr(*test.subject)
@@ -2690,7 +2818,7 @@ private final class Generator
             return "i1" ~ scalarsOf(types.successOf(type), span) ~ scalarsOf(types.errorOf(type), span);
         }
         if (types.isTuple(type)) return recordScalars(type, span);
-        if (type in _program.recordFields) return isBoxed(type) ? ["ptr"] : recordScalars(type, span);
+        if (type in _program.recordFields) return recordScalars(type, span);
         if (type in _program.cellContents) return ["ptr"];
         if (type in _program.sumMembers) return isAllMarkers(type) ? ["i32"] : ["i32", "ptr"];
         return notImplemented!(const(string)[])("the type " ~ types.describe(type), span);

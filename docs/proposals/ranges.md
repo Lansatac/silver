@@ -422,7 +422,7 @@ It's for where one type has to stand for many: a field, an element of an array, 
 
 Conformance is settled by the checker, and every call to `next` in a chain is a direct call to a specific instance. An `if type` is decided per instance, so the branch not taken isn't compiled into it. Nothing is looked up.
 
-Stepping an adapter allocates nothing. A compiled program passes and returns a product as its fields, so an adapter is a few values LLVM can see through, and each step builds the next adapter in registers. A product is on the heap only when its type holds itself, as a list node does, or when it's held as a member of a sum.
+Stepping an adapter allocates nothing. A compiled program passes and returns a product as its fields, so an adapter is a few values LLVM can see through, and each step builds the next adapter in registers. A value is on the heap only when it's held by a field that closes a cycle, as a list node's `next` is, or as a member of a sum.
 
 Measured, two million elements ten times in an optimized build: a `for` over a `map` of a `map` takes 17 ms by index, 17 ms by stepping and 18 ms by hand, and a `map` and `filter` chain 20 ms against 18 ms by hand. Counting or taking the last element through a `map` without asking is a walk of every element, since the transform can panic and has to run, which is what the test in `count` and `last` is for. What a chain can still cost beyond the loop written by hand:
 

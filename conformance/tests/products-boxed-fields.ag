@@ -1,0 +1,160 @@
+// Fields that close a cycle through products, options and error unions, read, built, compared,
+// hashed, printed and replaced wherever the types holding them are.
+import lang.hash
+
+type Node(value: Int, next: Node?)
+type Pair<A, B>(first: A, second: B)
+type List<T>(head: T, tail: List<T>?)
+type Tree(key: Int, left: Tree?, right: Tree?)
+type Rock(a: Int, paper: Paper?)
+type Paper(b: Int, scissors: Scissors?)
+type Scissors(c: Int, rock: Rock?)
+type Deep(level: Int, next: (Deep?)?)
+type Attempt(depth: Int, result: Attempt ! String)
+type Loop(value: Int, again: (Int, Loop)?)
+type Wrap(inner: Wrap?)
+type Chain = End | Link(value: Int, next: Link?)
+type Holder = Held(wrap: Wrap) | Empty
+type Config(name: String, verbose: Bool, parent: Config?, depth: Int)
+
+def nodes(n: Int): Node? => if n == 0 => None else Node(n, nodes(n - 1))
+
+def length(node: Node?): Int {
+    mutable val count = 0
+    mutable val rest = node
+    while val at = rest {
+        count += 1
+        rest = at.next
+    }
+    count
+}
+
+def insert(tree: Tree?, key: Int): Tree => match tree {
+    None => Tree(key, None, None)
+    Some(t) => if key < t.key => t with (left = insert(t.left, key))
+        else if key > t.key => t with (right = insert(t.right, key))
+        else t
+}
+
+def keys(tree: Tree?): [Int] => match tree {
+    None => []
+    Some(t) => keys(t.left) ~ [t.key] ~ keys(t.right)
+}
+
+def sizeOf<T>(list: List<T>?): Int => if val l = list => 1 + sizeOf(l.tail) else 0
+
+def links(chain: Chain): Int => match chain {
+    End => 0
+    Link(_, next) => if val n = next => 1 + links(n) else 1
+}
+
+def depthOf(wrap: Wrap): Int => if val inner = wrap.inner => 1 + depthOf(inner) else 0
+
+def nested(n: Int): Wrap => if n == 0 => Wrap(None) else Wrap(nested(n - 1))
+
+def main(): Unit {
+    // A product holding the cyclic type isn't boxed itself.
+    val list = Node(1, Node(2, Node(3, None)))
+    val pair = Pair(Some(list), 7)
+    printl(pair)
+    printl(pair.first?.next?.value)
+    printl(pair == Pair(Some(Node(1, Node(2, Node(3, None)))), 7))
+    printl(pair == Pair(Some(Node(1, Node(2, None))), 7))
+    printl(hash(pair) == hash(Pair(Some(Node(1, Node(2, Node(3, None)))), 7)))
+    printl(Pair(1, 2))
+    val pairs = [pair, pair with (first = None, second = 8), pair with (first = list.next)]
+    printl(pairs[2])
+    printl(pairs[1].first)
+
+    // Copying shares the box, and replacing a field leaves the original as it was.
+    val copy = list
+    val relinked = copy with (next = Node(9, list.next?.next))
+    printl(relinked)
+    printl(list)
+    printl(list with (value = 0))
+    printl(list with (next = None))
+    mutable val walker = list
+    walker.next = Node(5, walker.next)
+    printl(walker)
+    walker = walker with (value = walker.value + 10, next = walker.next)
+    printl(walker)
+    walker.next = None
+    printl(walker == Node(11, None))
+    printl(list)
+
+    // Long and deep.
+    printl(length(nodes(20000)))
+    val long = nodes(3000)
+    printl(long == nodes(3000))
+    printl(hash(long) == hash(nodes(3000)))
+
+    // A tree with two boxed fields.
+    mutable val tree: Tree? = None
+    for key in [50, 30, 70, 20, 40, 60, 80, 30] {
+        tree = insert(tree, key)
+    }
+    printl(keys(tree))
+    printl(tree?.left?.right)
+    printl(tree == insert(tree, 40))
+    printl(tree == insert(tree, 45))
+
+    // Generic instances.
+    val words = List("a", List("b", None))
+    printl(words)
+    printl(sizeOf(Some(List(1, List(2, List(3, None))))))
+    printl(Pair(words, Pair(list, 1.5)).second.first.next?.next)
+
+    // A cycle through three types.
+    val rock = Rock(1, Paper(2, Scissors(3, Rock(4, None))))
+    printl(rock)
+    printl(rock.paper?.scissors?.rock?.a)
+    printl(rock == Rock(1, Paper(2, Scissors(3, Rock(4, None)))))
+    printl(Pair(rock.paper, rock.paper?.scissors))
+
+    // Options of options, error unions and tuples on the cycle.
+    val deep = Deep(0, Some(Some(Deep(1, Some(None)))))
+    printl(deep)
+    printl(deep.next)
+    if val inner = deep.next {
+        if val next = inner {
+            printl(next.level)
+            printl(next.next)
+        }
+    }
+    printl(Deep(5, None) == Deep(5, None))
+    printl(Deep(5, Some(None)) == Deep(5, None))
+    val attempt = Attempt(0, Attempt(1, Error("gave up")))
+    printl(attempt)
+    printl(attempt.result)
+    printl(attempt == Attempt(0, Attempt(1, Error("gave up"))))
+    val loop = Loop(1, (2, Loop(3, None)))
+    printl(loop)
+    if val again = loop.again {
+        val (n, next) = again
+        printl(n + next.value)
+    }
+
+    // Sums whose members hold the cycle.
+    val chain = Link(1, Link(2, Link(3, None)))
+    printl(chain)
+    printl(links(chain))
+    printl(links(End))
+    printl(chain == Link(1, Link(2, Link(3, None))))
+    printl(hash(chain) == hash(Link(1, Link(2, Link(3, None)))))
+    val held = Held(nested(3))
+    printl(held)
+    match held {
+        Held(wrap) => printl(depthOf(wrap))
+        Empty => printl("empty")
+    }
+    printl(Held(Wrap(None)) == Held(Wrap(None)))
+    printl(Held(Wrap(None)) == Held(nested(1)))
+
+    // A wide product with a boxed field.
+    val root = Config("root", true, None, 0)
+    val child = Config("child", false, root, 1)
+    printl(child)
+    printl(child.parent?.name)
+    printl((child with (parent = child)).parent?.parent?.name)
+    printl(child with (verbose = true) == Config("child", true, Some(root), 1))
+}
