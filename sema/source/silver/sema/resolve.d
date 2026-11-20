@@ -137,6 +137,9 @@ package struct Resolution
     /// For each `if type`, by the `if`: the type parameter it asks about and the functions its
     /// bounds supply in its true branch, which a caller doesn't give witnesses for.
     SideTable!(Id!Expr, Test) tests;
+    /// For `x.f` where `x` is a local named like an imported module that has an `f`, that module,
+    /// by the member access. A local hides a module, so this is only for saying so when `x.f` fails.
+    SideTable!(Id!Expr, string) hiddenModules;
 
     /// The type parameters of `func`: those it declares, then its hidden ones.
     const(TypeParam)[] typeParamsOf(Id!FunctionDecl func) const
@@ -624,6 +627,7 @@ private final class NameResolver
     private ListedImport[][string] _listedImports;
     private SideTable!(Id!ConformDecl, Id!FunctionDecl) _conformances;
     private SideTable!(Id!Expr, Test) _tests;
+    private SideTable!(Id!Expr, string) _hiddenModules;
     /// The module-level function whose body is being resolved.
     private Id!FunctionDecl _bodyOf;
     /// Where the nodes resolution makes up get their IDs.
@@ -680,7 +684,8 @@ private final class NameResolver
         }
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
             _operatorLookups, _declarations, _nativeLibraries, cast(const(Scope)[string]) _moduleScopes, _hiddenParams, _sugarParams,
-            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances, _forwardImports, _listedImports, _conformances, _tests);
+            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances, _forwardImports, _listedImports, _conformances, _tests,
+            _hiddenModules);
     }
 
     /// Works out what every module forwards. A blanket forward passes on what its module forwards
@@ -2294,7 +2299,7 @@ private final class NameResolver
     }
 
     /// Declares a param or local, reporting it if it clashes with anything visible from `current`
-    /// except imported names, which locals may hide.
+    /// except imported names and modules, which locals may hide.
     private void declareLocal(string name, Span span, SymbolId symbol, Scope current,
         DiagnosticCode duplicateCode, string duplicateMessage)
     {
@@ -2313,10 +2318,6 @@ private final class NameResolver
             );
             _collector.reportError(DiagnosticCode.ShadowedDeclaration, span,
                 "'%s' has the same name as %s".format(name, what));
-        }
-        else
-        {
-            reportModuleRootClash(name, span, current.importedModules);
         }
         // Declared even after a clash, so later uses resolve to what the user meant here.
         current.declare(name, symbol);
@@ -2850,6 +2851,8 @@ private final class NameResolver
         final switch (object.kind)
         {
         case Path.Kind.Value:
+            noteHiddenModule(expr, access, scopeTable);
+            return object;
         case Path.Kind.Error:
             // A member of a value depends on its type, so the type checker resolves it.
             return object;
@@ -2899,6 +2902,22 @@ private final class NameResolver
                 "No imported module is named '%s'".format(name));
             return Path(Path.Kind.Error);
         }
+    }
+
+    /// Records the module `x` hides in `x.f`, when `x` is a local named like an imported module
+    /// path that has an `f`: a declaration of that module, or a module path that goes on with it.
+    private void noteHiddenModule(const Expr expr, const MemberAccess access, const Scope scopeTable)
+    {
+        auto name = access.object.kind.match!((const Identifier id) => id.name, _ => string.init);
+        auto symbol = access.object.id in _resolutions;
+        if (name is null || symbol is null) return;
+        auto isLocal = (*symbol).match!((const Id!VarDecl _) => true, (const Id!Param _) => true, _ => false);
+        if (!isLocal) return;
+        auto imported = scopeTable.importedModules;
+        auto nested = name ~ "." ~ access.member;
+        auto hasMember = imported.canFind(name) && visibleSymbol(name, access.member) !is null
+            || imported.any!(m => m == nested || m.startsWith(nested ~ "."));
+        if (hasMember) _hiddenModules[expr.id] = name;
     }
 
     /// `name` as a visible module (recording the resolution) or a prefix of one, else null.

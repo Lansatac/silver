@@ -55,6 +55,12 @@ class Collector
         _diagnostics ~= diagnostic;
     }
 
+    /// Adds `text` to the message of the diagnostic at `index`, for a hint known only after it.
+    void amend(size_t index, string text)
+    {
+        _diagnostics[index].message ~= text;
+    }
+
     void reportError(DiagnosticCode code, Span span, string message)
     {
         report(Diagnostic(code, span, message, Severity.Error));

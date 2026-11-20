@@ -1,0 +1,5 @@
+import std.math
+
+def side(std: Float): Float => std.math.sqrt(std)
+
+def main(): Unit => printl(side(4.0))

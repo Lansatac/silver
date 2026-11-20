@@ -1,0 +1,26 @@
+// A local can be named like an imported module. Inside its scope, `x.f` is a method call on the
+// local, and the module's names are still reached bare.
+
+import std.math
+
+def squared(x: Float): Float => x * x
+
+def area(std: Float): Float => pi * std.squared()
+
+def roots(): [Float] {
+    mutable val found: [Float] = []
+    for std in [4.0, 9.0] { found ~= [sqrt(std)] }
+    found
+}
+
+def main(): Unit {
+    printl(area(1.0) == pi)
+    printl(roots())
+    val half = (std: Float) => std / 2.0
+    printl(half(3.0))
+    val (std, n) = (2.0, 3)
+    printl(std.squared() * Float(n))
+    printl(qualified())
+}
+
+def qualified(): Float => std.math.sqrt(16.0)

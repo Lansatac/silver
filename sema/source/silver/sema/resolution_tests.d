@@ -666,14 +666,31 @@ unittest
     a.shouldHaveNoDiagnostics();
 }
 
-@("name resolution reports a local with the same name as an imported module's root")
+@("name resolution lets a local hide an imported module, so `x.f` is a method call on the local")
 unittest
 {
-    auto a = analyzed("import std.math
+    auto files = ["deck.ag": "module deck\ndef double(x: Int): Int => x * 2\nval size: Int = 3"];
+    auto a = analyzed("import deck
 def main(): Unit {
-    val std = 1
-}");
-    a.shouldReport(DiagnosticCode.ShadowedDeclaration, At("std", 2));
+    val deck = 1
+    printl(deck.double())
+}
+def f(deck: [Int]): Int => length(deck)", files);
+    a.shouldHaveNoDiagnostics();
+    a.shouldResolve("deck", 3, 2);
+    a.shouldResolve("deck", 5, 4);
+
+    auto hidden = analyzed("import deck\ndef f(deck: [Int]): Int => deck.size\ndef main(): Unit => ()", files);
+    assert(hidden.onlyMessage(DiagnosticCode.UnknownMember) == "Type `[Int]` has no member named `size`"
+        ~ "\n    `deck` here is a local, which hides the module `deck`; rename the local to use `deck.size`");
+
+    import std.algorithm : canFind;
+
+    auto root = analyzed("import std.math\ndef f(std: Int): Float => std.math.sqrt(4.0)\ndef main(): Unit => ()");
+    assert(root.onlyMessage(DiagnosticCode.UnknownMember).canFind("hides the module `std`; rename the local to use `std.math`"));
+
+    assert(analyzed("import deck\ndef f(deck: [Int]): Int => deck.nothing\ndef main(): Unit => ()", files)
+        .onlyMessage(DiagnosticCode.UnknownMember) == "Type `[Int]` has no member named `nothing`");
 }
 
 @("name resolution doesn't see the imports of an imported module")

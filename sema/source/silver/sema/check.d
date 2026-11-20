@@ -5787,10 +5787,29 @@ private final class TypeChecker
         );
     }
 
+    private Type synthesizeMethodCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected)
+    {
+        auto reported = _collector.diagnostics.length;
+        auto type = methodCall(expr, call, ctx, expected);
+        if (type == _types.error) sayModuleHidden(*call.callee, reported);
+        return type;
+    }
+
+    /// When `x` in the member access `access` is a local named like an imported module that has the
+    /// member, says so in the first error reported since `reported`, since the module was likely meant.
+    private void sayModuleHidden(const Expr access, size_t reported)
+    {
+        auto hidden = access.id in _resolutions.hiddenModules;
+        if (hidden is null || _collector.diagnostics.length == reported) return;
+        auto member = access.kind.match!((const MemberAccess m) => m.member, _ => assert(0, "only a member access hides a module"));
+        _collector.amend(reported, "\n    `%1$s` here is a local, which hides the module `%1$s`; rename the local to use `%1$s.%2$s`"
+            .format(*hidden, member));
+    }
+
     /// `object.f(args)`. A field named `f` comes first; otherwise it's `f(object, args)`, with the
     /// `f` a plain name finds at module level. The receiver was synthesized to look for the field,
     /// so it's an argument that already has its type.
-    private Type synthesizeMethodCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected)
+    private Type methodCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected)
     {
         auto access = (*call.callee).kind.match!(
             (const MemberAccess m) => m,
@@ -6004,7 +6023,11 @@ private final class TypeChecker
         if (isModulePath(*member.object)) return _types.error;
 
         rejectTypeArguments(member.typeArgs, member.member, expr.span);
-        return fieldOf(expr, member, synthesize(*member.object, ctx));
+        auto object = synthesize(*member.object, ctx);
+        auto reported = _collector.diagnostics.length;
+        auto type = fieldOf(expr, member, object);
+        if (type == _types.error) sayModuleHidden(expr, reported);
+        return type;
     }
 
     /// The field `member` names on a value of `objectType`, reported if there's none.

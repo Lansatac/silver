@@ -1,0 +1,2 @@
+T0006: Type `Float` has no member named `math`
+    `std` here is a local, which hides the module `std`; rename the local to use `std.math`

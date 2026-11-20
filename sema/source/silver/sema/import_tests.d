@@ -77,11 +77,10 @@ unittest
         .shouldHaveNoDiagnostics();
 }
 
-@("a selective import reserves its module's path from locals")
+@("a local can be named like a selectively imported module")
 unittest
 {
-    analyzed("import lib : f\ndef main(): Unit {\nval lib = f()\n}", library)
-        .shouldReport(DiagnosticCode.ShadowedDeclaration, At("lib", 2));
+    analyzed("import lib : f\ndef main(): Unit {\nval lib = f()\n}", library).shouldHaveNoDiagnostics();
 }
 
 @("a name two imports provide is ambiguous only if both provide it unqualified")

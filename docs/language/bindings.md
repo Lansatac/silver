@@ -51,9 +51,27 @@ Silver largely forbids shadowing, so an ambiguity needs a different name or a qu
 3. The same name in sibling blocks is fine.
 4. A local can't be named like a function or constant in its own module.
 5. A local can be named like an imported name, and the local wins.
-6. Nothing can be named like the root of an imported module path, so qualified access always works.
+6. A local can be named like the root of an imported module path, and the local wins there. A function or constant can't, so qualified access works everywhere outside such a local's scope.
 
 Rebinding a `mutable val` isn't shadowing, and a new `val` per loop iteration is a fresh binding.
+
+Rule 6 lets a function take a parameter named after the module that defines its type. Inside its scope, `cards.f` is a [method call](functions.md) on the local, and the module's names are still reached bare. A qualified type such as `cards.Card` is still the module's, since a local is never a type.
+
+```silver
+import cards
+
+def show(cards: [Card]): Unit {
+    printl(cards.describe())             // describe(cards)
+    val first: cards.Card = cards[0]     // the module's type
+}
+```
+
+When `x.f` fails and `x` hides a module that has an `f`, the error says so:
+
+```
+Type `[Card]` has no member named `handSize`
+    `cards` here is a local, which hides the module `cards`; rename the local to use `cards.handSize`
+```
 
 ## Open questions
 
