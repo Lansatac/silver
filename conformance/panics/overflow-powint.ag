@@ -1,2 +1,0 @@
-import std.math
-def main(): Unit => printl(powInt(2, 63))

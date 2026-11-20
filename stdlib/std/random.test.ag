@@ -1,0 +1,39 @@
+test "SplitMix64's published output for its seed" {
+    mutable val rng = seeded(1234567)
+    expect(next(mutable rng) == 6457827717110365317)
+    expect(next(mutable rng) == 3203168211198807973)
+    expect(next(mutable rng) == 9817491932198370423)
+}
+
+test "nextInt is in range, and the same seed gives the same sequence" {
+    mutable val a = seeded(42)
+    mutable val b = seeded(42)
+    mutable val inRange = true
+    mutable val same = true
+    for _ in 0..1000 {
+        val x = nextInt(mutable a, 6)?
+        inRange = inRange && x >= 0 && x < 6
+        same = same && x == nextInt(mutable b, 6)?
+    }
+    expect(inRange)
+    expect(same)
+}
+
+test "a bound of one has only one answer" {
+    mutable val rng = seeded(42)
+    expect(nextInt(mutable rng, 1) == 0)
+}
+
+test "a bound that isn't positive is an error, and leaves the generator where it was" {
+    mutable val rng = seeded(42)
+    mutable val fresh = seeded(42)
+    expect(nextInt(mutable rng, 0) == Error(EmptyRange))
+    expect(nextInt(mutable rng, -3) == Error(EmptyRange))
+    expect(next(mutable rng) == next(mutable fresh))
+}
+
+test "a split generator doesn't replay its parent" {
+    mutable val parent = seeded(7)
+    mutable val child = split(mutable parent)
+    expect(next(mutable parent) != next(mutable child))
+}

@@ -18,7 +18,7 @@ version (unittest)
     import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed;
     import silver.loader : isCompanionFile, load, standardLibraryPath, standardPrelude;
     import silver.sema : analyze, Analysis, Target;
-    import silver.testing : report, runFile, TestBackend;
+    import silver.testing : report, runFile, succeeded, TestBackend, testFiles;
 
     string conformanceDirectory()
     {
@@ -678,6 +678,25 @@ version (unittest)
             inParallel(all, (Case c) => runTesting(c, TestBackend.llvm, workDirectory, optimization)));
         finish(pendingProblems(described("testing", optimization), all, failed, compiledPending), workDirectory);
     }
+
+    /// Runs the standard library's tests on `backend`, and returns its report if any of them didn't pass.
+    string runStandardLibrary(TestBackend backend, string workDirectory, Optimization optimization = Optimization.none)
+    {
+        auto files = testFiles(standardLibraryPath());
+        auto runs = files.map!(file => runFile(file, [], backend, workDirectory, optimization)).array;
+        return succeeded(runs) ? null : report(runs);
+    }
+
+    /// Runs the standard library's tests on both backends, so that they pass and agree.
+    void checkStandardLibrary(Optimization optimization)
+    {
+        Build build;
+        if (!findBuild("standard library's compiled tests", optimization, build)) return;
+        auto workDirectory = workDirectoryFor("stdlib", optimization);
+        auto problems = runStandardLibrary(TestBackend.both, workDirectory, optimization);
+        finish(problems is null ? null : described("standard library tests", optimization)
+            ~ " failed or differed from the interpreter's:\n" ~ problems, workDirectory);
+    }
 }
 
 @("Interpreted conformance programs match their expected output")
@@ -741,6 +760,25 @@ unittest
 unittest
 {
     checkCompiledTesting(Optimization.full);
+}
+
+@("The standard library's tests pass interpreted")
+unittest
+{
+    auto problems = runStandardLibrary(TestBackend.interpreter, tempDir);
+    assert(problems is null, "Interpreted standard library tests failed:\n" ~ problems);
+}
+
+@("The standard library's tests pass compiled and agree with the interpreter")
+unittest
+{
+    checkStandardLibrary(Optimization.none);
+}
+
+@("The standard library's tests pass optimized and agree with the interpreter")
+unittest
+{
+    checkStandardLibrary(Optimization.full);
 }
 
 @("Interpreted programs whose main returns an error report it")

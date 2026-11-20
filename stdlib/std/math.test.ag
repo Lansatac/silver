@@ -1,0 +1,177 @@
+// Imported so that qualified names reach the module as they would from an importer.
+import std.math
+
+def infinity(): Float => 1.0 / 0.0
+def nan(): Float => 0.0 / 0.0
+def isNan(x: Float): Bool => x != x
+def isNegativeZero(x: Float): Bool => x == 0 && 1 / x < 0
+def isPositiveZero(x: Float): Bool => x == 0 && 1 / x > 0
+
+def near(actual: Float, expected: Float): Bool {
+    val difference = if actual > expected => actual - expected else expected - actual
+    difference <= 0.000000000000001
+}
+
+def apply(f: (Float) -> Float, x: Float): Float => f(x)
+
+test "sqrt, exp and log" {
+    expect(sqrt(16) == 4.0)
+    expect(near(sqrt(2), 1.4142135623730951))
+    expect(near(sqrt(16) / 3, 1.3333333333333333))
+    expect(exp(0) == 1.0)
+    expect(near(exp(1), 2.718281828459045))
+    expect(log(1) == 0.0)
+    expect(near(log(exp(2)), 2))
+    val y = 3.0
+    expect(sqrt(y * y + 16) == 5.0)
+    expect(std.math.sqrt(9) == 3.0)
+}
+
+test "outside a function's domain the result is NaN" {
+    expect(isNan(sqrt(-1)))
+    expect(isNan(log(-1)))
+    expect(log(0) == -infinity())
+}
+
+test "trigonometry" {
+    expect(sin(0) == 0.0)
+    expect(near(sin(1), 0.8414709848078965))
+    expect(cos(0) == 1.0)
+    expect(near(cos(1), 0.5403023058681398))
+    expect(near(tan(1), 1.5574077246549023))
+    expect(near(atan(1), pi / 4))
+    expect(near(asin(0.5), 0.5235987755982989))
+    expect(near(acos(0.5), 1.0471975511965979))
+    expect(near(asin(1), pi / 2))
+    expect(near(asin(-1), -pi / 2))
+    expect(isPositiveZero(acos(1)))
+    expect(near(acos(-1), pi))
+    expect(isNegativeZero(asin(-0.0)))
+    expect(isNan(asin(2)))
+    expect(isNan(acos(-2)))
+    expect(isNan(asin(nan())))
+}
+
+test "asin and acos undo sin and cos across their domain" {
+    mutable val i = -1000
+    mutable val allNear = true
+    while i <= 1000 {
+        val x = Float(i) / 1000
+        allNear = allNear && near(sin(asin(x)), x) && near(cos(acos(x)), x)
+        i += 1
+    }
+    expect(allNear)
+}
+
+test "atan2 by quadrant" {
+    expect(near(atan2(1, 1), pi / 4))
+    expect(near(atan2(1, -1), 2.356194490192345))
+    expect(near(atan2(1, 0), pi / 2))
+    expect(near(atan2(-1, 0), -pi / 2))
+}
+
+test "atan2 by the sign of zero" {
+    expect(isPositiveZero(atan2(0.0, 1)))
+    expect(isNegativeZero(atan2(-0.0, 1)))
+    expect(near(atan2(0.0, -1), pi))
+    expect(near(atan2(-0.0, -1), -pi))
+    expect(isPositiveZero(atan2(0.0, 0.0)))
+    expect(isNegativeZero(atan2(-0.0, 0.0)))
+    expect(near(atan2(0.0, -0.0), pi))
+    expect(near(atan2(-0.0, -0.0), -pi))
+}
+
+test "atan2 of infinities and NaN" {
+    expect(near(atan2(infinity(), 1), pi / 2))
+    expect(near(atan2(infinity(), infinity()), pi / 4))
+    expect(near(atan2(infinity(), -infinity()), 3 * pi / 4))
+    expect(near(atan2(-infinity(), infinity()), -pi / 4))
+    expect(near(atan2(1, -infinity()), pi))
+    expect(isPositiveZero(atan2(1, infinity())))
+    expect(isNan(atan2(nan(), 1)))
+    expect(isNan(atan2(1, nan())))
+}
+
+// dmd's std.math got these wrong; libm doesn't.
+test "sin of large arguments" {
+    expect(near(sin(1e22), -0.8522008497671888))
+    expect(near(sin(pi) * 10000000000000000.0, 1.2246467991473532))
+}
+
+test "floor, ceil and round" {
+    expect(floor(2.7) == 2.0)
+    expect(floor(-2.7) == -3.0)
+    expect(ceil(2.1) == 3.0)
+    expect(ceil(-2.1) == -2.0)
+    expect(round(2.4) == 2.0)
+    expect(floor(0.5) == 0.0)
+    // The result is a Float, which Int() can convert.
+    expect(Int(floor(2.7)) / 2 == 1)
+    expect(apply(floor, 2.5) == 2.0)
+}
+
+test "halfway cases round away from zero, and just under halfway doesn't" {
+    expect(round(2.5) == 3.0)
+    expect(round(-2.5) == -3.0)
+    expect(round(0.5) == 1.0)
+    expect(round(-0.5) == -1.0)
+    expect(round(1.5) == 2.0)
+    expect(isPositiveZero(round(0.49999999999999994)))
+}
+
+test "rounding keeps a zero's sign, including a zero that's the result of rounding" {
+    expect(isNegativeZero(floor(-0.0)))
+    expect(isNegativeZero(ceil(-0.0)))
+    expect(isNegativeZero(round(-0.0)))
+    expect(isNegativeZero(ceil(-0.5)))
+    expect(isNegativeZero(round(-0.3)))
+    expect(isPositiveZero(floor(0.5)))
+}
+
+test "rounding passes through what's too large for an Int, or not a number" {
+    expect(floor(infinity()) == infinity())
+    expect(ceil(-infinity()) == -infinity())
+    expect(round(infinity()) == infinity())
+    expect(floor(1e300) == 1e300)
+    expect(isNan(floor(nan())))
+    expect(isNan(ceil(nan())))
+    expect(isNan(round(nan())))
+    expect(floor(4503599627370497.0) == 4503599627370497.0)
+    expect(floor(4503599627370495.5) == 4503599627370495.0)
+}
+
+test "pow" {
+    expect(pow(2, 10) == 1024.0)
+    expect(near(pow(2, 0.5), 1.4142135623730951))
+    expect(pow(2, -1) == 0.5)
+    expect(pow(0, 0) == 1.0)
+    expect(near(pow(10, 300) / 1e300, 1))
+    expect(isNan(pow(-8, 0.5)))
+    expect(std.math.pow(1.5, 2) == 2.25)
+}
+
+test "powInt" {
+    expect(powInt(2, 10) == 1024)
+    expect(powInt(2, 0) == 1)
+    expect(powInt(0, 0) == 1)
+    expect(powInt(0, 5) == 0)
+    expect(powInt(-2, 3) == -8)
+    expect(powInt(-2, 4) == 16)
+    expect(powInt(3, 39) == 4052555153018976267)
+    expect(powInt(2, 62) == 4611686018427387904)
+    expect(powInt(-2, 63) == -9223372036854775807 - 1)
+    expect(powInt(9223372036854775807, 1) == 9223372036854775807)
+}
+
+test "powInt's negative exponent truncates like division" {
+    expect(powInt(2, -1) == 0)
+    expect(powInt(1, -5) == 1)
+    expect(powInt(-1, -3) == -1)
+    expect(powInt(-1, -4) == 1)
+    expect(powInt(1, -9223372036854775807 - 1) == 1)
+}
+
+test "powInt panics as arithmetic does" {
+    expect(panics(() => powInt(2, 63)) == "Integer overflow")
+    expect(panics(() => powInt(0, -1)) == "Division by zero")
+}

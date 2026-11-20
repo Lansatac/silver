@@ -1,0 +1,17 @@
+// A Float prints with 6 significant digits, switching to an exponent past them, and a zero shows its sign.
+def main(): Unit {
+    val zero = 0.0
+    printl(1.0 / 3 * 4)
+    printl(1.4142135623730951)
+    printl(0.8414709848078965)
+    printl(2.718281828459045)
+    printl(0.5)
+    printl(1024.0)
+    printl(4503599627370495.5)
+    printl(1e300)
+    printl(-zero)
+    printl(-0.0)
+    printl(zero)
+    printl(1.0 / zero)
+    printl(-1.0 / zero)
+}
