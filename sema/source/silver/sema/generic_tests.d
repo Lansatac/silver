@@ -262,7 +262,8 @@ unittest
     a.shouldDeclareType(At("qb", 1), "Box<UInt8>");
     a.shouldDeclareType(At("p", 1), "(Int?, Int?)");
     analyzedGeneric("    val e = empty<Int, Int>()").shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("empty", 2));
-    analyzedGeneric("    val e = printl<Int>(1)").shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("printl", 1));
+    analyzedGeneric("    val e = plain<Int>(1)", "def plain(x: Int): Int => x\n")
+        .shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("plain", 2));
     analyzedGeneric("    val qx = 1\n    val e = qx<Int>").shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("qx", 2));
 }
 
@@ -454,9 +455,12 @@ unittest
 @("an intrinsic is a value like any function, unless it takes an Any")
 unittest
 {
-    analyzedGeneric("    val qf: ([Int]) -> Int = length<Int>").shouldHaveNoDiagnostics();
-    analyzedGeneric("    val qf: ([Bool]) -> Int = length").shouldHaveNoDiagnostics();
-    analyzedGeneric("    val qf = printl").shouldReport(DiagnosticCode.NotSupportedYet, At("printl", 1));
+    // Intrinsics of the test's own, reached qualified, so the prelude's overloads take no part.
+    auto files = ["std/extra.ag": "module std.extra\nintrinsic def length<T>(values: [T]): Int\nintrinsic def print(value: Any): Unit"];
+    Analyzed inMain(string body) => analyzed("import std.extra\ndef main(): Unit {\n" ~ body ~ "\n}", files);
+    inMain("    val qf: ([Int]) -> Int = std.extra.length<Int>").shouldHaveNoDiagnostics();
+    inMain("    val qf: ([Bool]) -> Int = std.extra.length").shouldHaveNoDiagnostics();
+    inMain("    val qf = std.extra.print").shouldReport(DiagnosticCode.NotSupportedYet, At("std", 2));
 }
 
 @("a constructor pattern sees an instance's fields, and coverage works on instances")
