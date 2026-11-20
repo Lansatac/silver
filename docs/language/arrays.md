@@ -25,7 +25,7 @@ Indexing is a call: `x[i]` means `opIndex(x, i)`, `x[i] = v` means `x = opIndexA
 
 Either bound can be left out: `xs[a..]` runs to the end, as `xs[a..length(xs)]` would with `xs` evaluated once, and `xs[..b]` starts at 0. `xs[..]` isn't allowed, since it would just be `xs`.
 
-`length(xs)` is the number of elements, as an `Int`, and `at(xs, i)` is `xs[i]`, for where a function is wanted. Both are prelude functions, so they can be called as methods (`xs.at(i)`). So are `opIndex` and `opIndexAssign` for arrays, and the `opIndex` that slices one by an `Interval<Int>`.
+`length(xs)` is the number of elements, as an `Int`, and `at(xs, i)` is `xs[i]`, for where a function is wanted. Both are `lang` functions, so they can be called as methods (`xs.at(i)`). So are `opIndex` and `opIndexAssign` for arrays, and the `opIndex` that slices one by an `Interval<Int>`.
 
 ## Assigning elements
 
@@ -72,7 +72,7 @@ A slice keeps its whole underlying storage alive.
 
 ## Ranges
 
-`a..b` is the half-open range of integers from `a` up to but not including `b`, as a value of the prelude's `Interval`:
+`a..b` is the half-open range of integers from `a` up to but not including `b`, as a value of `lang`'s `Interval`:
 
 ```silver
 type Interval<T>(from: T, to: T)
@@ -114,5 +114,5 @@ Maps share the bracket syntax, with `:` between key and value, as in `["a": 1]`.
 
 - `xs[i] = v` copies the whole array every time, even when nothing else holds it.
 - An `Interval`'s `length`, `opIndex`, `next`, `nextBack` and `contains` are written once per integer type, since a bound can't ask for an integer yet. So an error about one of those calls lists every integer type's, and each name is overloaded, so using one as a value needs a function type, as in `val f: ([Int]) -> Int = length`.
-- A panic in an `Interval`'s `opIndex`, or in slicing an array with one, is reported at the prelude rather than at the call.
+- A panic in an `Interval`'s `opIndex`, or in slicing an array with one, is reported inside `lang` rather than at the call.
 - `==` on two intervals compares their bounds, as for any product, so two empty intervals with different bounds are unequal. Equality by elements needs a type's own `opEquals`, which isn't built.

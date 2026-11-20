@@ -153,7 +153,7 @@ encode(Square(2))  // shapes.encode, which fits exactly
 encode(Circle(1))  // encoding.encode, the only one that fits
 ```
 
-So an import, or a new overload in a library, never changes which of the current module's own functions a call means. Among imported functions, a new overload that fits a call better than the one it reached takes the call, as it would if one module declared both, and one that fits equally well makes the call ambiguous. It also means a module can declare its own `printl(p: Point)` and still call the prelude's `printl` with anything else.
+So an import, or a new overload in a library, never changes which of the current module's own functions a call means. Among imported functions, a new overload that fits a call better than the one it reached takes the call, as it would if one module declared both, and one that fits equally well makes the call ambiguous. It also means a module can declare its own `printl(p: Point)` and still call `lang`'s `printl` with anything else.
 
 An overloaded function used as a value is the one whose type is exactly the expected type, so it needs one:
 
@@ -196,7 +196,7 @@ def opIndex<T>(w: Window<T>, part: Interval<Int>): Window<T> =>
 - Slicing is indexing by an [`Interval`](arrays.md#ranges), so a type is sliced by writing an `opIndex` that takes one, and a slice is assigned to through an `opIndexAssign` that takes one, in every form: `x[a..b] = v` and a held `x[r] = v` mean the same. A type without one can't be sliced, and `x[a..b]` on it is an error that says so. Two literal bounds take the interval type the function asks for, as a literal argument does, so `x[0..2]` passes an `Interval<UInt8>` to an `opIndex` that takes one; otherwise `a..b` is typed as it is anywhere.
 - A slice with a bound left out uses `length`: `x[a..]` is `opIndex(x, a..length(x))`, with `x` evaluated once, and `x[..b]` is `opIndex(x, 0..b)`. The `opIndex` has to take that interval's type exactly. `length` returns an `Int`, so in `x[a..]` the start is an `Int` too.
 - An `opIndex` whose index is a type parameter takes an interval as any other key: for a `Table<K, V>` with `K` an `Interval<Int>`, `t[9..11]` looks up the key `9..11`.
-- For an array the syntax is built in, and an integer index is an `Int`. The prelude's `opIndex` and `opIndexAssign` for arrays do the same where a function is wanted, and its `opIndex` that takes an `Interval<Int>` slices. `x[i]` on an array with an integer index, and `x[a..b]` written out, never call a module's own. With an index of another type, `x[i]` calls `opIndex(x, i)`, as for any type.
+- For an array the syntax is built in, and an integer index is an `Int`. `lang`'s `opIndex` and `opIndexAssign` for arrays do the same where a function is wanted, and its `opIndex` that takes an `Interval<Int>` slices. `x[i]` on an array with an integer index, and `x[a..b]` written out, never call a module's own. With an index of another type, `x[i]` calls `opIndex(x, i)`, as for any type.
 
 ### How syntax finds its function
 
