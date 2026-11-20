@@ -201,7 +201,8 @@ private struct Lifetimes
     }
 
     /// `local`, which has a slot of `type`, starting now and lasting at least as long as the
-    /// statement declaring it.
+    /// statement declaring it. A mutable param has no slot of its own and a null `type`: it's
+    /// declared only so a loop that names it keeps it.
     void declare(const Local local, string type)
     {
         auto at = locals.length;
@@ -213,7 +214,7 @@ private struct Lifetimes
         if (_statements.length > 0) _statements[$ - 1] ~= at;
     }
 
-    /// A read or write of `local`. A local with no slot of its own is ignored.
+    /// A read or write of `local`. A local that wasn't declared (one made of nothing) is ignored.
     void use(const Local local)
     {
         auto at = local in _index;
@@ -300,9 +301,7 @@ private final class FunctionState
     LoopTargets[size_t] loops;
     /// The labels of the loops the code being generated is in, innermost last.
     size_t[] open;
-    /// The function's own index, and for one that calls itself in tail position, the params it
-    /// keeps alive where it returns without doing so (see `emitTail`).
-    size_t index;
+    /// For a recursive function, its params, which are kept where it returns (`keptOnReturn`).
     const(Local)[] tailKept;
     /// Whether the function has the runtime hand back a String or buffer, which comes through
     /// these two slots, allocated once at the top of the function.
@@ -415,6 +414,9 @@ private final class Generator
     private string[immutable(string)[]] _structs;
     private string[] _structDefinitions;
     private bool[Type] _scalarsPending;
+    /// The functions on a cycle of calls (`recursiveFunctions`), and their LLVM names.
+    private bool[size_t] _recursive;
+    private bool[string] _recursiveNames;
 
     this(const ref Program program, const SourceMap sources)
     {
@@ -425,6 +427,8 @@ private final class Generator
     string emitProgram()
     {
         string[] functions;
+        _recursive = recursiveFunctions();
+        foreach (index; _recursive.byKey) _recursiveNames[mangled(index)] = true;
         foreach (i, ref func; _program.functions)
         {
             functions ~= emitFunction(i, func);
@@ -530,8 +534,7 @@ private final class Generator
             receive = receive.then(receiveCaptures(func));
         }
 
-        _function.index = index;
-        if (calls(func.body, index)) _function.tailKept = func.params.filter!(p => !p.mutable).array;
+        if (index in _recursive) _function.tailKept = func.params;
         auto body = isStruct(returnType)
             ? emitInto(func.body, _function.returnScalars, FunctionState.resultSlot, true)
             : emitTail(func.body);
@@ -734,7 +737,7 @@ private final class Generator
     /// an `If` writes its own value there.
     private Fragment emitInto(const Expr e, const string[] layout, string pointer, bool tail = false)
     {
-        Fragment leaf(Fragment code) => tail ? keepingParams(e, code) : code;
+        Fragment leaf(Fragment code) => tail ? keepingOnReturn(e, code) : code;
 
         Fragment whole()
         {
@@ -862,7 +865,7 @@ private final class Generator
             auto passed = paramTypes(param, func.body.span);
             if (passed.length == 0) continue;
             if (param.mutable) slots.bind(param, incoming(param, 1)[0]);
-            else lifetimes.declare(param, structOf(passed));
+            lifetimes.declare(param, param.mutable ? null : structOf(passed));
         }
         foreach (capture; func.captures)
         {
@@ -870,7 +873,10 @@ private final class Generator
             if (type != "void") lifetimes.declare(capture, type);
         }
         trace(lifetimes, func.body);
-        foreach (i, local; lifetimes.locals) slots.allocate(local, lifetimes.types[i], lifetimes.starts[i], lifetimes.ends[i]);
+        foreach (i, local; lifetimes.locals)
+        {
+            if (lifetimes.types[i] !is null) slots.allocate(local, lifetimes.types[i], lifetimes.starts[i], lifetimes.ends[i]);
+        }
         foreach (label, indices; lifetimes.kept) slots.kept[label] = indices.map!(i => lifetimes.locals[i]).array;
         slots.left = lifetimes.left;
         return slots;
@@ -1080,11 +1086,19 @@ private final class Generator
 
     private Fragment emit(const Expr e, const Call call)
     {
+        return emitCall(e, call, false);
+    }
+
+    /// A call, which for one in tail position (`tail`) is preceded by `keptOnReturn`.
+    private Fragment emitCall(const Expr e, const Call call, bool tail)
+    {
         auto func = _program.functions[call.target];
         Type[] types;
         foreach (param; func.params) types ~= param.type;
         auto arguments = emitArguments(call.args, types, func.params.map!(p => p.mutable).array, e.span);
-        auto called = arguments.code.then(callFunction(func.returnType, mangled(call.target), arguments.operands, e.span));
+        auto kept = tail ? keptOnReturn(e.span) : Fragment.init;
+        auto called = arguments.code.then(kept)
+            .then(callFunction(func.returnType, mangled(call.target), arguments.operands, e.span));
         return endIfNever(called, e.type);
     }
 
@@ -1166,6 +1180,13 @@ private final class Generator
     /// A call through a function value: its code takes the arguments, then its environment.
     private Fragment emit(const Expr e, const CallClosure call)
     {
+        return emitCallClosure(e, call, false);
+    }
+
+    /// A call through a function value, which for one in tail position (`tail`) is preceded by
+    /// `keptOnReturn`.
+    private Fragment emitCallClosure(const Expr e, const CallClosure call, bool tail)
+    {
         auto signature = functionData(call.callee.type);
         auto closure = emitExpr(*call.callee);
         auto parts = operandsOf(*call.callee, closure.operands, 2);
@@ -1173,7 +1194,8 @@ private final class Generator
         bool[] mutables;
         foreach (i; 0 .. signature.params.length) mutables ~= signature.isMutable(i);
         auto arguments = emitArguments(call.args, signature.params, mutables, e.span);
-        auto called = closure.then(code).then(arguments.code)
+        auto kept = tail ? keptOnReturn(e.span) : Fragment.init;
+        auto called = closure.then(code).then(arguments.code).then(kept)
             .then(callFunction(signature.ret, code.value, arguments.operands ~ ("ptr " ~ parts[1]), e.span));
         return endIfNever(called, e.type);
     }
@@ -1896,31 +1918,40 @@ private final class Generator
         return block.result is null ? statements.withValue(null) : statements.then(emitExpr(*block.result));
     }
 
-    /// `e` where its value is what the function returns. LLVM can turn a function that calls
-    /// itself in tail position into a loop, the call becoming a jump back to its start, and then
-    /// its params are locals of that loop: they're kept (see `keepAlive`) wherever the value comes
-    /// back other than from such a call, which is where that loop is left, and the calls stay in
-    /// tail position.
+    /// `e` where its value is what the function returns, followed by what is kept where it returns
+    /// (`keptOnReturn`). A call there gets them once its arguments are worked out and before it's
+    /// made, so it stays in tail position, which LLVM needs to make it a jump.
     private Fragment emitTail(const Expr e)
     {
-        if (_function.tailKept.length == 0) return emitExpr(e);
+        if (_function.tailKept.length == 0 && _function.open.length == 0) return emitExpr(e);
         return e.kind.match!(
             (const If if_) => emitIf(e, if_, &emitTail),
             (const Block block) {
                 Fragment statements;
                 foreach (statement; block.statements) statements = statements.then(emitStmt(statement));
-                if (block.result is null) return statements.then(keepAlive(_function.tailKept, e.span)).withValue(null);
+                if (block.result is null) return statements.then(keptOnReturn(e.span)).withValue(null);
                 return statements.then(emitTail(*block.result));
             },
-            (_) => keepingParams(e, emitExpr(e)),
+            (const Call call) => emitCall(e, call, true),
+            (const CallClosure call) => emitCallClosure(e, call, true),
+            (_) => keepingOnReturn(e, emitExpr(e)),
         );
     }
 
-    /// `value`, the value of `e` in tail position, then the params kept there.
-    private Fragment keepingParams(const Expr e, Fragment value)
+    /// `value`, the value of `e`, which the function returns, then what's kept there.
+    private Fragment keepingOnReturn(const Expr e, Fragment value)
     {
-        if (_function.tailKept.length == 0 || isSelfCall(e)) return value;
-        return value.then(keepAlive(_function.tailKept, e.span)).withOperands(value.operands);
+        return value.then(keptOnReturn(e.span)).withOperands(value.operands);
+    }
+
+    /// What's kept where the function returns from the code being generated. A recursive function
+    /// can be made a loop by LLVM, and then its params are locals of that loop and are kept where
+    /// it's left; and every loop being generated is left without passing its end.
+    private Fragment keptOnReturn(Span span)
+    {
+        auto code = keepAlive(_function.tailKept, span);
+        foreach_reverse (open; _function.open) code = code.then(keepAlive(keptBy(open), span));
+        return code.withValue(null);
     }
 
     private Fragment emit(const Expr e, const Loop loop)
@@ -1931,8 +1962,11 @@ private final class Generator
         auto body = emitExpr(*loop.body);
         _function.open.length--;
         auto kept = keptBy(loop.label);
-        // A loop nothing leaves has no end to keep them at, and can't be vectorized anyway.
-        auto atHead = (loop.label in _function.slots.left) is null ? keepAlive(kept, e.span) : Fragment.init;
+        // A loop nothing leaves has no end to keep them at, and LLVM can remove every way out of
+        // one that can, leaving its end unreachable. Only a loop that calls something can
+        // allocate, and one that calls something it can't inline isn't vectorized anyway.
+        auto leaves = (loop.label in _function.slots.left) !is null;
+        auto atHead = !leaves || callsOutside(body) ? keepAlive(kept, e.span) : Fragment.init;
         return Fragment.jump(targets.head)
             .then(Fragment.label(targets.head))
             .then(atHead)
@@ -1951,6 +1985,40 @@ private final class Generator
     private Fragment emit(const Expr e, const Continue jump)
     {
         return keepLeaving(jump.label, e.span).then(leaveTo(_function.loops[jump.label].head));
+    }
+
+    /// Whether `code` calls something that returns and that LLVM won't inline away: the runtime
+    /// other than its panics, a native, a function value, or a recursive function. Other Silver
+    /// functions are left out, since a loop calling one may vectorize once it's inlined.
+    private bool callsOutside(const Fragment code)
+    {
+        import std.algorithm : startsWith;
+        import std.string : indexOf;
+
+        static immutable noReturn = ["@silver_panic(", "@silver_panic_message(", "@silver_exit_error(",
+            "@silver_test_stopped("];
+        foreach (line; code.code)
+        {
+            // `call [convention ]type callee(arguments)`, as `FunctionState.call` writes it.
+            auto at = line.indexOf("call ");
+            if (at < 0) continue;
+            auto rest = line[at + "call ".length .. $];
+            if (rest.startsWith("asm ")) continue;
+            if (rest.startsWith("ccc ")) rest = rest["ccc ".length .. $];
+            auto typeEnd = rest.startsWith("{") ? rest.indexOf("} ") + 1 : rest.indexOf(" ");
+            auto name = rest[typeEnd + 1 .. $];
+            if (name.startsWith("%")) return true;
+            if (name.startsWith("@\""))
+            {
+                auto end = name.indexOf("\"(", 2);
+                if (end > 0 && (name[0 .. end + 1] in _recursiveNames) !is null) return true;
+                continue;
+            }
+            if (["@llvm.", "@.", "@silver."].any!(p => name.startsWith(p))) continue;
+            if (noReturn.any!(n => name.startsWith(n))) continue;
+            return true;
+        }
+        return false;
     }
 
     private const(Local)[] keptBy(size_t label)
@@ -1978,8 +2046,9 @@ private final class Generator
     /// `xs - 8k`, which is in no block of ours, and drop `xs`. Each `asm` is opaque, so the value
     /// it's given has to be kept in a register or the frame up to it, which the collector scans;
     /// it touches no memory LLVM can see, so nothing else is held back. A loop keeps the locals
-    /// declared before it that it names where it's left, which is outside it, so a loop with no
-    /// call in it is optimized as before.
+    /// declared before it that it names where it's left, which is outside it, and at its head
+    /// only when it calls something that stays a call, so a loop that becomes free of calls is
+    /// optimized as before. This covers the shapes known to need it; it isn't a proof.
     private Fragment keepAlive(const(Local)[] locals, Span span)
     {
         Fragment code;
@@ -2015,10 +2084,7 @@ private final class Generator
             auto operands = operandsOf(*return_.value, value.operands, scalars.length);
             leave = Fragment.ret(structOf(scalars), operands.length == 0 ? null : operands[0]);
         }
-        // Every loop it's in is left without passing its end.
-        Fragment kept;
-        foreach_reverse (open; _function.open) kept = kept.then(keepAlive(keptBy(open), e.span));
-        return value.then(kept).then(leave)
+        return value.then(leave)
             .then(Fragment.label(_function.newLabel("after.return")))
             .withValue(null);
     }
@@ -2093,50 +2159,140 @@ private final class Generator
         );
     }
 
-    /// Whether `e` calls the function `index` anywhere.
-    private static bool calls(const Expr e, size_t index)
+    /// Adds to `targets` every function `e` calls or makes a function value of, which is what
+    /// LLVM can inline or call.
+    private static void collectCalls(const Expr e, ref bool[size_t] targets)
     {
-        bool any(const Expr[] exprs) => exprs.any!(expr => calls(expr, index));
-        bool inStmt(const Stmt s) => s.kind.match!(
-            (const Let let) => calls(let.value, index),
-            (const Assign assign) => calls(assign.value, index),
-            (const AssignElement assign) => calls(assign.index, index) || calls(assign.value, index),
-            (const Eval eval) => calls(eval.expr, index),
-        );
+        void all(const Expr[] exprs)
+        {
+            foreach (ref expr; exprs) collectCalls(expr, targets);
+        }
 
-        return e.kind.match!(
-            (const Call call) => call.target == index || any(call.args),
-            (const CallClosure call) => calls(*call.callee, index) || any(call.args),
-            (const MakeClosure closure) => any(closure.captures),
-            (const ForeignCall call) => any(call.args),
-            (const IntrinsicCall call) => any(call.args),
-            (const Prim prim) => any(prim.args),
-            (const Convert convert) => calls(*convert.value, index),
-            (const If if_) => calls(*if_.condition, index) || calls(*if_.trueBody, index) || calls(*if_.falseBody, index),
-            (const Block block) => block.statements.any!(s => inStmt(s)) || (block.result !is null && calls(*block.result, index)),
-            (const Loop loop) => calls(*loop.body, index),
-            (const Return return_) => calls(*return_.value, index),
-            (const Construct construct) => any(construct.fields),
-            (const Field field) => calls(*field.object, index),
-            (const Update update) => calls(*update.object, index) || calls(*update.value, index),
-            (const Inject inject) => inject.payload !is null && calls(*inject.payload, index),
-            (const IsMember test) => calls(*test.subject, index),
-            (const Payload payload) => calls(*payload.subject, index),
-            (const ArrayLit literal) => any(literal.elements),
-            (const Index index_) => calls(*index_.array, index) || calls(*index_.index, index),
-            (const Slice slice) => calls(*slice.array, index) || calls(*slice.start, index) || calls(*slice.end, index),
-            (const Length length) => calls(*length.array, index),
-            (const Cell cell) => any(cell.args),
-            (const Capture capture) => calls(*capture.closure, index),
-            (const TestFailure failure) => calls(*failure.message, index),
-            _ => false,
+        void inStmt(const Stmt s)
+        {
+            s.kind.match!(
+                (const Let let) => collectCalls(let.value, targets),
+                (const Assign assign) => collectCalls(assign.value, targets),
+                (const AssignElement assign) {
+                    collectCalls(assign.index, targets);
+                    collectCalls(assign.value, targets);
+                },
+                (const Eval eval) => collectCalls(eval.expr, targets),
+            );
+        }
+
+        e.kind.match!(
+            (const Call call) {
+                targets[call.target] = true;
+                all(call.args);
+            },
+            (const CallClosure call) {
+                collectCalls(*call.callee, targets);
+                all(call.args);
+            },
+            (const MakeClosure closure) {
+                targets[closure.target] = true;
+                all(closure.captures);
+            },
+            (const ForeignCall call) => all(call.args),
+            (const IntrinsicCall call) => all(call.args),
+            (const Prim prim) => all(prim.args),
+            (const Convert convert) => collectCalls(*convert.value, targets),
+            (const If if_) {
+                collectCalls(*if_.condition, targets);
+                collectCalls(*if_.trueBody, targets);
+                collectCalls(*if_.falseBody, targets);
+            },
+            (const Block block) {
+                foreach (ref statement; block.statements) inStmt(statement);
+                if (block.result !is null) collectCalls(*block.result, targets);
+            },
+            (const Loop loop) => collectCalls(*loop.body, targets),
+            (const Return return_) => collectCalls(*return_.value, targets),
+            (const Construct construct) => all(construct.fields),
+            (const Field field) => collectCalls(*field.object, targets),
+            (const Update update) {
+                collectCalls(*update.object, targets);
+                collectCalls(*update.value, targets);
+            },
+            (const Inject inject) {
+                if (inject.payload !is null) collectCalls(*inject.payload, targets);
+            },
+            (const IsMember test) => collectCalls(*test.subject, targets),
+            (const Payload payload) => collectCalls(*payload.subject, targets),
+            (const ArrayLit literal) => all(literal.elements),
+            (const Index index) {
+                collectCalls(*index.array, targets);
+                collectCalls(*index.index, targets);
+            },
+            (const Slice slice) {
+                collectCalls(*slice.array, targets);
+                collectCalls(*slice.start, targets);
+                collectCalls(*slice.end, targets);
+            },
+            (const Length length) => collectCalls(*length.array, targets),
+            (const Cell cell) => all(cell.args),
+            (const Capture capture) => collectCalls(*capture.closure, targets),
+            (const TestFailure failure) => collectCalls(*failure.message, targets),
+            (_) {},
         );
     }
 
-    /// Whether `e` is a call of the function being generated, which LLVM may make a jump.
-    private bool isSelfCall(const Expr e)
+    /// The functions on a cycle of calls, function values included (Tarjan's algorithm). LLVM can
+    /// make a loop of any of them, by inlining around the cycle until a call in tail position is
+    /// one of the function itself and making that a jump.
+    private bool[size_t] recursiveFunctions()
     {
-        return e.kind.match!((const Call call) => call.target == _function.index, _ => false);
+        auto count = _program.functions.length;
+        auto callees = new size_t[][](count);
+        foreach (i, ref func; _program.functions)
+        {
+            bool[size_t] targets;
+            collectCalls(func.body, targets);
+            callees[i] = targets.keys;
+        }
+
+        bool[size_t] recursive;
+        auto order = new size_t[](count);
+        auto low = new size_t[](count);
+        auto onStack = new bool[](count);
+        auto seen = new bool[](count);
+        size_t[] stack;
+        size_t next = 0;
+
+        void visit(size_t v)
+        {
+            seen[v] = true;
+            order[v] = low[v] = next++;
+            stack ~= v;
+            onStack[v] = true;
+            foreach (w; callees[v])
+            {
+                if (!seen[w])
+                {
+                    visit(w);
+                    if (low[w] < low[v]) low[v] = low[w];
+                }
+                else if (onStack[w] && order[w] < low[v]) low[v] = order[w];
+            }
+            if (low[v] != order[v]) return;
+            size_t[] component;
+            while (true)
+            {
+                auto w = stack[$ - 1];
+                stack.length--;
+                onStack[w] = false;
+                component ~= w;
+                if (w == v) break;
+            }
+            if (component.length > 1 || callees[v].canFind(v))
+            {
+                foreach (w; component) recursive[w] = true;
+            }
+        }
+
+        foreach (v; 0 .. count) if (!seen[v]) visit(v);
+        return recursive;
     }
 
     /// Whether evaluating `e` can't assign a local: it's made only of reads and of building values.
