@@ -110,7 +110,7 @@ A sum value has no field access or field assignment. A `mutable val` holding one
 
 ## match
 
-`match` is an expression. Each arm is `Pattern => Expression`, with arms separated by newlines, and the first arm whose pattern matches runs. `return`, `break` and `continue` are statements, so an arm using one needs a block: `_ => { return None }`.
+`match` is an expression. Each arm is `Pattern => Expression`, with arms separated by newlines, and the first arm whose pattern matches runs. An arm can be a jump: `_ => return None`.
 
 ```silver
 val area = match shape {

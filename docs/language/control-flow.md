@@ -111,9 +111,34 @@ A loop over an array or an interval gives the elements that stepping it gives. I
 
 ## break and continue
 
-`break` and `continue` are statements of type `Never`, and work in `while`, `while val` and `for`. Each acts on the innermost loop whose *body* contains it, so one in a `while` condition or `for` iterable belongs to the enclosing loop. Outside a loop body, they are an error. `continue` re-evaluates a `while` condition or steps a `for`.
+`break` and `continue` work in `while`, `while val` and `for`. Each acts on the innermost loop whose *body* contains it, so one in a `while` condition or `for` iterable belongs to the enclosing loop. Outside a loop body, they are an error. `continue` re-evaluates a `while` condition or steps a `for`.
 
 There are no labels.
+
+## Jumps are expressions
+
+`return`, `break` and `continue` are expressions of type [`Never`](types.md#never), so a jump can stand wherever a value is expected, without a block around it:
+
+```silver
+for line in lines {
+    val n = parseInt(line) ?? continue
+    val kept = if n < 0 => break else n
+    total += kept
+}
+
+val (first, rest) = items.next() ?? return []
+```
+
+`return` takes a value when the next token can begin an expression, and the value takes the rest of the expression, so a jump binds more loosely than any operator:
+
+```silver
+return a ?? b               // returns a ?? b
+x ?? return y ?? z          // x ?? (return (y ?? z))
+f(x ?? return, y)           // in a Unit function: returns ()
+if c => return a else b     // `else` ends the value
+```
+
+A jump can appear anywhere an expression can, even where it's pointless, as in `f(return 1)`, which returns before `f` is called.
 
 ## Panics
 

@@ -152,19 +152,6 @@ private final class IdCheck
         visit(e.expr);
     }
 
-    void visit(const ReturnStmt r, Span span)
-    {
-        visit(r.value);
-    }
-
-    void visit(const BreakStmt b, Span span)
-    {
-    }
-
-    void visit(const ContinueStmt c, Span span)
-    {
-    }
-
     void visit(const PatternDecl p, Span span)
     {
         visit(p.pattern);
@@ -256,6 +243,9 @@ private final class IdCheck
             (const OkExpr o) => visit(o.value),
             (const ErrorExpr e) => visit(e.value),
             (const AssertExpr a) => visit(a.operand),
+            (const ReturnExpr r) => visit(r.value),
+            (const BreakExpr _) {},
+            (const ContinueExpr _) {},
             (const SafeMemberAccess m) => visit(m.object),
             (const ArrayLiteral a) {
                 foreach (element; a.elements)

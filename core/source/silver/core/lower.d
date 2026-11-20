@@ -637,6 +637,9 @@ private final class Lowering
                 ? make(ExprKind(Inject(0, boxed(lowerExpr(*error.value)))))
                 : lowerExpr(*error.value),
             (const ast.AssertExpr assertion) => lowerAssert(assertion, type, span),
+            (const ast.ReturnExpr return_) => returnExpr(coerce(lowerExpr(*return_.value), _returnType)),
+            (const ast.BreakExpr _) => breakExpr(span, _loop),
+            (const ast.ContinueExpr _) => continueExpr(span, _loop),
             (const ast.SafeMemberAccess access) => lowerSafeMember(e, access, type),
             (const ast.ArrayLiteral literal) => make(ExprKind(ArrayLit(literal.elements.map!(el => lowerExpr(el)).array))),
             (const ast.IndexExpr index) => lowerIndex(e, index, type, span),
@@ -1311,9 +1314,6 @@ private final class Lowering
             (const ast.VarDecl decl) => lowerVar(decl),
             (const ast.AssignStmt assign) => lowerAssign(assign, statement.span),
             (const ast.ExprStmt stmt) => [eval(lowerExpr(stmt.expr))],
-            (const ast.BreakStmt _) => [eval(breakExpr(statement.span, _loop))],
-            (const ast.ContinueStmt _) => [eval(continueExpr(statement.span, _loop))],
-            (const ast.ReturnStmt return_) => [eval(returnExpr(coerce(lowerExpr(return_.value), _returnType)))],
             (const ast.PatternDecl decl) => lowerPatternDecl(decl.pattern, decl.value),
             (const ast.FunctionDecl _) => notLowered!(Stmt[])("a nested function that isn't a lambda"),
         );

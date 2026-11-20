@@ -1408,19 +1408,20 @@ private final class TypeChecker
             },
             // A nested `def` lowers to a VarDecl, and name resolution reports a nested native or intrinsic.
             (const FunctionDecl _) {},
-            (const ReturnStmt ret) {
-                if (ctx.inferred is null)
-                {
-                    check(ret.value, ctx.returnType, ctx);
-                    return;
-                }
-                auto type = synthesizeBeside(ret.value, ctx.inferred.beside, ctx);
-                ctx.inferred.values ~= ret.value;
-                ctx.inferred.types ~= type;
-            },
-            (const BreakStmt _) => requireLoop("break", stmt.span, ctx),
-            (const ContinueStmt _) => requireLoop("continue", stmt.span, ctx),
         );
+    }
+
+    private Type synthesizeReturn(const ReturnExpr ret, BodyContext ctx)
+    {
+        if (ctx.inferred is null)
+        {
+            check(*ret.value, ctx.returnType, ctx);
+            return _types.never;
+        }
+        auto type = synthesizeBeside(*ret.value, ctx.inferred.beside, ctx);
+        ctx.inferred.values ~= *ret.value;
+        ctx.inferred.types ~= type;
+        return _types.never;
     }
 
     /// `val binding = value`, or a binding in a pattern given its part of a tuple literal.
@@ -2070,6 +2071,15 @@ private final class TypeChecker
                 return reason == _types.error ? reason : _types.failure(reason);
             },
             (const AssertExpr assertion) => synthesizeAssert(assertion, ctx, expected),
+            (const ReturnExpr ret) => synthesizeReturn(ret, ctx),
+            (const BreakExpr _) {
+                requireLoop("break", expr.span, ctx);
+                return _types.never;
+            },
+            (const ContinueExpr _) {
+                requireLoop("continue", expr.span, ctx);
+                return _types.never;
+            },
             (const SafeMemberAccess access) => synthesizeSafeMember(expr, access, ctx),
             (const ArrayLiteral literal) => synthesizeArrayLiteral(literal, ctx),
             (const MapLiteral literal) => synthesizeMapLiteral(literal, expr.span, ctx),
@@ -6505,9 +6515,6 @@ private final class TypeChecker
     private bool alwaysExits(const Stmt stmt)
     {
         return stmt.kind.match!(
-            (const ReturnStmt _) => true,
-            (const BreakStmt _) => true,
-            (const ContinueStmt _) => true,
             (const ExprStmt e) => _typing.exprTypes.get(e.expr.id, _types.error) == _types.never,
             _ => false,
         );

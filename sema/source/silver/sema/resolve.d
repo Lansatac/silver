@@ -2362,11 +2362,6 @@ private final class NameResolver
                 resolveTarget(assignStmt.target, scopeTable);
                 resolveExpr(assignStmt.value, scopeTable);
             },
-            (const ReturnStmt returnStmt) {
-                resolveExpr(returnStmt.value, scopeTable);
-            },
-            (const BreakStmt _) {},
-            (const ContinueStmt _) {},
             (ref const PatternDecl patternDecl) {
                 // The value is resolved first, so it can't see the names the pattern declares.
                 resolveExpr(patternDecl.value, scopeTable);
@@ -2505,6 +2500,9 @@ private final class NameResolver
             (const OkExpr ok) => resolveExpr(*ok.value, scopeTable),
             (const ErrorExpr error) => resolveExpr(*error.value, scopeTable),
             (const AssertExpr assertion) => resolveExpr(*assertion.operand, scopeTable),
+            (const ReturnExpr ret) => resolveExpr(*ret.value, scopeTable),
+            (const BreakExpr _) {},
+            (const ContinueExpr _) {},
             (const SafeMemberAccess access) => resolveExpr(*access.object, scopeTable),
             (const ArrayLiteral literal) {
                 foreach (element; literal.elements)

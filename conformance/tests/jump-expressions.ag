@@ -1,0 +1,54 @@
+def choose<T>(items: [T], k: Int): [[T]] {
+    if k == 0 { return [[]] }
+    val (first, rest) = items.next() ?? return []
+    choose(rest, k - 1).map(c => [first] ~ c).array() ~ choose(rest, k)
+}
+
+def total(words: [String]): Int {
+    mutable val sum = 0
+    for word in words {
+        val n = (if word == "" => None else Some(word.count())) ?? continue
+        val kept = if n > 3 => break else n
+        sum += kept
+    }
+    sum
+}
+
+def describe(x: Int?): String => match x {
+    Some(n) => "{n}"
+    None => return "nothing"
+}
+
+def show(x: Int?): Unit {
+    val n = x ?? return
+    printl(n)
+}
+
+def add(a: Int, b: Int): Int => a + b
+
+// The value of a `return` takes the rest of the expression.
+def nested(x: Int?, y: Int?): Int => add(1, x ?? return y ?? -1)
+
+def countdown(from: Int): Int {
+    mutable val n = from
+    while true {
+        n = if n == 0 => break else n - 1
+    }
+    n
+}
+
+def main(): Unit {
+    printl(choose([1, 2, 3], 2))
+    printl(total(["a", "", "bb", "cccc", "d"]))
+    printl(describe(None))
+    printl(describe(5))
+    show(None)
+    show(7)
+    printl(nested(None, None))
+    printl(nested(None, 4))
+    printl(nested(2, None))
+    printl(countdown(3))
+    val orNine = (x: Int?) => x ?? return 9
+    printl(orNine(None))
+    printl(orNine(2))
+}

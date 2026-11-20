@@ -51,7 +51,7 @@ val b = (x
     - 1)       // x - 1
 ```
 
-`return` can end a statement, so `return` followed by a newline returns `()`.
+`return` can end a statement, so `return` followed by a newline returns `()`. Its value otherwise takes the rest of the expression; see [Jumps are expressions](control-flow.md#jumps-are-expressions).
 
 Inside `()` and `[]`, newlines are allowed after the opening bracket, around commas, and before the closing bracket. A `{}` block nested in brackets still separates its statements as usual.
 

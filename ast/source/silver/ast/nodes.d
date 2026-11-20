@@ -186,7 +186,7 @@ struct Expr
 alias ExprKind = SumType!(BoolLiteral, IntLiteral, FloatLiteral, StringLiteral, CharLiteral, InterpolatedString, Identifier,
     UnaryExpr, BinaryExpr, CallExpr, MemberAccess, WhileExpr, ForExpr, IfExpr, BlockExpr, UnitLiteral,
     SomeExpr, NoneLiteral, PropagateExpr, SafeMemberAccess, ArrayLiteral, MapLiteral, IndexExpr, RangeExpr,
-    TupleLiteral, WithExpr, MatchExpr, Lambda, OkExpr, ErrorExpr, AssertExpr);
+    TupleLiteral, WithExpr, MatchExpr, Lambda, OkExpr, ErrorExpr, AssertExpr, ReturnExpr, BreakExpr, ContinueExpr);
 
 /// `(x, y) => body`. A `def` inside a block is one of these bound to a local.
 struct Lambda
@@ -538,6 +538,9 @@ string printExpr(const Expr e)
         (const OkExpr o) => format("(Ok %s)", printExpr(*o.value)),
         (const ErrorExpr e) => format("(Error %s)", printExpr(*e.value)),
         (const AssertExpr a) => format("(! %s)", printExpr(*a.operand)),
+        (const ReturnExpr r) => format("(return %s)", printExpr(*r.value)),
+        (const BreakExpr _) => "(break)",
+        (const ContinueExpr _) => "(continue)",
         (const SafeMemberAccess m) => format("(?. %s %s)", printExpr(*m.object), m.member),
         (const ArrayLiteral a) => format("(array%s)", a.elements.map!(e => " " ~ printExpr(e)).join),
         (const MapLiteral m) {
@@ -581,8 +584,7 @@ struct Stmt
     StmtKind kind;
 }
 
-alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, FunctionDecl, ReturnStmt, BreakStmt, ContinueStmt,
-    PatternDecl);
+alias StmtKind = SumType!(VarDecl, AssignStmt, ExprStmt, FunctionDecl, PatternDecl);
 
 /// The name of a VarDecl that binds nothing: its value is evaluated and dropped, and no name is
 /// declared, so any number of them can share a scope.
@@ -873,19 +875,19 @@ struct ConstDecl
     bool isPrivate;
 }
 
-/// `return value`. A bare `return` has a UnitLiteral value.
-struct ReturnStmt
+/// `return value`, of type Never like `break` and `continue`. A bare `return` has a UnitLiteral value.
+struct ReturnExpr
 {
-    Expr value;
+    Expr* value;
 }
 
 /// `break`, which ends the innermost loop whose body holds it.
-struct BreakStmt
+struct BreakExpr
 {
 }
 
 /// `continue`, which starts the next iteration of the innermost loop whose body holds it.
-struct ContinueStmt
+struct ContinueExpr
 {
 }
 
@@ -940,9 +942,6 @@ string printStmt(const Stmt s)
         (const ExprStmt e) => printExpr(e.expr),
         (const AssignStmt a) => format("(assign %s %s)", printExpr(a.target), printExpr(a.value)),
         (const FunctionDecl f) => printFunctionDecl(f),
-        (const ReturnStmt r) => format("(return %s)", printExpr(r.value)),
-        (const BreakStmt _) => "(break)",
-        (const ContinueStmt _) => "(continue)",
         (const PatternDecl p) => format("(%s %s %s)", isMutable(p.pattern) ? "mutable val" : "val",
             printPattern(p.pattern), printExpr(p.value)),
     );

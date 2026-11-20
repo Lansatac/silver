@@ -20,10 +20,11 @@ Silver is statically typed. Types trail what they describe (`name: Type`), and t
 
 ## Never
 
-`return`, `break`, `continue` and `panic(...)` have type `Never`. `Never` is assignable to every type, so a branch that ends in one needs no common type with the others. `return`, `break` and `continue` are statements, so inside an expression they go in a block:
+`return`, `break`, `continue` and `panic(...)` have type `Never`. `Never` is assignable to every type, so a branch that ends in one needs no common type with the others. Each is an expression, so it can stand wherever a value is expected:
 
 ```silver
-val size = if isValid => compute() else { return None }
+val size = if isValid => compute() else return None
+val (first, rest) = items.next() ?? return []
 ```
 
 ## Promotion

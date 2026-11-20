@@ -26,9 +26,9 @@ immutable Case[] functions = [
     rejectsDeclaration("native def f() : Int => 1"), // natives have no body
     rejectsDeclaration("native val a = 1"),
 
-    declaresAs("def a() : Int {\n    return 1\n}", "(def a (): Int (block (return 1)))"),
-    declaresAs("def a() : Unit {\n    return\n}", "(def a (): Unit (block (return ())))"),
-    declaresAs("def a() : Int {\n    if b { return 1 }\n    2\n}", "(def a (): Int (block (if b (block (return 1))) => 2))"),
+    declaresAs("def a() : Int {\n    return 1\n}", "(def a (): Int (block => (return 1)))"),
+    declaresAs("def a() : Unit {\n    return\n}", "(def a (): Unit (block => (return ())))"),
+    declaresAs("def a() : Int {\n    if b { return 1 }\n    2\n}", "(def a (): Int (block (if b (block => (return 1))) => 2))"),
 
     // Lambdas, in every spelling.
     parsesAs("val f = x => x", "(val f (lambda (x) x))"),

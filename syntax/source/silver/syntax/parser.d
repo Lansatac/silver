@@ -852,21 +852,6 @@ private final class Parser
                 throw failure("`def`");
             }
             return parseNestedFunction(FunctionKind.intrinsic);
-        case TokenKind.kwReturn:
-            pos++;
-            if (!canBeginExpression(kind))
-            {
-                auto unit = Expr(ids.next!Expr, spanFrom(start), ExprKind(UnitLiteral()));
-                return Stmt(spanFrom(start), StmtKind(ReturnStmt(unit)));
-            }
-            auto value = parseExpression();
-            return Stmt(spanFrom(start), StmtKind(ReturnStmt(value)));
-        case TokenKind.kwBreak:
-            pos++;
-            return Stmt(spanFrom(start), StmtKind(BreakStmt()));
-        case TokenKind.kwContinue:
-            pos++;
-            return Stmt(spanFrom(start), StmtKind(ContinueStmt()));
         case TokenKind.underscore:
             if (kindAt(1) != TokenKind.assign) break;
             pos += 2;
@@ -1455,6 +1440,7 @@ private final class Parser
     /// folded left so `m.f(1)` is `call (m.f) 1`.
     private Expr parsePostfix()
     {
+        if (kind == TokenKind.kwReturn || kind == TokenKind.kwBreak || kind == TokenKind.kwContinue) return parseJump();
         auto startAt = pos;
         auto lhs = parsePrimary();
         loop: while (true)
@@ -1611,6 +1597,20 @@ private final class Parser
         while (accept(TokenKind.comma));
         expect(TokenKind.rightParen, "`)` or `,`");
         return Expr(ids.next!Expr, Span(file, object.span.start, lastEnd()), ExprKind(WithExpr(boxed(object), updates)));
+    }
+
+    /// A jump's value takes the rest of the expression, so `x ?? return a ?? b` returns `a ?? b`.
+    private Expr parseJump()
+    {
+        auto start = here;
+        auto keyword = kind;
+        pos++;
+        ExprKind jump;
+        if (keyword == TokenKind.kwBreak) jump = ExprKind(BreakExpr());
+        else if (keyword == TokenKind.kwContinue) jump = ExprKind(ContinueExpr());
+        else if (canBeginExpression(kind)) jump = ExprKind(ReturnExpr(boxed(parseExpression())));
+        else jump = ExprKind(ReturnExpr(boxed(Expr(ids.next!Expr, spanFrom(start), ExprKind(UnitLiteral())))));
+        return Expr(ids.next!Expr, spanFrom(start), jump);
     }
 
     private Expr parsePrimary()
@@ -2156,7 +2156,8 @@ private bool canBeginExpression(TokenKind kind)
     case TokenKind.identifier, TokenKind.typeName, TokenKind.integer, TokenKind.hexInteger, TokenKind.binaryInteger,
         TokenKind.float_, TokenKind.char_, TokenKind.stringStart, TokenKind.leftParen, TokenKind.leftBracket,
         TokenKind.leftBrace, TokenKind.minus, TokenKind.plus, TokenKind.bang, TokenKind.tilde, TokenKind.kwTrue,
-        TokenKind.kwFalse, TokenKind.underscore, TokenKind.kwMatch, TokenKind.kwFor, TokenKind.kwWhile, TokenKind.kwIf:
+        TokenKind.kwFalse, TokenKind.underscore, TokenKind.kwMatch, TokenKind.kwFor, TokenKind.kwWhile, TokenKind.kwIf,
+        TokenKind.kwReturn, TokenKind.kwBreak, TokenKind.kwContinue:
         return true;
     default:
         return false;
