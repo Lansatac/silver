@@ -41,16 +41,20 @@ Program load(string source, string file, string[] importPaths, string prelude, S
                 format("Module '%s' must be in a file at %s.ag",
                     start.name, declaration.path.join("/")));
         }
-        else if (isInLang(start.name) && !sameFile(file, findModule(declaration.path, importPaths)))
-        {
-            context.collector.reportError(DiagnosticCode.ModuleDeclarationMismatch, declaration.span,
-                format("Module '%s' belongs to `%s`, which ships with the compiler, so it must be the file at %s",
-                    start.name, langPackage, buildPath(standardLibraryPath() ~ declaration.path) ~ ".ag"));
-        }
         else
         {
             importPaths = root ~ importPaths;
         }
+    }
+    // A file with no module line is named after itself, so `lang.ag` would be `lang` too.
+    if (isInLang(start.name) && !sameFile(file, findModule(start.name.split("."), importPaths)))
+    {
+        context.collector.reportError(DiagnosticCode.NotInLang,
+            start.declaration is null ? Span(file, 0, 0) : start.declaration.span,
+            format("'%s' would be a module of `%s`, which ships with the compiler, and only the compiler's own %s can be\n%s",
+                start.name, langPackage, buildPath(standardLibraryPath() ~ start.name.split(".")) ~ ".ag",
+                start.declaration is null ? "Rename the file, or give it a `module` line outside `lang`"
+                    : "Name the module outside `lang`"));
     }
     program.modules[start.name] = start;
     program.entryModule = start.name;
@@ -87,6 +91,13 @@ Program load(string source, string file, string[] importPaths, string prelude, S
             }
             auto path = importNode.kind.get!ImportStmt.path;
             auto name = path.join(".");
+            if (isInLang(current.name) && !isInLang(name))
+            {
+                context.collector.reportError(DiagnosticCode.LangImportsOutside, importNode.span,
+                    format("`%s` depends on nothing outside itself, so '%s' can't import '%s'",
+                        langPackage, current.name, name));
+                continue;
+            }
             // Already loaded, or being loaded further up an import cycle.
             if (auto loaded = name in program.modules)
             {
@@ -248,6 +259,58 @@ version (unittest)
     {
         import std.algorithm : filter;
         return program.modules.keys.filter!(name => !isInLang(name)).array.sort.array;
+    }
+
+    /// A string literal, double-quoted or WYSIWYG, that is `std`, `prelude` or `intrinsics`, or a
+    /// module under one.
+    enum moduleNameLiteral = `["\x60](std|prelude|intrinsics)(\.[A-Za-z0-9_.]*)?["\x60]`;
+
+    /// `text`, a D source file, without its tests: each `unittest` block, and what each
+    /// `version (unittest)` covers, whether a block, one declaration, or with `:` the rest of the
+    /// file. Braces are counted without regard to strings and comments, which in the compiler's
+    /// sources keep them balanced.
+    string withoutTests(string text)
+    {
+        import std.algorithm : startsWith;
+        import std.regex : matchFirst, regex;
+
+        auto start = regex(`\bunittest\s*\{|\bversion\s*\(\s*unittest\s*\)\s*`);
+        string kept;
+        auto rest = text;
+        while (true)
+        {
+            auto found = rest.matchFirst(start);
+            if (found.empty) return kept ~ rest;
+            kept ~= found.pre;
+            auto after = found.post;
+            if (found.hit.startsWith("unittest")) rest = after[closing(after, 1) .. $];
+            else if (after.startsWith(":")) return kept;
+            else if (after.startsWith("{")) rest = after[1 + closing(after[1 .. $], 1) .. $];
+            else
+            {
+                // One declaration: up to a `;` outside braces, or the end of its first braces.
+                size_t end;
+                int depth;
+                for (; end < after.length; end++)
+                {
+                    if (after[end] == '{') depth++;
+                    else if (after[end] == '}' && --depth == 0) { end++; break; }
+                    else if (after[end] == ';' && depth == 0) { end++; break; }
+                }
+                rest = after[end .. $];
+            }
+        }
+    }
+
+    /// Where `text` is just past the `}` that leaves it with no open braces, given `depth` already open.
+    size_t closing(string text, int depth)
+    {
+        foreach (i, c; text)
+        {
+            if (c == '{') depth++;
+            else if (c == '}' && --depth == 0) return i + 1;
+        }
+        return text.length;
     }
 }
 
@@ -423,75 +486,101 @@ unittest
     program.modules["lang.io"].span.file.should.equal(buildPath(standardLibraryPath(), "lang", "io.ag"));
 }
 
-@("load refuses a starting module that claims to be in lang from somewhere else")
+@("load refuses a starting file that would be a module of lang from somewhere else, by its module line or its name")
 unittest
 {
     auto directory = makeModuleDirectory("lang-claimed", ["lang/evil.ag": ""]);
     scope (exit) rmdirRecurse(directory);
 
-    auto context = new SourceContext;
-    load("module lang.evil", buildPath(directory, "lang", "evil.ag"), [], null, context);
-    auto errors = context.collector.errors.array;
-    errors.length.should.equal(1);
-    errors[0].code.should.equal(DiagnosticCode.ModuleDeclarationMismatch);
-    errors[0].message.should.contain("ships with the compiler");
+    void refused(string source, string file, Span at)
+    {
+        auto context = new SourceContext;
+        load(source, file, [], null, context);
+        auto errors = context.collector.errors.array;
+        errors.length.should.equal(1);
+        errors[0].code.should.equal(DiagnosticCode.NotInLang);
+        errors[0].message.should.contain("ships with the compiler");
+        errors[0].span.should.equal(at);
+    }
+    refused("module lang.evil", buildPath(directory, "lang", "evil.ag"), Span(buildPath(directory, "lang", "evil.ag"), 0, 16));
+    refused("def main(): Unit { }", "lang.evil.ag", Span("lang.evil.ag", 0, 0));
+    refused("def main(): Unit { }", "lang.ag", Span("lang.ag", 0, 0));
+    refused("module lang", "lang.ag", Span("lang.ag", 0, 11));
 }
 
-@("load accepts lang's own modules as the starting file, as `silver test` runs them")
+@("load refuses an import in a module of lang of anything outside lang")
 unittest
 {
+    // The compiler's own file of `lang.char`, with other text, stands in for a module of lang.
     auto path = buildPath(standardLibraryPath(), "lang", "char.ag");
+    auto source = "module lang.char\nimport lang.io\nimport std.ref\nforward import other";
     auto context = new SourceContext;
-    load(readText(path), path, [], null, context);
-    context.collector.diagnostics.length.should.equal(0);
+    auto program = load(source, path, [], null, context);
+    auto errors = context.collector.errors.array;
+    errors.map!(e => e.code).array.should.equal([DiagnosticCode.LangImportsOutside, DiagnosticCode.LangImportsOutside]);
+    errors[0].span.start.should.equal(source.indexOf("import std.ref"));
+    errors[1].span.start.should.equal(source.indexOf("forward import other"));
+    assert("std.ref" !in program.modules);
 }
 
-@("nothing in lang imports another package")
+@("every module of lang loads as the starting file, as `silver test` runs them, importing only lang")
 unittest
 {
     import std.file : dirEntries, SpanMode;
-    import std.regex : matchFirst, regex;
 
     auto lang = buildPath(standardLibraryPath(), langPackage);
-    auto files = dirEntries(lang, "*.ag", SpanMode.depth).map!(e => e.name).array ~ [lang ~ ".ag"];
-    auto anImport = regex(`^\s*(forward\s+)?import\s+([A-Za-z0-9_.]+)`, "m");
-    foreach (file; files)
+    foreach (path; dirEntries(lang, "*.ag", SpanMode.depth).map!(e => e.name).array ~ [lang ~ ".ag"])
     {
-        foreach (line; readText(file).split("\n"))
-        {
-            auto found = line.matchFirst(anImport);
-            if (!found.empty) assert(isInLang(found[2]), file ~ " imports " ~ found[2]);
-        }
+        auto context = new SourceContext;
+        auto program = load(readText(path), path, [], null, context);
+        assert(context.collector.diagnostics.length == 0, path);
+        assert(ownModules(program).length == 0, path);
     }
 }
+
 
 @("the compiler names no module outside lang")
 unittest
 {
-    import std.algorithm : canFind, endsWith, filter, startsWith;
+    import std.algorithm : canFind, startsWith;
     import std.string : strip;
     import std.file : dirEntries, SpanMode;
     import std.regex : matchFirst, regex;
 
     // The standard library's prelude is named only where a build picks it, as `standardPrelude`.
-    // Tests may name what they like, so only what comes before a `version (unittest)` is read.
+    // Tests may name what they like. `testing/` and the driver are the build, so they aren't read.
     auto root = buildNormalizedPath(standardLibraryPath(), "..");
-    auto named = regex(`"(std|prelude|intrinsics)(\.[A-Za-z0-9_.]*)?"`);
+    auto named = regex(moduleNameLiteral);
+    size_t read;
     foreach (package_; ["ast", "syntax", "loader", "sema", "core", "interpreter", "codegen"])
     {
-        foreach (file; dirEntries(buildPath(root, package_, "source"), "*.d", SpanMode.depth)
-            .map!(e => e.name).filter!(f => !f.endsWith("_tests.d") && !f.canFind("cases")))
+        foreach (file; dirEntries(buildPath(root, package_, "source"), "*.d", SpanMode.depth).map!(e => e.name))
         {
-            auto text = readText(file);
-            auto end = text.indexOf("version (unittest)");
-            foreach (line; (end < 0 ? text : text[0 .. end]).split("\n"))
+            foreach (line; withoutTests(readText(file)).split("\n"))
             {
                 if (line.canFind("enum standardPrelude") || line.strip.startsWith("//")) continue;
                 auto found = line.matchFirst(named);
                 assert(found.empty, file ~ " names " ~ found.hit);
+                read++;
             }
         }
     }
+    assert(read > 20_000, "Only %s lines were read".format(read));
+}
+
+@("the check that the compiler names no module outside lang reads all of each file's non-test code")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.regex : matchFirst, regex;
+
+    auto text = readText(buildPath(standardLibraryPath(), "..", "sema", "source", "silver", "sema", "analysis.d"));
+    assert(withoutTests(text).canFind("Analysis analyze("), "analysis.d's analyze isn't read");
+    withoutTests("a\nversion (unittest) import b;\nc\n@(\"t\") unittest { if (x) { y(); } }\nd\n"
+        ~ "version (unittest) { e }\nf\nversion (unittest) void g() { h; }\ni\nversion (unittest):\nj")
+        .should.equal("a\n\nc\n@(\"t\") \nd\n\nf\n\ni\n");
+    auto named = regex(moduleNameLiteral);
+    assert(!"x = `std.c`;".matchFirst(named).empty);
 }
 
 @("load records an imported module's text and throws its parse error")
@@ -642,15 +731,4 @@ unittest
     errors[0].code.should.equal(DiagnosticCode.MissingModuleDeclaration);
     errors[0].span.file.should.equal(buildPath(directory, "helper.ag"));
     errors[0].message.should.contain("`module script`");
-}
-
-@("the check that the compiler names no module outside lang reads all of each file's non-test code")
-unittest
-{
-    // That check stops at a file's first `version (unittest)`. analysis.d has a one-line
-    // `version (unittest) import ...;` near its top, so `analyze` and the rest of the file go unread.
-    auto text = readText(buildPath(standardLibraryPath(), "..", "sema", "source", "silver", "sema", "analysis.d"));
-    auto cut = text.indexOf("version (unittest)");
-    assert(cut < 0 || cut > text.indexOf("Analysis analyze("),
-        "analysis.d is read only up to its first version (unittest), before analyze");
 }

@@ -39,10 +39,10 @@ def decode(data: [UInt8]): String? {
 def slice(text: String, from: Int, to: Int): String {
     val data = bytes(text)
     if from < 0 || from > to || to > length(data) {
-        panic("Slice is out of range")
+        panic("Slice {from}..{to} of a {length(data)}-byte string is out of range")
     }
     if !between(data, from) || !between(data, to) {
-        panic("Slice doesn't fall between characters")
+        panic("Slice {from}..{to} of a {length(data)}-byte string doesn't fall between characters")
     }
     uncheckedString(data[from..to])
 }
@@ -97,9 +97,9 @@ test "slice cuts between characters" {
 }
 
 test "slice panics outside the text or inside a character" {
-    expect(panics(() => slice("silver", 2, 1)) == Some("Slice is out of range"))
-    expect(panics(() => slice("silver", -1, 2)) == Some("Slice is out of range"))
-    expect(panics(() => slice("silver", 0, 7)) == Some("Slice is out of range"))
-    expect(panics(() => slice("caf\u{e9}", 4, 5)) == Some("Slice doesn't fall between characters"))
-    expect(panics(() => slice("caf\u{e9}", 0, 4)) == Some("Slice doesn't fall between characters"))
+    expect(panics(() => slice("silver", 2, 1)) == Some("Slice 2..1 of a 6-byte string is out of range"))
+    expect(panics(() => slice("silver", -1, 2)) == Some("Slice -1..2 of a 6-byte string is out of range"))
+    expect(panics(() => slice("silver", 0, 7)) == Some("Slice 0..7 of a 6-byte string is out of range"))
+    expect(panics(() => slice("caf\u{e9}", 4, 5)) == Some("Slice 4..5 of a 5-byte string doesn't fall between characters"))
+    expect(panics(() => slice("caf\u{e9}", 0, 4)) == Some("Slice 0..4 of a 5-byte string doesn't fall between characters"))
 }

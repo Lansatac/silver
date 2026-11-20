@@ -11,6 +11,10 @@ enum DiagnosticCode : string
     ModuleNotFound = "L0001",
     MissingModuleDeclaration = "L0002",
     ModuleDeclarationMismatch = "L0003",
+    /// A module named as part of `lang` that isn't the compiler's own file of that name.
+    NotInLang = "L0004",
+    /// An import, in a module of `lang`, of a module outside it.
+    LangImportsOutside = "L0005",
 
     DuplicateDeclaration = "S0001",
     UnknownName = "S0002",

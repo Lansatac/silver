@@ -132,5 +132,5 @@ def main(): Unit ! IoError {
 ## Current implementation
 
 - Everything above is available on both backends, except as listed here.
-- `decode` and `toChar` are declared in `lang`, which `std.string` and `std.char` forward. `std.string` cuts a String with `lang.string`'s `slice(text, from, to)`, which panics unless both byte offsets fall between characters, so nothing outside `lang` can build a String that isn't UTF-8.
+- `decode` and `toChar` are declared in `lang`, which `std.string` and `std.char` forward. `lang.string` also has `slice(text, from, to)`, which cuts a String at two byte offsets and panics unless both fall between characters. It exists so that `std.string` can cut a String without an unchecked conversion, and isn't part of the language's surface: the rule above, that no function takes an offset into a String, is still the one to follow.
 - The planned forms above aren't available.

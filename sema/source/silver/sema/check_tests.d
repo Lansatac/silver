@@ -3074,7 +3074,7 @@ unittest
             [standardLibraryPath()], standardPrelude, context);
         if (!context.collector.hasErrors) analyze(program, context.collector, Target.host);
         auto codes = context.collector.errors.map!(e => e.code).array;
-        assert(codes.canFind(DiagnosticCode.IntrinsicOutsideLang) || codes.canFind(DiagnosticCode.ModuleDeclarationMismatch),
+        assert(codes.canFind(DiagnosticCode.NotInLang),
             file ~ " was accepted as part of lang: " ~ "%s".format(codes));
     }
 }

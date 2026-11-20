@@ -18,6 +18,8 @@ version (unittest)
 
         auto context = new SourceContext;
         auto program = load(source, "test", [standardLibraryPath()], standardPrelude, context);
+        assert(!context.collector.hasErrors, context.collector.errors
+                .map!(d => formatDiagnostic(d, context.sources)).join("\n"));
         auto analysis = analyze(program, context.collector);
         assert(!context.collector.hasErrors, context.collector.errors
                 .map!(d => formatDiagnostic(d, context.sources)).join("\n"));
