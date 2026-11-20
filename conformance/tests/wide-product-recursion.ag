@@ -6,8 +6,8 @@ def zero(): Wide => Wide(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 def total(w: Wide): Int => w.a0 + w.a1 + w.a2 + w.a3 + w.a4 + w.a5 + w.a6 + w.a7 + w.a8 + w.a9 + w.a10 + w.a31
 
-// A frame holds only the products live at once, not one for each local, so this goes as deep
-// compiled as interpreted.
+// A frame holds only the products live at once, not one for each local. Before that, compiled
+// code overflowed at 36,000; 48,000 leaves the interpreter headroom (it overflows near 70,000 on Linux).
 def walk(w: Wide, n: Int): Int {
     if n == 0 { return total(w) }
     val v0 = w with (a0 = w.a0 + 1)
@@ -26,7 +26,7 @@ def walk(w: Wide, n: Int): Int {
 }
 
 def main(): Unit {
-    printl(walk(zero(), 60000))
+    printl(walk(zero(), 48000))
 
     // A local read in a loop it was declared outside outlives the locals declared after its
     // last read in the body.
