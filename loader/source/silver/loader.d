@@ -1287,7 +1287,7 @@ unittest
     auto errors = context.collector.errors.array;
     errors.length.should.equal(1);
     errors[0].code.should.equal(DiagnosticCode.ModuleDeclarationMismatch);
-    errors[0].message.should.contain("std/maths.ag");
+    errors[0].message.should.contain(buildPath("std", "maths.ag"));
 }
 
 @("load gives an import of the declared starting module the module already loaded")

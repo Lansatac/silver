@@ -439,7 +439,8 @@ version (unittest)
         Packages packages;
         assert(describePackages(null, null, null, null, packages) is null);
         status = testReport(path, packages, backend, Optimization.none, filters, format, report);
-        report = report.replace((path.isDir ? path : path.dirName) ~ dirSeparator, "");
+        auto prefix = (path.isDir ? path : path.dirName) ~ dirSeparator;
+        report = report.replace(format == TestFormat.json ? prefix.replace(`\`, `\\`) : prefix, "");
         return true;
     }
 
