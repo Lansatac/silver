@@ -223,7 +223,7 @@ A literal doesn't adapt through a bound. With `toJson(x: UInt8)` and `conform UI
 
 ## A type only in the result
 
-A function that produces a `Self` from nothing of that type has no argument to be found by. It takes a parameter whose only job is to carry the type, the prelude's `Of<T>`:
+A function that produces a `Self` from nothing of that type has no argument to be found by. It takes a parameter whose only job is to carry the type, `Of<T>`, from `std.of`, which the prelude forwards:
 
 ```silver
 interface FromText { def fromText(of: Of<Self>, text: String): Self? }
