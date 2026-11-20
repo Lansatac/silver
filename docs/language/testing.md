@@ -21,6 +21,24 @@ A test can sit inline next to the code it documents, or in a companion file. `na
 
 Code under test is the code that ships. There's no conditional compilation for tests.
 
+So what the companion adds is seen only by the companion. The module's own code means the same thing whether it's tested or built, and its importers never see the companion's helpers or imports. No import can name a companion, and `silver build` and running a program never read it.
+
+```silver
+// shape.ag
+private def double(x: Int): Int => x * 2
+def area(side: Int): Int => side * side
+
+// shape.test.ag
+import geometry.fixtures             // the companion's import, not shape.ag's
+
+def square(): Int => fixtureSide()   // a helper only the companion sees
+def area(side: Float): Float => side * side   // overloads shape.ag's area in the companion only
+
+test "double is private, and still reachable here" => expect(double(square()) == 8)
+```
+
+A companion's declaration is part of the module, so one with the name or parameters of the module's own is a duplicate, as are two tests of one name.
+
 ## assert and expect
 
 | Form | On failure | Available |
@@ -116,6 +134,8 @@ Matchers, fixtures, property testing, snapshots and reporters belong in librarie
 ## Open questions
 
 - `test group "name" { ... }` and a `name.test/` directory, for larger suites
+- Which conformances a companion may declare. One for a type the companion declares, as a fake `Range` would need, can't change what the module's code means, but every module sees a conformance, so one for any other type could.
+- Whether a companion of a module of `lang` may import outside `lang`, as to use `std.random` in its tests
 - The syntax of the caller-location default argument
 - The cap on failures recorded per test
 
@@ -124,4 +144,7 @@ Matchers, fixtures, property testing, snapshots and reporters belong in librarie
 - `assert`, `test`, `expect` and `silver test` are available on both backends. `silver test -b llvm` compiles the tests, and `-b both` runs them both ways and fails a test the two backends disagree on. `-O` with either optimizes the compiled tests.
 - A directory's tests are those of every `.ag` file under it, each loaded as a program of its own.
 - `panics` is available on both backends. Its work can't be a function that returns `Never`, such as `() => panic("x")`, because a type parameter doesn't take `Never` yet; `(): Unit => panic("x")` works.
-- Companion files, `--filter`, `--format json` and the library hooks aren't available yet.
+- Companion files are available on both backends. `silver test` loads only the companion of the file it runs, beside it, and its tests run after the file's own. A directory's companions run with their modules, and naming a companion runs its module.
+- A companion can't have a `module` line, a `native library` (it has its module's), a `forward import`, a `def main` or a `conform` declaration (`L0007`). Running or building a companion, or testing one with no module beside it, is `L0006`.
+- A companion of a module of `lang` is in `lang` too: it imports nothing outside `lang` (`L0005`) and doesn't see the prelude.
+- `--filter`, `--format json` and the library hooks aren't available yet.

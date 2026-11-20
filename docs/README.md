@@ -38,7 +38,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
 | [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: no packages or renamed imports, and the build can't name another prelude |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the natives of `lang` and the standard library |
-| [Testing](language/testing.md) | `test`, `assert`, `expect`, `panics`, the test runner | Partial: no companion files, `--filter` or `--format json` |
+| [Testing](language/testing.md) | `test`, `assert`, `expect`, `panics`, the test runner | Partial: no `--filter` or `--format json` |
 
 ## Not designed yet
 
