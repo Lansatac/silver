@@ -20,6 +20,9 @@ struct Toolchain
 {
     string clang;
     string dmd;
+    /// Whether dmd's C compiler should link with lld, which links Phobos statically many
+    /// times faster than GNU ld. Only looked for off Windows, where dmd uses its own linker.
+    bool lld;
 }
 
 /// Finds clang (`$SILVER_CLANG`, else `clang` on the PATH) and dmd (`$SILVER_DMD`, else
@@ -36,6 +39,8 @@ string findToolchain(out Toolchain toolchain)
     {
         return "dmd wasn't found. Install it, or set SILVER_DMD to its path.";
     }
+    version (Windows) {}
+    else toolchain.lld = findTool("SILVER_LLD", "ld.lld") !is null;
     return null;
 }
 
@@ -128,7 +133,8 @@ string[] linkCommand(const Toolchain toolchain, string objPath, const BuiltRunti
     // dmd hands a `.lib` argument to link.exe as it is, and `-L` flags to the Unix linker.
     version (Windows) auto linked = libraries.map!(l => l ~ ".lib").array;
     else auto linked = libraries.map!(l => "-L-l" ~ l).array;
-    return [toolchain.dmd, objPath, runtime.entryObject, runtime.library] ~ linked ~ ["-of=" ~ outputPath];
+    auto linker = toolchain.lld ? ["-Xcc=-fuse-ld=lld"] : [];
+    return [toolchain.dmd] ~ linker ~ [objPath, runtime.entryObject, runtime.library] ~ linked ~ ["-of=" ~ outputPath];
 }
 
 /// The compiled runtime, under `runtimePath()/build`.
@@ -266,4 +272,12 @@ unittest
     version (Windows) auto expected = ["SDL2.lib", "m.lib"];
     else auto expected = ["-L-lSDL2", "-L-lm"];
     assert(command == ["dmd", "main.o", "entry.o", "rt.a"] ~ expected ~ ["-of=main"], command.to!string);
+}
+
+@("the link command asks for lld when the toolchain found it")
+unittest
+{
+    auto runtime = BuiltRuntime("rt.a", "entry.o");
+    auto command = linkCommand(Toolchain("clang", "dmd", true), "main.o", runtime, [], "main");
+    assert(command == ["dmd", "-Xcc=-fuse-ld=lld", "main.o", "entry.o", "rt.a", "-of=main"], command.to!string);
 }
