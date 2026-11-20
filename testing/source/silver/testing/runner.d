@@ -380,7 +380,7 @@ unittest
     assert(run.diagnostics.length == 4, shown);
 }
 
-@("a companion test file's function, constant, type or test is a duplicate of its module's of the same name or parameters")
+@("a companion test file can't declare a function named like one of its module's, and its constant, type or test of a module's name is a duplicate")
 unittest
 {
     auto directory = testDirectory("companion-duplicates", [
@@ -390,7 +390,7 @@ unittest
     ]);
     scope (exit) rmdirRecurse(directory);
 
-    assert(reportedCodes(buildPath(directory, "shape.ag")) == ["S0001", "S0001", "T0035", "S0001"]);
+    assert(reportedCodes(buildPath(directory, "shape.ag")) == ["S0033", "S0033", "S0001", "S0001", "S0001"]);
 }
 
 @("a companion test file runs with its module, whether its module or it is named, and only by silver test")
@@ -459,4 +459,13 @@ unittest
 
     assertNotThrown(runFile(buildPath(directory, "shape.ag"), [], TestBackend.interpreter, tempDir));
     assertNotThrown(testFiles(directory).map!(f => runFile(f, [], TestBackend.interpreter, tempDir)).array);
+}
+
+@("a companion test file that isn't UTF-8 is reported, not thrown")
+unittest
+{
+    auto directory = testDirectory("companion-unreadable", ["shape.ag": "test \"t\" => expect(true)", "shape.test.ag": "\xFF\xFE"]);
+    scope (exit) rmdirRecurse(directory);
+
+    assert(reportedCodes(buildPath(directory, "shape.ag")) == ["L0009"]);
 }

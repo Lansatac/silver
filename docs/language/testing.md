@@ -17,11 +17,15 @@ test "doubling zero is zero" => expect(double(0) == 0)
 
 ## Where tests live
 
-A test can sit inline next to the code it documents, or in a companion file. `name.test.ag` is part of the module `name.ag`: it sees its private members, has its own imports and helpers, and is loaded only when testing.
+A test can sit inline next to the code it documents, or in a companion file. The companion of `name.ag` is the file `name.test.ag` beside it; a directory of that name isn't one. It is a module of its own that has the privileges of `name.ag`, and it's loaded only when testing.
 
-Code under test is the code that ships. There's no conditional compilation for tests.
+Code under test is the code that ships. There's no conditional compilation for tests. So the module's own code means the same thing whether it's tested or built, and nothing the companion adds can change that.
 
-So what the companion adds is seen only by the companion. The module's own code means the same thing whether it's tested or built, and its importers never see the companion's helpers or imports. No import can name a companion, and `silver build` and running a program never read it.
+- The companion sees the module's declarations as the module does, private ones included, unqualified or qualified.
+- A declaration in the companion with the name of one of the module's is a duplicate, as is a test with the name of one of the module's tests. This covers functions too, whatever their parameters, so a test calling one of the module's functions calls what the module's code would.
+- The companion has its own imports and helpers, and doesn't see the module's imports.
+- Neither the module's code nor its importers see what the companion declares or imports. No import can name a companion, and `silver build` and running a program never read it.
+- A conformance is seen by every module, so neither the companion nor a module that's in the program only because the companion imports it can declare one.
 
 ```silver
 // shape.ag
@@ -29,15 +33,13 @@ private def double(x: Int): Int => x * 2
 def area(side: Int): Int => side * side
 
 // shape.test.ag
-import geometry.fixtures             // the companion's import, not shape.ag's
+import geometry.fixtures             // the companion's own import: shape.ag doesn't see it
 
 def square(): Int => fixtureSide()   // a helper only the companion sees
-def area(side: Float): Float => side * side   // overloads shape.ag's area in the companion only
+def area(side: Float): Float => side * side   // error: `area` is shape.ag's
 
 test "double is private, and still reachable here" => expect(double(square()) == 8)
 ```
-
-A companion's declaration is part of the module, so one with the name or parameters of the module's own is a duplicate, as are two tests of one name.
 
 ## assert and expect
 
@@ -134,7 +136,7 @@ Matchers, fixtures, property testing, snapshots and reporters belong in librarie
 ## Open questions
 
 - `test group "name" { ... }` and a `name.test/` directory, for larger suites
-- Which conformances a companion may declare. One for a type the companion declares, as a fake `Range` would need, can't change what the module's code means, but every module sees a conformance, so one for any other type could.
+- Which conformances the companion, and the modules only it imports, may declare. One for a type declared there, as a fake `Range` would need, can't change what the module's code means, but every module sees a conformance, so one for any other type could.
 - Whether a companion of a module of `lang` may import outside `lang`, as to use `std.random` in its tests
 - The syntax of the caller-location default argument
 - The cap on failures recorded per test
@@ -145,6 +147,6 @@ Matchers, fixtures, property testing, snapshots and reporters belong in librarie
 - A directory's tests are those of every `.ag` file under it, each loaded as a program of its own.
 - `panics` is available on both backends. Its work can't be a function that returns `Never`, such as `() => panic("x")`, because a type parameter doesn't take `Never` yet; `(): Unit => panic("x")` works.
 - Companion files are available on both backends. `silver test` loads only the companion of the file it runs, beside it, and its tests run after the file's own. A directory's companions run with their modules, and naming a companion runs its module.
-- A companion can't have a `module` line, a `native library` (it has its module's), a `forward import`, a `def main` or a `conform` declaration (`L0007`). Running or building a companion, or testing one with no module beside it, is `L0006`.
+- A companion can't have a `module` line, a `native library` (it has its module's), a `forward import`, a `def main` or a `conform` declaration (`L0007`), and a module in the program only because a companion imports it can't declare a conformance (`L0008`). A companion's function named like one of its module's is `S0033`. Running or building a companion, or testing one with no module beside it, is `L0006`, and a companion that can't be read as text is `L0009`.
 - A companion of a module of `lang` is in `lang` too: it imports nothing outside `lang` (`L0005`) and doesn't see the prelude.
 - `--filter`, `--format json` and the library hooks aren't available yet.

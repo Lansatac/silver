@@ -616,6 +616,8 @@ private final class NameResolver
     private SideTable!(Id!AliasDecl, bool) _recursiveAliases;
     /// The module being resolved, which is the one that sees its own private declarations.
     private string _currentModule;
+    /// The module each companion test file is part of, by the companion's name.
+    private string[string] _companionOf;
 
     private Target _target;
     private string[string] _nativeLibraries;
@@ -659,8 +661,9 @@ private final class NameResolver
         // A companion test file sees its module's declarations as its own, but not the other way round.
         foreach (mod; modules)
         {
-            if (mod.companionOf !is null)
-                declareModule(mod.name, mod, implicitImports(program, mod.name), _moduleScopes[mod.companionOf]);
+            if (mod.companionOf is null) continue;
+            _companionOf[mod.name] = mod.companionOf;
+            declareModule(mod.name, mod, implicitImports(program, mod.name), _moduleScopes[mod.companionOf]);
         }
         reportForwardCycles(modules);
         forwardNames(modules);
@@ -1161,6 +1164,14 @@ private final class NameResolver
                     {
                         _collector.reportError(DiagnosticCode.MainInvalidDefinition, func.nameSpan,
                             "`main` can't be private");
+                    }
+                    if (part !is null && func.testName is null && part.functionsNamed(func.name).length > 0)
+                    {
+                        _collector.reportError(DiagnosticCode.CompanionOverload, func.nameSpan,
+                            ("`%s` is a function of '%s', so its tests can't declare another, which would make a call in "
+                                ~ "them mean something else than the same call in '%s'\nGive this one a name of its own")
+                                .format(func.name, mod.companionOf, mod.companionOf));
+                        return;
                     }
                     // Overloads with the same parameter types are reported once types are known.
                     auto existing = moduleScope.resolveLocal(func.name);
@@ -1827,12 +1838,18 @@ private final class NameResolver
     /// Whether `m`'s declaration `symbol` can be seen from the module being resolved.
     private bool isVisible(SymbolId symbol, string m)
     {
-        return m == _currentModule || isPublic(symbol);
+        return isOwn(m) || isPublic(symbol);
     }
 
     private bool isVisible(TypeSymbol symbol, string m)
     {
-        return m == _currentModule || isPublic(symbol);
+        return isOwn(m) || isPublic(symbol);
+    }
+
+    /// Whether `m` is the module being resolved, or the module it's the companion test file of.
+    private bool isOwn(string m)
+    {
+        return m == _currentModule || _companionOf.get(_currentModule, null) == m;
     }
 
     private bool isPublic(SymbolId symbol)
@@ -2892,7 +2909,7 @@ private final class NameResolver
                 if (isFunction(*symbol))
                 {
                     return recordFunctions(expr, access.member, Candidates([visibleFunctions(object.name, access.member)], null,
-                        [object.name == _currentModule ? string.init : object.name]));
+                        [isOwn(object.name) ? string.init : object.name]));
                 }
                 return recordValue(expr, access.member, *symbol);
             }

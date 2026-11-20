@@ -2,12 +2,12 @@ import imports_support.counting
 
 def fixture(): Secret => Secret(limit)
 
-def triple(x: Float): Float => x * 3.0
+def tripleFloat(x: Float): Float => x * 3.0
 
 test "a companion reaches its module's private members" => expect(double(fixture().value) == 20)
 
 test "a companion has imports of its own" => expect(next(triple(1)) == 4)
 
-test "a companion's helper overloads its module's function" => expect(triple(1.5) == 4.5)
+test "a companion has helpers of its own" => expect(tripleFloat(1.5) == 4.5)
 
 test "a companion's failure says where it is" => expect(double(1) == 3)

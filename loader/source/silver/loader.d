@@ -33,6 +33,16 @@ Program load(string source, string file, string[] importPaths, string prelude, S
     Program program;
     program.sources = context.sources;
     program.prelude = prelude;
+    // Before parsing, since what's wrong with it is where it was started from.
+    if (isCompanionFile(file))
+    {
+        auto moduleFile = companionModuleFile(file);
+        context.collector.reportError(DiagnosticCode.CompanionStarted, Span(file, 0, 0), exists(moduleFile)
+            ? format("'%s' holds tests of %s, and is loaded with it only by `silver test`", file, moduleFile)
+            : format("'%s' is named as the tests of %s, which doesn't exist\nRename it, or add %s",
+                file, moduleFile, baseName(moduleFile)));
+        return program;
+    }
     auto start = new Module;
     auto startName = baseName(file).stripExtension;
     *start = parse(source, startName, new NodeIds(ModuleKey.of(startName, source)), file);
@@ -61,20 +71,11 @@ Program load(string source, string file, string[] importPaths, string prelude, S
                 start.declaration is null ? "Rename the file, or give it a `module` line outside `lang`"
                     : "Name the module outside `lang`"));
     }
-    if (isCompanionFile(file))
-    {
-        auto moduleFile = companionModuleFile(file);
-        context.collector.reportError(DiagnosticCode.CompanionStarted, Span(file, 0, 0), exists(moduleFile)
-            ? format("'%s' holds tests of %s, and is loaded with it only by `silver test`", file, moduleFile)
-            : format("'%s' is named as the tests of %s, which doesn't exist\nRename it, or add %s",
-                file, moduleFile, baseName(moduleFile)));
-    }
     program.modules[start.name] = start;
     program.entryModule = start.name;
 
     // Modules whose imports haven't been followed yet.
     Module*[] unscanned = [start];
-    if (companion !is null) unscanned ~= addCompanion(program, start, *companion, context);
     foreach (i, implicit; [langPackage, prelude])
     {
         if (implicit is null || implicit in program.modules) continue;
@@ -93,55 +94,95 @@ Program load(string source, string file, string[] importPaths, string prelude, S
         }
     }
 
-    while (unscanned.length > 0)
+    // The companion's imports are followed last, so what's loaded then is in the program only for it.
+    bool[string] built;
+    foreach (forCompanion; [false, true])
     {
-        auto current = unscanned[$ - 1];
-        unscanned = unscanned[0 .. $ - 1];
-        foreach (importNode; current.declarations)
+        if (forCompanion)
         {
-            if (!importNode.kind.has!ImportStmt)
+            if (companion is null) break;
+            foreach (name; program.modules.byKey) built[name] = true;
+            if (companion.problem !is null)
             {
-                continue;
+                context.collector.reportError(DiagnosticCode.UnreadableFile, Span(file, 0, 0),
+                    format("The tests of '%s' in %s can't be read: %s", start.name, companion.file, companion.problem));
+                break;
             }
-            auto path = importNode.kind.get!ImportStmt.path;
-            auto name = path.join(".");
-            if (isInLang(current.name) && !isInLang(name))
+            unscanned = [addCompanion(program, start, *companion, context)];
+        }
+        while (unscanned.length > 0)
+        {
+            auto current = unscanned[$ - 1];
+            unscanned = unscanned[0 .. $ - 1];
+            foreach (importNode; current.declarations)
             {
-                context.collector.reportError(DiagnosticCode.LangImportsOutside, importNode.span,
-                    format("`%s` depends on nothing outside itself, so %s can't import '%s'", langPackage,
-                        current.companionOf is null ? "'" ~ current.name ~ "'" : "the tests of '" ~ current.companionOf ~ "'",
-                        name));
-                continue;
-            }
-            // Already loaded, or being loaded further up an import cycle.
-            if (auto loaded = name in program.modules)
-            {
-                // Only the starting file can be in the map without a `module` line.
-                if ((*loaded).declaration is null)
+                if (!importNode.kind.has!ImportStmt)
                 {
-                    context.collector.reportError(DiagnosticCode.MissingModuleDeclaration, importNode.span,
-                        format("'%s' has no module declaration, so it can't be imported\nAdd `module %s` as the first line of %s",
-                            name, name, (*loaded).span.file));
+                    continue;
                 }
-                continue;
+                auto path = importNode.kind.get!ImportStmt.path;
+                auto name = path.join(".");
+                if (isInLang(current.name) && !isInLang(name))
+                {
+                    context.collector.reportError(DiagnosticCode.LangImportsOutside, importNode.span,
+                        format("`%s` depends on nothing outside itself, so %s can't import '%s'", langPackage,
+                            current.companionOf is null ? "'" ~ current.name ~ "'" : "the tests of '" ~ current.companionOf ~ "'",
+                            name));
+                    continue;
+                }
+                // Already loaded, or being loaded further up an import cycle.
+                if (auto loaded = name in program.modules)
+                {
+                    // Only the starting file can be in the map without a `module` line.
+                    if ((*loaded).declaration is null)
+                    {
+                        context.collector.reportError(DiagnosticCode.MissingModuleDeclaration, importNode.span,
+                            format("'%s' has no module declaration, so it can't be imported\nAdd `module %s` as the first line of %s",
+                                name, name, (*loaded).span.file));
+                    }
+                    continue;
+                }
+                auto modulePath = findModule(path, importPaths);
+                if (modulePath is null)
+                {
+                    context.collector.reportError(
+                        DiagnosticCode.ModuleNotFound,
+                        importNode.span,
+                        format("Module '%s.ag' not found\nPaths searched: %s",
+                            path.join("/"),
+                            importPaths.join("\n")));
+                    continue;
+                }
+                program.modules[name] = parseModuleFile(modulePath, path, context);
+                unscanned ~= program.modules[name];
             }
-            auto modulePath = findModule(path, importPaths);
-            if (modulePath is null)
-            {
-                context.collector.reportError(
-                    DiagnosticCode.ModuleNotFound,
-                    importNode.span,
-                    format("Module '%s.ag' not found\nPaths searched: %s",
-                        path.join("/"),
-                        importPaths.join("\n")));
-                continue;
-            }
-            program.modules[name] = parseModuleFile(modulePath, path, context);
-            unscanned ~= program.modules[name];
+        }
+    }
+    if (companion !is null)
+    {
+        import std.algorithm : sort;
+        foreach (name; program.modules.keys.sort)
+        {
+            if (name !in built && program.modules[name].companionOf is null)
+                refuseConformances(*program.modules[name], start.name, context);
         }
     }
 
     return program;
+}
+
+/// Reports each conformance in `mod`, which is in the program only because the companion test file
+/// of `tested` reaches it. Every module sees a conformance, so `tested`'s code would mean something
+/// else when tested than when built.
+private void refuseConformances(const Module mod, string tested, SourceContext context)
+{
+    foreach (decl; mod.declarations)
+    {
+        if (!decl.kind.match!((const ConformDecl _) => true, _ => false)) continue;
+        context.collector.reportError(DiagnosticCode.TestOnlyConformance, decl.span,
+            format("'%s' is loaded only for the tests of '%s', so it can't declare a conformance: every module would see it "
+                ~ "while testing, so '%s' wouldn't mean what it means when it's built", mod.name, tested, tested));
+    }
 }
 
 /// Directory holding `lang` and the standard library that ships with the compiler.
@@ -162,15 +203,27 @@ struct Companion
 {
     string file;
     string source;
+    /// Why the file couldn't be read, or null.
+    string problem;
 }
 
-/// The companion test file of `file`, read from beside it, or null if there isn't one.
+/// The companion test file of `file`, read from beside it, or null if there isn't one. A
+/// directory of that name isn't one.
 Companion* companionOf(string file)
 {
+    import std.file : isFile;
+
     if (isCompanionFile(file) || extension(file) != ".ag") return null;
     auto path = file.stripExtension ~ companionExtension;
-    if (!exists(path)) return null;
-    return new Companion(path, readText(path));
+    if (!exists(path) || !isFile(path)) return null;
+    try
+    {
+        return new Companion(path, readText(path));
+    }
+    catch (Exception e)
+    {
+        return new Companion(path, null, e.msg);
+    }
 }
 
 /// Whether `file` is named as a companion test file.
@@ -939,4 +992,38 @@ unittest
     errors[0].span.start.should.equal(source.indexOf("import std.ref"));
     errors[0].message.should.contain("the tests of 'lang.char'");
     assert(isInLang(companionName("lang.char")) && isInLang(companionName(langPackage)));
+}
+
+@("a module in the program only for the companion test file can't declare a conformance, and one the module reaches can")
+unittest
+{
+    auto directory = makeModuleDirectory("companion-conformance", [
+        "fakes.ag": "module fakes\nconform Int: Sized",
+        "shared.ag": "module shared\nconform Int: Sized",
+        "deep.ag": "module deep\nimport fakes",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto companion = Companion("shape.test.ag", "import deep\nimport shared");
+    auto context = new SourceContext;
+    load("import shared", "shape.ag", [directory], null, context, &companion);
+    auto errors = context.collector.errors.array;
+    errors.map!(e => e.code).array.should.equal([DiagnosticCode.TestOnlyConformance]);
+    errors[0].span.file.should.equal(buildPath(directory, "fakes.ag"));
+    errors[0].message.should.contain("only for the tests of 'shape'");
+}
+
+@("a companion test file that can't be read is reported, and the starting file's name is checked before it's parsed")
+unittest
+{
+    auto unreadable = Companion("shape.test.ag", null, "Invalid UTF-8 sequence");
+    auto context = new SourceContext;
+    load("def area(): Int => 1", "shape.ag", [], null, context, &unreadable);
+    auto errors = context.collector.errors.array;
+    errors.map!(e => e.code).array.should.equal([DiagnosticCode.UnreadableFile]);
+    errors[0].message.should.contain("shape.test.ag can't be read: Invalid UTF-8 sequence");
+
+    context = new SourceContext;
+    load("def = broken", "gone.test.ag", [], null, context);
+    context.collector.errors.array.map!(e => e.code).array.should.equal([DiagnosticCode.CompanionStarted]);
 }

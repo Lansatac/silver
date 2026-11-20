@@ -19,6 +19,10 @@ enum DiagnosticCode : string
     CompanionStarted = "L0006",
     /// Something in a companion test file that only its module can have.
     NotInCompanion = "L0007",
+    /// A conformance in a module that's in the program only because a companion test file reaches it.
+    TestOnlyConformance = "L0008",
+    /// A file that exists and can't be read as text.
+    UnreadableFile = "L0009",
 
     DuplicateDeclaration = "S0001",
     UnknownName = "S0002",
@@ -60,6 +64,8 @@ enum DiagnosticCode : string
     UnknownWhenParameter = "S0031",
     /// An `if type` on a type that isn't a type parameter of the function it's in.
     TestsNonParameter = "S0032",
+    /// A function in a companion test file named like one of its module's own.
+    CompanionOverload = "S0033",
 
     TypeMismatch = "T0001",
     NotCallable = "T0002",
