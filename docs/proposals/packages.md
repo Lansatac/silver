@@ -1,6 +1,6 @@
 # Proposal: packages
 
-**Status: decided and built, except a way to describe a package, and what parts share.** The rules are described in [Modules](../language/modules.md#packages). This document keeps the reasoning and what was rejected. Packages are given to `silver` on the command line for now, and a program is still compiled whole. `lang` is in place: only it may declare intrinsics, and the compiler names no other package. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
+**Status: decided and built, except the package file's fields, a package's root module, and what parts share.** The rules are described in [Modules](../language/modules.md#packages). This document keeps the reasoning and what was rejected. Packages are given on the command line for now (the package file will be TOML, read by a `silver` front end that calls the compiler), and a program is still compiled whole. `lang` is in place: only it may declare intrinsics, and the compiler names no other package. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
 
 ## Summary
 
@@ -15,7 +15,7 @@ core/source/tree/node.ag      module silver.core.tree.node
 
 A package lists the packages it uses. One with a `main` is a program, and nothing can depend on it. The compiler knows one package by name, `lang`, and the standard library is an ordinary package.
 
-The lines that describe a package here, as `package silver.core at core/source`, are a notation for this document. How a package is written down isn't designed.
+The lines that describe a package here, as `package silver.core at core/source`, are a notation for this document. A package will be written down in a TOML file whose fields aren't designed.
 
 ## Motivation
 
@@ -27,7 +27,12 @@ The lines that describe a package here, as `package silver.core at core/source`,
 
 - **The language** says what a package is, which package a module belongs to, what a package may depend on, and which package is the program.
 - **The tool** says where a package's source comes from: a manifest, versions, fetching, a lock file and a registry. None of it changes what a program means.
-- **The tool is `silver`.** `silver build` and `silver test` read the package's description. There is no separate package manager with its own idea of a project.
+- **Two executables, with the compiler's flags as the contract between them (decided).**
+  - `silverc` is the compiler. It's given every package fact on its command line (the name, directory, uses and parts of each package) and never reads a package file or touches the network. Every rule that changes what a program means lives here.
+  - `silver` is the front end and package manager. It finds the project, reads its package file, works out where each dependency's source is, and calls `silverc`. `silver run`, `silver build` and `silver test` are its commands.
+  - So a package file can change format, or another tool can drive `silverc`, without the language changing. Two programs can later be merged into one more easily than one can be split. A package compiled on its own, which separate compilation needs, is one `silverc` call, as a crate is one `rustc` call under Cargo.
+  - Until `silver` exists, today's executable is both. It keeps the name `silver` until the front end takes it.
+- **A package file is TOML (decided),** read only by `silver`. Its fields aren't designed. It's TOML because it has comments, it's what package manifests have converged on, and it has few surprises. The compiler doesn't read it, so it needn't be Silver's syntax.
 
 ## The proposal
 
@@ -44,7 +49,17 @@ The lines that describe a package here, as `package silver.core at core/source`,
 - A package lists the packages it uses, and may import only from those and itself.
 - Every package and every script uses the prelude's package without listing it, as every module imports the prelude without naming it (decided). With the standard prelude that's `std`, so `silver hello.ag` can import `std.math`. The compiler doesn't name `std` for this: it's whatever package the build's prelude is in. `lang` is still exempt from lists, and still imports nothing outside itself.
 - The list has no cycles.
-- Until a manifest exists, the list and each package's directory can be given to the compiler directly, as `--package lib=path/to/lib`.
+- The list and each package's directory are given to the compiler as flags, as `--package lib=path/to/lib`. That stays the compiler's interface once a package file exists: `silver` turns the file into these flags.
+
+### Scripts (open)
+
+How a script that needs more than the standard library gets it is the front end's to decide later. It might be `silver run`, a header in the script, or the package of the script's directory. These hold now so that no choice is closed off:
+
+1. A file with no `module` line is a whole program, and runs with no package file anywhere.
+2. No package file is needed to run one file. Packages are for work in several files.
+3. A script uses the prelude's package without listing it, so most scripts need nothing else.
+4. Whatever mechanism comes, it only supplies the facts the compiler's flags carry, so it needs no change to the language.
+5. Nothing gives a meaning to a comment at the top of a file, which leaves room for a header there.
 
 ### Programs and libraries (decided)
 
@@ -95,6 +110,11 @@ So `xs.map(f)` needs no import, the functions behind it are plain Silver in `std
 - **Packages managed entirely outside the language,** by a tool like `dub`. The language would have no boundary to hang ownership or a wider visibility on, and each tool would draw its own.
 - **The first segment of a module's name is its package.** Nothing to declare, but `silver.core` couldn't be a package of its own, and the folder problem stays.
 - **A manifest written in Silver.** It can compute what it needs, but a tool has to run it to read it. A data file can be read by anything.
+- **A package file in a subset of Silver's syntax, read by the compiler.** It would feel familiar and need no second parser in the compiler. But it puts reading the file in the compiler, and with the flags as the contract the compiler needn't read it at all.
+- **JSON for the package file.** Everyone knows it and the standard library will parse it anyway, but it has no comments, and a dependency often wants one.
+- **YAML for the package file.** Readable and familiar, but it types values implicitly (`no` is false), its indentation is significant, and its parser is large.
+- **One executable, with the compiler as a library inside it,** as `go` and `zig` are. One install and nothing to start per package, but the contract would be an internal interface that nothing keeps clean, and one per-package compile is the unit separate compilation wants anyway.
+- **A separate package manager with its own idea of a project,** as dub is beside dmd. The compiler and the manager could disagree about which package a file is in. With `silver` calling `silverc` with the facts, only `silverc` decides.
 - **Every package stands alone for ownership.** Simpler to state. A project split into parts would meet the restriction on conformances in its own code.
 - **A part by its name, or by naming its parent.** Nothing for the parent to write. But being a part gives ownership of the parent's types, and anyone could claim it: a package named `std.extra` could conform built-in types to `std`'s interfaces.
 - **Every part of a program is the program.** Each part could conform anything, and nothing outside could depend on any of them, so a program's library parts couldn't be shared.
@@ -108,7 +128,8 @@ So `xs.map(f)` needs no import, the functions behind it are plain Silver in `std
 
 ## Open questions
 
-1. How a package is described before a manifest exists, and the manifest's format after.
-2. The visibility shared by the parts of a package.
-3. Whether tests in a library may see more than the library does.
-4. Whether a part can list parts of its own.
+1. The package file's fields: how a package names what it uses and where each one's source is (a path, git, a registry), and whether a workspace file lists the packages of a project.
+2. Where a package's root module lives, so `import cards` can name a package's own module: a fixed name inside its directory (as D's `package.d` and Python's `__init__.py`), or none.
+3. The visibility shared by the parts of a package.
+4. Whether tests in a library may see more than the library does.
+5. Whether a part can list parts of its own.
