@@ -413,3 +413,50 @@ unittest
     }
     assert(reportedCodes(buildPath(directory, "orphan.test.ag")) == ["L0006"]);
 }
+
+@("a conformance in a module only the companion test file imports doesn't change what its module's code means")
+unittest
+{
+    auto directory = testDirectory("companion-conformance", [
+        "shape.ag": "module shape\ninterface Named {\n    def name(value: Self): String\n}\n"
+            ~ "def describe<T>(x: T): String => if type T: Named => name(x) else \"plain\"\n"
+            ~ "test \"as built\" => expect(describe(1) == \"plain\")",
+        "shape.test.ag": "import fakes\ntest \"companion\" => expect(true)",
+        "fakes.ag": "module fakes\nimport shape\ndef name(value: Int): String => \"named\"\nconform Int: Named",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto run = runFile(buildPath(directory, "shape.ag"), [], TestBackend.interpreter, tempDir);
+    // Either the conformance is refused, or the module's own test sees what a build would.
+    assert(run.problem !is null || run.results.all!(r => r.passed), run.results.map!(r => r.failures.join("\n")).join("\n"));
+}
+
+@("a companion test file reaches its module's private members qualified, as the module itself can")
+unittest
+{
+    auto directory = testDirectory("companion-qualified", [
+        "app/shape.ag": "module app.shape\nimport app.shape\nprivate def hidden(): Int => 1\nprivate type Secret(n: Int)\n"
+            ~ "test \"own\" => expect(app.shape.hidden() == 1)",
+        "app/shape.test.ag": "import app.shape\n"
+            ~ "test \"companion\" => expect(app.shape.hidden() == app.shape.Secret(1).n)",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto run = runFile(buildPath(directory, "app", "shape.ag"), [directory], TestBackend.interpreter, tempDir);
+    assert(run.problem is null, run.diagnostics.join("\n"));
+    assert(run.results.all!(r => r.passed));
+}
+
+@("a directory named as a companion test file is reported or ignored, not thrown")
+unittest
+{
+    import std.exception : assertNotThrown;
+    import std.file : mkdir;
+
+    auto directory = testDirectory("companion-directory", ["shape.ag": "test \"t\" => expect(true)"]);
+    scope (exit) rmdirRecurse(directory);
+    mkdir(buildPath(directory, "shape.test.ag"));
+
+    assertNotThrown(runFile(buildPath(directory, "shape.ag"), [], TestBackend.interpreter, tempDir));
+    assertNotThrown(testFiles(directory).map!(f => runFile(f, [], TestBackend.interpreter, tempDir)).array);
+}
