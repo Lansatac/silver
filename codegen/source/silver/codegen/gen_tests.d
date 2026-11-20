@@ -242,7 +242,8 @@ unittest
 @("codegen declares a native from its signature and calls it with the C calling convention")
 unittest
 {
-    auto source = "import std.math\nimport std.time\ndef main(): Unit {\n    printl(sqrt(16.0))\n    val now = nowNanos()\n"
+    auto source = "native def sqrt(x: Float): Float\nnative(\"silver_nowNanos\") def nowNanos(): Int\n"
+        ~ "def main(): Unit {\n    printl(sqrt(16.0))\n    val now = nowNanos()\n"
         ~ "    printl(now > 1600000000000000000)\n}";
     auto ir = generateSource(source);
 
@@ -641,7 +642,8 @@ unittest
 @("a native is an opaque call when optimized, whatever C library function it's named like")
 unittest
 {
-    auto source = "import std.math\nnative def exp2(x: Float): Float\n"
+    auto source = "native def pow(base: Float, exponent: Float): Float\nnative def sin(x: Float): Float\n"
+        ~ "native def exp2(x: Float): Float\n"
         ~ "def main(): Unit {\n    val hidden = [2.0, 0.3]\n    mutable val differs = 0\n"
         ~ "    for i in 0..2000 {\n        val x = Float(i) * 0.149 - 150.0\n"
         ~ "        if pow(2.0, x) != pow(hidden[0], x) { differs += 1 }\n    }\n"

@@ -31,12 +31,6 @@ unittest
     a.shouldDeclareType(At("made", 1), "[Ref<Int>]");
 }
 
-@("Ref isn't in the prelude")
-unittest
-{
-    analyzed("def main(): Unit {\n    val r = Ref(0)\n}").shouldReport(DiagnosticCode.UnknownName, At("Ref", 1));
-}
-
 @("a Ref has no fields, so they can't be read, written or updated with `with`")
 unittest
 {

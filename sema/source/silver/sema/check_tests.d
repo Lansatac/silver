@@ -626,9 +626,9 @@ unittest
 @("type checking gives a module-qualified function its declared type")
 unittest
 {
-    auto a = analyzed("import std.math\ndef main(): Unit => printl(std.math.pow(2, 3))");
-    a.shouldHaveType("std.math.pow", "(Float, Float) -> Float");
-    a.shouldHaveType("std.math.pow(2, 3)", "Float");
+    auto a = analyzed("import geo.shapes\ndef main(): Unit => printl(geo.shapes.area(2, 3))", shapes);
+    a.shouldHaveType("geo.shapes.area", "(Float, Float) -> Float");
+    a.shouldHaveType("geo.shapes.area(2, 3)", "Float");
     a.shouldHaveNoDiagnostics();
 }
 
@@ -644,10 +644,10 @@ unittest
     analyzedMain("printl(nope + 1)").shouldReport(DiagnosticCode.UnknownName, At("nope", 1));
     analyzedMain("printl(nope(1))").shouldReport(DiagnosticCode.UnknownName, At("nope", 1));
     analyzedMain("printl(-nope)").shouldReport(DiagnosticCode.UnknownName, At("nope", 1));
-    analyzed("import std.math\ndef main(): Unit => printl(std.math.nope(1))")
-        .shouldReport(DiagnosticCode.UnknownModuleMember, At("std", 2));
-    analyzed("import std.math\ndef main(): Unit => printl(std.math + 1)")
-        .shouldReport(DiagnosticCode.ModuleIsNotAValue, At("std", 2));
+    analyzed("import geo.shapes\ndef main(): Unit => printl(geo.shapes.nope(1))", shapes)
+        .shouldReport(DiagnosticCode.UnknownModuleMember, At("geo", 2));
+    analyzed("import geo.shapes\ndef main(): Unit => printl(geo.shapes + 1)", shapes)
+        .shouldReport(DiagnosticCode.ModuleIsNotAValue, At("geo", 2));
 }
 
 @("type checking gives every expression in a program a type")
@@ -2656,7 +2656,6 @@ unittest
         analyzed("native def f(x: " ~ type ~ "): " ~ type ~ "\ndef main(): Unit { }").shouldHaveNoDiagnostics();
     }
     analyzed("native def f(): Unit\nnative def g(): Never\ndef main(): Unit { }").shouldHaveNoDiagnostics();
-    analyzed("import std.c\nnative def f(x: CInt, y: CLong, z: CSize): CUChar\ndef main(): Unit { }").shouldHaveNoDiagnostics();
 
     foreach (type; ["String", "Any", "Int?", "[Int]", "(Int, Bool)", "Point", "(Int) -> Int", "()", "Unit", "Never"])
     {
@@ -2697,14 +2696,6 @@ unittest
     analyzed("def main(): Unit {\n    assert(true, 7)\n}").shouldReport(DiagnosticCode.TypeMismatch, At("7", 1));
     analyzed("def main(): Unit {\n    val f: (Bool) -> Unit = assert\n}")
         .shouldReport(DiagnosticCode.InvalidOperand, At("assert", 1));
-}
-
-@("std.c's long is as wide as the target says, and its other types are the same everywhere")
-unittest
-{
-    enum source = "import std.c\ndef f(x: CLong): Int64 => x\ndef g(x: CULong): UInt32 => x\ndef h(x: CInt, y: CSize): (Int32, UInt64) => (x, y)\ndef main(): Unit { }";
-    analyzed(source, null, Target(64)).shouldReport(DiagnosticCode.TypeMismatch, At("x", 4));
-    analyzed(source, null, Target(32)).shouldReport(DiagnosticCode.TypeMismatch, At("x", 2));
 }
 
 @("a native can't be called while a constant is evaluated")

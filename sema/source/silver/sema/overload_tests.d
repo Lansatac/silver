@@ -365,11 +365,12 @@ unittest
 @("this module's function of a name can call the prelude's")
 unittest
 {
-    auto a = analyzed("type Point(x: Int, y: Int)\ndef printl(p: Point): Unit => printl(\"({p.x}, {p.y})\")\n"
-        ~ "def main(): Unit => printl(Point(1, 2))");
+    auto prelude = ["prelude.ag": "module prelude\ndef show(text: String): Unit => ()"];
+    auto a = analyzed("type Point(x: Int, y: Int)\ndef show(p: Point): Unit => show(\"({p.x}, {p.y})\")\n"
+        ~ "def main(): Unit => show(Point(1, 2))", prelude);
     a.shouldHaveNoDiagnostics();
-    a.shouldCall(At("printl", 2), At("printl", 1, "intrinsics.io"));
-    a.shouldCall(At("printl", 3), At("printl", 1));
+    a.shouldCall(At("show", 2), At("show", 1, "prelude"));
+    a.shouldCall(At("show", 3), At("show", 1));
 }
 
 @("a private overload isn't visible from another module")

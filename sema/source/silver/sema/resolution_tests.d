@@ -25,7 +25,8 @@ struct Analyzed
 }
 
 /// Analyzes `entry` as main.ag. `files` (by file name, e.g. "a/b.ag") are written to a
-/// temporary import path, searched before the stdlib.
+/// temporary import path, searched before the stdlib, so a "prelude.ag" among them replaces the
+/// stdlib's prelude.
 Analyzed analyzed(string entry, string[string] files = null, Target target = Target.host, bool testing = false)
 {
     import std.file : mkdirRecurse, readText, rmdirRecurse, tempDir, write;
@@ -512,21 +513,28 @@ def main(): Unit => ()");
     a.shouldHaveNoDiagnostics();
 }
 
+/// A module of the test's own, for a test that needs a module with a path to import.
+enum shapes = ["geo/shapes.ag": "module geo.shapes\ndef area(width: Float, height: Float): Float => width * height\n"
+    ~ "def perimeter(width: Float, height: Float): Float => 2 * (width + height)"];
+
+/// A prelude of the test's own, which replaces the stdlib's.
+enum greetingPrelude = ["prelude.ag": "module prelude\ndef greet(times: Int): Int => times"];
+
 @("name resolution finds prelude functions without an import")
 unittest
 {
-    auto a = analyzed("def main(): Unit => printl(1)");
-    a.shouldResolve(At("printl", 1), At("printl", 1, "intrinsics.io"));
+    auto a = analyzed("def main(): Unit {\n    val n = greet(1)\n}", greetingPrelude);
+    a.shouldResolve(At("greet", 1), At("greet", 1, "prelude"));
     a.shouldHaveNoDiagnostics();
 }
 
 @("name resolution resolves a module-qualified call and the module path in it")
 unittest
 {
-    auto a = analyzed("import std.math
-def main(): Unit => printl(std.math.pow(2, 3))");
-    a.shouldResolve(At("pow", 1), At("pow", 1, "std.math"));
-    a.shouldResolveToModule(At("math", 2), "std.math");
+    auto a = analyzed("import geo.shapes
+def main(): Unit => printl(geo.shapes.area(2, 3))", shapes);
+    a.shouldResolve(At("area", 1), At("area", 1, "geo.shapes"));
+    a.shouldResolveToModule(At("shapes", 2), "geo.shapes");
     a.shouldHaveNoDiagnostics();
 }
 
@@ -686,8 +694,8 @@ def f(deck: [Int]): Int => length(deck)", files);
 
     import std.algorithm : canFind;
 
-    auto root = analyzed("import std.math\ndef f(std: Int): Float => std.math.sqrt(4.0)\ndef main(): Unit => ()");
-    assert(root.onlyMessage(DiagnosticCode.UnknownMember).canFind("hides the module `std`; rename the local to use `std.math`"));
+    auto root = analyzed("import geo.shapes\ndef f(geo: Int): Float => geo.shapes.area(4.0, 1.0)\ndef main(): Unit => ()", shapes);
+    assert(root.onlyMessage(DiagnosticCode.UnknownMember).canFind("hides the module `geo`; rename the local to use `geo.shapes`"));
 
     assert(analyzed("import deck\ndef f(deck: [Int]): Int => deck.nothing\ndef main(): Unit => ()", files)
         .onlyMessage(DiagnosticCode.UnknownMember) == "Type `[Int]` has no member named `nothing`");
@@ -735,38 +743,39 @@ unittest
 @("name resolution treats the prelude like any other import when names clash")
 unittest
 {
-    auto files = ["lib.ag": "module lib\ndef printl(value: Int?): Unit => ()"];
-    auto bare = analyzed("import lib\ndef main(): Unit => printl(1)", files);
-    bare.shouldReport(DiagnosticCode.AmbiguousName, At("printl", 1));
+    auto files = greetingPrelude.dup;
+    files["lib.ag"] = "module lib\ndef greet(times: Int): Int => 0";
+    auto bare = analyzed("import lib\ndef main(): Unit {\n    val n = greet(1)\n}", files);
+    bare.shouldReport(DiagnosticCode.AmbiguousName, At("greet", 1));
 
-    auto qualified = analyzed("import lib\ndef main(): Unit => prelude.printl(1)", files);
-    qualified.shouldResolve(At("printl", 1), At("printl", 1, "intrinsics.io"));
+    auto qualified = analyzed("import lib\ndef main(): Unit {\n    val n = prelude.greet(1)\n}", files);
+    qualified.shouldResolve(At("greet", 1), At("greet", 1, "prelude"));
     qualified.shouldHaveNoDiagnostics();
 }
 
 @("name resolution accepts an explicit import of the prelude")
 unittest
 {
-    auto a = analyzed("import prelude\ndef main(): Unit => printl(1)");
-    a.shouldResolve(At("printl", 1), At("printl", 1, "intrinsics.io"));
+    auto a = analyzed("import prelude\ndef main(): Unit {\n    val n = greet(1)\n}", greetingPrelude);
+    a.shouldResolve(At("greet", 1), At("greet", 1, "prelude"));
     a.shouldHaveNoDiagnostics();
 }
 
 @("name resolution reports a module or package used as a value")
 unittest
 {
-    auto mod = analyzed("import std.math\ndef main(): Unit => printl(std.math)");
-    mod.shouldReport(DiagnosticCode.ModuleIsNotAValue, At("std", 2));
+    auto mod = analyzed("import geo.shapes\ndef main(): Unit => printl(geo.shapes)", shapes);
+    mod.shouldReport(DiagnosticCode.ModuleIsNotAValue, At("geo", 2));
 
-    auto package_ = analyzed("import std.math\ndef main(): Unit => printl(std)");
-    package_.shouldReport(DiagnosticCode.ModuleIsNotAValue, At("std", 2));
+    auto package_ = analyzed("import geo.shapes\ndef main(): Unit => printl(geo)", shapes);
+    package_.shouldReport(DiagnosticCode.ModuleIsNotAValue, At("geo", 2));
 }
 
 @("name resolution reports a member a module doesn't have")
 unittest
 {
-    auto a = analyzed("import std.math\ndef main(): Unit => printl(std.math.nope)");
-    a.shouldReport(DiagnosticCode.UnknownModuleMember, At("std", 2));
+    auto a = analyzed("import geo.shapes\ndef main(): Unit => printl(geo.shapes.nope)", shapes);
+    a.shouldReport(DiagnosticCode.UnknownModuleMember, At("geo", 2));
 }
 
 @("name resolution finds a module through a part of its path that isn't imported, below one that is")
@@ -959,14 +968,14 @@ unittest
 @("name resolution records the function a direct call invokes, plain or qualified")
 unittest
 {
-    auto a = analyzed("import std.math
+    auto a = analyzed("import geo.shapes
 def twice(x: Float): Float => x * 2
 def main(): Unit {
-    printl(twice(std.math.pow(2, 3)))
-}");
+    val x = perimeter(twice(geo.shapes.area(2, 3)), 1)
+}", shapes);
     a.shouldCall(At("twice", 2), At("twice", 1));
-    a.shouldCall(At("pow", 1), At("pow", 1, "std.math"));
-    a.shouldCall(At("printl", 1), At("printl", 1, "intrinsics.io"));
+    a.shouldCall(At("area", 1), At("area", 1, "geo.shapes"));
+    a.shouldCall(At("perimeter", 1), At("perimeter", 1, "geo.shapes"));
     a.shouldHaveNoDiagnostics();
 }
 
@@ -1330,8 +1339,8 @@ unittest
 @("name resolution reports a constant with the same name as an imported module's root")
 unittest
 {
-    analyzed("import std.math\nval std: Int = 1\ndef main(): Unit => ()")
-        .shouldReport(DiagnosticCode.ShadowedDeclaration, At("std", 2));
+    analyzed("import geo.shapes\nval geo: Int = 1\ndef main(): Unit => ()", shapes)
+        .shouldReport(DiagnosticCode.ShadowedDeclaration, At("geo", 2));
 }
 
 @("name resolution reports an unknown constant, plain or qualified, once")
@@ -1339,17 +1348,17 @@ unittest
 {
     analyzed("val x: Int = nope\ndef main(): Unit => ()")
         .shouldReport(DiagnosticCode.UnknownName, At("nope", 1));
-    analyzed("import std.math\nval x: Float = std.math.nope\ndef main(): Unit => ()")
-        .shouldReport(DiagnosticCode.UnknownModuleMember, At("std", 2));
-    analyzed("import std.math\nval x: Float = std.nope\ndef main(): Unit => ()")
-        .shouldReport(DiagnosticCode.UnknownName, At("std", 2));
+    analyzed("import geo.shapes\nval x: Float = geo.shapes.nope\ndef main(): Unit => ()", shapes)
+        .shouldReport(DiagnosticCode.UnknownModuleMember, At("geo", 2));
+    analyzed("import geo.shapes\nval x: Float = geo.nope\ndef main(): Unit => ()", shapes)
+        .shouldReport(DiagnosticCode.UnknownName, At("geo", 2));
 }
 
 @("name resolution reports a module used as a constant's value, once")
 unittest
 {
-    analyzed("import std.math\nval x: Int = std.math\ndef main(): Unit => ()")
-        .shouldReport(DiagnosticCode.ModuleIsNotAValue, At("std", 2));
+    analyzed("import geo.shapes\nval x: Int = geo.shapes\ndef main(): Unit => ()", shapes)
+        .shouldReport(DiagnosticCode.ModuleIsNotAValue, At("geo", 2));
 }
 
 @("name resolution reports a constant with no type, at its name, and nothing else")
