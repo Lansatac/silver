@@ -1,0 +1,8 @@
+type Action(name: String, run: () -> Unit)
+
+def compare(a: Action, b: Action): Ordering => derivedCompare(a, b)
+conform Action: Ord
+
+def main(): Unit {
+    printl("unreached")
+}

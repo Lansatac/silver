@@ -1,0 +1,98 @@
+import std.ref
+
+// `derivedCompare` orders a declared type as it's written: a sum's members in order, then fields.
+type Rank = Two | Three | Jack | Ace
+def compare(a: Rank, b: Rank): Ordering => derivedCompare(a, b)
+conform Rank: Ord
+
+type Suit = Club | Heart
+def compare(a: Suit, b: Suit): Ordering => a.derivedCompare(b)
+conform Suit: Ord
+
+type Card(rank: Rank, suit: Suit)
+def compare(a: Card, b: Card): Ordering => derivedCompare(a, b)
+conform Card: Ord
+
+// A member that's a type of its own is compared through its conformance, which here is backwards.
+type Backwards(n: Int)
+def compare(a: Backwards, b: Backwards): Ordering => compare(b.n, a.n)
+conform Backwards: Ord
+
+type Shape = Dot | Circle(radius: Int) | Box(width: Int, height: Int) | :Card | :Backwards
+def compare(a: Shape, b: Shape): Ordering => derivedCompare(a, b)
+conform Shape: Ord
+
+type Tree = Leaf | Node(left: Tree, value: Int, right: Tree)
+def compare(a: Tree, b: Tree): Ordering => derivedCompare(a, b)
+conform Tree: Ord
+
+type Pair<A, B>(first: A, second: B)
+def compare<A: Ord, B: Ord>(a: Pair<A, B>, b: Pair<A, B>): Ordering => derivedCompare(a, b)
+conform Pair<A, B>: Ord when A: Ord, B: Ord
+
+type Nothing
+def compare(a: Nothing, b: Nothing): Ordering => derivedCompare(a, b)
+conform Nothing: Ord
+
+// Part of the answer derived, and the rest decided by hand.
+type Versioned(major: Int, label: String)
+type Major(major: Int)
+def compare(a: Major, b: Major): Ordering => derivedCompare(a, b)
+conform Major: Ord
+def compare(a: Versioned, b: Versioned): Ordering {
+    val first = derivedCompare(Major(a.major), Major(b.major))
+    if first != Equal => first else compare(length(bytes(a.label)), length(bytes(b.label)))
+}
+conform Versioned: Ord
+
+// Comparing one of these panics, so a field of this type shows whether it was reached.
+type Fuse(n: Int)
+def compare(a: Fuse, b: Fuse): Ordering => panic("compared a Fuse")
+conform Fuse: Ord
+type Trio(a: Int, b: Int, c: Fuse)
+def compare(a: Trio, b: Trio): Ordering => derivedCompare(a, b)
+conform Trio: Ord
+
+def show(a: Shape, b: Shape): Unit => printl("{compare(a, b)} {compare(b, a)}")
+def tree(value: Int): Tree => Node(Leaf, value, Leaf)
+
+def main(): Unit {
+    printl(Jack < Ace)
+    printl(Two >= Three)
+    printl(compare(Ace, Ace))
+    printl(Card(Jack, Heart) < Card(Ace, Club))
+    printl(Card(Jack, Heart) > Card(Jack, Club))
+    printl([Jack, Two] < [Jack, Three])
+
+    show(Dot, Dot)
+    show(Dot, Circle(1))
+    show(Circle(3), Circle(2))
+    show(Box(1, 2), Box(1, 3))
+    show(Box(9, 9), Card(Two, Club))
+    show(Card(Two, Heart), Card(Two, Club))
+    show(Card(Ace, Heart), Backwards(0))
+    show(Backwards(1), Backwards(2))
+
+    printl(tree(1) < Node(Leaf, 1, tree(0)))
+    printl(compare(tree(2), tree(1)))
+    printl(compare(Node(tree(1), 5, Leaf), Node(tree(1), 5, Leaf)))
+    printl(Leaf < tree(0))
+
+    printl(Pair(1, "b") < Pair(1, "c"))
+    printl(compare(Pair(Ace, 2.0), Pair(Jack, 9.0)))
+    printl(compare(Pair(Pair(1, 2), [Two]), Pair(Pair(1, 2), [Two, Two])))
+    printl(compare(Nothing, Nothing))
+    printl(Versioned(2, "x") < Versioned(10, ""))
+    printl(compare(Versioned(1, "ab"), Versioned(1, "c")))
+
+    // The first field that differs decides, and the fields after it aren't compared.
+    printl(compare(Trio(1, 2, Fuse(3)), Trio(1, 9, Fuse(0))))
+    // Each side is evaluated once.
+    val made: Ref<Int> = Ref(0)
+    def make(n: Int): Int {
+        made.set(made.get() + 1)
+        n
+    }
+    printl(derivedCompare(Trio(make(1), make(1), Fuse(0)), Trio(make(1), make(2), Fuse(0))))
+    printl(made.get())
+}

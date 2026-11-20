@@ -37,6 +37,8 @@ enum Intrinsic
     bytes,
     uncheckedString,
     hash,
+    /// Lowering expands a call of it from the `DerivedOrder` sema worked out.
+    derivedCompare,
     /// Not in the prelude: lowering calls it when `main` returns an error, to print it and exit.
     exitWithError,
 }

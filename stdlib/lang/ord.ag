@@ -1,0 +1,171 @@
+module lang.ord
+
+import lang.array
+
+// What comparing two values gives. The compiler finds this type, `Ord` and the four private
+// functions at the end here by name.
+type Ordering = Less | Equal | Greater
+
+// A type whose values are in order. `<`, `<=`, `>` and `>=` on one call its `compare`.
+interface Ord {
+    def compare(a: Self, b: Self): Ordering
+}
+
+// The order a declared type is written in: a sum's members as declared, then fields in order. Every
+// field, and every member that's a type of its own, has to be an `Ord`.
+intrinsic def derivedCompare<T>(a: T, b: T): Ordering
+
+// Once for each integer type, since a bound can't ask for an integer yet.
+def compare(a: Int, b: Int): Ordering => if a < b => Less else if a > b => Greater else Equal
+def compare(a: Int8, b: Int8): Ordering => if a < b => Less else if a > b => Greater else Equal
+def compare(a: Int16, b: Int16): Ordering => if a < b => Less else if a > b => Greater else Equal
+def compare(a: Int32, b: Int32): Ordering => if a < b => Less else if a > b => Greater else Equal
+def compare(a: UInt, b: UInt): Ordering => if a < b => Less else if a > b => Greater else Equal
+def compare(a: UInt8, b: UInt8): Ordering => if a < b => Less else if a > b => Greater else Equal
+def compare(a: UInt16, b: UInt16): Ordering => if a < b => Less else if a > b => Greater else Equal
+def compare(a: UInt32, b: UInt32): Ordering => if a < b => Less else if a > b => Greater else Equal
+// A total order: `-0.0` and `0.0` are equal, and NaN is equal to itself and after everything else.
+def compare(a: Float, b: Float): Ordering {
+    if a < b { return Less }
+    if a > b { return Greater }
+    if a == b { return Equal }
+    if a == a => Less else if b == b => Greater else Equal
+}
+def compare(a: Char, b: Char): Ordering => if a < b => Less else if a > b => Greater else Equal
+def compare(a: String, b: String): Ordering => if a < b => Less else if a > b => Greater else Equal
+def compare(a: Bool, b: Bool): Ordering => if a == b => Equal else if b => Less else Greater
+def compare<T: Ord>(a: [T], b: [T]): Ordering {
+    mutable val i = 0
+    while i < length(a) && i < length(b) {
+        val step = compare(a[i], b[i])
+        if step != Equal { return step }
+        i += 1
+    }
+    compare(length(a), length(b))
+}
+def compare<T: Ord>(a: T?, b: T?): Ordering => match (a, b) {
+    (None, None) => Equal
+    (None, _) => Less
+    (_, None) => Greater
+    (Some(x), Some(y)) => compare(x, y)
+}
+// A tuple, element by element, written once for each length up to eight.
+def compare<A: Ord, B: Ord>(a: (A, B), b: (A, B)): Ordering {
+    val (a1, a2) = a
+    val (b1, b2) = b
+    val step1 = compare(a1, b1)
+    if step1 != Equal { return step1 }
+    compare(a2, b2)
+}
+def compare<A: Ord, B: Ord, C: Ord>(a: (A, B, C), b: (A, B, C)): Ordering {
+    val (a1, a2, a3) = a
+    val (b1, b2, b3) = b
+    val step1 = compare(a1, b1)
+    if step1 != Equal { return step1 }
+    val step2 = compare(a2, b2)
+    if step2 != Equal { return step2 }
+    compare(a3, b3)
+}
+def compare<A: Ord, B: Ord, C: Ord, D: Ord>(a: (A, B, C, D), b: (A, B, C, D)): Ordering {
+    val (a1, a2, a3, a4) = a
+    val (b1, b2, b3, b4) = b
+    val step1 = compare(a1, b1)
+    if step1 != Equal { return step1 }
+    val step2 = compare(a2, b2)
+    if step2 != Equal { return step2 }
+    val step3 = compare(a3, b3)
+    if step3 != Equal { return step3 }
+    compare(a4, b4)
+}
+def compare<A: Ord, B: Ord, C: Ord, D: Ord, E: Ord>(a: (A, B, C, D, E), b: (A, B, C, D, E)): Ordering {
+    val (a1, a2, a3, a4, a5) = a
+    val (b1, b2, b3, b4, b5) = b
+    val step1 = compare(a1, b1)
+    if step1 != Equal { return step1 }
+    val step2 = compare(a2, b2)
+    if step2 != Equal { return step2 }
+    val step3 = compare(a3, b3)
+    if step3 != Equal { return step3 }
+    val step4 = compare(a4, b4)
+    if step4 != Equal { return step4 }
+    compare(a5, b5)
+}
+def compare<A: Ord, B: Ord, C: Ord, D: Ord, E: Ord, F: Ord>(a: (A, B, C, D, E, F), b: (A, B, C, D, E, F)): Ordering {
+    val (a1, a2, a3, a4, a5, a6) = a
+    val (b1, b2, b3, b4, b5, b6) = b
+    val step1 = compare(a1, b1)
+    if step1 != Equal { return step1 }
+    val step2 = compare(a2, b2)
+    if step2 != Equal { return step2 }
+    val step3 = compare(a3, b3)
+    if step3 != Equal { return step3 }
+    val step4 = compare(a4, b4)
+    if step4 != Equal { return step4 }
+    val step5 = compare(a5, b5)
+    if step5 != Equal { return step5 }
+    compare(a6, b6)
+}
+def compare<A: Ord, B: Ord, C: Ord, D: Ord, E: Ord, F: Ord, G: Ord>(a: (A, B, C, D, E, F, G), b: (A, B, C, D, E, F, G)): Ordering {
+    val (a1, a2, a3, a4, a5, a6, a7) = a
+    val (b1, b2, b3, b4, b5, b6, b7) = b
+    val step1 = compare(a1, b1)
+    if step1 != Equal { return step1 }
+    val step2 = compare(a2, b2)
+    if step2 != Equal { return step2 }
+    val step3 = compare(a3, b3)
+    if step3 != Equal { return step3 }
+    val step4 = compare(a4, b4)
+    if step4 != Equal { return step4 }
+    val step5 = compare(a5, b5)
+    if step5 != Equal { return step5 }
+    val step6 = compare(a6, b6)
+    if step6 != Equal { return step6 }
+    compare(a7, b7)
+}
+def compare<A: Ord, B: Ord, C: Ord, D: Ord, E: Ord, F: Ord, G: Ord, H: Ord>(a: (A, B, C, D, E, F, G, H), b: (A, B, C, D, E, F, G, H)): Ordering {
+    val (a1, a2, a3, a4, a5, a6, a7, a8) = a
+    val (b1, b2, b3, b4, b5, b6, b7, b8) = b
+    val step1 = compare(a1, b1)
+    if step1 != Equal { return step1 }
+    val step2 = compare(a2, b2)
+    if step2 != Equal { return step2 }
+    val step3 = compare(a3, b3)
+    if step3 != Equal { return step3 }
+    val step4 = compare(a4, b4)
+    if step4 != Equal { return step4 }
+    val step5 = compare(a5, b5)
+    if step5 != Equal { return step5 }
+    val step6 = compare(a6, b6)
+    if step6 != Equal { return step6 }
+    val step7 = compare(a7, b7)
+    if step7 != Equal { return step7 }
+    compare(a8, b8)
+}
+
+conform Int: Ord
+conform Int8: Ord
+conform Int16: Ord
+conform Int32: Ord
+conform UInt: Ord
+conform UInt8: Ord
+conform UInt16: Ord
+conform UInt32: Ord
+conform Float: Ord
+conform Char: Ord
+conform String: Ord
+conform Bool: Ord
+conform [T]: Ord when T: Ord
+conform T?: Ord when T: Ord
+conform (A, B): Ord when A: Ord, B: Ord
+conform (A, B, C): Ord when A: Ord, B: Ord, C: Ord
+conform (A, B, C, D): Ord when A: Ord, B: Ord, C: Ord, D: Ord
+conform (A, B, C, D, E): Ord when A: Ord, B: Ord, C: Ord, D: Ord, E: Ord
+conform (A, B, C, D, E, F): Ord when A: Ord, B: Ord, C: Ord, D: Ord, E: Ord, F: Ord
+conform (A, B, C, D, E, F, G): Ord when A: Ord, B: Ord, C: Ord, D: Ord, E: Ord, F: Ord, G: Ord
+conform (A, B, C, D, E, F, G, H): Ord when A: Ord, B: Ord, C: Ord, D: Ord, E: Ord, F: Ord, G: Ord, H: Ord
+
+// What `a < b`, `a <= b`, `a > b` and `a >= b` call for anything but two numbers, Strings or Chars.
+private def less<T: Ord>(a: T, b: T): Bool => compare(a, b) == Less
+private def lessEqual<T: Ord>(a: T, b: T): Bool => compare(a, b) != Greater
+private def greater<T: Ord>(a: T, b: T): Bool => compare(a, b) == Greater
+private def greaterEqual<T: Ord>(a: T, b: T): Bool => compare(a, b) != Less

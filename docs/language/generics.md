@@ -174,8 +174,6 @@ type Grow<T> = More(rest: Grow<(T, T)>, head: T) | Stop    // error: `Grow<T>`, 
 - Inferring a common type when arguments disagree, which waits on the same decision for integers widening.
 
 ## Current implementation
-
-- [`Ord`](types.md#ordering) isn't built, so `<` on a `T` is always an error, and a function that needs an order takes a comparison as a parameter.
 - The limit also counts the [invariant](user-types.md#current-implementation) of a type an instance builds or changes with `with`, while invariants are still available.
 - Type arguments that don't grow without end can still nest only 64 deep. Past that the program doesn't compile, and the error shows the instances, or the type, that led there.
 - Inference treats two more kinds of argument as having no type of their own, as `None` does: a marker that a generic sum owns, such as `Nil`, and a generic function or constructor named without its type arguments. Each binds nothing, and is checked once the type arguments are known.

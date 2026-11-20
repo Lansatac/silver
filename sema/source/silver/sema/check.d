@@ -2045,12 +2045,12 @@ private final class TypeChecker
             (const UnaryExpr unary) => synthesizeUnary(unary, expr.span, ctx),
             (const BinaryExpr binary) => binary.op == BinaryOp.Concat || binary.op == BinaryOp.Append
                 ? synthesizeConcat(expr, binary, ctx)
-                : synthesizeBinary(binary, expr.span, ctx),
+                : synthesizeBinary(expr.id, binary, expr.span, ctx),
             (const CallExpr call) => expr.id in _resolutions.conversions
                 ? synthesizeConversion(call, _declarer.builtinType(_resolutions.conversions[expr.id]), expr.span, ctx)
-                : placeExpect(expr, isMethodCall(expr.id, *call.callee)
+                : deriveOrder(expr, call, placeExpect(expr, isMethodCall(expr.id, *call.callee)
                     ? synthesizeMethodCall(expr, call, ctx, expected)
-                    : synthesizeCall(expr, call, ctx, expected), ctx.site),
+                    : synthesizeCall(expr, call, ctx, expected), ctx.site), ctx.site),
             (const MemberAccess member) => synthesizeMemberAccess(expr, member, ctx, expected),
             (const WithExpr with_) => synthesizeWith(expr, with_, ctx),
             (const WhileExpr while_) => synthesizeWhile(while_, expr.span, ctx),
@@ -2335,6 +2335,79 @@ private final class TypeChecker
         return (*symbol).match!((const Id!InterfaceDecl decl) => decl, _ => Id!InterfaceDecl.init);
     }
 
+    /// `lang`'s `Ord`, which `<` compares through, or an invalid ID when `lang` isn't loaded.
+    private Id!InterfaceDecl ordDecl()
+    {
+        auto prelude = "lang.ord" in _resolutions.moduleScopes;
+        auto symbol = prelude is null ? null : (*prelude).resolveLocalType("Ord");
+        if (symbol is null) return Id!InterfaceDecl.init;
+        return (*symbol).match!((const Id!InterfaceDecl decl) => decl, _ => Id!InterfaceDecl.init);
+    }
+
+    /// `lang`'s function that `op` calls on two values of a type that's an `Ord`.
+    private Id!FunctionDecl orderingFunction(BinaryOp op)
+    {
+        auto name = op == BinaryOp.Less ? "less" : op == BinaryOp.LessEqual ? "lessEqual"
+            : op == BinaryOp.Greater ? "greater" : "greaterEqual";
+        auto prelude = "lang.ord" in _resolutions.moduleScopes;
+        auto symbol = prelude is null ? null : (*prelude).resolveLocal(name);
+        if (symbol is null) return Id!FunctionDecl.init;
+        return (*symbol).match!((const Id!FunctionDecl decl) => decl, _ => Id!FunctionDecl.init);
+    }
+
+    /// `a < b` and the like on anything but two numbers, Strings or Chars, which the machine
+    /// compares: the two are one type already, and its conformance to `Ord` says how they compare.
+    private Type synthesizeOrdered(Id!Expr id, const BinaryExpr binary, Span span, Type leftType, Type rightType, BodyContext ctx)
+    {
+        auto op = cast(string) binary.op;
+        if (leftType == _types.none && rightType == _types.none) return _declarer.reportUntypedNone(binary.left.span);
+        if (leftType == _types.emptyArray && rightType == _types.emptyArray)
+        {
+            return _declarer.reportUntypedEmptyArray(binary.left.span);
+        }
+        if (leftType != rightType)
+        {
+            // Unlike `==`, a value isn't wrapped to meet an option: `None` is before every `Some`,
+            // so that would quietly give a missing value a side.
+            auto wraps = _types.isOption(leftType) != _types.isOption(rightType);
+            _collector.reportError(DiagnosticCode.InvalidOperand, span,
+                "`%s` can't compare `%s` and `%s`%s".format(op, _types.describe(leftType), _types.describe(rightType),
+                    wraps ? "; `None` is before every `Some`, so write the `Some(...)` out, or take the value out of the option first" : ""));
+            return _types.error;
+        }
+        auto ord = ordDecl();
+        auto function_ = orderingFunction(binary.op);
+        Conformance found;
+        if (ord.isValid && function_.isValid)
+        {
+            Substitution bound;
+            found = lookUp(Goal(ord, leftType, []), [], bound, ctx.site, 0);
+        }
+        else
+        {
+            found.failure = "`lang` isn't loaded to declare `Ord`";
+        }
+        if (!found.holds)
+        {
+            if (_types.mentionsParameter(leftType))
+            {
+                auto subject = _types.isParameter(leftType)
+                    ? "`%s` could be any type".format(_types.describe(leftType))
+                    : "`%s` holds a type parameter, which could be any type".format(_types.describe(leftType));
+                _collector.reportError(DiagnosticCode.OpaqueTypeParameter, binary.left.span,
+                    "%s, so its values can't be ordered with `%s`; a bound says they can, as in `T: Ord`".format(subject, op));
+                return _types.error;
+            }
+            _collector.reportError(DiagnosticCode.InvalidOperand, binary.left.span,
+                "`%s` compares two values of an `Ord`, and `%s` isn't one: %s".format(op, _types.describe(leftType),
+                    found.failure is null ? "nothing says so yet" : found.failure));
+            return _types.error;
+        }
+        _typing.comparisons[id] = FunctionUse(function_, [leftType], found.witnesses);
+        noteUse(ctx.site, span, function_, [leftType], found.witnesses);
+        return _types.bool_;
+    }
+
     /// `lang`'s `Interval`, which `a..b` builds, or an invalid ID when `lang` isn't loaded.
     private Id!TypeDecl intervalDecl()
     {
@@ -2435,18 +2508,96 @@ private final class TypeChecker
         return type;
     }
 
+    /// `call`, of type `type`. When it calls `derivedCompare`, works out how the type it's given
+    /// is ordered: a declared type, each of whose parts is an `Ord`.
+    private Type deriveOrder(const Expr expr, const CallExpr call, Type type, Site site)
+    {
+        auto callee = calleeOf(expr.id);
+        if (callee is null) callee = expr.id in _typing.methodCallees;
+        if (type == _types.error || callee is null || !isIntrinsic(*callee, "derivedCompare")) return type;
+        auto given = call.callee.id in _typing.typeArguments;
+        auto ord = ordDecl();
+        if (given is null || !ord.isValid) return type;
+        auto subject = (*given)[0];
+        if (subject == _types.error) return type;
+
+        auto declared = _types[subject].match!((const NominalData nominal) => !_declarer.isIntrinsic(nominal.decl), _ => false);
+        if (!declared)
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, expr.span,
+                "`derivedCompare` orders a declared type by its members and fields, and `%s` isn't one".format(_types.describe(subject)));
+            return _types.error;
+        }
+
+        auto failed = false;
+        FunctionUse compareOf(Type part, lazy string what)
+        {
+            if (part == _types.error) { failed = true; return FunctionUse.init; }
+            Substitution bound;
+            auto found = lookUp(Goal(ord, part, []), [], bound, site, 0);
+            if (!found.holds)
+            {
+                if (!failed)
+                {
+                    _collector.reportError(DiagnosticCode.InvalidOperand, expr.span,
+                        "`derivedCompare` needs every part of `%s` to be an `Ord`, and %s, a `%s`, isn't one: %s".format(
+                            _types.describe(subject), what, _types.describe(part),
+                            found.failure is null ? "nothing says so yet" : found.failure));
+                }
+                failed = true;
+                return FunctionUse.init;
+            }
+            auto compare = found.witnesses[0];
+            noteUse(site, expr.span, compare.func, compare.typeArgs, compare.witnesses);
+            return FunctionUse(compare.func, compare.typeArgs, compare.witnesses);
+        }
+        DerivedPart byFields(Type whole)
+        {
+            DerivedPart part;
+            foreach (f; _declarer.fieldsOf(whole))
+            {
+                part.uses ~= compareOf(f.type, whole == subject ? "its field `%s`".format(f.name)
+                    : "the field `%s` of `%s`".format(f.name, _types.describe(whole)));
+            }
+            return part;
+        }
+        bool ownedBy(Type member, Type sum)
+        {
+            auto owner = _types[member].match!((const NominalData n) => _declarer.ownerOf(n.decl), _ => null);
+            if (owner is null) return false;
+            return _types[*owner].match!(
+                (const NominalData o) => _types[sum].match!((const NominalData s) => s.decl == o.decl, _ => false),
+                _ => false);
+        }
+
+        DerivedOrder order;
+        order.tags = compareOf(_types.int_, "an `Int`");
+        auto members = _declarer.membersOf(subject);
+        if (members.length == 0) order.parts = [byFields(subject)];
+        foreach (member; members)
+        {
+            order.parts ~= ownedBy(member, subject) ? byFields(member)
+                : DerivedPart(true, [compareOf(member, "its member `%s`".format(_types.describe(member)))]);
+        }
+        if (failed) return _types.error;
+        _typing.derivedOrders[expr.id] = order;
+        return type;
+    }
+
     private void reportPanicsOutsideTest(Span span)
     {
         _collector.reportError(DiagnosticCode.PanicsOutsideTest, span,
             "`panics` survives a panic so that a test can check it, so it can only be used in one");
     }
 
-    /// Whether `symbol` is an intrinsic with an `Any` parameter, which has no function type to be a value of.
+    /// Whether `symbol` is an intrinsic with an `Any` parameter, which has no function type to be a
+    /// value of, or `derivedCompare`, which is worked out where it's called.
     private bool takesAnyIntrinsically(SymbolId symbol)
     {
         return symbol.match!(
             (const Id!FunctionDecl f) => _resolutions.declarations.functions[f].kind == FunctionKind.intrinsic
-                && _types[symbolType(symbol)].match!((const FunctionData data) => data.params.canFind(_types.any), _ => false),
+                && (isIntrinsic(f, "derivedCompare")
+                    || _types[symbolType(symbol)].match!((const FunctionData data) => data.params.canFind(_types.any), _ => false)),
             _ => false,
         );
     }
@@ -2946,8 +3097,7 @@ private final class TypeChecker
         return expr.kind.match!((const TupleLiteral _) => true, _ => false);
     }
 
-    /// Synthesizes both sides of `==` or `!=`. A side written as `Some`, `None` or an array is
-    /// Synthesizes both sides of `==` or `!=`. A side written as `Some`, `None`, an array or `a..b` is
+    /// Synthesizes both sides of a comparison. A side written as `Some`, `None`, an array or `a..b` is
     private void synthesizeCompared(const BinaryExpr binary, out Type leftType, out Type rightType, BodyContext ctx)
     {
         bool takesType(const Expr expr) => isOptionSyntax(expr) || isErrorUnionSyntax(expr) || isArraySyntax(expr)
@@ -2987,7 +3137,7 @@ private final class TypeChecker
         return option;
     }
 
-    private Type synthesizeBinary(const BinaryExpr binary, Span span, BodyContext ctx)
+    private Type synthesizeBinary(Id!Expr id, const BinaryExpr binary, Span span, BodyContext ctx)
     {
         if (binary.op == BinaryOp.Coalesce) return synthesizeCoalesce(binary, ctx);
 
@@ -3012,6 +3162,11 @@ private final class TypeChecker
                         ~ "function or lambda; compare a named function, or a value made earlier");
                 return _types.error;
             }
+        }
+        else if (binary.op == BinaryOp.Less || binary.op == BinaryOp.LessEqual || binary.op == BinaryOp.Greater
+            || binary.op == BinaryOp.GreaterEqual)
+        {
+            synthesizeCompared(binary, leftType, rightType, ctx);
         }
         else
         {
@@ -3089,21 +3244,9 @@ private final class TypeChecker
             case BinaryOp.LessEqual:
             case BinaryOp.Greater:
             case BinaryOp.GreaterEqual:
-                foreach (side, sideType; [leftType, rightType])
+                if (!isOrdered(leftType) || !isOrdered(rightType))
                 {
-                    if (!_types.mentionsParameter(sideType)) continue;
-                    return reportOpaque(side == 0 ? binary.left.span : binary.right.span, sideType,
-                        "its values can't be ordered with `%s`".format(cast(string) binary.op), "less: (%s, %s) -> Bool");
-                }
-                if (!isOrdered(leftType))  {
-                    _collector.reportError(DiagnosticCode.InvalidOperand, binary.left.span,
-                        "`%s` needs a number, a String or a Char, got `%s`".format(cast(string) binary.op, _types.describe(leftType)));
-                    return _types.error;
-                }
-                if (!isOrdered(rightType)) {
-                    _collector.reportError(DiagnosticCode.InvalidOperand, binary.right.span,
-                        "`%s` needs a number, a String or a Char, got `%s`".format(cast(string) binary.op, _types.describe(rightType)));
-                    return _types.error;
+                    return synthesizeOrdered(id, binary, span, leftType, rightType, ctx);
                 }
                 if (leftType != rightType)
                 {

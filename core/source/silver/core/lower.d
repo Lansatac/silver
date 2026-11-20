@@ -10,7 +10,7 @@ import std.typecons : Rebindable, rebindable;
 import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
 import silver.core.nodes;
-import silver.sema : Analysis, FunctionUse, IndexFunctions, LoopFunctions, ConstChar, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
+import silver.sema : Analysis, DerivedOrder, DerivedPart, FunctionUse, IndexFunctions, LoopFunctions, ConstChar, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
     Bound, Substitution, SymbolId, Type, TypeTable, Witness;
 
 /// A parameter's local name. Discarded ones get a name no Silver identifier can have, so several
@@ -145,6 +145,27 @@ private struct Instance
         if (loop is null) return null;
         auto instance = new LoopFunctions;
         *instance = LoopFunctions(concrete(loop.next));
+        return instance;
+    }
+
+    /// How the call `call` of `derivedCompare` orders its type, with the type arguments of the
+    /// functions it calls for this instance.
+    DerivedOrder derivedOrderOf(Id!(ast.Expr) call) const
+    {
+        auto order = analysis.derivedOrderOf(call);
+        assert(order !is null, "sema works out every call of `derivedCompare`");
+        return DerivedOrder(concrete(order.tags),
+            order.parts.map!(p => DerivedPart(p.whole, p.uses.map!(u => concrete(u)).array)).array);
+    }
+
+    /// The function the comparison `binary` calls, with its type arguments for this instance, or
+    /// null if a `Prim` compares its operands.
+    const(FunctionUse)* comparisonOf(Id!(ast.Expr) binary) const
+    {
+        auto use = analysis.comparisonOf(binary);
+        if (use is null) return null;
+        auto instance = new FunctionUse;
+        *instance = concrete(*use);
         return instance;
     }
 
@@ -942,6 +963,10 @@ private final class Lowering
             case ast.BinaryOp.Coalesce:
                 return lowerCoalesce(binary, type, span);
             default:
+                if (auto compared = _analysis.comparisonOf(e.id))
+                {
+                    return callUse(*compared, [lowerExpr(*binary.left), lowerExpr(*binary.right)], span);
+                }
                 return binaryOf(binary.op, lowerExpr(*binary.left), lowerExpr(*binary.right), type, span);
         }
     }
@@ -1981,7 +2006,7 @@ private final class Lowering
                 return callWith(written, signature, type, span, null,
                     (Expr[] args, Expr* _) => Expr(signature.ret, span, ExprKind(ForeignCall(symbol, args))));
             case ast.FunctionKind.intrinsic:
-                return lowerIntrinsic(callee.decl, written, signature, span);
+                return lowerIntrinsic(e.id, callee.decl, written, signature, span);
             case ast.FunctionKind.required:
                 assert(0, "a function a bound supplies is replaced by its witness");
         }
@@ -2027,10 +2052,17 @@ private final class Lowering
         }
     }
 
-    private Expr lowerIntrinsic(Id!(ast.FunctionDecl) callee, const ast.Expr[] written, FunctionData signature, Span span)
+    private Expr lowerIntrinsic(Id!(ast.Expr) call, Id!(ast.FunctionDecl) callee, const ast.Expr[] written,
+        FunctionData signature, Span span)
     {
         auto intrinsic = _analysis.intrinsicOf(callee);
         if (intrinsic == Intrinsic.assert_ || intrinsic == Intrinsic.expect) return lowerShown(intrinsic, written, span);
+        if (intrinsic == Intrinsic.derivedCompare)
+        {
+            auto left = lowerExpr(written[0]), right = lowerExpr(written[1]);
+            return derivedCompare(_analysis.derivedOrderOf(call), promote(left, left.type, signature.params[0]),
+                promote(right, right.type, signature.params[1]), signature.ret, span);
+        }
         return intrinsicCall(intrinsic, written.map!(a => lowerExpr(a)).array, signature, span);
     }
 
@@ -2083,6 +2115,68 @@ private final class Lowering
         return Expr(types.unit, span, ExprKind(Block(held ~ eval(when(not(test), failure)), null)));
     }
 
+    /// `derivedCompare(a, b)`: which member each is, for a sum, and then the first field that
+    /// differs. `ordering` is `lang`'s `Ordering`, whose second member is `Equal`.
+    private Expr derivedCompare(const DerivedOrder order, Expr a, Expr b, Type ordering, Span span)
+    {
+        enum equal = 1;
+        auto left = temp("left", a.type), right = temp("right", b.type);
+        Expr[] noInts;
+        Expr compared(const FunctionUse f, Expr x, Expr y) => callUse(f, [x, y], span);
+        // A type with nothing to compare is equal to itself, which two equal tags say.
+        Expr same() => compared(order.tags, intLiteral(types.int_, 0, span), intLiteral(types.int_, 0, span));
+
+        Expr byFields(const DerivedPart part, Expr x, Expr y)
+        {
+            auto fields = fieldTypes(x.type);
+            assert(fields.length == part.uses.length, "sema found a `compare` for each field");
+            Expr at(size_t i) => compared(part.uses[i], field(x, i, fields[i]), field(y, i, fields[i]));
+            auto result = at(fields.length - 1);
+            foreach_reverse (i; 0 .. fields.length - 1)
+            {
+                auto step = temp("step", ordering);
+                result = Expr(ordering, span, ExprKind(Block([let(step, at(i))], boxed(Expr(ordering, span,
+                    ExprKind(If(boxed(isMember(use(step, span), equal)), boxed(result), boxed(use(step, span)))))))));
+            }
+            return result;
+        }
+        bool compares(const DerivedPart part) => part.whole || part.uses.length > 0;
+        Expr byPart(const DerivedPart part, Expr x, Expr y) => part.whole ? compared(part.uses[0], x, y) : byFields(part, x, y);
+
+        Expr body;
+        if (!isSum(a.type))
+        {
+            body = compares(order.parts[0]) ? byPart(order.parts[0], use(left, span), use(right, span)) : same();
+        }
+        else
+        {
+            auto count = order.parts.length;
+            Expr tagOf(Local value)
+            {
+                auto tag = intLiteral(types.int_, count - 1, span);
+                foreach_reverse (i; 0 .. count - 1)
+                {
+                    tag = Expr(types.int_, span, ExprKind(If(boxed(isMember(use(value, span), i)),
+                        boxed(intLiteral(types.int_, i, span)), boxed(tag))));
+                }
+                return tag;
+            }
+            auto tags = temp("tags", ordering);
+            // Both are one member here, and one with nothing to compare leaves the tags' answer.
+            auto within = use(tags, span);
+            foreach_reverse (i, part; order.parts)
+            {
+                if (!compares(part)) continue;
+                within = Expr(ordering, span, ExprKind(If(boxed(isMember(use(left, span), i)),
+                    boxed(byPart(part, payload(use(left, span), i), payload(use(right, span), i))), boxed(within))));
+            }
+            body = Expr(ordering, span, ExprKind(Block([let(tags, compared(order.tags, tagOf(left), tagOf(right)))],
+                boxed(Expr(ordering, span, ExprKind(If(boxed(isMember(use(tags, span), equal)), boxed(within),
+                    boxed(use(tags, span)))))))));
+        }
+        return Expr(ordering, span, ExprKind(Block([let(left, a), let(right, b)], boxed(body))));
+    }
+
     private Expr testFailure(Expr message, bool ends, Span span)
     {
         return Expr(ends ? types.never : types.unit, span, ExprKind(TestFailure(boxed(message), ends)));
@@ -2118,6 +2212,8 @@ private final class Lowering
                 return hash.type == types.never ? hash : prim(PrimOp.Hash, types.uint_, hash);
             case Intrinsic.assert_, Intrinsic.expect:
                 assert(0, "`assert` and `expect` are expanded from what's written, and sema rejects them as values");
+            case Intrinsic.derivedCompare:
+                assert(0, "`derivedCompare` is expanded where it's called, and sema rejects it as a value");
             case Intrinsic.exitWithError:
                 assert(0, "only the wrapper lowering makes for `main` calls `exitWithError`");
             case Intrinsic.print, Intrinsic.printl, Intrinsic.readLine, Intrinsic.panic, Intrinsic.panics:

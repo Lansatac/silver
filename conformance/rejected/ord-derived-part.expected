@@ -1,0 +1,1 @@
+T0005: `derivedCompare` needs every part of `Action` to be an `Ord`, and its field `run`, a `() -> Unit`, isn't one: no conformance says so

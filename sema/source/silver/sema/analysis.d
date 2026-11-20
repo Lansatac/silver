@@ -171,6 +171,19 @@ final class Analysis
         return (for_ in _typing.intervalLoops) !is null;
     }
 
+    /// The function the comparison `binary` calls, or null if it compares two numbers, Strings or
+    /// Chars, or isn't `<`, `<=`, `>` or `>=`.
+    const(FunctionUse)* comparisonOf(Id!Expr binary) const
+    {
+        return binary in _typing.comparisons;
+    }
+
+    /// How the call `call` of `derivedCompare` orders its type.
+    const(DerivedOrder)* derivedOrderOf(Id!Expr call) const
+    {
+        return call in _typing.derivedOrders;
+    }
+
     /// The functions the `for` loop `for_` calls, or null if it loops over an array or `a..b`.
     const(LoopFunctions)* loopOf(Id!Expr for_) const
     {

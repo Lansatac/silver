@@ -1,0 +1,1 @@
+T0032: `T` could be any type, so its values can't be ordered with `<`; a bound says they can, as in `T: Ord`

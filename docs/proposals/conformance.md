@@ -32,7 +32,7 @@ What's wanted is a range library that costs nothing most of the time in an optim
 Decided and deferred, each marked below:
 
 - **Who may declare a conformance, and a program's conformance that only the program sees.** Both need packages. Until then any module may declare one, a duplicate is an error wherever the two are, and every module sees the same answer.
-- **`Ord`.** Decided since in full, and described in [Types](../language/types.md#ordering). Not built.
+- **`Ord`.** Decided since in full, and described in [Types](../language/types.md#ordering), and built.
 
 Measured, two million elements ten times in an optimized build: a `map` and `filter` chain that only steps takes 20 ms against 18 ms for the loop by hand, and counting an array by stepping compiles to its length. Counting or taking the last element through a `map` stays a walk of every element, about 2 ms per two million, since the transform can panic and has to run. So nothing here is needed for the cost per element. The test is for the shortcuts an optimizer can't find, and for sizing an array before filling it.
 
@@ -227,7 +227,7 @@ total(Countdown(3))               // steps
 
 Measured, two million elements ten times. In an optimized build a `for` over a `map` of a `map` takes 17 ms by index, 17 ms by stepping and 18 ms by hand, and one over a `map`, a `filter` and a `map` takes 17 ms against 20 ms by hand. Without optimization stepping the first takes 2.4 times what the loop by index does, and in the interpreter 1.8 times. A chain with a `filter` in it steps under either rule.
 
-### Ordering (decided, not built)
+### Ordering (decided)
 
 `Ord` is an ordinary interface under the rules above, with one function, `compare(a: Self, b: Self): Ordering`. [Types](../language/types.md#ordering) describes it, the types that are ordered already, and `derivedCompare`. A type's own package usually declares it, and a program can order a library's type that has no order:
 

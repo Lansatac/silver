@@ -130,7 +130,8 @@ These types are ordered already:
 | `T?`, when `T` is ordered | `None` before every `Some` |
 
 - Function values, `Ref`s, maps and error unions aren't ordered.
-- Both sides are one type, as for `==`: an `Int8` isn't compared with an `Int`.
+- Both sides are one type, as for `==`: an `Int8` isn't compared with an `Int`. A literal written as `Some(...)`, a tuple or an array takes its type from the other side, so with `x: UInt8?`, `x < Some(2)` compares two `UInt8?`s.
+- A value isn't wrapped to meet an option, as it is for `==`. With `age: Int?`, `age < 18` is an error: `None` is before every `Some`, so it would be true for a missing age without saying so. `age < Some(18)` says it, and `age ?? 0 < 18` chooses what a missing one counts as.
 - `<` on two `Float`s written outside generic code is the machine's comparison, which is false whenever either is NaN. `compare` on them, and `<` on a type parameter that turns out to be a `Float`, use the total order above, so the two differ only when a NaN is involved.
 - `Ord` is an [interface](interfaces.md) like any other, so a module can order a type it didn't declare, and there is one order for a type in the whole program.
 
@@ -149,7 +150,8 @@ Jack < Ace        // true
 
 - A sum's members are ordered as they're declared, and two values of one member by its fields. A product is ordered by its fields, the first difference deciding.
 - Every field, and every member that's a type of its own, has to be ordered, or the call is an error that names the one that isn't.
-- It's a function, so a `compare` can use it for part of its answer and decide the rest itself.
+- It takes two values of a declared type. A tuple, an array or an option is ordered already, and anything else has no members or fields to go by.
+- It's called like a function, so a `compare` can use it for part of its answer and decide the rest itself.
 
 ### Ordering and equality
 
@@ -184,5 +186,8 @@ A function value prints as the function it comes from, without anything it captu
 
 ## Current implementation
 
-- `Ord`, `Ordering`, `compare` and `derivedCompare` aren't built. `<`, `<=`, `>` and `>=` work on two numbers of one type, two `String`s or two `Char`s, and on nothing else.
+- A tuple is ordered up to eight elements. `lang` writes the conformance once for each length, since no one declaration covers them all.
+- `compare` on an integer is written once for each integer type, since a bound can't ask for an integer yet, so an error about a call of it lists them all.
+- `derivedCompare` can only be called. It isn't a function value, so `val f = derivedCompare` is an error.
+- `Ord`, `Ordering` and its members, `compare` and `derivedCompare` are declared in `lang.ord`, which `lang` forwards, and the compiler finds them there by name.
 - `Any` is a placeholder type visible in prelude signatures such as `print(value: Any)`, standing in for a design based on generics. It can't be an element of an array, tuple or option, a field, or a member of a sum.

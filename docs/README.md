@@ -20,7 +20,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | Document | Covers | Status |
 | --- | --- | --- |
 | [Syntax](language/syntax.md) | Comments, names, literals, newlines, operator precedence | Implemented |
-| [Types](language/types.md) | Built-in types, promotion, equality, ordering, printing | Mostly implemented: no `Ord` |
+| [Types](language/types.md) | Built-in types, promotion, equality, ordering, printing | Mostly implemented |
 | [Numbers](language/numbers.md) | Numeric types, literals, operators, overflow, conversions | Implemented |
 | [Bindings](language/bindings.md) | `val`, `mutable val`, discards, shadowing, constants | Implemented |
 | [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading, operator functions | Partial: no tail calls, `opEquals` or `opString` |

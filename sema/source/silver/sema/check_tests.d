@@ -322,13 +322,80 @@ unittest
     analyzedMain(`printl("a" ~ ())`).shouldReport(DiagnosticCode.InvalidOperand, At("()", 1));
 }
 
-@("type checking only orders two numbers or two Strings")
+@("type checking only orders two values of one type")
 unittest
 {
     analyzedMain(`printl("a" < 1)`).shouldReport(DiagnosticCode.InvalidOperand, At(`"a"`, 1));
     analyzedMain(`printl(1 >= "a")`).shouldReport(DiagnosticCode.InvalidOperand, At("1", 1));
-    analyzedMain(`printl("a" < true)`).shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
-    analyzedMain(`printl(true < "a")`).shouldReport(DiagnosticCode.InvalidOperand, At("true", 1));
+    analyzedMain(`printl("a" < true)`).shouldReport(DiagnosticCode.InvalidOperand, At(`"a" < true`, 1));
+    analyzedMain(`printl(true < "a")`).shouldReport(DiagnosticCode.InvalidOperand, At(`true < "a"`, 1));
+}
+
+@("a type that isn't a number, a String or a Char is ordered through its conformance to Ord")
+unittest
+{
+    analyzedMain(`printl(false < true)
+    printl((1, "a") <= (1, "b"))
+    printl([1] > [2])
+    val x: UInt8? = 1
+    printl(x < Some(2))
+    printl(None >= x)
+    val t: (UInt8, Int8) = (1, 2)
+    printl(t < (1, 3))`).shouldHaveNoDiagnostics();
+    analyzed("type Point(x: Int)\ndef compare(a: Point, b: Point): Ordering => compare(a.x, b.x)\nconform Point: Ord\n"
+        ~ "def main(): Unit => printl(Point(1) < Point(2))").shouldHaveNoDiagnostics();
+    analyzed("def smaller<T: Ord>(a: T, b: T): T => if a < b => a else b\ndef main(): Unit => printl(smaller(2.5, 1.5))")
+        .shouldHaveNoDiagnostics();
+
+    static string messageOf(const Analyzed a) => a.collector.diagnostics[0].message;
+    auto unordered = analyzed("type Point(x: Int)\ndef main(): Unit => printl(Point(1) < Point(2))");
+    unordered.shouldReport(DiagnosticCode.InvalidOperand, At("Point(1)", 1));
+    messageOf(unordered).should.equal("`<` compares two values of an `Ord`, and `Point` isn't one: no conformance says so");
+    analyzed("def f(): Unit => ()
+def main(): Unit => printl((1, f) < (1, f))").shouldReport(DiagnosticCode.InvalidOperand, At("(1, f)", 1));
+    // A value isn't wrapped to meet an option, as it is for `==`.
+    auto wrapped = analyzedMain(`val x: Int? = 1
+    printl(x < 2)`);
+    wrapped.shouldReport(DiagnosticCode.InvalidOperand, At("x < 2", 1));
+    messageOf(wrapped).should.equal("`<` can't compare `Int?` and `Int`; `None` is before every `Some`, so write the "
+        ~ "`Some(...)` out, or take the value out of the option first");
+    analyzedMain(`val x: Int? = 1
+    printl(2 >= x)`).shouldReport(DiagnosticCode.InvalidOperand, At("2 >= x", 1));
+    auto opaque = analyzed("def f<T>(a: T, b: T): Bool => a < b\ndef main(): Unit => ()");
+    opaque.shouldReport(DiagnosticCode.OpaqueTypeParameter, At("a", 2));
+    messageOf(opaque).should.equal(
+        "`T` could be any type, so its values can't be ordered with `<`; a bound says they can, as in `T: Ord`");
+}
+
+@("derivedCompare orders a declared type whose parts are all ordered, and can only be called")
+unittest
+{
+    static string messageOf(const Analyzed a) => a.collector.diagnostics[0].message;
+    enum main = "\ndef main(): Unit => ()";
+    analyzed("type Rank = Two | Three\ndef compare(a: Rank, b: Rank): Ordering => derivedCompare(a, b)\nconform Rank: Ord\n"
+        ~ "type Card(rank: Rank, n: Int)\ndef compare(a: Card, b: Card): Ordering => a.derivedCompare(b)\nconform Card: Ord\n"
+        ~ "type Box<T>(value: T)\ndef compare<T: Ord>(a: Box<T>, b: Box<T>): Ordering => derivedCompare(a, b)" ~ main)
+        .shouldHaveNoDiagnostics();
+
+    auto field = analyzed("type Plain(x: Int)\ntype Card(n: Int, plain: Plain)\n"
+        ~ "def compare(a: Card, b: Card): Ordering => derivedCompare(a, b)" ~ main);
+    field.shouldReport(DiagnosticCode.InvalidOperand, At("derivedCompare(a, b)", 1));
+    messageOf(field).should.equal("`derivedCompare` needs every part of `Card` to be an `Ord`, and its field `plain`, "
+        ~ "a `Plain`, isn't one: no conformance says so");
+    auto member = analyzed("type Plain(x: Int)\ntype Mixed = Empty | :Plain\n"
+        ~ "def compare(a: Mixed, b: Mixed): Ordering => derivedCompare(a, b)" ~ main);
+    messageOf(member).should.equal("`derivedCompare` needs every part of `Mixed` to be an `Ord`, and its member `Plain`, "
+        ~ "a `Plain`, isn't one: no conformance says so; it has the functions, so `conform Plain: Ord` is all that's missing");
+    auto inner = analyzed("type Shape = Dot | Held(f: () -> Int)\n"
+        ~ "def compare(a: Shape, b: Shape): Ordering => derivedCompare(a, b)" ~ main);
+    messageOf(inner).should.equal("`derivedCompare` needs every part of `Shape` to be an `Ord`, and the field `f` of `Held`, "
+        ~ "a `() -> Int`, isn't one: no conformance says so");
+    auto generic = analyzed("type Box<T>(value: T)\ndef compare<T>(a: Box<T>, b: Box<T>): Ordering => derivedCompare(a, b)" ~ main);
+    generic.shouldReport(DiagnosticCode.InvalidOperand, At("derivedCompare(a, b)", 1));
+
+    analyzedMain(`printl(derivedCompare(1, 2))`).shouldReport(DiagnosticCode.InvalidOperand, At("derivedCompare(1, 2)", 1));
+    analyzedMain(`printl(derivedCompare((1, 2), (1, 3)))`).shouldReport(DiagnosticCode.InvalidOperand, At("derivedCompare((1, 2), (1, 3))", 1));
+    analyzedMain(`val f = derivedCompare`).shouldReport(DiagnosticCode.NotSupportedYet, At("derivedCompare", 1));
 }
 
 @("operator diagnostics on Strings name the operator as it's written")
@@ -336,7 +403,7 @@ unittest
 {
     static string messageOf(const Analyzed a) => a.collector.diagnostics[0].message;
     assert(messageOf(analyzedMain(`printl(1 ~ 2)`)) == "`~` needs a String or an array, got `Int`");
-    assert(messageOf(analyzedMain(`printl("a" <= true)`)) == "`<=` needs a number, a String or a Char, got `Bool`");
+    assert(messageOf(analyzedMain(`printl("a" <= true)`)) == "`<=` can't compare `String` and `Bool`");
     assert(messageOf(analyzedMain(`printl("a" < 1.5)`)) == "`<` can't compare `String` and `Float`");
 }
 
@@ -456,7 +523,7 @@ unittest
     }`).shouldReport(DiagnosticCode.AssignToImmutable, At("y", 2));
 }
 
-@("type checking compares an option with its payload, but doesn't order it")
+@("type checking compares an option with its payload, but doesn't order the two")
 unittest
 {
     analyzedMain(`val x: UInt8? = 1
@@ -470,8 +537,6 @@ unittest
 
     analyzedMain(`val x: Int? = 1
     printl(x == "a")`).shouldReport(DiagnosticCode.InvalidOperand, At(`x == "a"`, 1));
-    analyzedMain(`val x: Int? = 1
-    printl(x < 2)`).shouldReport(DiagnosticCode.InvalidOperand, At("x", 2));
     analyzedMain(`val x: UInt8? = 1
     printl(x == 300)`).shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
     analyzedMain("printl(3 == None)").shouldReport(DiagnosticCode.InvalidOperand, At("3 == None", 1));
@@ -2036,14 +2101,13 @@ unittest
     x ~= [2]`).shouldReport(DiagnosticCode.InvalidOperand, At("x", 2));
 }
 
-@("arrays compare when their elements do, and have no order")
+@("arrays compare when their elements do")
 unittest
 {
     analyzedMain(`val xs = [1]
     print(xs == [1])
     print([1] != xs)
     print(xs == [])`).shouldHaveNoDiagnostics();
-    analyzedMain(`print([1] < [2])`).shouldReport(DiagnosticCode.InvalidOperand, At("[1]", 1));
     analyzed("def f(): Unit => ()\ndef main(): Unit => print([f] == [f])").shouldHaveNoDiagnostics();
 }
 
@@ -2428,7 +2492,7 @@ unittest
 def main(): Unit => ()`).shouldReport(DiagnosticCode.InvalidTupleElement, At("Any", 1));
 }
 
-@("tuples compare elementwise when every element can, and have no order")
+@("tuples compare elementwise when every element can")
 unittest
 {
     auto a = analyzedMain(`val t: (UInt8, Int?) = (1, None)
@@ -2441,7 +2505,6 @@ unittest
 def main(): Unit {
     _ = (f, 1) == (f, 1)
 }`).shouldHaveNoDiagnostics();
-    analyzedMain(`_ = (1, 2) < (1, 3)`).shouldReport(DiagnosticCode.InvalidOperand, At("(1, 2)", 1));
 }
 
 @("a tuple literal against an option is checked against its payload and promoted")

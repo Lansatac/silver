@@ -1,0 +1,1 @@
+T0005: `<` compares two values of an `Ord`, and `(Int, Point)` isn't one: the conformance for `(A, B)` needs `B` to be an `Ord`, and `Point` isn't one: no conformance says so

@@ -5,6 +5,7 @@ module lang
 forward import lang.array
 forward import lang.interval
 forward import lang.io
+forward import lang.ord
 forward import lang.panic
 forward import lang.range
 forward import lang.string : bytes, next

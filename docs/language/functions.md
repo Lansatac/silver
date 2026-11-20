@@ -243,7 +243,7 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 ## Current implementation
 
 - A nested function can call itself and those declared before it, but not one declared after it.
-- Of the operator functions, `opIndex` and `opIndexAssign` are available. `opEquals`, `opHash` and `opString` aren't, so `==` and printing are always the structural ones. [`Ord`](types.md#ordering), `Ordering` and `derivedCompare` aren't built, so `<` works only on numbers, strings and characters. A `for` still finds `next` by name, as [Control flow](control-flow.md#current-implementation) describes.
+- Of the operator functions, `opIndex` and `opIndexAssign` are available. `opEquals`, `opHash` and `opString` aren't, so `==` and printing are always the structural ones. A `for` still finds `next` by name, as [Control flow](control-flow.md#current-implementation) describes.
 - Only module-level functions can be overloaded. Two nested `def`s of one name in a block are an error.
 - When more than one candidate is left, an `if`, `match` or block is typed before any is chosen, even when its values are all literals, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.
 - Of the arguments compared by their shape, `None` and `[]` count one step wherever they go.

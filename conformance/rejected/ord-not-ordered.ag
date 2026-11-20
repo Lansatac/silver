@@ -1,0 +1,5 @@
+type Point(x: Int, y: Int)
+
+def main(): Unit {
+    printl((1, Point(1, 2)) < (1, Point(1, 3)))
+}

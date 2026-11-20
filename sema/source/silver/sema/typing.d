@@ -41,6 +41,11 @@ package struct Typing
     SideTable!(Id!Expr, Id!FunctionDecl) methodCallees;
     /// For a `for` over something other than an array or `a..b`, the functions it calls, by the `for`.
     SideTable!(Id!Expr, LoopFunctions) loops;
+    /// For `<`, `<=`, `>` or `>=` on anything but two numbers, Strings or Chars, `lang`'s
+    /// function it calls, by the comparison.
+    SideTable!(Id!Expr, FunctionUse) comparisons;
+    /// For each call of `derivedCompare`, how it orders its type, by the call.
+    SideTable!(Id!Expr, DerivedOrder) derivedOrders;
     /// The `for`s over an `Interval` value, which loop over its bounds as `for` over `a..b` does.
     SideTable!(Id!Expr, bool) intervalLoops;
     /// For each indexing of something other than an array, the functions it calls, by the indexing.
@@ -128,6 +133,24 @@ struct Witness
 struct LoopFunctions
 {
     FunctionUse next;
+}
+
+/// How `derivedCompare` orders two values of a declared type: for a sum, by which member each is,
+/// compared as `Int`s with `tags`, and then by `parts`, one for each member in order. A type that
+/// isn't a sum has one part.
+struct DerivedOrder
+{
+    FunctionUse tags;
+    DerivedPart[] parts;
+}
+
+/// One member of a sum, or a whole type that isn't one, as `derivedCompare` orders it: `whole`
+/// through the one `compare` of its own conformance, and otherwise field by field, with a
+/// `compare` for each.
+struct DerivedPart
+{
+    bool whole;
+    FunctionUse[] uses;
 }
 
 /// The functions `x[i]` calls when `x` isn't an array. Any of them can be missing: `read` is

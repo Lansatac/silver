@@ -75,7 +75,8 @@ package ConstValue binaryValue(BinaryOp op, const ConstValue lhs, const ConstVal
     return lhs.match!(
         (const ConstInt l) => integerBinary(op, l.value, rhs.get!(const ConstInt).value, info),
         (const ConstUInt l) => integerBinary(op, l.value, rhs.get!(const ConstUInt).value, info),
-        (const bool l) => equality!bool(op, l, rhs.get!(const bool)),
+        // `false` is before `true`, as `lang`'s `compare` has it.
+        (const bool l) => comparison!bool(op, l, rhs.get!(const bool)),
         (const double l) => floatBinary(op, l, rhs.get!(const double)),
         (const string l) => stringBinary(op, l, rhs.get!(const string)),
         (const ConstUnit _) => equality!bool(op, true, true),

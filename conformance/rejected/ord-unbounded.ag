@@ -1,0 +1,5 @@
+def smaller<T>(a: T, b: T): T => if a < b => a else b
+
+def main(): Unit {
+    printl(smaller(1, 2))
+}

@@ -1438,6 +1438,8 @@ private final class Generator
             case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect, Intrinsic.uncheckedChar:
             case Intrinsic.hash:
                 assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, `hash` a derived function, and the others operations on a Cell");
+            case Intrinsic.derivedCompare:
+                assert(0, "lowering expands `derivedCompare` into calls of `compare`");
             case Intrinsic.panics:
                 return emitPanics(call.args[0], e.span);
         }
