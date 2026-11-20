@@ -382,7 +382,13 @@ version (unittest)
         {
             return false;
         }
-        auto lines = readText(c.sourcePath).lineSplitter.map!(line => line.strip).array;
+        auto text = readText(c.sourcePath);
+        // A shebang has to stay at the very start, where a bundle member's module line goes.
+        if (text.startsWith("#!"))
+        {
+            return false;
+        }
+        auto lines = text.lineSplitter.map!(line => line.strip).array;
         return lines.canFind!(line => line.startsWith("def main("))
             && !lines.canFind!(line => line.startsWith("module ") || importsSibling(line));
     }
@@ -398,15 +404,7 @@ version (unittest)
         {
             auto file = "t_" ~ c.name.replace("-", "_");
             auto moduleName = bundlePackage ~ "." ~ file;
-            auto text = readText(c.sourcePath);
-            // A shebang is allowed only at the very start, which the module line takes here.
-            if (text.startsWith("#!"))
-            {
-                import std.string : indexOf;
-                auto end = text.indexOf('\n');
-                text = end < 0 ? "" : text[end .. $];
-            }
-            auto source = ("module " ~ moduleName ~ "\n" ~ text)
+            auto source = ("module " ~ moduleName ~ "\n" ~ readText(c.sourcePath))
                 .replace("\ndef main(", "\ndef " ~ bundleEntry ~ "(");
             write(buildPath(directory, bundlePackage, file ~ ".ag"), source);
             imports ~= "import " ~ moduleName ~ "\n";
