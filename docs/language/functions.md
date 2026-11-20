@@ -172,7 +172,7 @@ Syntax that isn't a call means a call to a function whose name starts with `op`.
 | `x[a..b]` | `opIndex(x, a..b)` |
 | `x[a..b] = v` | `x = opIndexAssign(x, a..b, v)` |
 | `a == b`, `a != b` | `opEquals(a, b)` |
-| `a < b`, `<=`, `>`, `>=` | `opCompare(a, b)`, through the type's conformance to `Ord` |
+| `a < b`, `<=`, `>`, `>=` | `compare(a, b)`, through the type's conformance to [`Ord`](types.md#ordering) |
 | printing, `String(x)`, a string hole | `opString(x)` |
 
 ```silver
@@ -203,7 +203,7 @@ def opIndex<T>(w: Window<T>, part: Interval<Int>): Window<T> =>
 Syntax finds its function in one of three ways, by what the syntax is for:
 
 - **Indexing is a call.** `x[i]`, `x[i] = v` and slices mean the calls in the table, chosen where they're written as any call is, just as `x.f()` means `f(x)`. So indexing a type needs its `opIndex` in scope, as calling `x.length()` needs `length`, and a module can write one for a type it didn't declare. No [conformance](interfaces.md#conformance) is involved.
-- **Looping and ordering go through a conformance.** `for` steps with the `next` of the type's conformance to [`Range`](control-flow.md#for), and `<` compares with the `opCompare` of its conformance to `Ord`. A conformance is one answer for the whole program, so a loop or a comparison means the same wherever it's written, in a generic function too, where a bound asks for it.
+- **Looping and ordering go through a conformance.** `for` steps with the `next` of the type's conformance to [`Range`](control-flow.md#for), and `<` compares with the `compare` of its conformance to [`Ord`](types.md#ordering). A conformance is one answer for the whole program, so a loop or a comparison means the same wherever it's written, in a generic function too, where a bound asks for it.
 - **Equality, hashing and printing belong to the type.** Every type has an `opEquals`, an `opHash` and an `opString` already, so generic code needs no bound to use them, and only the type's own module can write one to replace it.
 
 ```silver
@@ -232,11 +232,10 @@ def opHash<K, V>(m: Map<K, V>): UInt64 => ...      // combines the entries in an
 
 Structural equality is right for nearly every type. These functions are for a type whose fields can differ for values that mean the same thing, such as a collection whose layout depends on the order it was built in. A comparison that ignores part of a value, such as positions in source or the case of a name, is an ordinary function, passed where it's needed, and not a replacement for `==`.
 
-A function that's useful to call by name keeps a plain name, even where syntax uses it: `length`, and `next`, which `for` calls through the type's conformance to [`Range`](control-flow.md#for).
+A function that's useful to call by name keeps a plain name, even where syntax uses it: `length`; `next`, which `for` calls through the type's conformance to [`Range`](control-flow.md#for); and `compare`, which `<` calls through its conformance to [`Ord`](types.md#ordering).
 
 ## Open questions
 
-- What `opCompare` returns, whether a type gets one without writing it, and how `opEquals` and `opCompare` are kept in agreement. `Ord` itself is described in the [conformance proposal](../proposals/conformance.md#ordering-decided-deferred).
 - Whether `x.f()` can drop its parentheses.
 - Whether a method call can have a `mutable` receiver.
 - Method calls through `?.`, as in `a?.f()`.
@@ -244,7 +243,7 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 ## Current implementation
 
 - A nested function can call itself and those declared before it, but not one declared after it.
-- Of the operator functions, `opIndex` and `opIndexAssign` are available. `opEquals`, `opHash` and `opString` aren't, so `==` and printing are always the structural ones. There's no `Ord`, so `<` works only on numbers and strings. A `for` still finds `next` by name, as [Control flow](control-flow.md#current-implementation) describes.
+- Of the operator functions, `opIndex` and `opIndexAssign` are available. `opEquals`, `opHash` and `opString` aren't, so `==` and printing are always the structural ones. [`Ord`](types.md#ordering), `Ordering` and `derivedCompare` aren't built, so `<` works only on numbers, strings and characters. A `for` still finds `next` by name, as [Control flow](control-flow.md#current-implementation) describes.
 - Only module-level functions can be overloaded. Two nested `def`s of one name in a block are an error.
 - When more than one candidate is left, an `if`, `match` or block is typed before any is chosen, even when its values are all literals, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.
 - Of the arguments compared by their shape, `None` and `[]` count one step wherever they go.

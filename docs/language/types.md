@@ -93,7 +93,67 @@ button == Button("OK", () => save())     // error: this lambda is equal to nothi
 
 ### Ordering
 
-Ordering with `<`, `<=`, `>` and `>=` is defined only for numbers and strings.
+A type is ordered when it conforms to `Ord`, which asks for one function:
+
+```silver
+type Ordering = Less | Equal | Greater
+
+interface Ord {
+    def compare(a: Self, b: Self): Ordering
+}
+```
+
+`<`, `<=`, `>` and `>=` work on two values of one ordered type, and mean what `compare` says: `a < b` is `compare(a, b) == Less`, and `a <= b` is `compare(a, b) != Greater`. `compare` is an ordinary function, called by name wherever the three-way answer is wanted.
+
+```silver
+type Card(rank: Int, suit: Suit)
+
+def compare(a: Card, b: Card): Ordering => compare((a.rank, a.suit), (b.rank, b.suit))
+conform Card: Ord
+
+Card(3, Club) < Card(5, Club)        // true
+compare(Card(3, Club), Card(3, Club)) // Equal
+
+def smaller<T: Ord>(a: T, b: T): T => if a < b => a else b
+```
+
+These types are ordered already:
+
+| Type | Order |
+| --- | --- |
+| The integer types | By value |
+| `Float` | By value, with `-0.0` and `0.0` equal and NaN after every other value |
+| `Char`, `String` | By code point, a string being compared a character at a time, with a prefix before what it's a prefix of |
+| `Bool` | `false` before `true` |
+| A tuple, when each element is ordered | Element by element, the first difference deciding |
+| `[T]`, when `T` is ordered | Element by element, with a prefix before what it's a prefix of |
+| `T?`, when `T` is ordered | `None` before every `Some` |
+
+- Function values, `Ref`s, maps and error unions aren't ordered.
+- Both sides are one type, as for `==`: an `Int8` isn't compared with an `Int`.
+- `<` on two `Float`s written outside generic code is the machine's comparison, which is false whenever either is NaN. `compare` on them, and `<` on a type parameter that turns out to be a `Float`, use the total order above, so the two differ only when a NaN is involved.
+- `Ord` is an [interface](interfaces.md) like any other, so a module can order a type it didn't declare, and there is one order for a type in the whole program.
+
+### An order from the type's shape
+
+Nothing is ordered without a conformance. A type whose order is the order it's written in asks for it with `derivedCompare`:
+
+```silver
+type Rank = Two | Three | Four | Jack | Queen | King | Ace
+
+def compare(a: Rank, b: Rank): Ordering => derivedCompare(a, b)
+conform Rank: Ord
+
+Jack < Ace        // true
+```
+
+- A sum's members are ordered as they're declared, and two values of one member by its fields. A product is ordered by its fields, the first difference deciding.
+- Every field, and every member that's a type of its own, has to be ordered, or the call is an error that names the one that isn't.
+- It's a function, so a `compare` can use it for part of its answer and decide the rest itself.
+
+### Ordering and equality
+
+`==` never calls `compare`: [equality belongs to the type](#equality-and-ordering), and ordering is a conformance. The two should agree, so that `compare(a, b) == Equal` exactly when `a == b`, and nothing checks that they do. `derivedCompare` agrees with structural equality. The one built-in exception is NaN, which `compare` puts equal to itself and `==` doesn't.
 
 ## Printing
 
@@ -122,7 +182,7 @@ A function value prints as the function it comes from, without anything it captu
 
 - Whether integers widen implicitly where a type is expected, as `Int8` to `Int` or `UInt8` to `Int16`. These would pass the rule for implicit conversions. `Int` and `UInt` wouldn't convert in either direction, and neither would `Int` to `Float`, which is inexact for large values.
 
-
 ## Current implementation
 
+- `Ord`, `Ordering`, `compare` and `derivedCompare` aren't built. `<`, `<=`, `>` and `>=` work on two numbers of one type, two `String`s or two `Char`s, and on nothing else.
 - `Any` is a placeholder type visible in prelude signatures such as `print(value: Any)`, standing in for a design based on generics. It can't be an element of an array, tuple or option, a field, or a member of a sum.

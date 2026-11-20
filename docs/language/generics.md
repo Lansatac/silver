@@ -30,7 +30,7 @@ A value whose type is `T` can be bound, passed, returned, stored and captured. A
 Nothing else is known about `T`, unless it has a [bound](interfaces.md#bounds), which supplies its interface's functions. So:
 
 - `T` is assignable only to itself. A literal can't be a `T`.
-- A type that mentions a type parameter isn't ordered. `<` on a `T` is an error.
+- A `T` isn't ordered, so `<` on one is an error, unless its bound is [`Ord`](types.md#ordering).
 - A pattern on a `T` can only bind it.
 
 Comparing with `==` and printing do work on a `T`, because every type has both. Each instance uses its type's own:
@@ -44,7 +44,7 @@ def contains<T>(values: [T], wanted: T): Bool {
 }
 ```
 
-A function that needs an order takes it as a parameter for now, as `larger` does below.
+A function that needs an order asks for it with a bound, as in `def smaller<T: Ord>(a: T, b: T): T => if a < b => a else b`, or takes a comparison as a parameter, as `larger` does below.
 
 ## Generic types
 
@@ -165,7 +165,6 @@ type Grow<T> = More(rest: Grow<(T, T)>, head: T) | Stop    // error: `Grow<T>`, 
 
 ## Open questions
 
-- Ordering a type parameter's values, which waits on `Ord`. See [Interfaces](interfaces.md#open-questions).
 - A type parameter as a sum member by itself, as in `type Maybe<T> = :T | Nothing`.
 - Generic aliases, as in `alias Pair<T> = (T, T)`.
 - Type parameters on a nested `def`.
@@ -176,6 +175,7 @@ type Grow<T> = More(rest: Grow<(T, T)>, head: T) | Stop    // error: `Grow<T>`, 
 
 ## Current implementation
 
+- [`Ord`](types.md#ordering) isn't built, so `<` on a `T` is always an error, and a function that needs an order takes a comparison as a parameter.
 - The limit also counts the [invariant](user-types.md#current-implementation) of a type an instance builds or changes with `with`, while invariants are still available.
 - Type arguments that don't grow without end can still nest only 64 deep. Past that the program doesn't compile, and the error shows the instances, or the type, that led there.
 - Inference treats two more kinds of argument as having no type of their own, as `None` does: a marker that a generic sum owns, such as `Nil`, and a generic function or constructor named without its type arguments. Each binds nothing, and is checked once the type arguments are known.
