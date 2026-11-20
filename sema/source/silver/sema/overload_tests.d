@@ -365,11 +365,13 @@ unittest
 @("this module's function of a name can call the prelude's")
 unittest
 {
-    auto prelude = ["prelude.ag": "module prelude\ndef show(text: String): Unit => ()"];
+    // The prelude's `show(Any)` fits a `Point` too, as the real prelude's `printl(Any)` does.
+    auto prelude = ["prelude.ag": "module prelude\nforward import console",
+        "console.ag": "module console\ndef show(value: Any): Unit => ()"];
     auto a = analyzed("type Point(x: Int, y: Int)\ndef show(p: Point): Unit => show(\"({p.x}, {p.y})\")\n"
         ~ "def main(): Unit => show(Point(1, 2))", prelude);
     a.shouldHaveNoDiagnostics();
-    a.shouldCall(At("show", 2), At("show", 1, "prelude"));
+    a.shouldCall(At("show", 2), At("show", 1, "console"));
     a.shouldCall(At("show", 3), At("show", 1));
 }
 
