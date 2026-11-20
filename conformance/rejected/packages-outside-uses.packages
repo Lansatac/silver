@@ -1,0 +1,3 @@
+--package shapes=packages_fixtures/shapes
+--package shapes.render=packages_fixtures/render
+--uses shapes.render

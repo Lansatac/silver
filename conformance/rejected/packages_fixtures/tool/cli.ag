@@ -1,0 +1,5 @@
+module tool.cli
+
+def main(): Unit {
+    printl("tool")
+}

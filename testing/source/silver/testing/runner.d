@@ -15,7 +15,8 @@ import silver.ast : DiagnosticException, formatDiagnostic, Program, SourceContex
 import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, Toolchain;
 import silver.core : lowerTests, CoreProgram = Program;
 import silver.interpreter.evaluator : Evaluator;
-import silver.loader : companionModuleFile, companionOf, isCompanionFile, load, standardLibraryPath, standardPrelude;
+import silver.loader : companionModuleFile, companionOf, isCompanionFile, load, Packages, standardPackage, standardPrelude,
+    withStandardLibrary;
 import silver.sema : analyze, Analysis, Target;
 
 /// How `silver test` runs the tests.
@@ -62,10 +63,9 @@ string[] testFiles(string path)
 }
 
 /// Runs the tests that `file` and its companion test file declare, though not those of the
-/// modules it imports, with `importPaths` searched before the standard library and the file's own
-/// directory. A companion is run as its module. A compiled run keeps its files in `workDirectory`
-/// while it runs, and is optimized as `optimization` says.
-FileRun runFile(string file, const string[] importPaths, TestBackend backend, string workDirectory,
+/// modules it imports, loaded with `packages`. A companion is run as its module. A compiled run
+/// keeps its files in `workDirectory` while it runs, and is optimized as `optimization` says.
+FileRun runFile(string file, const Packages packages, TestBackend backend, string workDirectory,
     Optimization optimization = Optimization.none)
 {
     if (isCompanionFile(file) && exists(companionModuleFile(file))) file = companionModuleFile(file);
@@ -75,8 +75,7 @@ FileRun runFile(string file, const string[] importPaths, TestBackend backend, st
     Analysis analysis;
     try
     {
-        program = load(readText(file), file, importPaths.dup ~ [standardLibraryPath(), dirName(file)], standardPrelude, context,
-            companionOf(file));
+        program = load(readText(file), file, packages, standardPrelude, context, companionOf(file));
         if (!context.collector.hasErrors) analysis = analyze(program, context.collector, Target.host, true);
     }
     catch (DiagnosticException e)
@@ -332,6 +331,13 @@ unittest
 version (unittest)
 {
     import std.file : mkdirRecurse, rmdirRecurse, tempDir;
+    import silver.ast : Package;
+
+    /// The standard library and `directory` as a test's unnamed package, used by a file with no `module` line.
+    Packages fixtures(string directory)
+    {
+        return Packages(withStandardLibrary([Package(null, directory)]), [standardPackage]);
+    }
 
     /// A fresh directory under the temp dir holding `files` (path to text). The caller removes it.
     private string testDirectory(string name, string[string] files)
@@ -351,7 +357,7 @@ version (unittest)
     {
         import std.regex : matchFirst;
 
-        auto run = runFile(file, [], TestBackend.interpreter, tempDir);
+        auto run = runFile(file, fixtures(dirName(file)), TestBackend.interpreter, tempDir);
         assert(run.problem == "it has errors", run.problem);
         return run.diagnostics.map!(d => d.matchFirst(`Error ([A-Z]\d{4})`)[1]).array;
     }
@@ -370,7 +376,7 @@ unittest
     ]);
     scope (exit) rmdirRecurse(directory);
 
-    auto run = runFile(buildPath(directory, "app", "shape.ag"), [directory], TestBackend.interpreter, tempDir);
+    auto run = runFile(buildPath(directory, "app", "shape.ag"), fixtures(directory), TestBackend.interpreter, tempDir);
     assert(run.problem == "it has errors");
     auto shown = run.diagnostics.join("\n");
     assert(shown.canFind("shape.ag(3,20): Error S0002: Unknown name 'helper'"), shown);
@@ -406,7 +412,7 @@ unittest
     assert(testFiles(directory) == [buildPath(directory, "orphan.test.ag"), buildPath(directory, "shape.ag")]);
     foreach (named; ["shape.ag", "shape.test.ag"])
     {
-        auto run = runFile(buildPath(directory, named), [], TestBackend.interpreter, tempDir);
+        auto run = runFile(buildPath(directory, named), fixtures(directory), TestBackend.interpreter, tempDir);
         assert(run.file == buildPath(directory, "shape.ag"));
         assert(run.results.map!(r => r.name).array == ["inline", "companion"]);
         assert(run.results.map!(r => r.passed).array == [true, false]);
@@ -426,7 +432,7 @@ unittest
     ]);
     scope (exit) rmdirRecurse(directory);
 
-    auto run = runFile(buildPath(directory, "shape.ag"), [], TestBackend.interpreter, tempDir);
+    auto run = runFile(buildPath(directory, "shape.ag"), fixtures(directory), TestBackend.interpreter, tempDir);
     // Either the conformance is refused, or the module's own test sees what a build would.
     assert(run.problem !is null || run.results.all!(r => r.passed), run.results.map!(r => r.failures.join("\n")).join("\n"));
 }
@@ -442,7 +448,7 @@ unittest
     ]);
     scope (exit) rmdirRecurse(directory);
 
-    auto run = runFile(buildPath(directory, "app", "shape.ag"), [directory], TestBackend.interpreter, tempDir);
+    auto run = runFile(buildPath(directory, "app", "shape.ag"), fixtures(directory), TestBackend.interpreter, tempDir);
     assert(run.problem is null, run.diagnostics.join("\n"));
     assert(run.results.all!(r => r.passed));
 }
@@ -457,8 +463,8 @@ unittest
     scope (exit) rmdirRecurse(directory);
     mkdir(buildPath(directory, "shape.test.ag"));
 
-    assertNotThrown(runFile(buildPath(directory, "shape.ag"), [], TestBackend.interpreter, tempDir));
-    assertNotThrown(testFiles(directory).map!(f => runFile(f, [], TestBackend.interpreter, tempDir)).array);
+    assertNotThrown(runFile(buildPath(directory, "shape.ag"), fixtures(directory), TestBackend.interpreter, tempDir));
+    assertNotThrown(testFiles(directory).map!(f => runFile(f, fixtures(directory), TestBackend.interpreter, tempDir)).array);
 }
 
 @("a companion test file that isn't UTF-8 is reported, not thrown")

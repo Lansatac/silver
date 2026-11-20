@@ -1,6 +1,6 @@
 # Proposal: packages
 
-**Status: decided; `lang` and the build's prelude are built, packages aren't.** The rules are described in [Modules](../language/modules.md#packages). This document keeps the reasoning and what was rejected. Today a program is still compiled whole, and a module's name is its whole path under an unnamed root. `lang` is in place: only it may declare intrinsics, and the compiler names no other package. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
+**Status: decided and built, except a way to describe a package, and what parts share.** The rules are described in [Modules](../language/modules.md#packages). This document keeps the reasoning and what was rejected. Packages are given to `silver` on the command line for now, and a program is still compiled whole. `lang` is in place: only it may declare intrinsics, and the compiler names no other package. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
 
 ## Summary
 

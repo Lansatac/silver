@@ -1,0 +1,4 @@
+// shapes/wrong.ag is shapes.wrong by its package and path, and its module line says otherwise.
+import shapes.wrong
+
+def main(): Unit { }

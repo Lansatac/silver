@@ -1,0 +1,5 @@
+module shapes.render.text
+
+import shapes.circle
+
+def describe(c: Circle): String => "circle of radius {c.radius}"

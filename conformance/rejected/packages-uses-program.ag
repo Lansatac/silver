@@ -1,0 +1,6 @@
+// tool declares main in a module nothing imports, which still makes it a program.
+import tool.util
+
+def main(): Unit {
+    printl(twice(2))
+}

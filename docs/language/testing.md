@@ -144,7 +144,7 @@ Matchers, fixtures, property testing, snapshots and reporters belong in librarie
 ## Current implementation
 
 - `assert`, `test`, `expect` and `silver test` are available on both backends. `silver test -b llvm` compiles the tests, and `-b both` runs them both ways and fails a test the two backends disagree on. `-O` with either optimizes the compiled tests.
-- A directory's tests are those of every `.ag` file under it, each loaded as a program of its own.
+- A directory's tests are those of every `.ag` file under it, each loaded as a program of its own. `silver test` takes the [package options](modules.md#current-implementation) `silver` does: a file with a `module` line is loaded as a module of its package, and one without uses what `--uses a,b` lists.
 - `panics` is available on both backends. Its work can't be a function that returns `Never`, such as `() => panic("x")`, because a type parameter doesn't take `Never` yet; `(): Unit => panic("x")` works.
 - Companion files are available on both backends. `silver test` loads only the companion of the file it runs, beside it, and its tests run after the file's own. A directory's companions run with their modules, and naming a companion runs its module.
 - A companion can't have a `module` line, a `native library` (it has its module's), a `forward import`, a `def main` or a `conform` declaration (`L0007`), and a module in the program only because a companion imports it can't declare a conformance (`L0008`). A companion's function named like one of its module's is `S0033`. Running or building a companion, or testing one with no module beside it, is `L0006`, and a companion that can't be read as text is `L0009`.

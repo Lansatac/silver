@@ -1,0 +1,2 @@
+--package tool=packages_fixtures/tool
+--uses tool

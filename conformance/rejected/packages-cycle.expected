@@ -1,0 +1,2 @@
+L0012: What the packages use forms a cycle: 'shapes' uses 'shapes.render' uses 'shapes'
+A package can't use itself, directly or through others

@@ -16,7 +16,8 @@ version (unittest)
     import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, Toolchain;
     import silver.core : lowerProgram, CoreProgram = Program;
     import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed;
-    import silver.loader : isCompanionFile, load, standardLibraryPath, standardPrelude;
+    import silver.loader : describePackages, isCompanionFile, load, Packages, standardLibraryPath, standardPrelude,
+        withStandardLibrary;
     import silver.sema : analyze, Analysis, Target;
     import silver.testing : report, runFile, succeeded, TestBackend, testFiles;
 
@@ -112,7 +113,7 @@ version (unittest)
     /// Runs the tests of `c` on `backend`, and returns why the report isn't the expected one, or null.
     string runTesting(Case c, TestBackend backend, string workDirectory, Optimization optimization = Optimization.none)
     {
-        auto text = report([runFile(c.sourcePath, [], backend, workDirectory, optimization)]);
+        auto text = report([runFile(c.sourcePath, packagesFor(c), backend, workDirectory, optimization)]);
         return compareOutput(c, text.replace(dirName(c.sourcePath) ~ dirSeparator, "").normalizeNewlines);
     }
 
@@ -121,10 +122,51 @@ version (unittest)
         return text.replace("\r\n", "\n");
     }
 
+    /// The packages `c` is loaded with. A case's `.packages`, when it has one, holds its command
+    /// line's package options, one to a line, with directories taken from the case's own. Otherwise
+    /// each `*_support` directory beside the case is a package using the standard library, and the
+    /// case uses them all and the standard library.
+    Packages packagesFor(Case c)
+    {
+        import std.file : isDir;
+        import std.string : indexOf;
+
+        auto directory = dirName(c.sourcePath);
+        auto described = buildPath(directory, baseName(c.sourcePath).stripExtension ~ ".packages");
+        string[][string] options;
+        if (exists(described))
+        {
+            foreach (line; readText(described).lineSplitter.map!(l => l.strip).filter!(l => l.length > 0))
+            {
+                auto space = line.indexOf(' ');
+                assert(space > 0, "A line of " ~ described ~ " isn't an option and its value: " ~ line);
+                options[line[0 .. space]] ~= line[space + 1 .. $].strip;
+            }
+        }
+        else
+        {
+            string[] support;
+            foreach (entry; dirEntries(directory, "*_support", SpanMode.shallow))
+            {
+                if (!entry.isDir) continue;
+                auto name = baseName(entry.name);
+                support ~= name;
+                options["--package"] ~= name ~ "=" ~ name;
+                options["--uses"] ~= name ~ "=std";
+            }
+            options["--uses"] ~= (support.sort.release ~ "std").join(",");
+        }
+        Packages packages;
+        auto mistake = describePackages(options.get("--package", null), options.get("--uses", null),
+            options.get("--parts", null), directory, packages);
+        assert(mistake is null, described ~ ": " ~ mistake);
+        return packages;
+    }
+
     /// Loads and analyzes `c`. Returns why that failed, or null if it worked.
     string loadAndAnalyze(Case c, SourceContext context, out Program program, out Analysis analysis)
     {
-        program = load(readText(c.sourcePath), c.sourcePath, [standardLibraryPath(), dirName(c.sourcePath)], standardPrelude, context);
+        program = load(readText(c.sourcePath), c.sourcePath, packagesFor(c), standardPrelude, context);
         if (!context.collector.hasErrors)
         {
             analysis = analyze(program, context.collector, Target.host);
@@ -312,6 +354,8 @@ version (unittest)
 
     enum bundleSize = 12;
     enum bundleEntry = "conformanceEntry";
+    /// The package beside a bundle's program that holds its members, found as a case's support is.
+    enum bundlePackage = "bundle_support";
 
     struct Bundle
     {
@@ -341,16 +385,17 @@ version (unittest)
     /// Writes `members` to `directory` as modules, and a program there that runs each of them.
     Bundle makeBundle(string name, Case[] members, string directory)
     {
-        mkdirRecurse(directory);
+        mkdirRecurse(buildPath(directory, bundlePackage));
         string imports;
         string calls;
         string expected;
         foreach (c; members)
         {
-            auto moduleName = "t_" ~ c.name.replace("-", "_");
+            auto file = "t_" ~ c.name.replace("-", "_");
+            auto moduleName = bundlePackage ~ "." ~ file;
             auto source = ("module " ~ moduleName ~ "\n" ~ readText(c.sourcePath))
                 .replace("\ndef main(", "\ndef " ~ bundleEntry ~ "(");
-            write(buildPath(directory, moduleName ~ ".ag"), source);
+            write(buildPath(directory, bundlePackage, file ~ ".ag"), source);
             imports ~= "import " ~ moduleName ~ "\n";
             // Dropped, since a `main` can return `Unit ! E`.
             calls ~= "    _ = " ~ moduleName ~ "." ~ bundleEntry ~ "()\n";
@@ -683,7 +728,8 @@ version (unittest)
     string runStandardLibrary(TestBackend backend, string workDirectory, Optimization optimization = Optimization.none)
     {
         auto files = testFiles(standardLibraryPath());
-        auto runs = files.map!(file => runFile(file, [], backend, workDirectory, optimization)).array;
+        auto packages = Packages(withStandardLibrary([]));
+        auto runs = files.map!(file => runFile(file, packages, backend, workDirectory, optimization)).array;
         return succeeded(runs) ? null : report(runs);
     }
 

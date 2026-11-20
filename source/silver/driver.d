@@ -10,16 +10,16 @@ import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, 
 import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, optimizeIr, Toolchain;
 import silver.core : lowerProgram, printCore = print;
 import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed, RuntimeError;
-import silver.loader : load, standardLibraryPath, standardPrelude;
+import silver.loader : describePackages, load, Packages, standardPrelude;
 import silver.sema : analyze, Analysis, Target;
 
 /// Loads and analyzes `programFile`. Problems go to `context.collector`, which the caller
 /// must check before using `program` or the returned Analysis.
-Analysis loadAndAnalyze(string programFile, string[] importPaths, SourceContext context, out Program program)
+Analysis loadAndAnalyze(string programFile, const Packages packages, SourceContext context, out Program program)
 {
     try
     {
-        program = load(programFile.readText, programFile, importPaths, standardPrelude, context);
+        program = load(programFile.readText, programFile, packages, standardPrelude, context);
     }
     catch (DiagnosticException e)
     {
@@ -34,11 +34,11 @@ Analysis loadAndAnalyze(string programFile, string[] importPaths, SourceContext 
 }
 
 /// Interprets the program in `programFile`, or with `emitCore`, prints the Core it lowers to.
-int interpret(string programFile, string[] importPaths, bool emitCore = false)
+int interpret(string programFile, const Packages packages, bool emitCore = false)
 {
     auto context = new SourceContext();
     Program program;
-    auto analysis = loadAndAnalyze(programFile, importPaths, context, program);
+    auto analysis = loadAndAnalyze(programFile, packages, context, program);
     printDiagnostics(context);
     if (context.collector.hasErrors)
     {
@@ -89,11 +89,11 @@ enum Backend
 
 /// The LLVM IR for the program in `programFile`, or null after printing why there isn't any.
 /// `libraries` are what it has to be linked with.
-string compileToIr(string programFile, string[] importPaths, out string[] libraries)
+string compileToIr(string programFile, const Packages packages, out string[] libraries)
 {
     auto context = new SourceContext();
     Program program;
-    auto analysis = loadAndAnalyze(programFile, importPaths, context, program);
+    auto analysis = loadAndAnalyze(programFile, packages, context, program);
     printDiagnostics(context);
     if (context.collector.hasErrors)
     {
@@ -128,10 +128,10 @@ bool writeFile(string path, string content)
 }
 
 /// Compiles the program in `programFile` to the executable `outputPath`. False after printing why it failed.
-bool compileToExecutable(string programFile, string[] importPaths, string outputPath, Optimization optimization)
+bool compileToExecutable(string programFile, const Packages packages, string outputPath, Optimization optimization)
 {
     string[] libraries;
-    auto ir = compileToIr(programFile, importPaths, libraries);
+    auto ir = compileToIr(programFile, packages, libraries);
     if (ir is null)
     {
         return false;
@@ -161,13 +161,13 @@ bool compileToExecutable(string programFile, string[] importPaths, string output
 
 /// Compiles the program in `programFile` to an executable, or only to LLVM IR if `emitLlvm`:
 /// the IR codegen writes, or when optimizing, what clang makes of it.
-int build(string programFile, string[] importPaths, string outputPath, bool emitLlvm, Optimization optimization)
+int build(string programFile, const Packages packages, string outputPath, bool emitLlvm, Optimization optimization)
 {
     auto name = programFile.baseName.stripExtension;
     if (emitLlvm)
     {
         string[] libraries;
-        auto ir = compileToIr(programFile, importPaths, libraries);
+        auto ir = compileToIr(programFile, packages, libraries);
         if (ir is null)
         {
             return 1;
@@ -197,18 +197,18 @@ int build(string programFile, string[] importPaths, string outputPath, bool emit
         }
         return 0;
     }
-    return compileToExecutable(programFile, importPaths,
+    return compileToExecutable(programFile, packages,
         outputPath.empty ? executablePath(name) : outputPath, optimization) ? 0 : 1;
 }
 
 /// Compiles the program in `programFile` to a temporary executable and runs it,
 /// returning its exit status.
-int compileAndRun(string programFile, string[] importPaths, Optimization optimization)
+int compileAndRun(string programFile, const Packages packages, Optimization optimization)
 {
     import std.process : spawnProcess, wait;
 
     auto exePath = executablePath(temporaryPath(programFile, ""));
-    if (!compileToExecutable(programFile, importPaths, exePath, optimization))
+    if (!compileToExecutable(programFile, packages, exePath, optimization))
     {
         return 1;
     }
@@ -217,14 +217,14 @@ int compileAndRun(string programFile, string[] importPaths, Optimization optimiz
 }
 
 /// Runs the tests in the file or directory at `path`, reports them, and returns 0 if they all passed.
-int test(string path, string[] importPaths, Backend backend, Optimization optimization)
+int test(string path, const Packages packages, Backend backend, Optimization optimization)
 {
     import std.algorithm : map;
     import silver.testing : report, runFile, succeeded, TestBackend, testFiles;
 
     auto testBackend = backend == Backend.both ? TestBackend.both
         : backend == Backend.llvm ? TestBackend.llvm : TestBackend.interpreter;
-    auto runs = testFiles(path).map!(file => runFile(file, importPaths, testBackend, tempDir, optimization)).array;
+    auto runs = testFiles(path).map!(file => runFile(file, packages, testBackend, tempDir, optimization)).array;
     write(report(runs));
     return succeeded(runs) ? 0 : 1;
 }
@@ -364,7 +364,9 @@ unittest
 /// Runs the driver with the command line `args`, returning the exit status.
 int run(string[] args)
 {
-    string[] importPaths;
+    string[] packageOptions;
+    string[] usesOptions;
+    string[] partsOptions;
     string outputPath;
     bool emitLlvm;
     bool emitCore;
@@ -381,7 +383,10 @@ int run(string[] args)
         arguments = getopt(
     args,
     config.caseSensitive,
-    "importPath|I", "Add a path to search for imported modules", &importPaths,
+    "package", "a package, as name=directory: the module name.a.b is directory/a/b.ag", &packageOptions,
+    "uses", "what a package uses, as name=package,package, or for a file with no module line, package,package",
+        &usesOptions,
+    "parts", "a package's parts, as name=part,part", &partsOptions,
     "backend|b", "run, test: how to run the program: interpreter (default), llvm, or for tests, both", &backend,
     "output|o", "build: where to write the executable (or the IR, with --emit-llvm)", &outputPath,
     "optimize|O", "build, and run or test with -b llvm: have clang optimize the compiled program."
@@ -405,6 +410,12 @@ int run(string[] args)
         stderr.writeln(mistake);
         return 1;
     }
+    Packages packages;
+    if (auto mistake = describePackages(packageOptions, usesOptions, partsOptions, null, packages))
+    {
+        stderr.writeln(mistake, "\nRun `silver --help` for the options.");
+        return 1;
+    }
     immutable building = args[1] == "build";
     immutable testing = args[1] == "test";
     immutable optimization = optimize ? Optimization.full : Optimization.none;
@@ -417,7 +428,7 @@ int run(string[] args)
             stderr.writefln("'%s' doesn't exist!", programFile);
             return 1;
         }
-        return test(programFile, importPaths, backend, optimization);
+        return test(programFile, packages, backend, optimization);
     }
 	if(!programFile.exists || !programFile.isFile)
 	{
@@ -425,15 +436,14 @@ int run(string[] args)
 		return 1;
 	}
 
-    auto allImportPaths = importPaths.chain([standardLibraryPath(), programFile.dirName]).array;
     if (building)
     {
-        return build(programFile, allImportPaths, outputPath, emitLlvm, optimization);
+        return build(programFile, packages, outputPath, emitLlvm, optimization);
     }
     final switch (backend)
     {
-        case Backend.interpreter: return interpret(programFile, allImportPaths, emitCore);
-        case Backend.llvm: return compileAndRun(programFile, allImportPaths, optimization);
+        case Backend.interpreter: return interpret(programFile, packages, emitCore);
+        case Backend.llvm: return compileAndRun(programFile, packages, optimization);
         case Backend.both:
             stderr.writeln("Only `silver test` runs a program both ways");
             return 1;

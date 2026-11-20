@@ -9,7 +9,7 @@ These documents describe the language as designed. Where the implementation does
 - `silver <file>` runs a program with the interpreter, and `silver -b llvm <file>` compiles it and runs the result.
 - `silver build <file>` compiles it to an executable, which `-o` names. With `--emit-llvm` it writes the LLVM IR instead.
 - `silver test <path>` runs tests: see [Testing](language/testing.md#running-tests).
-- `-I <path>` adds a directory to search for imported modules.
+- `--package name=directory` declares a [package](language/modules.md#packages), `--uses name=a,b` lists what it uses, `--uses a,b` what a file with no `module` line uses, and `--parts name=a,b` its parts: see [Modules](language/modules.md#current-implementation). The standard library is the package `std`, and a file that imports from it lists it, as `silver --uses std hello.ag`.
 
 Silver is designed to be compiled a package at a time. A package compiles to its signatures, the bodies of its generic and inlinable functions, and object code. A package that uses it instantiates those generics itself and is rebuilt when the package changes. There is no stable binary interface: a compiled package can't be swapped without rebuilding what uses it. Today every program is still compiled whole.
 
@@ -36,7 +36,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
 | [Interfaces](language/interfaces.md) | Interfaces, declared conformance, bounds, `if type`, interface names as parameter and result types | Partial: every module sees every conformance; no interface types as values |
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
-| [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: no packages or renamed imports, and the build can't name another prelude |
+| [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: packages are given on the command line, their parts share nothing yet, and there are no renamed imports; the build can't name another prelude |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the natives of `lang` and the standard library |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, `panics`, the test runner | Partial: no `--filter` or `--format json` |
 

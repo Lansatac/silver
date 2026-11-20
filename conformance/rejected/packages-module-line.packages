@@ -1,0 +1,2 @@
+--package shapes=packages_fixtures/shapes
+--uses shapes

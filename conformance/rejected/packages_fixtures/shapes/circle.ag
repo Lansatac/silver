@@ -1,0 +1,5 @@
+module shapes.circle
+
+type Circle(radius: Int)
+
+def area(c: Circle): Int => 3 * c.radius * c.radius

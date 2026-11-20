@@ -190,7 +190,25 @@ Inside the forwarding module, its own functions come first, and what it forwards
 ## Current implementation
 
 - Renamed imports aren't available.
-- Packages aren't implemented. A program is compiled whole from unnamed roots, given with `-I`, and a module's name is its whole path under one: `import a.b` loads `<root>/a/b.ag`. There are no parts, no list of what a package uses, and no difference between a program and a library.
+- A program is still compiled whole, with every package it reaches.
+- Until there's a way to describe a package, `silver` is given them on the command line. `--package name=directory` declares one, `--uses name=a,b` lists what the package `name` uses, `--uses a,b` lists what a file with no `module` line uses, and `--parts name=a,b` lists a package's parts. Each can be repeated, and a list given twice adds up. The standard library is the package `std` in the compiler's directory, unless `--package std=...` puts another in its place.
+
+  ```
+  silver --uses std hello.ag
+  silver --package geometry=lib/geometry --uses geometry=std --uses geometry,std app.ag
+  silver --package app=src --package geometry=lib/geometry --uses app=geometry,std src/main.ag
+  silver --package silver=source --package silver.core=core/source --parts silver=silver.core
+      --uses silver=silver.core,std --uses silver.core=std source/app.ag
+  silver test --package geometry=lib/geometry --uses geometry=std lib/geometry
+  ```
+
+- Nothing but `lang` is used without being listed, so a package or a file that imports a module of `std` lists `std`. The prelude is imported into every module whatever its package lists.
+- A package's own name isn't a module's: in a package `geometry`, `import geometry` isn't found (`L0001`), since a module's path under the directory can't be empty. `lang` is the exception, whose module `lang` is the compiler's.
+- A starting file with a `module` line has to be the file its package and the rest of its name say, and one whose name no package's starts is an error, as is an imported file whose `module` line isn't the name it was imported by (all `L0003`).
+- An import from a package that the importing module's package doesn't list is `L0010`, and isn't followed. A part imports its parent, or another part, only by listing it, as for any package.
+- A package that uses a program is `L0011`, reported at the program's `main`. Every `.ag` file of a used package is read to find one, other than companion test files, so a `main` in a module nothing imports still counts.
+- Lists of what packages use that form a cycle are `L0012`. A description that can't be followed is `L0013`: a list naming a package that isn't declared or `lang`, two packages of one name, a directory that isn't one, a part listed by two parents or listing parts of its own, or a file with no `module` line named as a declared package is. Declaring a package in `lang` is `L0004`.
+- Parts are checked as above and mean nothing else yet: what the parts of a package share isn't built.
 - `lang` is the module `lang` and the modules under it, read only from the compiler's own directory. What every module sees without an import, whatever the prelude, is what the module `lang` forwards: `lang.array`, `lang.interval`, `lang.io`, `lang.panic`, `lang.range`, `lang.testing`, and `bytes` and `next` from `lang.string`. `lang`'s other modules are reached by importing them, or through the `std` modules that forward them, as `std.ref` does `lang.ref`.
 - A module named as part of `lang`, by its `module` line or, without one, by its file name, is an error (`L0004`) unless it is the compiler's own file, so a program can't add to `lang` or replace it. An import in a module of `lang` of anything outside `lang` is an error too (`L0005`).
 - The build can't name another prelude yet: `silver` always uses `std.prelude`, which forwards `std.of` (for `Of`) and `std.range`, and declares nothing itself. The other `std` modules are reached by importing them. A prelude that isn't found is an error.

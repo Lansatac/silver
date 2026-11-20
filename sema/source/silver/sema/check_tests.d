@@ -2671,8 +2671,8 @@ unittest
 @("an intrinsic is declared only in lang, and only for one the compiler implements")
 unittest
 {
-    analyzed("import std.extra\ndef main(): Unit { }", ["std/extra.ag": "module std.extra\nintrinsic def printl(value: Any): Unit"])
-        .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("printl", 1, "std.extra"));
+    analyzed("import kit.extra\ndef main(): Unit { }", ["kit/extra.ag": "module kit.extra\nintrinsic def printl(value: Any): Unit"])
+        .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("printl", 1, "kit.extra"));
     analyzed("import language\ndef main(): Unit { }", ["language.ag": "module language\nintrinsic alias CLong"])
         .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("CLong", 1, "language"));
     analyzed("intrinsic def print(value: Any): Unit\ndef main(): Unit { }")
@@ -3064,14 +3064,14 @@ unittest
 {
     import std.algorithm : canFind, map;
     import std.array : array;
-    import silver.loader : load, standardLibraryPath, standardPrelude;
+    import silver.loader : load, Packages, standardPackage, standardPrelude, withStandardLibrary;
     import silver.sema.analysis : analyze;
 
     foreach (file; ["lang.ag", "lang.evil.ag"])
     {
         auto context = new SourceContext;
         auto program = load("intrinsic def panic(message: String): Never\ndef main(): Unit { }", file,
-            [standardLibraryPath()], standardPrelude, context);
+            Packages(withStandardLibrary([]), [standardPackage]), standardPrelude, context);
         if (!context.collector.hasErrors) analyze(program, context.collector, Target.host);
         auto codes = context.collector.errors.map!(e => e.code).array;
         assert(codes.canFind(DiagnosticCode.NotInLang),

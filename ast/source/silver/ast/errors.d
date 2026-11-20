@@ -23,6 +23,14 @@ enum DiagnosticCode : string
     TestOnlyConformance = "L0008",
     /// A file that exists and can't be read as text.
     UnreadableFile = "L0009",
+    /// An import of a module in a package that the importing module's package doesn't list.
+    ImportOutsideUses = "L0010",
+    /// A package that lists a program among what it uses.
+    UsesProgram = "L0011",
+    /// Packages whose lists of what they use form a cycle.
+    PackageCycle = "L0012",
+    /// A description of the packages that can't be followed, as a list naming an unknown package.
+    InvalidPackages = "L0013",
 
     DuplicateDeclaration = "S0001",
     UnknownName = "S0002",

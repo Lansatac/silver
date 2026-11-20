@@ -9,7 +9,7 @@ import std.format : format;
 import std.sumtype : match;
 
 import silver.ast;
-import silver.loader : load, standardLibraryPath, standardPrelude;
+import silver.loader : load, Packages, standardPackage, standardPrelude, withStandardLibrary;
 import silver.sema.analysis;
 import silver.sema.resolve;
 import silver.sema.target : Target;
@@ -44,7 +44,7 @@ Analyzed analyzed(string entry, string[string] files = null, Target target = Tar
     }
 
     auto context = new SourceContext;
-    auto program = load(entry, "main.ag", [directory, standardLibraryPath()], prelude, context);
+    auto program = load(entry, "main.ag", Packages(withStandardLibrary([Package(null, directory)]), [standardPackage]), prelude, context);
     assert(!context.collector.hasErrors, "The test program failed to load");
 
     Analyzed a;
@@ -522,7 +522,7 @@ const(DiagnosticCode)[] inLang(string declarations)
     import silver.syntax.parse : parse;
 
     auto context = new SourceContext;
-    auto program = load("def main(): Unit { }", "main.ag", [standardLibraryPath()], standardPrelude, context);
+    auto program = load("def main(): Unit { }", "main.ag", Packages(withStandardLibrary([]), [standardPackage]), standardPrelude, context);
     auto source = "module lang.extra\n" ~ declarations;
     context.sources.add("extra.ag", source);
     auto extra = new Module;
@@ -1541,7 +1541,7 @@ unittest
 {
     void rejected(string declaration)
     {
-        auto a = analyzed("module main\nprivate type Detail(value: Int)\n" ~ declaration ~ "\ndef main(): Unit => ()");
+        auto a = analyzed("private type Detail(value: Int)\n" ~ declaration ~ "\ndef main(): Unit => ()");
         a.shouldReport(DiagnosticCode.PrivateTypeExposed, At("Detail", 2));
     }
 

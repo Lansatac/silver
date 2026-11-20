@@ -62,18 +62,20 @@ unittest
 /// Each public function that a module declares beside a blanket forward of a module giving a
 /// function of the same name and parameters, as `facade.name hides target.name`. The facade's
 /// replaces the target's for its importers, so a module importing both, as anyone importing the
-/// original beside the prelude does, can't call either. `modules` are loaded from `roots`, and each
-/// candidate is asked of the checker as two imports listing the name, which is T0035 exactly when
-/// they bring different functions of the same parameters.
-private string[] hiddenByFacades(string[] roots, string[] modules)
+/// original beside the prelude does, can't call either. `modules` are loaded from the standard
+/// library and from `fixtures`, unless it's null, as a test's unnamed package, and each candidate
+/// is asked of the checker as two imports listing the name, which is T0035 exactly when they bring
+/// different functions of the same parameters.
+private string[] hiddenByFacades(string fixtures, string[] modules)
 {
     import std.algorithm : canFind, map;
     import std.array : join;
     import std.sumtype : match;
     import silver.ast;
-    import silver.loader : load, standardPrelude;
+    import silver.loader : load, Packages, standardPackage, standardPrelude, withStandardLibrary;
     import silver.sema.analysis : analyze;
 
+    auto roots = Packages(withStandardLibrary(fixtures is null ? [] : [Package(null, fixtures)]), [standardPackage]);
     auto context = new SourceContext;
     auto program = load(modules.map!(m => "import " ~ m ~ "\n").join, "main.ag", roots, standardPrelude, context);
     assert(!context.collector.hasErrors, "The modules failed to load");
@@ -128,7 +130,7 @@ unittest
         .map!(e => relativePath(e.name, root).stripExtension.pathSplitter.join("."))
         .array;
     assert(modules.length > 10, "The standard library wasn't found");
-    auto hidden = hiddenByFacades([root], modules);
+    auto hidden = hiddenByFacades(null, modules);
     assert(hidden.length == 0, format("Facades replacing what they forward: %s", hidden));
 }
 
@@ -150,6 +152,6 @@ unittest
     write(buildPath(directory, "kit", "facade.ag"), "module kit.facade\nforward import kit.middle\n"
         ~ "def f(y: Int): Int => y\ndef g<U>(ys: [U]): Int => 1\ndef h(x: Float): Float => x\n"
         ~ "private def f(): Int => 0\n");
-    auto hidden = hiddenByFacades([directory, standardLibraryPath()], ["kit.facade"]);
+    auto hidden = hiddenByFacades(directory, ["kit.facade"]);
     assert(hidden == ["kit.facade.f hides kit.middle.f", "kit.facade.g hides kit.middle.g"], format("%s", hidden));
 }

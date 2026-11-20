@@ -1,0 +1,4 @@
+// shapes.render imports shapes.circle without listing shapes among what it uses.
+import shapes.render.text
+
+def main(): Unit { }

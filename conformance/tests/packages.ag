@@ -1,0 +1,10 @@
+// A module is named by its package and its path under the package's directory, found by the
+// package with the longest matching name, and a package imports only from itself and what it lists.
+import shapes.circle
+import shapes.render.text
+
+def main(): Unit {
+    val c = Circle(2)
+    printl(area(c))
+    printl(describe(c))
+}

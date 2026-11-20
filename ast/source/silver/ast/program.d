@@ -20,6 +20,25 @@ struct Program
     SourceMap sources;
     /// The module loading started from, whose tests `silver test` runs.
     string entryModule;
+    /// The packages the program was loaded with.
+    const(Package)[] packages;
+    /// The name of each module's package, by the module's name. A file with no `module` line is a
+    /// package of its own, named as its module is, and `lang`'s modules are in `lang`.
+    string[string] packageOf;
+}
+
+/// A package: a name, and the directory its modules are under. A module's name is the package's
+/// followed by the module's path under the directory.
+struct Package
+{
+    /// One or more segments, as `silver.core`. Empty only for a test's fixtures, whose modules are
+    /// named by their whole path, and which use and are used by every package.
+    string name;
+    string directory;
+    /// The packages it may import from beside itself, other than `lang`, which every package uses.
+    string[] uses;
+    /// The packages that are its parts.
+    string[] parts;
 }
 
 auto sortedModules(const ref Program program)
