@@ -94,3 +94,15 @@ unittest
     run("type Box<T>(value: T)\ndef identity<T>(x: T): T => x\ndef main(): Unit {\n    printl(identity<Int>)\n"
         ~ "    printl(Box<String>)\n}").should.equal("identity<Int>\nBox<String>\n");
 }
+
+@("the test helper fails on a module that doesn't load, rather than resolving without it")
+unittest
+{
+    import core.exception : AssertError;
+    import std.algorithm : canFind;
+    import std.exception : collectException;
+
+    auto e = collectException!Throwable(run("import std.nosuch\ndef main(): Unit {\n    nosuch.g()\n}"));
+    assert(cast(AssertError) e !is null && e.msg.canFind("nosuch"),
+            "expected the helper's assertion naming the missing module, got " ~ (e is null ? "nothing" : typeid(e).name ~ ": " ~ e.msg));
+}

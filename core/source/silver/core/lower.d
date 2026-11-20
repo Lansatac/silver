@@ -3627,3 +3627,14 @@ def lambda(n: Int): Int Add(n, cell.Get(r))
 
 def format.Ref<Int>(value: Ref<Int>): String Concat("Ref(", Format(cell.Get(value)), ")")`);
 }
+
+@("the test helper fails on a module that doesn't load, rather than resolving without it")
+unittest
+{
+    import core.exception : AssertError;
+    import std.exception : collectException;
+
+    auto e = collectException!Throwable(loweredFunction("import std.nosuch\ndef f(): Int => nosuch.g()", "f"));
+    assert(cast(AssertError) e !is null && e.msg.canFind("nosuch"),
+            "expected the helper's assertion naming the missing module, got " ~ (e is null ? "nothing" : typeid(e).name ~ ": " ~ e.msg));
+}
