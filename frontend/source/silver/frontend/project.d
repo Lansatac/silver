@@ -384,22 +384,27 @@ bool within(string inner, string outer)
 /// Whether `a` and `b` are the same path, comparing names as the file system does.
 bool samePath(string a, string b) => within(a, b) && within(b, a);
 
-/// Whether `name` is a package's name: names joined by `.`, each a letter or `_` and then letters,
-/// digits and `_`, as the compiler requires.
+/// Whether `name` is a package's name: segments joined by `.`, each one a module's name could have, a
+/// lowercase letter or `_` and then letters, digits and `_`, so that the package can have modules. A
+/// copy of `isPackageName` in loader/source/silver/loader.d, which this package can't import.
 bool validName(string name)
 {
     import std.algorithm : all, splitter;
-    import std.ascii : isAlpha, isAlphaNum;
+    import std.ascii : isAlphaNum, isLower;
 
     if (name.length == 0) return false;
     foreach (segment; name.splitter('.'))
     {
-        if (segment.length == 0 || !(isAlpha(segment[0]) || segment[0] == '_')
+        if (segment.length == 0 || !(isLower(segment[0]) || segment[0] == '_')
             || !segment.all!(c => isAlphaNum(c) || c == '_'))
             return false;
     }
     return true;
 }
+
+/// What a package's name is, worded to follow "isn't a package name: ", as the compiler words it.
+enum nameRule = "it's one or more segments joined by `.`, as \"silver.core\", each a lowercase letter or `_` "
+    ~ "followed by letters, digits and `_`, as in a module's name";
 
 private:
 
@@ -538,8 +543,7 @@ struct Checker
         if (!str(value, "A package's `name`")) return false;
         if (!validName(value.text))
         {
-            return fail(ProjectCode.BadName, value.span, "\"" ~ value.text ~ "\" isn't a package name: it's one or "
-                ~ "more names joined by `.`, each a letter or `_` and then letters, digits and `_`, as \"silver.core\"");
+            return fail(ProjectCode.BadName, value.span, "\"" ~ value.text ~ "\" isn't a package name: " ~ nameRule);
         }
         named = Named(value.text, value.span);
         return true;
@@ -602,8 +606,8 @@ struct Checker
             }
             if (!validName(entry.key))
             {
-                return fail(ProjectCode.BadName, entry.keySpan, "\"" ~ entry.key ~ "\" isn't a package name: it's one "
-                    ~ "or more names joined by `.`, as \"silver.core\"");
+                return fail(ProjectCode.BadName, entry.keySpan, "\"" ~ entry.key ~ "\" isn't a package name: "
+                    ~ nameRule);
             }
             if (entry.key == standardPackage)
             {
@@ -1116,6 +1120,28 @@ unittest
     m("name = \"g\"\n[paths]\n\"g.x\" = \"x\"\n[[part]]\nname = \"g.x\"\npath = \"lib\"", ProjectCode.PathForOwnPackage, 3, 1);
     m("name = \"g\"\nuses = [\"a\"]\n[[part]]\nname = \"g.x\"\npath = \"lib\"", ProjectCode.UsesWithoutModules, 2, 1);
     m("name = \"g\"\nuses = [geometry]", TomlCode.BadValue, 2, 9);
+}
+
+@("a package's name has the segments a module's name has, wherever a silver.toml writes one")
+unittest
+{
+    auto directory = makeTree("project-names", ["lib/": ""]);
+    scope (exit) rmdirRecurse(directory);
+    alias m = (text, line, column) => mistakeIn(directory, text, ProjectCode.BadName, line, column);
+
+    foreach (bad; ["Geo", "geoShapes.X", "geo.Shapes", "1geo", "geo.2d", "geo-x", "a..b", ".a", "a.", "café", "geo x"])
+    {
+        auto named = m("name = \"" ~ bad ~ "\"", 1, 8);
+        assert(named.message == "\"" ~ bad ~ "\" isn't a package name: it's one or more segments joined by `.`, as "
+            ~ "\"silver.core\", each a lowercase letter or `_` followed by letters, digits and `_`, as in a module's "
+            ~ "name", named.message);
+        m("name = \"g\"\nuses = [\"a\", \"" ~ bad ~ "\"]\n[paths]\na = \"x\"", 2, 14);
+        m("name = \"g\"\n[paths]\n\"" ~ bad ~ "\" = \"x\"", 3, 1);
+        m("name = \"g\"\n[[part]]\nname = \"" ~ bad ~ "\"\npath = \"lib\"", 3, 8);
+        m("name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"lib\"\nuses = [\"" ~ bad ~ "\"]", 5, 9);
+    }
+    foreach (good; ["geo", "geoShapes", "geo_x", "_", "_geo", "geo2", "val", "if", "match", "silver.core"])
+        assert(validName(good), good);
 }
 
 @("a mistake is formatted with its file shown as asked, and one that can't be read has no position")

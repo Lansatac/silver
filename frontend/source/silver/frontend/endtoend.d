@@ -151,6 +151,17 @@ unittest
     assert(p.mistake == "silver.toml(2,1): " ~ message[0 .. $ - 1] && p.arguments is null);
 }
 
+@("a package named with a capital letter is refused at its name in silver.toml, and the compiler isn't started")
+unittest
+{
+    auto directory = makeTree("frontend-capital-name", ["silver.toml": "name = \"Geo\"\n",
+        "main.ag": "module Geo.main\n\ndef main(): Unit {\n    printl(1)\n}\n"]);
+    scope (exit) rmdirRecurse(directory);
+    expectRan(silver(["main.ag"], directory), "silver.toml(1,8): Error F0019: \"Geo\" isn't a package name: it's one or "
+        ~ "more segments joined by `.`, as \"silver.core\", each a lowercase letter or `_` followed by letters, digits "
+        ~ "and `_`, as in a module's name\n", 1);
+}
+
 @("a compiler message about a package in a project names its package file and field, not an option")
 unittest
 {

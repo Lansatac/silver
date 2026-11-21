@@ -4,6 +4,8 @@ A module's identity is its name: its [package](#packages)'s name, then its path 
 
 Every importable file begins with its full name, as `module a.b.c`, which must match. Only a file that is never imported may omit the declaration.
 
+Each segment of a module's name is a lowercase letter or `_` followed by letters, digits and `_`, so `geo.shapes` and `geo.roundShapes` can be modules and `Geo.shapes`, `geo.2d` and `geo.round-shapes` can't.
+
 ## Imports
 
 ```silver
@@ -30,7 +32,7 @@ The prelude declares nothing itself. It's a list of `forward import`s of `std` m
 
 ## Packages
 
-A package is a name and a directory of modules. Its name is one or more segments, as `std` or `silver.core`, and a module's name is the package's name followed by the module's path under the directory:
+A package is a name and a directory of modules. Its name is one or more segments, as `std` or `silver.core`. Each segment is written as a segment of a [module's name](#modules) is, since the package's name starts the name of every module in it. A module's name is the package's name followed by the module's path under the directory:
 
 ```
 package silver.core at core/source

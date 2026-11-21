@@ -11,7 +11,7 @@ import silver.codegen : executablePath, findToolchain, generate, linkExecutable,
 import silver.core : lowerProgram, printCore = print;
 import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed, RuntimeError;
 import silver.loader : describePackageFiles, describePackages, describeScriptHomes, describeSilver, load, Packages,
-    programStart, standardPrelude;
+    programStart, standardPrelude, undeclared;
 import silver.sema : analyze, Analysis, Target;
 
 /// Loads and analyzes `programFile`. Problems go to `context.collector`, which the caller
@@ -952,7 +952,7 @@ int run(string[] args)
     if (mistake is null) mistake = describePackageFiles(packageFileOptions, packages);
     if (mistake is null) mistake = describeScriptHomes(scriptsInOptions, null, packages);
     if (mistake is null && program !is null && !packages.declared.canFind!(p => p.name == program))
-        mistake = "--program names '" ~ program ~ "', which no --package or --parts declares";
+        mistake = undeclared("--program", program);
     if (mistake !is null)
     {
         stderr.writeln(mistake, "\nRun `silverc --help` for the options.");

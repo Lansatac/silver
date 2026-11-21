@@ -546,9 +546,9 @@ private struct Layout
         string[string] parentOf;
         foreach (i, ref p; declared)
         {
-            if (p.name.length > 0 && !validName(p.name))
-                problem(DiagnosticCode.InvalidPackages, format("'%s' isn't a package name: it's one or more names "
-                    ~ "joined by `.`, as `silver.core`", p.name));
+            if (p.name.length > 0 && !isPackageName(p.name))
+                problem(DiagnosticCode.InvalidPackages, format("'%s' isn't a package name: %s", p.name,
+                    packageNameRule));
             else if (isInLang(p.name))
                 problem(DiagnosticCode.NotInLang, format("'%s' would be part of `%s`, which ships with the compiler, "
                     ~ "so it can't be declared", p.name, langPackage));
@@ -585,6 +585,9 @@ private struct Layout
                 if (isInLang(entry))
                     problem(DiagnosticCode.InvalidPackages, format("%s lists `%s` among what it %s, and every "
                         ~ "package uses `%s` without listing it", owner, entry, what, langPackage));
+                else if (entry.length > 0 && named(entry) is null && !isPackageName(entry))
+                    problem(DiagnosticCode.InvalidPackages, format("%s lists '%s' among what it %s, and '%s' isn't "
+                        ~ "a package name: %s", owner, entry, what, entry, packageNameRule));
                 else if (entry.length == 0 || named(entry) is null)
                     problem(DiagnosticCode.InvalidPackages, format("%s lists '%s' among what it %s, and there's no "
                         ~ "package of that name%s", owner, entry, what,
@@ -859,20 +862,18 @@ private string[] segmentsOf(string name)
     return name.length == 0 ? [] : name.split(".");
 }
 
-/// Whether `name` is one or more identifiers joined by `.`.
-private bool validName(string name)
+/// Whether `name` is a package's name: segments joined by `.`, each one a module's name could have, so
+/// that the package can have modules. frontend/source/silver/frontend/project.d has a copy, `validName`.
+bool isPackageName(string name)
 {
     import std.algorithm : all;
-    import std.ascii : isAlpha, isAlphaNum;
 
-    foreach (segment; name.split("."))
-    {
-        if (segment.length == 0 || !(isAlpha(segment[0]) || segment[0] == '_')
-            || !segment.all!(c => isAlphaNum(c) || c == '_'))
-            return false;
-    }
-    return true;
+    return name.length > 0 && name.split(".").all!moduleSegment;
 }
+
+/// What a package's name is, worded to follow "isn't a package name: ".
+enum packageNameRule = "it's one or more segments joined by `.`, as `silver.core`, each a lowercase letter or `_` "
+    ~ "followed by letters, digits and `_`, as in a module's name";
 
 /// The file the module `chain` of `lang` is, which is only ever the compiler's own.
 private string langModulePath(const string[] chain)
@@ -977,7 +978,7 @@ string describePackages(const string[] declared, const string[] uses, const stri
                 owner = &packages.declared[$ - 1];
             }
             if (owner is null)
-                return format("%s names '%s', which no --package declares", flag, option[0 .. at]);
+                return undeclared(flag, option[0 .. at], "--package");
             if (i == 0) owner.uses ~= listOf(option[at + 1 .. $]);
             else owner.parts ~= listOf(option[at + 1 .. $]);
         }
@@ -987,6 +988,14 @@ string describePackages(const string[] declared, const string[] uses, const stri
         ? format("Give `--uses %s` to list it", used) : format("Give `--uses %s=%s` to list it", user, used);
     packages.packageHint = (user, name) => format("Give `--package %s=<directory>` to declare one", name);
     return null;
+}
+
+/// Why the option `option` can't name `name`, which none of `declarers` declares: that it can't be a
+/// package's name at all, when it can't.
+string undeclared(string option, string name, string declarers = "--package or --parts")
+{
+    return isPackageName(name) ? format("%s names '%s', which no %s declares", option, name, declarers)
+        : format("%s names '%s', which isn't a package name: %s", option, name, packageNameRule);
 }
 
 /// Says that `silver` is the one driving, from `--from-silver`: the hints for what no package file
@@ -1024,7 +1033,7 @@ string describePackageFiles(const string[] files, ref Packages packages)
                 ~ "`--package-file geometry=geometry/silver.toml`, not `%s`", option);
         immutable name = option[0 .. at];
         if (!packages.declared.canFind!(p => p.name == name))
-            return format("--package-file names '%s', which no --package or --parts declares", name);
+            return undeclared("--package-file", name);
         fileOf[name] = option[at + 1 .. $];
     }
     string[string] parentOf;
@@ -1074,7 +1083,7 @@ string describeScriptHomes(const string[] options, string base, ref Packages pac
         auto directory = base.length == 0 ? option[at + 1 .. $] : buildPath(base, option[at + 1 .. $]);
         auto found = packages.declared.countUntil!(p => p.name == name);
         if (found < 0)
-            return format("--scripts-in names '%s', which no --package or --parts declares", name);
+            return undeclared("--scripts-in", name);
         auto modules = packages.declared[found].directory;
         if (modules.length > 0 && !within(modules, directory))
             return format("--scripts-in gives '%s' the directory %s, which doesn't hold its modules, at %s", name,
@@ -2342,6 +2351,56 @@ unittest
         .should.contain("a part can't have parts");
     problems(Packages([Package("a", a.directory, [], ["a"])], ["a"]))[0].should.contain("lists itself as a part");
     problems(Packages([Package("a", a.directory, [], ["b"]), b], ["a"])).length.should.equal(0);
+}
+
+@("a package's name has the segments a module's name has, wherever it's given, and one that can't be a name says so")
+unittest
+{
+    auto directory = makeModuleDirectory("package-names", ["a/x.ag": "module a.x", "b/x.ag": ""]);
+    scope (exit) rmdirRecurse(directory);
+
+    enum rule = "it's one or more segments joined by `.`, as `silver.core`, each a lowercase letter or `_` followed by "
+        ~ "letters, digits and `_`, as in a module's name";
+    auto bad = ["Geo", "geo.Shapes", "1geo", "geo.2d", "geo-x", "a..b", ".a", "b.", "café", "geo x"];
+    foreach (name; bad) isPackageName(name).should.equal(false);
+    foreach (name; ["geo", "geoShapes", "geo_x", "_", "_geo", "geo2", "val", "if", "match", "silver.core"])
+        isPackageName(name).should.equal(true);
+
+    string[] problems(Packages packages)
+    {
+        auto context = new SourceContext;
+        load("import a.x", "main.ag", packages, null, context);
+        return context.collector.errors.map!(e => cast(string) e.code ~ ": " ~ e.message).array;
+    }
+    auto a = Package("a", buildPath(directory, "a"));
+    foreach (name; bad)
+    {
+        // Declared, it's refused once, and a list naming it isn't told there's no such package.
+        problems(Packages([a, Package(name, buildPath(directory, "b"))], ["a", name]))
+            .should.equal([format("L0013: '%s' isn't a package name: %s", name, rule)]);
+        problems(Packages([a, Package("p", null, [], [name])], ["a"])).should.equal([format("L0013: The package 'p' "
+            ~ "lists '%s' among what it has as parts, and '%s' isn't a package name: %s", name, name, rule)]);
+        problems(Packages([Package("a", a.directory, [name])], ["a"])).should.equal([format("L0013: The package 'a' "
+            ~ "lists '%s' among what it uses, and '%s' isn't a package name: %s", name, name, rule)]);
+        problems(Packages([a], ["a", name])).should.equal([format("L0013: 'main', the file with no `module` line, "
+            ~ "lists '%s' among what it uses, and '%s' isn't a package name: %s", name, name, rule)]);
+    }
+    problems(Packages([a], ["a", "geo"]))[0].should.endWith("lists 'geo' among what it uses, and there's no package of that name");
+    problems(Packages([a, Package("shapes.package", buildPath(directory, "b"))], ["a"]))[0]
+        .should.contain("its last segment is `package`");
+
+    Packages packages;
+    describePackages(["Geo=b"], [], [], null, packages).should.equal(null);
+    describePackages([], ["Geo=a"], [], null, packages)
+        .should.equal("--uses names 'Geo', which isn't a package name: " ~ rule);
+    describePackages(["a=a"], [], [], null, packages).should.equal(null);
+    describePackageFiles(["Geo=x/silver.toml"], packages)
+        .should.equal("--package-file names 'Geo', which isn't a package name: " ~ rule);
+    describePackages(["a=" ~ a.directory], [], [], null, packages).should.equal(null);
+    describeScriptHomes(["Geo=" ~ directory], null, packages)
+        .should.equal("--scripts-in names 'Geo', which isn't a package name: " ~ rule);
+    undeclared("--program", "Geo").should.equal("--program names 'Geo', which isn't a package name: " ~ rule);
+    undeclared("--program", "geo").should.equal("--program names 'geo', which no --package or --parts declares");
 }
 
 @("describePackages reads the command line's spelling, from a base directory, and adds the standard library")

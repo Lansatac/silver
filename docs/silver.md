@@ -38,7 +38,7 @@ geometry/area.ag              module geometry.area
 geometry/shapes/circle.ag     module geometry.shapes.circle
 ```
 
-- `name` is the package's name, and has to be given.
+- `name` is the package's name, and has to be given. Each segment of it is written as a segment of a [module's name](language/modules.md#modules) is: a lowercase letter or `_`, then letters, digits and `_`. The same goes for a part's `name` and every name in `uses` and under `[paths]`.
 - The package's modules are in the file's own directory, unless `source` names a directory under it, as `source = "source"`.
 - `uses` lists the packages this one uses, by name. The standard library isn't listed: every package uses it.
 - `[paths]` says where a used package is, as a directory. That directory's `silver.toml` has to declare a package of that name, and what the used package uses in turn is read there and not repeated.
