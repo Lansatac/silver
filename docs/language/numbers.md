@@ -71,6 +71,8 @@ An integer operation produces the right answer or stops the program. This is the
 
 `<<` does not panic when bits fall off the end. `>>` is logical on unsigned types and arithmetic on signed types. `+%`, `-%` and `*%` wrap instead of panicking.
 
+`countOnes(x)`, from `std.math`, is how many bits of a `UInt` are 1: `countOnes(0b1011)` is 3. A value of another integer type is converted first, as in `countOnes(UInt(byte))`.
+
 ## Conversions
 
 A conversion is written as a call to the target type: `UInt8(x)`, `Float(n)`, `Int(f)`.

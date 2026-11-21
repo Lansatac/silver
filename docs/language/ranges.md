@@ -127,6 +127,8 @@ conform Dictionary<K, V>: Iterable<Entries<K, V>>
 
 - `for x in c`, where `c` isn't a range and is an `Iterable<R>`, calls `iterate(c)` once and loops over what it gives, which has to be a range.
 - A range is looped over as it is, whether or not it's an `Iterable` too.
+- The `iterate` is the one the conformance found, as a loop's `next` is, so a loop means the same wherever it's written. A function named `iterate` without the conformance doesn't make a type loop.
+- A generic function asks for both: `def total<C: Iterable<R>, R: Range<Int>>(items: C): Int`.
 - The adapters and consumers take a range, so a chain starts from `c.iterate()`.
 - `Iterable` is declared in `lang`, beside `Range`.
 
@@ -229,7 +231,8 @@ These are listed in the [ranges proposal](../proposals/ranges.md#open-questions)
 
 ## Current implementation
 
-- Everything above is built, in plain Silver in `stdlib/std/range.ag`, except `Iterable`: a `for` takes only a range.
+- Everything above is built, in plain Silver in `stdlib/std/range.ag`, with `Iterable` in `lang`.
+- `std.range`'s `iterate` for a type with a `length` and an `opIndex` is a function of the same name, and declares no conformance: a type that's `Indexed` isn't an `Iterable` for that, so `for cell in row` still needs `row.iterate()`.
 - `array` steps every range. Sizing its result first needs a way to make an array with room for a known number of items, which there isn't yet.
 - Not built yet, as designed in the proposal: `sum`, `Backward` and `reversed`. `sorted` and `sortedBy` are a merge sort written in Silver.
 - An adapter's type can be built with its constructor by a module that imports it, which skips what `take` and `step` check: `Stepped(xs, 0)` divides by zero when asked for its length.

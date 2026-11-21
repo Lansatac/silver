@@ -2206,9 +2206,9 @@ unittest
 {
     enum loop = "\ndef main(): Unit {\n    for x in A(1) { }\n}";
     analyzed("type A(x: Int)" ~ loop).onlyMessage(DiagnosticCode.InvalidOperand)
-        .should.equal("`for` loops over a `Range`, and `A` isn't one: no conformance says so");
+        .should.equal("`for` loops over a `Range` or an `Iterable`, and `A` is neither: no conformance says so");
     analyzed("type A(x: Int)\ndef next(a: A): (Int, A)? => None" ~ loop).onlyMessage(DiagnosticCode.InvalidOperand)
-        .should.equal("`for` loops over a `Range`, and `A` isn't one: no conformance says so; it has the functions, "
+        .should.equal("`for` loops over a `Range` or an `Iterable`, and `A` is neither: no conformance says so; it has the functions, "
             ~ "so `conform A: Range<Int>` is all that's missing");
     // A length and an opIndex don't make it one.
     analyzed("type A(x: Int)\ndef length(a: A): Int => 1\ndef opIndex(a: A, index: Int): Int => 1" ~ loop)

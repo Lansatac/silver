@@ -1,0 +1,175 @@
+// Dictionaries, before their literal and type syntax: built with `dictionary` from pairs.
+import lang.hash
+
+// Every `Clash` has one hash, so they all share a slot.
+type Clash(name: String)
+def opEquals(a: Clash, b: Clash): Bool => a.name == b.name
+def opHash(c: Clash): UInt => 7
+
+type Point(x: Int, y: Int)
+type Game(scores: Dictionary<String, Int>, round: Int)
+
+def checkAgainst(d: Dictionary<Int, Int>, expected: [Int]): Bool {
+    if keys(d).array() != expected { return false }
+    if length(d) != length(expected) { return false }
+    for key in expected {
+        if d[key] != Some(key * 3) { return false }
+    }
+    true
+}
+
+def main(): Unit {
+    val pairs: [(String, Int)] = []
+    val nothing = dictionary(pairs)
+    printl(nothing)
+    printl(isEmpty(nothing))
+    printl(nothing["a"])
+
+    // Reading, writing and order.
+    mutable val ages = dictionary([("ana", 31), ("bo", 27)])
+    val before = ages
+    ages["cy"] = 40
+    ages["bo"] = 28
+    printl(before)
+    printl(ages)
+    printl(ages["bo"])
+    printl(ages["dee"])
+    printl((ages["dee"] ?? 0) + 1)
+    if val age = ages["ana"] { printl("ana is {age}") }
+    printl(contains(ages, "cy"))
+    printl(ages.contains("dee"))
+    printl(length(ages))
+    printl(isEmpty(ages))
+
+    // Removing, and adding again at the end.
+    ages = ages.without("ana")
+    printl(ages)
+    printl(ages.without("nobody") == ages)
+    ages["ana"] = 32
+    printl(ages)
+    printl(dictionary([("a", 1), ("b", 2), ("a", 3)]))
+
+    // Counting.
+    mutable val counts = dictionary(pairs)
+    for word in ["to", "be", "or", "not", "to", "be"] {
+        counts[word] = (counts[word] ?? 0) + 1
+    }
+    printl(counts)
+    counts = counts.update("be", 0, n => n * 10).update("that", 5, n => n + 1)
+    printl(counts)
+
+    // Looping, keys and values.
+    for (word, count) in counts {
+        print("{word}={count} ")
+    }
+    printl("")
+    printl(keys(counts).array())
+    printl(values(counts).array())
+    printl(values(counts).fold(0, (a, b) => a + b))
+    printl(counts.iterate().count())
+    printl(keys(counts).map(word => word.count()).array())
+
+    // A path that ends in a dictionary, and one inside another.
+    mutable val game = Game(counts, 1)
+    game.scores["to"] = 100
+    printl(game.scores["to"])
+    printl(counts["to"])
+    val inner: [(String, Int)] = []
+    val rows: [(String, Dictionary<String, Int>)] = []
+    mutable val graph = dictionary(rows)
+    mutable val edges = graph["a"] ?? dictionary(inner)
+    edges["b"] = 1
+    graph["a"] = edges
+    printl(graph)
+
+    // Equality ignores order, and printing shows it.
+    val forward = dictionary([("a", 1), ("b", 2)])
+    val backward = dictionary([("b", 2), ("a", 1)])
+    printl(forward == backward)
+    printl(hash(forward) == hash(backward))
+    printl(forward)
+    printl(backward)
+    printl(forward == dictionary([("a", 1), ("b", 3)]))
+    printl(forward == dictionary([("a", 1)]))
+    printl([forward] == [backward])
+    printl(Some(forward) == Some(backward))
+
+    // Keys of any type.
+    mutable val grid = dictionary([((0, 0), "start"), ((3, 4), "end")])
+    grid[(1, 1)] = "middle"
+    printl(grid[(3, 4)])
+    printl(grid)
+    val places = dictionary([(Point(1, 2), "a"), (Point(3, 4), "b")])
+    printl(places[Point(3, 4)])
+    val noInts: [Int] = []
+    val byList = dictionary([([1, 2], "pair"), (noInts, "none")])
+    printl(byList[[1, 2]])
+    printl(byList[noInts])
+    val options: [(Int?, String)] = [(Some(1), "one"), (None, "none")]
+    val byOption = dictionary(options)
+    printl(byOption[None])
+    printl(byOption[Some(1)])
+    val byDictionary = dictionary([(forward, "letters")])
+    printl(byDictionary[backward])
+    val zeros = dictionary([(0.0, "zero")])
+    printl(zeros[-0.0])
+    val double = (x: Int) => x * 2
+    val byFunction = dictionary([(double, "double")])
+    printl(byFunction[double])
+
+    // Keys whose hashes are all the same.
+    mutable val clashes = dictionary([(Clash("a"), 1), (Clash("b"), 2), (Clash("c"), 3)])
+    clashes[Clash("b")] = 20
+    printl(clashes)
+    printl(clashes[Clash("c")])
+    printl(clashes[Clash("z")])
+    clashes = clashes.without(Clash("a"))
+    printl(clashes)
+    clashes = clashes.without(Clash("c")).without(Clash("b"))
+    printl(clashes)
+    clashes[Clash("d")] = 4
+    printl(clashes)
+
+    // Many keys, removed and added, checked against an array kept beside them.
+    val ints: [(Int, Int)] = []
+    mutable val big = dictionary(ints)
+    mutable val expected: [Int] = []
+    for i in 0..1200 {
+        big[i * 7] = i * 21
+        expected ~= [i * 7]
+    }
+    printl(checkAgainst(big, expected))
+    val whole = big
+    mutable val kept: [Int] = []
+    for key in expected {
+        if key % 3 == 0 {
+            big = big.without(key)
+        } else {
+            kept ~= [key]
+        }
+    }
+    printl(checkAgainst(big, kept))
+    printl(checkAgainst(whole, expected))
+    for i in 0..200 {
+        big[i * 21] = i * 63
+        kept ~= [i * 21]
+    }
+    printl(checkAgainst(big, kept))
+    printl(length(big))
+    for key in kept {
+        big = big.without(key)
+    }
+    printl(big)
+    big[5] = 15
+    printl(big)
+
+    // Two dictionaries made from one each keep their own changes.
+    mutable val left = whole
+    mutable val right = whole
+    left[-1] = -3
+    right[-2] = -6
+    printl(length(left) == length(right))
+    printl(left[-2])
+    printl(right[-2])
+    printl(length(whole))
+}

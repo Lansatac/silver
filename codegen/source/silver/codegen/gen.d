@@ -1436,8 +1436,8 @@ private final class Generator
                 // A String and a `[UInt8]` have one layout, so the value is already the other.
                 return emitExpr(call.args[0]);
             case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect, Intrinsic.uncheckedChar:
-            case Intrinsic.hash:
-                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, `hash` a derived function, and the others operations on a Cell");
+            case Intrinsic.hash, Intrinsic.countOnes:
+                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, `hash` a derived function, `countOnes` a CountOnes, and the others operations on a Cell");
             case Intrinsic.derivedCompare:
                 assert(0, "lowering expands `derivedCompare` into calls of `compare`");
             case Intrinsic.panics:
@@ -1708,6 +1708,9 @@ private final class Generator
             case PrimOp.Equal, PrimOp.NotEqual, PrimOp.Less, PrimOp.LessEqual, PrimOp.Greater, PrimOp.GreaterEqual:
                 auto predicate = comparison(prim.op, isFloat, isInteger && !signed);
                 return instruction((isFloat ? "fcmp " : "icmp ") ~ predicate, both);
+            case PrimOp.CountOnes:
+                useIntrinsic("declare i64 @llvm.ctpop.i64(i64)");
+                return _function.result("call i64 @llvm.ctpop.i64(i64 %s)".format(operands[0]));
             case PrimOp.Concat, PrimOp.Append, PrimOp.Format, PrimOp.Hash:
                 assert(0, "handled by the caller");
         }

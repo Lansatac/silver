@@ -218,6 +218,8 @@ enum PrimOp
     /// its bits mixed. `0.0` and `-0.0` hash alike. A `Ref` hashes by which cell it is, and a
     /// function value by its function and, when that has a `captureHash`, what it gives.
     Hash,
+    /// How many bits of a `UInt` are set, as an `Int`.
+    CountOnes,
 }
 
 struct Prim

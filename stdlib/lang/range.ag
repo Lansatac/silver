@@ -9,6 +9,11 @@ interface Range<T> {
     def next(range: Self): (T, Self)?
 }
 
+// A collection that isn't a range itself, and the range that steps it, which `for` loops over.
+interface Iterable<R> {
+    def iterate(value: Self): R
+}
+
 conform [T]: Range<T>
 conform String: Range<Char>
 conform Interval<Int>: Range<Int>

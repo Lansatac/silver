@@ -1,0 +1,339 @@
+// A dictionary from keys to values that keeps the order its keys were added in. Changing one
+// copies a few small nodes and shares the rest with the dictionary it was made from.
+//
+// Two tries hold it. `slots` finds a key by its hash, five bits a level, and holds each key's value
+// and the number it was added as. `order` finds a key by that number, and stepping it in order
+// is what looping does. The compiler finds `Dictionary` and `empty` here by name.
+module lang.dictionary
+
+import lang.array
+import lang.bits
+import lang.hash
+import lang.panic
+import lang.range
+
+type Dictionary<K, V>(slots: Slot<K, V>, order: Order<K>, shift: Int, count: Int, added: Int)
+
+type Held<K, V>(key: K, value: V, number: Int)
+
+// `Many` keeps only the children it has, in the order of their bits in `bitmap`. `Same` is for keys
+// whose whole hashes are equal.
+type Slot<K, V> = One(code: UInt, held: Held<K, V>)
+    | Many(bitmap: UInt, children: [Slot<K, V>])
+    | Same(code: UInt, all: [Held<K, V>])
+
+// A `Fork` at `shift` 0 holds `Spot`s, and one above it holds `Fork`s. `shift` in the dictionary is
+// the root's.
+type Order<K> = Spot(code: UInt, key: K) | Fork(bitmap: UInt, children: [Order<K>])
+
+type Leaf<K>(spots: [Order<K>], base: Int)
+
+// A dictionary with nothing in it.
+def empty<K, V>(): Dictionary<K, V> {
+    val slots: [Slot<K, V>] = []
+    val forks: [Order<K>] = []
+    Dictionary(Many(0, slots), Fork(0, forks), 0, 0, 0)
+}
+
+private def bitAt(index: UInt): UInt {
+    val one: UInt = 1
+    one << index
+}
+private def below(bitmap: UInt, bit: UInt): Int => countOnes(bitmap & (bit - 1))
+private def inserted<T>(items: [T], at: Int, item: T): [T] => items[0..at] ~ [item] ~ items[at..]
+private def removed<T>(items: [T], at: Int): [T] => items[0..at] ~ items[(at + 1)..]
+private def replaced<T>(items: [T], at: Int, item: T): [T] {
+    mutable val changed = items
+    changed[at] = item
+    changed
+}
+
+private def find<K, V>(slot: Slot<K, V>, code: UInt, shift: Int, key: K): Held<K, V>? => match slot {
+    One(own, held) => if own == code && held.key == key => Some(held) else None
+    Many(bitmap, children) => {
+        val bit = bitAt((code >> shift) & 31)
+        if bitmap & bit == 0 => None else find(children[below(bitmap, bit)], code, shift + 5, key)
+    }
+    Same(own, all) => {
+        if own == code {
+            for held in all {
+                if held.key == key { return Some(held) }
+            }
+        }
+        None
+    }
+}
+
+// `slot` with `held` in it, in place of what it held for the key if anything.
+private def put<K, V>(slot: Slot<K, V>, code: UInt, shift: Int, held: Held<K, V>): Slot<K, V> => match slot {
+    One(own, old) => {
+        if own != code { return put(Many(bitAt((own >> shift) & 31), [slot]), code, shift, held) }
+        if old.key == held.key { return One(code, held) }
+        Same(code, [old, held])
+    }
+    Many(bitmap, children) => {
+        val bit = bitAt((code >> shift) & 31)
+        val at = below(bitmap, bit)
+        if bitmap & bit == 0 { return Many(bitmap | bit, inserted(children, at, One(code, held))) }
+        Many(bitmap, replaced(children, at, put(children[at], code, shift + 5, held)))
+    }
+    Same(own, all) => {
+        if own != code { return put(Many(bitAt((own >> shift) & 31), [slot]), code, shift, held) }
+        for i in 0..length(all) {
+            if all[i].key == held.key { return Same(code, replaced(all, i, held)) }
+        }
+        Same(code, all ~ [held])
+    }
+}
+
+// `slot` without `key`, which it holds, or `None` when that leaves nothing.
+private def take<K, V>(slot: Slot<K, V>, code: UInt, shift: Int, key: K): Slot<K, V>? => match slot {
+    One(_, _) => None
+    Many(bitmap, children) => {
+        val bit = bitAt((code >> shift) & 31)
+        val at = below(bitmap, bit)
+        if val left = take(children[at], code, shift + 5, key) {
+            return Some(settled(bitmap, replaced(children, at, left)))
+        }
+        if length(children) == 1 { return None }
+        Some(settled(bitmap ^ bit, removed(children, at)))
+    }
+    Same(own, all) => {
+        mutable val rest: [Held<K, V>] = []
+        for held in all {
+            if held.key != key { rest ~= [held] }
+        }
+        if length(rest) == 1 => Some(One(own, rest[0])) else Some(Same(own, rest))
+    }
+}
+
+// A node of `children`, or its one child when that isn't a node itself, which can sit a level up.
+private def settled<K, V>(bitmap: UInt, children: [Slot<K, V>]): Slot<K, V> {
+    if length(children) == 1 {
+        match children[0] {
+            Many(_, _) => ()
+            _ => { return children[0] }
+        }
+    }
+    Many(bitmap, children)
+}
+
+// `node` with `spot` at `number`, which it has nothing at.
+private def place<K>(node: Order<K>, shift: Int, number: Int, spot: Order<K>): Order<K> => match node {
+    Fork(bitmap, children) => {
+        val bit = bitAt((UInt(number) >> shift) & 31)
+        val at = below(bitmap, bit)
+        if shift == 0 { return Fork(bitmap | bit, inserted(children, at, spot)) }
+        if bitmap & bit == 0 {
+            val forks: [Order<K>] = []
+            return Fork(bitmap | bit, inserted(children, at, place(Fork(0, forks), shift - 5, number, spot)))
+        }
+        Fork(bitmap, replaced(children, at, place(children[at], shift - 5, number, spot)))
+    }
+    Spot(_, _) => panic("A dictionary's order has a key where a fork belongs")
+}
+
+// `node` without what's at `number`, which it has, or `None` when that leaves nothing.
+private def unplace<K>(node: Order<K>, shift: Int, number: Int): Order<K>? => match node {
+    Fork(bitmap, children) => {
+        val bit = bitAt((UInt(number) >> shift) & 31)
+        val at = below(bitmap, bit)
+        if shift > 0 {
+            if val left = unplace(children[at], shift - 5, number) {
+                return Some(Fork(bitmap, replaced(children, at, left)))
+            }
+        }
+        if length(children) == 1 { return None }
+        Some(Fork(bitmap ^ bit, removed(children, at)))
+    }
+    Spot(_, _) => None
+}
+
+// The first fork of keys in `node` at `from` or after, counting from the node's own start. `from` is
+// a multiple of 32, which is how many keys such a fork has room for.
+private def leafFrom<K>(node: Order<K>, shift: Int, from: Int): Leaf<K>? => match node {
+    Spot(_, _) => None
+    Fork(bitmap, children) => {
+        if shift == 0 {
+            if length(children) == 0 { return None }
+            return Some(Leaf(children, 0))
+        }
+        val index = UInt(from) >> shift
+        mutable val left = bitmap & ~(bitAt(index) - 1)
+        while left != 0 {
+            val low = left & (~left +% 1)
+            val slot = countOnes(low - 1)
+            val within = if UInt(slot) == index => from - (slot << shift) else 0
+            if val leaf = leafFrom(children[below(bitmap, low)], shift - 5, within) {
+                return Some(Leaf(leaf.spots, leaf.base + (slot << shift)))
+            }
+            left = left ^ low
+        }
+        None
+    }
+}
+
+// Where stepping through a dictionary's keys has got to: `at` in `spots`, the fork of keys it's in,
+// with the next fork to be looked for from the number `next`. Stepping within a fork doesn't go
+// back to the root.
+type Cursor<K, V>(source: Dictionary<K, V>, spots: [Order<K>], at: Int, next: Int)
+
+private def start<K, V>(d: Dictionary<K, V>): Cursor<K, V> {
+    val spots: [Order<K>] = []
+    Cursor(d, spots, 0, 0)
+}
+
+// The next key's spot, and the cursor after it.
+private def step<K, V>(cursor: Cursor<K, V>): (Order<K>, Cursor<K, V>)? {
+    if cursor.at < length(cursor.spots) {
+        return Some((cursor.spots[cursor.at], cursor with (at = cursor.at + 1)))
+    }
+    if cursor.next < cursor.source.added {
+        if val leaf = leafFrom(cursor.source.order, cursor.source.shift, cursor.next) {
+            return Some((leaf.spots[0], Cursor(cursor.source, leaf.spots, 1, leaf.base + 32)))
+        }
+    }
+    None
+}
+
+// The value for `key`, or `None` when `d` has no such key.
+def opIndex<K, V>(d: Dictionary<K, V>, key: K): V? {
+    if val held = find(d.slots, hash(key), 0, key) { return Some(held.value) }
+    None
+}
+
+// `d` with `value` for `key`: in the key's place when `d` has it, and otherwise at the end.
+def opIndexAssign<K, V>(d: Dictionary<K, V>, key: K, value: V): Dictionary<K, V> {
+    val code = hash(key)
+    if val held = find(d.slots, code, 0, key) {
+        return d with (slots = put(d.slots, code, 0, Held(key, value, held.number)))
+    }
+    if key != key {
+        panic("A dictionary's key has to be equal to itself, and this one isn't, so it could never be found")
+    }
+    val number = d.added
+    mutable val order = d.order
+    mutable val shift = d.shift
+    while shift < 60 && (UInt(number) >> (shift + 5)) != 0 {
+        if d.count > 0 { order = Fork(1, [order]) }
+        shift += 5
+    }
+    Dictionary(put(d.slots, code, 0, Held(key, value, number)), place(order, shift, number, Spot(code, key)), shift,
+        d.count + 1, number + 1)
+}
+
+def contains<K, V>(d: Dictionary<K, V>, key: K): Bool {
+    if val _ = find(d.slots, hash(key), 0, key) { return true }
+    false
+}
+
+// How many keys `d` has.
+def length<K, V>(d: Dictionary<K, V>): Int => d.count
+def isEmpty<K, V>(d: Dictionary<K, V>): Bool => d.count == 0
+
+// `d` without `key`, or `d` itself when it has no such key.
+def without<K, V>(d: Dictionary<K, V>, key: K): Dictionary<K, V> {
+    val code = hash(key)
+    if val held = find(d.slots, code, 0, key) {
+        val none: [Slot<K, V>] = []
+        val forks: [Order<K>] = []
+        return Dictionary(take(d.slots, code, 0, key) ?? Many(0, none), unplace(d.order, d.shift, held.number) ?? Fork(0, forks),
+            d.shift, d.count - 1, d.added)
+    }
+    d
+}
+
+// `d` with the value for `key` replaced by `change` of it, or of `default` when `d` has no such key.
+def update<K, V>(d: Dictionary<K, V>, key: K, default: V, change: (V) -> V): Dictionary<K, V> =>
+    opIndexAssign(d, key, change(d[key] ?? default))
+
+// A dictionary of the pairs `range` gives, a later pair replacing an earlier one of the same key.
+def dictionary<R: Range<(K, V)>, K, V>(range: R): Dictionary<K, V> {
+    mutable val d = empty<K, V>()
+    for (key, value) in range {
+        d = opIndexAssign(d, key, value)
+    }
+    d
+}
+
+// The entries of a dictionary from one place on, which is what looping over it steps.
+type Entries<K, V>(cursor: Cursor<K, V>)
+
+def next<K, V>(entries: Entries<K, V>): ((K, V), Entries<K, V>)? {
+    if val moved = step(entries.cursor) {
+        val (spot, rest) = moved
+        match spot {
+            Spot(code, key) => {
+                if val held = find(rest.source.slots, code, 0, key) {
+                    return Some(((key, held.value), Entries(rest)))
+                }
+            }
+            Fork(_, _) => ()
+        }
+    }
+    None
+}
+conform Entries<K, V>: Range<(K, V)>
+
+def iterate<K, V>(d: Dictionary<K, V>): Entries<K, V> => Entries(start(d))
+conform Dictionary<K, V>: Iterable<Entries<K, V>>
+
+type Keys<K, V>(cursor: Cursor<K, V>)
+
+def next<K, V>(keys: Keys<K, V>): (K, Keys<K, V>)? {
+    if val moved = step(keys.cursor) {
+        val (spot, rest) = moved
+        match spot {
+            Spot(_, key) => { return Some((key, Keys(rest))) }
+            Fork(_, _) => ()
+        }
+    }
+    None
+}
+conform Keys<K, V>: Range<K>
+
+// The keys of `d`, in order.
+def keys<K, V>(d: Dictionary<K, V>): Keys<K, V> => Keys(start(d))
+
+type Values<K, V>(entries: Entries<K, V>)
+
+def next<K, V>(values: Values<K, V>): (V, Values<K, V>)? {
+    if val step = next(values.entries) {
+        val ((_, value), rest) = step
+        return Some((value, Values(rest)))
+    }
+    None
+}
+conform Values<K, V>: Range<V>
+
+// The values of `d`, in the order of their keys.
+def values<K, V>(d: Dictionary<K, V>): Values<K, V> => Values(iterate(d))
+
+// Two dictionaries are equal when they have the same keys with equal values, in any order.
+def opEquals<K, V>(a: Dictionary<K, V>, b: Dictionary<K, V>): Bool {
+    if a.count != b.count { return false }
+    for (key, value) in a {
+        if b[key] != Some(value) { return false }
+    }
+    true
+}
+
+def opHash<K, V>(d: Dictionary<K, V>): UInt {
+    mutable val total: UInt = 0
+    for (key, value) in d {
+        total = total +% hash((key, value))
+    }
+    total
+}
+
+def opString<K, V>(d: Dictionary<K, V>): String {
+    if d.count == 0 { return "[:]" }
+    mutable val text = "["
+    mutable val first = true
+    for (key, value) in d {
+        if !first { text ~= ", " }
+        first = false
+        text ~= "{key}: {value}"
+    }
+    text ~ "]"
+}

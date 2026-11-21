@@ -3,6 +3,8 @@
 module lang
 
 forward import lang.array
+forward import lang.dictionary : Dictionary, contains, length, isEmpty, without, update, keys, values, dictionary,
+    iterate, next, opIndex, opIndexAssign
 forward import lang.interval
 forward import lang.io
 forward import lang.ord

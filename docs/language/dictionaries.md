@@ -74,7 +74,7 @@ Each function that changes a dictionary returns the new dictionary and leaves it
 
 ```silver
 val byName = people.map(p => (p.name, p)).dictionary()
-val adults = ages.iterate().filter(entry => entry[1] >= 18).dictionary()
+val lengths = words.map(word => (word, length(word))).dictionary()
 ```
 
 ## Order
@@ -125,5 +125,16 @@ Looking up, adding, replacing and removing a key take time that grows with the l
 
 ## Current implementation
 
-- Dictionary literals parse, but are rejected. Nothing else on this page is available yet.
-- Every type already has the structural hash keys will be found by, on both backends: equal values hash alike, `0.0` and `-0.0` included, a `Ref` hashes by which cell it is, and a function value by its function and captures. It's `hash` in `lang.hash`, which `lang` doesn't forward, for the standard library's own use. A type can replace it with an `opHash`.
+- `Dictionary<K, V>` and everything under Reading, Writing, Functions, Order, Looping, Keys, Equality and printing, and Cost is built, in plain Silver in `stdlib/lang/dictionary.ag`.
+- The literal, `[:]` and the type `[K: V]` aren't: a literal parses and is rejected. Until then a dictionary is made with `dictionary` from an array of pairs, an empty one from an empty array with its type written, and its type is written `Dictionary<K, V>`:
+
+  ```silver
+  val ages = dictionary([("ana", 31), ("bo", 27)])
+  val none: [(String, Int)] = []
+  mutable val counts = dictionary(none)
+  ```
+
+- `keys`, `values` and `iterate` give the types `Keys<K, V>`, `Values<K, V>` and `Entries<K, V>`, which a `val` infers. Writing one of those names needs `import lang.dictionary`.
+- A dictionary's fields can be read and it can be built with its constructor by a module that imports `lang.dictionary`, which nothing checks.
+- The panic for a key that isn't equal to itself is reported at the line in `lang.dictionary` that panics, not at the caller's.
+- `hash` is in `lang.hash`, which `lang` doesn't forward, so a module that writes an `opHash` imports it.

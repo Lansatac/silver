@@ -144,7 +144,7 @@ private struct Instance
         auto loop = analysis.loopOf(for_);
         if (loop is null) return null;
         auto instance = new LoopFunctions;
-        *instance = LoopFunctions(concrete(loop.next));
+        *instance = LoopFunctions(concrete(loop.next), loop.iterate.found ? concrete(loop.iterate) : FunctionUse.init);
         return instance;
     }
 
@@ -1724,7 +1724,7 @@ private final class Lowering
         {
             auto functions = _analysis.loopOf(e.id);
             if (functions is null) return lowerForArray(for_, span);
-            return lowerForStepped(for_, functions.next, span);
+            return lowerForStepped(for_, *functions, span);
         }
         return lowerForBounds(for_, null, lowerExpr(*range.start), lowerExpr(*range.end), span);
     }
@@ -1781,12 +1781,14 @@ private final class Lowering
     }
 
     /// `for x in r` with `next` is `while val step = next(rest)` over a mutable `rest` that starts
-    /// as `r`. `rest` moves on before the body, so `continue` can't skip it.
-    private Expr lowerForStepped(const ast.ForExpr for_, const FunctionUse stepper, Span span)
+    /// as `r`, or as `iterate(r)` for an `Iterable`. `rest` moves on before the body, so `continue`
+    /// can't skip it.
+    private Expr lowerForStepped(const ast.ForExpr for_, const LoopFunctions functions, Span span)
     {
         auto source = lowerExpr(for_.binding.value);
+        if (functions.iterate.found) source = callUse(functions.iterate, [source], span);
         auto rest = temp("rest", source.type, true);
-        auto next = callUse(stepper, [use(rest, span)], span);
+        auto next = callUse(functions.next, [use(rest, span)], span);
         auto step = temp("step", next.type);
         auto stepped = payload(use(step, span), 1);
         auto pair = temp("pair", stepped.type);
@@ -2221,6 +2223,8 @@ private final class Lowering
                 // is mixed once more: a trie takes its first level from them.
                 auto hash = hashOf(args[0]);
                 return hash.type == types.never ? hash : prim(PrimOp.Hash, types.uint_, hash);
+            case Intrinsic.countOnes:
+                return prim(PrimOp.CountOnes, types.int_, args[0]);
             case Intrinsic.assert_, Intrinsic.expect:
                 assert(0, "`assert` and `expect` are expanded from what's written, and sema rejects them as values");
             case Intrinsic.derivedCompare:

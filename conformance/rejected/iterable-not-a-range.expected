@@ -1,0 +1,1 @@
+T0005: `for` loops over what `iterate` gives for a `Shelf`, and `Cursor` isn't a `Range`: no conformance says so

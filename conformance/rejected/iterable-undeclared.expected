@@ -1,0 +1,1 @@
+T0005: `for` loops over a `Range` or an `Iterable`, and `Shelf` is neither: no conformance says so

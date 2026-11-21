@@ -1,0 +1,5 @@
+// Not forwarded by `lang`: `std.math` forwards it.
+module lang.bits
+
+// How many bits of `value` are 1.
+intrinsic def countOnes(value: UInt): Int

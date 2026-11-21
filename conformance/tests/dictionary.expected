@@ -1,0 +1,63 @@
+[:]
+true
+None
+[ana: 31, bo: 27]
+[ana: 31, bo: 28, cy: 40]
+Some(28)
+None
+1
+ana is 31
+true
+false
+3
+false
+[bo: 28, cy: 40]
+true
+[bo: 28, cy: 40, ana: 32]
+[a: 3, b: 2]
+[to: 2, be: 2, or: 1, not: 1]
+[to: 2, be: 20, or: 1, not: 1, that: 6]
+to=2 be=20 or=1 not=1 that=6 
+[to, be, or, not, that]
+[2, 20, 1, 1, 6]
+30
+5
+[2, 2, 2, 3, 4]
+Some(100)
+Some(2)
+[a: [b: 1]]
+true
+true
+[a: 1, b: 2]
+[b: 2, a: 1]
+false
+false
+true
+true
+Some(end)
+[(0, 0): start, (3, 4): end, (1, 1): middle]
+Some(b)
+Some(pair)
+Some(none)
+Some(none)
+Some(one)
+Some(letters)
+Some(zero)
+Some(double)
+[Clash(a): 1, Clash(b): 20, Clash(c): 3]
+Some(3)
+None
+[Clash(b): 20, Clash(c): 3]
+[:]
+[Clash(d): 4]
+true
+true
+true
+true
+1000
+[:]
+[5: 15]
+true
+None
+Some(-6)
+1200

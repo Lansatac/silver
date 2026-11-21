@@ -169,6 +169,7 @@ private final class TypeChecker
     private Conformance[Looked] _lookups;
     /// What a `for` asks the element type of its `Range` to be.
     private TypeParam _loopElement;
+    private TypeParam _loopRange;
     /// The `if type`s whose true branch is being checked, innermost last, by the `if`.
     private Id!Expr[] _activeTests;
     /// Each `if type`, by its true branch.
@@ -2333,6 +2334,16 @@ private final class TypeChecker
     {
         auto prelude = "lang.range" in _resolutions.moduleScopes;
         auto symbol = prelude is null ? null : (*prelude).resolveLocalType("Range");
+        if (symbol is null) return Id!InterfaceDecl.init;
+        return (*symbol).match!((const Id!InterfaceDecl decl) => decl, _ => Id!InterfaceDecl.init);
+    }
+
+    /// `lang`'s `Iterable`, which says what range a `for` steps a value through, or an invalid ID
+    /// when `lang` isn't loaded.
+    private Id!InterfaceDecl iterableDecl()
+    {
+        auto prelude = "lang.range" in _resolutions.moduleScopes;
+        auto symbol = prelude is null ? null : (*prelude).resolveLocalType("Iterable");
         if (symbol is null) return Id!InterfaceDecl.init;
         return (*symbol).match!((const Id!InterfaceDecl decl) => decl, _ => Id!InterfaceDecl.init);
     }
@@ -6347,9 +6358,9 @@ private final class TypeChecker
     }
 
     /// What `for` yields from a `type` that isn't an array or an interval: the element of the
-    /// type's conformance to `lang`'s `Range`, whose `next` steps it. Inside a generic
-    /// function, a type parameter's bounds say whether it's a `Range`. `Type.init` when there's
-    /// no `lang`.
+    /// type's conformance to `lang`'s `Range`, whose `next` steps it. A type that isn't a `Range`
+    /// and is an `Iterable` is stepped through the range its `iterate` gives. Inside a generic
+    /// function, a type parameter's bounds say what it is. `Type.init` when there's no `lang`.
     private Type loopElement(const Expr for_, const Expr iterable, Type type, BodyContext ctx)
     {
         auto range = rangeDecl();
@@ -6357,16 +6368,43 @@ private final class TypeChecker
         if (!_loopElement.id.isValid) _loopElement = TypeParam(_ids.next!TypeParam, "T", iterable.span);
         Substitution bound;
         auto found = lookUp(Goal(range, type, [_types.parameter(_loopElement.id, "T")]), [_loopElement], bound, ctx.site, 0);
-        if (!found.holds || _loopElement.id !in bound)
+        if (found.holds && _loopElement.id in bound)
         {
-            _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span, "`for` loops over a `Range`, and `%s` isn't one: %s"
-                .format(_types.describe(type), found.failure is null ? "nothing says what it gives" : found.failure));
-            return _types.error;
+            auto next = found.witnesses[0];
+            _typing.loops[for_.id] = LoopFunctions(FunctionUse(next.func, next.typeArgs, next.witnesses));
+            noteUse(ctx.site, iterable.span, next.func, next.typeArgs, next.witnesses);
+            return bound[_loopElement.id];
         }
-        auto next = found.witnesses[0];
-        _typing.loops[for_.id] = LoopFunctions(FunctionUse(next.func, next.typeArgs, next.witnesses));
-        noteUse(ctx.site, iterable.span, next.func, next.typeArgs, next.witnesses);
-        return bound[_loopElement.id];
+
+        auto collection = iterableDecl();
+        if (!_loopRange.id.isValid) _loopRange = TypeParam(_ids.next!TypeParam, "R", iterable.span);
+        Substitution gives;
+        auto made = lookUp(Goal(collection.isValid ? collection : range, type, [_types.parameter(_loopRange.id, "R")]),
+            [_loopRange], gives, ctx.site, 0);
+        if (collection.isValid && made.holds && _loopRange.id in gives)
+        {
+            auto stepped = gives[_loopRange.id];
+            Substitution inner;
+            auto steps = lookUp(Goal(range, stepped, [_types.parameter(_loopElement.id, "T")]), [_loopElement], inner, ctx.site, 0);
+            if (!steps.holds || _loopElement.id !in inner)
+            {
+                _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span,
+                    "`for` loops over what `iterate` gives for a `%s`, and `%s` isn't a `Range`: %s".format(_types.describe(type),
+                        _types.describe(stepped), steps.failure is null ? "nothing says what it gives" : steps.failure));
+                return _types.error;
+            }
+            auto iterate = made.witnesses[0];
+            auto next = steps.witnesses[0];
+            _typing.loops[for_.id] = LoopFunctions(FunctionUse(next.func, next.typeArgs, next.witnesses),
+                FunctionUse(iterate.func, iterate.typeArgs, iterate.witnesses));
+            noteUse(ctx.site, iterable.span, iterate.func, iterate.typeArgs, iterate.witnesses);
+            noteUse(ctx.site, iterable.span, next.func, next.typeArgs, next.witnesses);
+            return inner[_loopElement.id];
+        }
+
+        _collector.reportError(DiagnosticCode.InvalidOperand, iterable.span, "`for` loops over a `Range` or an `Iterable`, and `%s` is neither: %s"
+            .format(_types.describe(type), found.failure is null ? "nothing says what it gives" : found.failure));
+        return _types.error;
     }
 
     /// The function `name` that `syntax` at `at` calls with `args`, chosen as a call is from the

@@ -90,7 +90,7 @@ for n in Countdown(3) {
 }
 ```
 
-A type with a `length` and an `opIndex` and no `next` isn't looped over: what a `for` takes is what the functions that step a range take.
+A type with a `length` and an `opIndex` and no `next` isn't looped over: what a `for` takes is what the functions that step a range take, or an [`Iterable`](ranges.md#iterable), whose `iterate` gives one. For an `Iterable` that isn't a range, `r` below is `iterate(r)`, called once.
 
 `for x in r { body }` means:
 

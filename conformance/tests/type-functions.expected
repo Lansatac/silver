@@ -32,6 +32,13 @@ true
 true
 false
 Word(if, 1)
+[heads, heads]
+true
+true
+[Heads(1990), Heads(2001)]
+false
+Heads(1990)
+heads
 if on 9
 true
 true

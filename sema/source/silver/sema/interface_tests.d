@@ -255,7 +255,7 @@ unittest
     analyzedModule("def count<T>(range: Range<T>): Int" ~ loop).shouldHaveNoDiagnostics();
     // An interface with the same function isn't the `Range` a `for` loops over.
     analyzedModule("interface Steps<T> { def next(r: Self): (T, Self)? }\ndef count<R: Steps<Int>>(range: R): Int" ~ loop)
-        .onlyMessage(DiagnosticCode.InvalidOperand).should.equal("`for` loops over a `Range`, and `R` isn't one: nothing `R` is bounded by says it is");
+        .onlyMessage(DiagnosticCode.InvalidOperand).should.equal("`for` loops over a `Range` or an `Iterable`, and `R` is neither: nothing `R` is bounded by says it is");
 }
 
 // Conformance

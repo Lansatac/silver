@@ -133,10 +133,12 @@ struct Witness
 }
 
 /// How a `for` steps a value that isn't an array or an interval: with the `next` of its type's
-/// conformance to `Range`.
+/// conformance to `Range`. For a value that's an `Iterable` and no `Range`, `iterate` is found, and
+/// `next` steps what it gives.
 struct LoopFunctions
 {
     FunctionUse next;
+    FunctionUse iterate;
 }
 
 /// How `derivedCompare` orders two values of a declared type: for a sum, by which member each is,

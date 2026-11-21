@@ -1,0 +1,11 @@
+// A key that isn't equal to itself could never be found again, so adding one panics.
+def main(): Unit {
+    val zero = 0.0
+    val nan = zero / zero
+    mutable val seen = dictionary([(1.5, "a")])
+    printl(seen[nan])
+    seen[2.5] = "b"
+    printl(length(seen))
+    seen[nan] = "c"
+    printl("never")
+}

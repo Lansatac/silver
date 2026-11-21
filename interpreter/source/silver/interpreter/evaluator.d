@@ -403,6 +403,10 @@ final class Evaluator
                 return Value(formatted(args[0], prim.args[0].type));
             case PrimOp.Hash:
                 return Value(cast(long) hashed(args[0]));
+            case PrimOp.CountOnes:
+                import core.bitop : popcnt;
+
+                return Value(cast(long) popcnt(cast(ulong) args[0].as!long));
             default:
                 break;
         }
@@ -754,8 +758,8 @@ final class Evaluator
             case Intrinsic.bytes, Intrinsic.uncheckedString:
                 return Value(byteString(args[0]));
             case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect, Intrinsic.uncheckedChar:
-            case Intrinsic.hash:
-                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, `hash` a derived function, and the others operations on a Cell");
+            case Intrinsic.hash, Intrinsic.countOnes:
+                assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, `hash` a derived function, `countOnes` a CountOnes, and the others operations on a Cell");
             case Intrinsic.derivedCompare:
                 assert(0, "lowering expands `derivedCompare` into calls of `compare`");
             case Intrinsic.panics:

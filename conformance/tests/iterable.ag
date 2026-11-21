@@ -1,0 +1,87 @@
+// A collection that isn't a range says which range steps it, and `for` loops over that.
+type Shelf(books: [String])
+type Books(left: [String])
+
+def next(b: Books): (String, Books)? =>
+    if length(b.left) == 0 => None else (b.left[0], Books(b.left[1..]))
+conform Books: Range<String>
+
+def iterate(shelf: Shelf): Books {
+    printl("iterate")
+    Books(shelf.books)
+}
+conform Shelf: Iterable<Books>
+
+// One that gives an array, and a generic one that gives pairs.
+type Row(cells: [Int])
+def iterate(row: Row): [Int] => row.cells
+conform Row: Iterable<[Int]>
+
+type Table<K, V>(keys: [K], values: [V])
+type Entries<K, V>(table: Table<K, V>, at: Int)
+def next<K, V>(e: Entries<K, V>): ((K, V), Entries<K, V>)? =>
+    if e.at >= length(e.table.keys) => None
+    else ((e.table.keys[e.at], e.table.values[e.at]), Entries(e.table, e.at + 1))
+conform Entries<K, V>: Range<(K, V)>
+def iterate<K, V>(t: Table<K, V>): Entries<K, V> => Entries(t, 0)
+conform Table<K, V>: Iterable<Entries<K, V>>
+
+// A range that's an `Iterable` too is looped over as it is.
+type Both(n: Int)
+def next(b: Both): (Int, Both)? => if b.n == 0 => None else (b.n, Both(b.n - 1))
+def iterate(b: Both): [Int] => [99]
+conform Both: Range<Int> & Iterable<[Int]>
+
+def total<C: Iterable<R>, R: Range<Int>>(items: C): Int {
+    mutable val sum = 0
+    for item in items {
+        sum += item
+    }
+    sum
+}
+
+def names<C: Iterable<R>, R: Range<(String, V)>, V>(items: C): [String] {
+    mutable val found: [String] = []
+    for (name, _) in items {
+        found ~= [name]
+    }
+    found
+}
+
+def main(): Unit {
+    val shelf = Shelf(["a", "b", "c"])
+    for book in shelf {
+        print(book)
+    }
+    printl("")
+    for book in shelf {
+        if book == "b" { continue }
+        if book == "c" { break }
+        printl(book)
+    }
+    for _ in Shelf([]) {
+        printl("never")
+    }
+
+    for cell in Row([1, 2, 3]) {
+        print(cell)
+    }
+    printl("")
+
+    val table = Table(["x", "y"], [10, 20])
+    for (key, value) in table {
+        printl("{key}={value}")
+    }
+    printl(table.iterate().map(entry => {
+        val (_, value) = entry
+        value + 1
+    }).array())
+
+    for n in Both(3) {
+        print(n)
+    }
+    printl("")
+
+    printl(total(Row([4, 5, 6])))
+    printl(names(table))
+}

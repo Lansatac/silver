@@ -35,6 +35,23 @@ type Token = Word(text: String, line: Int) | End
 def opEquals(a: Word, b: Word): Bool => a.text == b.text
 def opHash(w: Word): UInt => hash(w.text)
 
+// A function is for the type it names: a sum's isn't its members'.
+type Coin = Heads(year: Int) | Tails(year: Int)
+
+def opEquals(a: Coin, b: Coin): Bool => match (a, b) {
+    (Heads(_), Heads(_)) => true
+    (Tails(_), Tails(_)) => true
+    _ => false
+}
+def opHash(coin: Coin): UInt => match coin {
+    Heads(_) => 1
+    Tails(_) => 2
+}
+def opString(coin: Coin): String => match coin {
+    Heads(_) => "heads"
+    Tails(_) => "tails"
+}
+
 type Holder(bag: Bag, name: String)
 
 def same<T>(a: T, b: T): Bool => a == b
@@ -86,6 +103,18 @@ def main(): Unit {
     printl(hash(first) == hash(second))
     printl(first == End)
     printl(first)
+
+    val coins = [Heads(1990), Heads(2001)]
+    printl(coins)
+    printl(coins[0] == coins[1])
+    printl(hash(coins[0]) == hash(coins[1]))
+    val minted = [1990, 2001].map(Heads).array()
+    printl(minted)
+    printl(minted[0] == minted[1])
+    val one: Heads = Heads(1990)
+    printl(one)
+    val whole: Coin = one
+    printl(whole)
 
     // A pattern takes a value apart by its members, whatever its `opEquals` says.
     val told = match second {

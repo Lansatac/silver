@@ -1,0 +1,12 @@
+// What `iterate` gives has to be a range for `for` to loop over it.
+type Shelf(books: [String])
+type Cursor(at: Int)
+
+def iterate(shelf: Shelf): Cursor => Cursor(0)
+conform Shelf: Iterable<Cursor>
+
+def main(): Unit {
+    for book in Shelf(["a"]) {
+        printl("never")
+    }
+}

@@ -1,0 +1,7 @@
+// A key with a NaN inside it isn't equal to itself either.
+def main(): Unit {
+    val zero = 0.0
+    val points = dictionary([((1.0, 2.0), "a")])
+    printl(points)
+    printl(points.update((zero / zero, 1.0), "none", text => text))
+}

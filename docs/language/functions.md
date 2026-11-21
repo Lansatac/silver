@@ -233,7 +233,15 @@ def opHash<K, V>(d: Dictionary<K, V>): UInt => ...    // combines the entries in
 - Each takes the declared type it's for, and nothing else: `opEquals(a: T, b: T): Bool`, `opHash(x: T): UInt` and `opString(x: T): String`, with no `mutable` parameter.
 - One written for a generic type is for every instance of it. It takes the type with type parameters of its own, as `opEquals<T>(a: Box<T>, b: Box<T>)` does, and they can't have bounds.
 - They're used wherever a value of the type is compared, hashed or printed: inside an option, an array, a tuple, a field or a sum, in generic code, and in what a closure captured.
-- One written for a sum is for values of the sum, and one for a member is for that member, inside its sum too. A value whose type is the member isn't printed by its sum's `opString`.
+- Each is for the type it names. One written for a sum is for values of the sum, and not for a value whose type is one of its members; one written for a member is for that member, inside its sum too:
+
+  ```silver
+  type Coin = Heads(year: Int) | Tails(year: Int)
+  def opString(coin: Coin): String => ...        // "heads" or "tails"
+
+  printl([Heads(1990)])                          // [heads]: building a member a sum owns gives the sum
+  printl([1990].map(Heads).array())              // [Heads(1990)]: the constructor as a function gives a `Heads`
+  ```
 - A [pattern](user-types.md) takes a value apart by its members and fields, whatever its `opEquals` says.
 - `hash(x)`, in `lang.hash`, is the hash of any value, through its type's `opHash` when it has one. A type's `opHash` calls it for the parts it hashes.
 

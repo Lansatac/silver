@@ -1,5 +1,7 @@
 module std.math
 
+forward import lang.bits
+
 val pi: Float = 3.141592653589793
 
 native def sqrt(x: Float): Float

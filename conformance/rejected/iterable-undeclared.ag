@@ -1,0 +1,10 @@
+// A function named `iterate` doesn't make a type an `Iterable`: the conformance does.
+type Shelf(books: [String])
+
+def iterate(shelf: Shelf): [String] => shelf.books
+
+def main(): Unit {
+    for book in Shelf(["a"]) {
+        printl(book)
+    }
+}
