@@ -13,7 +13,7 @@ These documents describe the language as designed. Where the implementation does
 
 - Options go before the file. What follows the file is to be the program's, and since a program can't read arguments yet, anything there is an error.
 
-`silver` is a front end: it calls the compiler, `silverc`, which takes the same commands and is where the options are read. A project's packages are to be written down in a `silver.toml` file, which `silver` reads before calling the compiler: see [The `silver` tool](silver.md). That part isn't built, so the options above are how packages are given today.
+`silver` is a front end: it calls the compiler, `silverc`, which takes the same commands and is where the options are read. A project's packages are written down in a `silver.toml` file, which `silver` finds from the file named and reads before calling the compiler: see [The `silver` tool](silver.md). The options above are for a file in no project, and are how `silver` gives the packages to `silverc`.
 
 Silver is designed to be compiled a package at a time. A package compiles to its signatures, the bodies of its generic and inlinable functions, and object code. A package that uses it instantiates those generics itself and is rebuilt when the package changes. There is no stable binary interface: a compiled package can't be swapped without rebuilding what uses it. Today every program is still compiled whole.
 
@@ -40,7 +40,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
 | [Interfaces](language/interfaces.md) | Interfaces, declared conformance, bounds, `if type`, interface names as parameter and result types | Partial: every module sees every conformance; no interface types as values |
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
-| [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: packages are given on the command line, their parts share nothing yet, and there are no renamed imports; the build can't name another prelude |
+| [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: packages' parts share nothing yet, and there are no renamed imports; the build can't name another prelude |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the natives of `lang` and the standard library |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, `panics`, the test runner | Partial: no library hooks |
 

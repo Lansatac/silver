@@ -1,0 +1,8 @@
+module tool.compiler.main
+
+import geometry.area
+import tool.syntax.parse
+
+def main(): Unit {
+    printl(parse(square(3)))
+}

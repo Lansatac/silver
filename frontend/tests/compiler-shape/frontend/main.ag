@@ -1,0 +1,5 @@
+module tool.frontend.main
+
+def main(): Unit {
+    printl("the front end")
+}

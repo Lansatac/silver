@@ -19,6 +19,7 @@ silver test                run the tests of the project here
 - A file can start with `#!/usr/bin/env silver` and be run as `./hello.ag`.
 - With no file, `run` and `build` take the program of the package `silver` was started in. A library is reported as one. In a package with several parts that are programs, `silver` lists them, and one is chosen by its directory, as `silver run compiler`.
 - With no path, `test` runs the tests of the package `silver` was started in, and of its parts.
+- `--show-command`, given before the file like any option, prints the command line `silver` runs the compiler with, then runs it. It's for when `silver` and `silverc` seem to disagree.
 
 ## Projects
 
@@ -139,10 +140,16 @@ And a program can keep scripts under it that never import it, as a test harness 
 - What an executable built from a part is called when the part's name isn't wanted, as `silverc` for `silver.compiler`.
 - A package used only by tests.
 - Naming a prelude other than the standard one.
+- Whether only what a run reaches should be read. Today every package and part of a file is read and followed once any of them is reached, so a part's broken `[paths]` entry stops runs that never use that part.
 
 ## Current implementation
 
 - `silver` and `silverc` are two programs, and `silver` runs a file, builds one and tests a path by calling `silverc` with the same command and options. It finds `silverc` beside itself, or where the environment variable `SILVERC` says.
-- `silver` reads no `silver.toml` and finds no project. Packages are given on the command line, which it passes on: see [Modules](language/modules.md#current-implementation).
-- `run`, `build` and `test` need a file or a path.
+- `silver` finds the project of the file or directory named and reads its `silver.toml`, and the files of the packages it uses, as above. It gives `silverc` each package's directory, uses and parts as `--package`, `--uses` and `--parts`, and the file that describes it as `--package-file`, so that what `silverc` reports about a package names that file and its `uses` rather than an option, and a starting file whose `module` line names no package is told the name its package and path give it. The directories are given relative to where `silver` was started when they're inside it. `std` isn't given: `silverc` adds it.
+- With no `silver.toml` at or above the file, the command line is passed on as it is, and packages can still be given on it: see [Modules](language/modules.md#current-implementation). Options given by hand inside a project follow the ones `silver` gives, and a package declared both ways is the compiler's error.
+- A package file is read whole and checked before anything is run, and a mistake in it is one message located in the file, with a code from `F0001`: a field `silver` doesn't know or of the wrong type, a missing `name`, a part with no `name` or `path`, a name that isn't a package's, an empty directory, a directory that isn't one, a used package `silver` can't find, a directory under `[paths]` whose file doesn't describe a package of that name there, or one package name at two directories.
+- Where the design leaves it open, `silver` refuses: a `source` or a part's `path` outside the directory it's taken from, a part, or a package's or part's `source`, in or under a directory with a `silver.toml` of its own below the file, since that file's package would hold its files, a part at the file's own directory, a part with its package's name or another part's, two parts at one path, a name listed twice in `uses`, `std` in `uses` or under `[paths]`, a name under `[paths]` that's the file's own package or one of its parts, and `uses` on a package with parts and no `source`. When any package of a file is reached, every package and part in that file is read and followed and given to `silverc`, so a mistake in one part's `[paths]` entry, such as a directory that isn't there, stops every run that reaches the file, including one from a package elsewhere that uses a different part. An entry under `[paths]` is followed only when something uses it.
+- `run`, `build` and `test` need a file or a path. `-` as the file is passed on with no search for a project.
+- A directory named `silver.toml` isn't a package file, and the search carries on above it.
+- A file with no `module` line in a project uses the standard library and nothing else, as one with no project does, and what `silverc` says about what it uses names the options, which can still be given for it by hand.
 - A program can't read arguments, so anything after the file is an error.

@@ -1,0 +1,3 @@
+module tool.ast.node
+
+def nodeName(n: Int): String => "node {n}"

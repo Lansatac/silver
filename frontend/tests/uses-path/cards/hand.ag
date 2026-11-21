@@ -1,0 +1,5 @@
+module cards.hand
+
+import geometry.area
+
+def handValue(): Int => square(2) + 1

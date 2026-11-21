@@ -1,0 +1,8 @@
+# A program, whose modules are in src, using two libraries, one of which uses the other.
+name = "shop"
+source = "src"
+uses = ["cards", "geometry"]
+
+[paths]
+cards = "../cards"
+geometry = "../geometry"

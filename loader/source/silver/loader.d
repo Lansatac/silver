@@ -19,9 +19,10 @@ struct Packages
     string[] scriptUses;
     /// How the build says to list `used` among what the package `user` uses, or a file with no
     /// `module` line uses when `user` is null, added to the messages that need it. Null for nothing.
-    string function(string user, string used) usesHint;
-    /// How the build says to declare a package named `name`, likewise.
-    string function(string name) packageHint;
+    string delegate(string user, string used) usesHint;
+    /// How the build says to make a package named `name` known to the package `user`, which may be a
+    /// script's (`scriptPackage`), or null when no package asks, likewise.
+    string delegate(string user, string name) packageHint;
 }
 
 /// The package of the file started from when it has no `module` line, by its module's name. It
@@ -76,7 +77,7 @@ Program load(string source, string file, const Packages packages, string prelude
         start.name = declaration.path.join(".");
         if (!isInLang(start.name))
         {
-            auto found = layout.locate(declaration.path);
+            auto found = layout.locate(declaration.path, null, file);
             if (found.package_ is null || found.path is null)
             {
                 context.collector.reportError(DiagnosticCode.ModuleDeclarationMismatch, declaration.span,
@@ -190,7 +191,7 @@ Program load(string source, string file, const Packages packages, string prelude
                             name));
                     continue;
                 }
-                auto found = layout.locate(path);
+                auto found = layout.locate(path, importer);
                 if (found.package_ !is null && !layout.mayUse(importer, found.package_.name))
                 {
                     context.collector.reportError(DiagnosticCode.ImportOutsideUses, importNode.span,
@@ -268,8 +269,8 @@ private struct Layout
 {
     const(Package)[] declared;
     const(string)[] scriptUses;
-    string function(string, string) usesHint;
-    string function(string) packageHint;
+    const(string delegate(string, string)) usesHint;
+    const(string delegate(string, string)) packageHint;
     /// The package of the starting file when it has no `module` line, and so is a package of its
     /// own, as `scriptPackage` names it, and its module's name.
     string script;
@@ -278,8 +279,9 @@ private struct Layout
     /// null when there's no prelude or it's in no package.
     string preludePackage;
 
-    /// Where the module `chain` would be, and why it isn't if it isn't.
-    Location locate(const string[] chain) const
+    /// Where the module `chain` would be, and why it isn't if it isn't: imported by a module of the
+    /// package `user`, or named by the `module` line of `startingFile`.
+    Location locate(const string[] chain, string user = null, string startingFile = null) const
     {
         Location found;
         if (isInLang(chain.join(".")))
@@ -306,8 +308,10 @@ private struct Layout
         }
         if (found.package_ is null)
         {
+            auto suggested = startingFile is null ? null : moduleNameHint(startingFile);
+            if (suggested is null && packageHint !is null) suggested = packageHint(user, chain[0]);
             found.problem = format("no package is named '%s', or by any longer start of '%s'%s", chain[0],
-                chain.join("."), hint(packageHint is null ? null : packageHint(chain[0])));
+                chain.join("."), hint(suggested));
         }
         else if (found.package_.directory.length == 0)
         {
@@ -336,6 +340,25 @@ private struct Layout
                 found.package_.name, found.package_.directory, found.path, misplacedRootHint(found.path));
         }
         return found;
+    }
+
+    /// What the `module` line of `file` has to say, by the package whose directory holds it, the
+    /// deepest, or null when none does.
+    string moduleNameHint(string file) const
+    {
+        import std.path : pathSplitter, relativePath;
+
+        const(Package)* holder;
+        foreach (ref p; declared)
+        {
+            if (p.name.length == 0 || p.directory.length == 0 || !within(file.dirName, p.directory)) continue;
+            if (holder is null || within(p.directory, holder.directory)) holder = &p;
+        }
+        if (holder is null) return null;
+        auto under = pathSplitter(relativePath(absolutePath(file.stripExtension), absolutePath(holder.directory))).array;
+        auto name = (segmentsOf(holder.name) ~ (under == [rootModuleFile.stripExtension] ? [] : under)).join(".");
+        return format("%s is in the package '%s', at %s, so its `module` line is `module %s`", file, holder.name,
+            holder.directory, name);
     }
 
     /// The package named `name`, or null if none is.
@@ -422,7 +445,7 @@ private struct Layout
                         ~ "be a module of each", other.name, other.directory, p.name, p.directory));
             }
         }
-        void checkList(string owner, const string[] list, string what)
+        void checkList(string user, string owner, const string[] list, string what)
         {
             foreach (entry; list)
             {
@@ -432,13 +455,13 @@ private struct Layout
                 else if (entry.length == 0 || named(entry) is null)
                     problem(DiagnosticCode.InvalidPackages, format("%s lists '%s' among what it %s, and there's no "
                         ~ "package of that name%s", owner, entry, what,
-                        hint(packageHint is null || entry.length == 0 ? null : packageHint(entry))));
+                        hint(packageHint is null || entry.length == 0 ? null : packageHint(user, entry))));
             }
         }
         foreach (ref p; declared)
         {
-            checkList(format("The package '%s'", p.name), p.uses, "uses");
-            checkList(format("The package '%s'", p.name), p.parts, "has as parts");
+            checkList(p.name, format("The package '%s'", p.name), p.uses, "uses");
+            checkList(p.name, format("The package '%s'", p.name), p.parts, "has as parts");
             foreach (part; p.parts)
             {
                 auto found = named(part);
@@ -453,7 +476,7 @@ private struct Layout
                 parentOf[part] = p.name;
             }
         }
-        if (script !is null) checkList(format("'%s', the file with no `module` line,", scriptModule), scriptUses, "uses");
+        if (script !is null) checkList(script, format("'%s', the file with no `module` line,", scriptModule), scriptUses, "uses");
         return ok;
     }
 
@@ -757,7 +780,56 @@ string describePackages(const string[] declared, const string[] uses, const stri
     packages.declared = withStandardLibrary(packages.declared);
     packages.usesHint = (user, used) => user is null
         ? format("Give `--uses %s` to list it", used) : format("Give `--uses %s=%s` to list it", user, used);
-    packages.packageHint = name => format("Give `--package %s=<directory>` to declare one", name);
+    packages.packageHint = (user, name) => format("Give `--package %s=<directory>` to declare one", name);
+    return null;
+}
+
+/// Reads `--package-file name=file`, which says that what the package `name` is, uses and has as parts
+/// was read from the package file `file`, so that the messages about it name that file and its
+/// fields instead of options that weren't given. Packages it doesn't name keep the options' hints.
+/// Returns what's wrong with how one is written, or null.
+string describePackageFiles(const string[] files, ref Packages packages)
+{
+    import std.string : indexOf;
+
+    if (files.length == 0) return null;
+    string[string] fileOf;
+    foreach (option; files)
+    {
+        auto at = option.indexOf('=');
+        if (at <= 0 || at == option.length - 1)
+            return format("--package-file takes a package and the file it's described in, as "
+                ~ "`--package-file geometry=geometry/silver.toml`, not `%s`", option);
+        immutable name = option[0 .. at];
+        if (!packages.declared.canFind!(p => p.name == name))
+            return format("--package-file names '%s', which no --package or --parts declares", name);
+        fileOf[name] = option[at + 1 .. $];
+    }
+    string[string] parentOf;
+    foreach (ref p; packages.declared)
+    {
+        foreach (part; p.parts) parentOf[part] = p.name;
+    }
+    string listIn(string user, string file)
+    {
+        return user in parentOf ? format("the `uses` of the part '%s' in %s", user, file) : "`uses` in " ~ file;
+    }
+    auto optionUses = packages.usesHint;
+    packages.usesHint = (user, used) {
+        auto file = user is null ? null : user in fileOf;
+        if (file is null) return optionUses is null ? null : optionUses(user, used);
+        auto list = "That list is " ~ listIn(user, *file);
+        auto usedFile = used in fileOf;
+        if (usedFile !is null && *usedFile == *file) return list;
+        return list ~ format(", with the directory of '%s' under `[paths]` there if it has none", used);
+    };
+    auto optionPackage = packages.packageHint;
+    packages.packageHint = (user, name) {
+        auto file = user is null ? null : user in fileOf;
+        if (file is null)
+            return user is null || optionPackage is null ? null : optionPackage(user, name);
+        return format("List it in %s, with its directory under `[paths]` there", listIn(user, *file));
+    };
     return null;
 }
 
@@ -2130,6 +2202,63 @@ unittest
     problems("import geo.shapes", ["geo"])[0].should.contain("\nGive `--uses geo=units` to list it");
     problems("import shapes.circle", [])[0].should.contain("\nGive `--package shapes=<directory>` to declare one");
     problems("def f(): Int => 1", ["nope"])[0].should.contain("\nGive `--package nope=<directory>` to declare one");
+}
+
+@("--package-file makes the hints name the package file and its fields instead of options")
+unittest
+{
+    auto directory = makeModuleDirectory("packages-file-hints", [
+        "geo/shapes.ag": "module geo.shapes",
+        "kit/tool.ag": "module geo.kit.tool",
+        "units/length.ag": "module units.length",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    string[] problems(string source, string[] files, string start = "main.ag")
+    {
+        Packages packages;
+        assert(describePackages(["geo=" ~ buildPath(directory, "geo"), "geo.kit=" ~ buildPath(directory, "kit"),
+            "units=" ~ buildPath(directory, "units")], [], ["geo=geo.kit"], null, packages) is null);
+        assert(describePackageFiles(files, packages) is null);
+        auto context = new SourceContext;
+        load(source, start, packages, standardPrelude, context);
+        return context.collector.errors.map!(e => e.message.idup).array;
+    }
+    auto files = ["geo=geo/silver.toml", "geo.kit=geo/silver.toml", "units=units/silver.toml"];
+    auto shapes = buildPath(directory, "geo", "shapes.ag");
+    auto tool = buildPath(directory, "kit", "tool.ag");
+    auto root = problems("module geo.shapes\nimport units.length", files, shapes);
+    root.length.should.equal(1);
+    root[0].should.endWith("\nList 'units' among what 'geo' uses\nThat list is `uses` in geo/silver.toml, with the "
+        ~ "directory of 'units' under `[paths]` there if it has none");
+    problems("module geo.kit.tool\nimport units.length", files, tool)[0]
+        .should.endWith("\nThat list is the `uses` of the part 'geo.kit' in geo/silver.toml, with the directory of "
+            ~ "'units' under `[paths]` there if it has none");
+    problems("module geo.kit.tool\nimport geo.shapes", files, tool)[0]
+        .should.endWith("\nList 'geo' among what 'geo.kit' uses\nThat list is the `uses` of the part 'geo.kit' in geo/silver.toml");
+    problems("module geo.shapes\nimport shapes.circle", files, shapes)[0]
+        .should.endWith("\nList it in `uses` in geo/silver.toml, with its directory under `[paths]` there");
+    problems("module geo.kit.tool\nimport shapes.circle", files, tool)[0]
+        .should.endWith("\nList it in the `uses` of the part 'geo.kit' in geo/silver.toml, with its directory under "
+            ~ "`[paths]` there");
+    // A file with no module line can't be given what it uses in a package file yet, so it's told the options.
+    problems("import shapes.circle", files)[0].should.endWith("\nGive `--package shapes=<directory>` to declare one");
+    problems("import geo.shapes", files)[0].should.endWith("\nGive `--uses geo` to list it");
+    auto misnamed = problems("module wrong.shapes", files, shapes);
+    misnamed.length.should.equal(1);
+    misnamed[0].should.endWith(format("\n%s is in the package 'geo', at %s, so its `module` line is `module geo.shapes`",
+        shapes, buildPath(directory, "geo")));
+    problems("module wrong.thing", files, buildPath(directory, "elsewhere.ag"))[0]
+        .should.endWith("or by any longer start of 'wrong.thing'");
+    problems("module geo.shapes\nimport units.length", ["geo.kit=geo/silver.toml"], shapes)[0]
+        .should.endWith("\nGive `--uses geo=units` to list it");
+
+    Packages packages;
+    assert(describePackages(["geo=geo"], [], [], null, packages) is null);
+    describePackageFiles(["geo"], packages).should.contain("--package-file takes a package and the file");
+    describePackageFiles(["geo="], packages).should.contain("--package-file takes");
+    describePackageFiles(["other=x/silver.toml"], packages).should.contain("'other', which no --package or --parts declares");
+    describePackageFiles([], packages).should.equal(null);
 }
 
 

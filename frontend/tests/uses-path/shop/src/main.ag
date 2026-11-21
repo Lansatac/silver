@@ -1,0 +1,9 @@
+module shop.main
+
+import cards.hand
+import geometry.area
+
+def main(): Unit {
+    printl(square(5))
+    printl(handValue())
+}

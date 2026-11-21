@@ -1,0 +1,5 @@
+module tool.syntax.parse
+
+import tool.ast.node
+
+def parse(n: Int): String => "parsed {nodeName(n)}"

@@ -1,0 +1,24 @@
+# The compiler's own shape: a parent with no modules, library parts, and two parts that are programs.
+name = "tool"
+
+[paths]
+geometry = "../uses-path/geometry"
+
+[[part]]
+name = "tool.ast"
+path = "ast"
+
+[[part]]
+name = "tool.syntax"
+path = "syntax"
+uses = ["tool.ast"]
+
+[[part]]
+name = "tool.compiler"
+path = "compiler"
+source = "source"
+uses = ["tool.syntax", "tool.ast", "geometry"]
+
+[[part]]
+name = "tool.frontend"
+path = "frontend"

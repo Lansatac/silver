@@ -1,0 +1,5 @@
+module geometry.area
+
+def square(n: Int): Int => n * n
+
+test "a square" => expect(square(3) == 9)

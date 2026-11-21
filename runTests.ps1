@@ -8,6 +8,10 @@ $failed = @()
 Push-Location $PSScriptRoot
 try
 {
+    # The front end's end-to-end tests run the built silver and silverc.
+    Write-Host "=== build"
+    dub build
+    if ($LASTEXITCODE -ne 0) { $failed += 'build' }
     foreach ($package in $packages)
     {
         Write-Host "=== $package"

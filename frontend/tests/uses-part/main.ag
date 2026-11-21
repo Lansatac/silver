@@ -1,0 +1,7 @@
+module lint.main
+
+import tool.syntax.parse
+
+def main(): Unit {
+    printl(parse(7))
+}

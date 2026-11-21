@@ -10,7 +10,7 @@ import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, 
 import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, optimizeIr, Toolchain;
 import silver.core : lowerProgram, printCore = print;
 import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed, RuntimeError;
-import silver.loader : describePackages, load, Packages, standardPrelude;
+import silver.loader : describePackageFiles, describePackages, load, Packages, standardPrelude;
 import silver.sema : analyze, Analysis, Target;
 
 /// Loads and analyzes `programFile`. Problems go to `context.collector`, which the caller
@@ -353,9 +353,12 @@ unittest
     assert(takeCommand(args) == "run");
 }
 
-/// The options whose value is the next word, as `-o out`. `--output=out` needs no entry.
-immutable optionsWithValues = ["--package", "--uses", "--parts", "--backend", "-b", "--output", "-o", "--filter",
-    "--format"];
+/// The options whose value is the next word, as `-o out`. `--output=out` needs no entry. The front end,
+/// `silver`, keeps a copy of this list to find the file among the options it passes on
+/// (`compilerOptionsWithValues` in frontend/source/silver/frontend/package.d), and a test there reads
+/// this one to check the two agree.
+immutable optionsWithValues = ["--package", "--uses", "--parts", "--package-file", "--backend", "-b", "--output", "-o",
+    "--filter", "--format"];
 
 /// Takes what follows the file off `args` and returns it. The file is the first word that isn't an
 /// option or an option's value, and options stop there: what follows is for the program. getopt's own
@@ -388,6 +391,29 @@ unittest
     assert(takeAfterFile(args) == [] && args.length == 3);
     args = ["silverc", "f.ag", "-o", "out"];
     assert(takeAfterFile(args) == ["-o", "out"] && args == ["silverc", "f.ag"]);
+    args = ["silverc", "--package", "a=a", "--package-file", "a=a/silver.toml", "f.ag", "x"];
+    assert(takeAfterFile(args) == ["x"] && args.length == 6);
+}
+
+@("--package-file names a declared package and its file, and anything else is refused before loading")
+unittest
+{
+    import std.algorithm : canFind;
+
+    auto directory = testDirectory("package-file",["main.ag": "def main(): Unit {}"]);
+    scope (exit) rmdirRecurse(directory);
+    auto main = buildPath(directory, "main.ag");
+    auto saved = stderr;
+    stderr = File(buildPath(directory, "stderr.txt"), "w");
+    scope (exit) stderr = saved;
+
+    assert(run(["silverc", "run", "--package", "a=" ~ directory, "--package-file", "a=silver.toml", main]) == 0);
+    assert(run(["silverc", "run", "--package", "a=" ~ directory, "--package-file", "a", main]) == 1);
+    assert(run(["silverc", "run", "--package-file", "b=silver.toml", main]) == 1);
+    stderr.close();
+    auto written = readText(buildPath(directory, "stderr.txt"));
+    assert(written.canFind("--package-file takes a package and the file") && written.canFind("'b', which no --package"),
+        written);
 }
 
 /// What's wrong with `command` (`run`, `build` or `test`), given `files`, which is what its options
@@ -632,6 +658,7 @@ int run(string[] args)
     string[] packageOptions;
     string[] usesOptions;
     string[] partsOptions;
+    string[] packageFileOptions;
     string outputPath;
     bool emitLlvm;
     bool emitCore;
@@ -657,6 +684,8 @@ int run(string[] args)
     "uses", "what a package uses, as name=package,package, or for a file with no module line, package,package",
         &usesOptions,
     "parts", "a package's parts, as name=part,part", &partsOptions,
+    "package-file", "the package file a package was described in, as name=file, which messages then name instead of"
+        ~ " these options; silver gives it", &packageFileOptions,
     "backend|b", "run, test: how to run the program: interpreter (default), llvm, or for tests, both", &backend,
     "output|o", "build: where to write the executable (or the IR, with --emit-llvm)", &outputPath,
     "optimize|O", "build, and run or test with -b llvm: have clang optimize the compiled program."
@@ -684,7 +713,9 @@ int run(string[] args)
         return 1;
     }
     Packages packages;
-    if (auto mistake = describePackages(packageOptions, usesOptions, partsOptions, null, packages))
+    auto mistake = describePackages(packageOptions, usesOptions, partsOptions, null, packages);
+    if (mistake is null) mistake = describePackageFiles(packageFileOptions, packages);
+    if (mistake !is null)
     {
         stderr.writeln(mistake, "\nRun `silverc --help` for the options.");
         return 1;

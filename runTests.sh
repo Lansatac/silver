@@ -8,6 +8,10 @@ cd "$(dirname "$0")" || exit 1
 packages=(:ast :syntax :loader :sema :core :interpreter :codegen :testing :conformance :frontend)
 failed=()
 
+# The front end's end-to-end tests run the built silver and silverc.
+echo "=== build"
+dub build || failed+=(build)
+
 for package in "${packages[@]}" root; do
     echo "=== $package"
     if [ "$package" = root ]; then

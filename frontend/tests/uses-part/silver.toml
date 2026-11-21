@@ -1,0 +1,6 @@
+# Uses one part of another project, found by the part's directory.
+name = "lint"
+uses = ["tool.syntax"]
+
+[paths]
+"tool.syntax" = "../compiler-shape/syntax"
