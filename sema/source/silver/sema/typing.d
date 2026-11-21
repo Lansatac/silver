@@ -57,6 +57,10 @@ package struct Typing
     /// The functions that share their name with another of their module.
     SideTable!(Id!FunctionDecl, bool) overloaded;
     SideTable!(Id!TypeDecl, Type) nominalTypes;
+    /// The `opEquals`, `opHash` and `opString` a declared type's module wrote for it, by the type.
+    SideTable!(Id!TypeDecl, Id!FunctionDecl) equalsFunctions;
+    SideTable!(Id!TypeDecl, Id!FunctionDecl) hashFunctions;
+    SideTable!(Id!TypeDecl, Id!FunctionDecl) stringFunctions;
     /// What each sum's values can be, in declaration order.
     SideTable!(Id!TypeDecl, Type[]) members;
     /// For a construction that produces its owner, the member it builds on the way.

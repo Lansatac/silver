@@ -1,0 +1,1 @@
+T0054: `opString` for `Point` belongs to the module that declares the type, `type_functions_support.shapes`; here, a function with a name of its own does this

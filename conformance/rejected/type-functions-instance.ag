@@ -1,0 +1,8 @@
+// A type's own function is for every instance of the type.
+type Box<T>(value: T)
+
+def opString(b: Box<Int>): String => "box of {b.value}"
+
+def main(): Unit {
+    printl(Box(1))
+}

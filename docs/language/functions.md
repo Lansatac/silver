@@ -217,18 +217,25 @@ g[1]                           // error: `x[i]` calls `opIndex`, and no `opIndex
 
 ### Equality and hashing
 
-`opHash(x): UInt64` is the hash a [map](maps.md) uses for its keys. Values that are equal have to hash alike, so a type that replaces `opEquals` replaces `opHash` too, and writing one without the other is an error.
+`opHash(x): UInt` is the hash a [dictionary](dictionaries.md) uses for its keys. Values that are equal have to hash alike, so a type that replaces `opEquals` replaces `opHash` too, and writing one without the other is an error.
 
 ```silver
-def opEquals<K, V>(a: Map<K, V>, b: Map<K, V>): Bool {
+def opEquals<K, V>(a: Dictionary<K, V>, b: Dictionary<K, V>): Bool {
     if length(a) != length(b) { return false }
     for (k, v) in a {
         if b[k] != Some(v) { return false }
     }
     true
 }
-def opHash<K, V>(m: Map<K, V>): UInt64 => ...      // combines the entries in any order
+def opHash<K, V>(d: Dictionary<K, V>): UInt => ...    // combines the entries in any order
 ```
+
+- Each takes the declared type it's for, and nothing else: `opEquals(a: T, b: T): Bool`, `opHash(x: T): UInt` and `opString(x: T): String`, with no `mutable` parameter.
+- One written for a generic type is for every instance of it. It takes the type with type parameters of its own, as `opEquals<T>(a: Box<T>, b: Box<T>)` does, and they can't have bounds.
+- They're used wherever a value of the type is compared, hashed or printed: inside an option, an array, a tuple, a field or a sum, in generic code, and in what a closure captured.
+- One written for a sum is for values of the sum, and one for a member is for that member, inside its sum too. A value whose type is the member isn't printed by its sum's `opString`.
+- A [pattern](user-types.md) takes a value apart by its members and fields, whatever its `opEquals` says.
+- `hash(x)`, in `lang.hash`, is the hash of any value, through its type's `opHash` when it has one. A type's `opHash` calls it for the parts it hashes.
 
 Structural equality is right for nearly every type. These functions are for a type whose fields can differ for values that mean the same thing, such as a collection whose layout depends on the order it was built in. A comparison that ignores part of a value, such as positions in source or the case of a name, is an ordinary function, passed where it's needed, and not a replacement for `==`.
 
@@ -243,7 +250,8 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 ## Current implementation
 
 - A nested function can call itself and those declared before it, but not one declared after it.
-- Of the operator functions, `opIndex` and `opIndexAssign` are available. `opEquals`, `opHash` and `opString` aren't, so `==` and printing are always the structural ones. A `for` still finds `next` by name, as [Control flow](control-flow.md#current-implementation) describes.
+- `hash` isn't forwarded by `lang` or the standard library yet, so a module that writes an `opHash` imports `lang.hash` for it.
+- An `opEquals`, `opHash` or `opString` for `Ref` isn't used.
 - Only module-level functions can be overloaded. Two nested `def`s of one name in a block are an error.
 - When more than one candidate is left, an `if`, `match` or block is typed before any is chosen, even when its values are all literals, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.
 - Of the arguments compared by their shape, `None` and `[]` count one step wherever they go.

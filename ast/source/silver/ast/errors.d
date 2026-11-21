@@ -162,6 +162,9 @@ enum DiagnosticCode : string
     MissingRequiredConformance = "T0052",
     /// Two conformances that could apply to the same type and interface.
     OverlappingConformance = "T0053",
+    /// An `opEquals`, `opHash` or `opString` that isn't its type's module's, hasn't the shape, or is
+    /// an `opEquals` without an `opHash` or the reverse.
+    InvalidTypeFunction = "T0054",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

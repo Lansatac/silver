@@ -1,0 +1,105 @@
+import lang.hash
+import std.ref
+
+// A bag of numbers that's equal to another with the same numbers in any order.
+type Bag(items: [Int])
+
+def opEquals(a: Bag, b: Bag): Bool => sorted(a.items) == sorted(b.items)
+def opHash(bag: Bag): UInt {
+    mutable val total: UInt = 0
+    for item in bag.items {
+        total = total ^ hash(item)
+    }
+    total
+}
+def opString(bag: Bag): String => "bag of {length(bag.items)}"
+
+// Every instance of a generic type gets the one function.
+type Loose<T>(value: T, note: String)
+
+def opEquals<T>(a: Loose<T>, b: Loose<T>): Bool => a.value == b.value
+def opHash<T>(x: Loose<T>): UInt => hash(x.value)
+def opString<T>(x: Loose<T>): String => "~{x.value}"
+
+// A sum, and a member of one.
+type Shape = Circle(radius: Int) | Square(side: Int) | Dot
+
+def opString(shape: Shape): String => match shape {
+    Circle(r) => "circle {r}"
+    Square(s) => "square {s}"
+    Dot => "dot"
+}
+
+type Token = Word(text: String, line: Int) | End
+
+def opEquals(a: Word, b: Word): Bool => a.text == b.text
+def opHash(w: Word): UInt => hash(w.text)
+
+type Holder(bag: Bag, name: String)
+
+def same<T>(a: T, b: T): Bool => a == b
+def show<T>(x: T): String => "<{x}>"
+def hashed<T>(x: T): UInt => hash(x)
+
+def main(): Unit {
+    val a = Bag([1, 2, 3])
+    val b = Bag([3, 1, 2])
+    printl(a == b)
+    printl(a != b)
+    printl(a == Bag([1, 2]))
+    printl(hash(a) == hash(b))
+    printl(a)
+    printl("{a} and {String(b)}")
+
+    // Inside other values, and through generic code.
+    printl(Some(a) == Some(b))
+    printl([a, b] == [b, a])
+    printl((a, 1) == (b, 1))
+    printl(Holder(a, "x") == Holder(b, "x"))
+    printl(Holder(a, "x") == Holder(b, "y"))
+    printl(hash(Holder(a, "x")) == hash(Holder(b, "x")))
+    printl(hash([a]) == hash([b]))
+    printl(same(a, b))
+    printl(hashed(a) == hashed(b))
+    printl(show(a))
+    printl([a, b])
+    printl(Some(a))
+    printl(Holder(a, "x"))
+    printl([a].contains(b))
+
+    printl(Loose(1, "one") == Loose(1, "uno"))
+    printl(Loose("a", "x") == Loose("b", "x"))
+    printl(hash(Loose(1, "one")) == hash(Loose(1, "uno")))
+    printl(same(Loose([1], "p"), Loose([1], "q")))
+    printl([Loose(1, "one"), Loose(2, "two")])
+    printl(Loose(a, "bag") == Loose(b, "sack"))
+    printl(Loose(a, "bag"))
+
+    val shapes: [Shape] = [Circle(2), Square(3), Dot]
+    printl(shapes)
+    printl(Circle(2))
+    printl(shapes[0] == Circle(2))
+
+    val first: Token = Word("if", 1)
+    val second: Token = Word("if", 9)
+    printl(first == second)
+    printl(hash(first) == hash(second))
+    printl(first == End)
+    printl(first)
+
+    // A pattern takes a value apart by its members, whatever its `opEquals` says.
+    val told = match second {
+        Word(text, 1) => "line one"
+        Word(text, line) => "{text} on {line}"
+        End => "end"
+    }
+    printl(told)
+
+    // A closure is equal to another by what it captured, compared as the captured type compares.
+    val holds = (bag: Bag) => () => bag
+    printl(holds(a) == holds(b))
+    printl(hash(holds(a)) == hash(holds(b)))
+
+    val cell = Ref(a)
+    printl(get(cell) == b)
+}

@@ -136,3 +136,43 @@ unittest
         ~ "    xs = xs.opIndexAssign(0, 3)\n    print(xs.opIndex(0..1))\n}").shouldHaveNoDiagnostics();
     analyzed("def main(): Unit {\n    val i: UInt8 = 0\n    print(opIndex([1], i))\n}").shouldReport(DiagnosticCode.NoMatchingOverload, At("opIndex", 1));
 }
+
+@("opEquals, opHash and opString are for a declared type, with the shape each has, for every instance, and opEquals and opHash come together")
+unittest
+{
+    enum types = "interface Named { def name(value: Self): String }
+type Point(x: Int, y: Int)
+type Box<T>(value: T)
+type Pair<A, B>(first: A, second: B)
+";
+    void rejects(string functions)
+    {
+        auto a = analyzed(types ~ functions ~ "\ndef main(): Unit {}");
+        assert(a.collector.diagnostics.length == 1, functions);
+        assert(a.collector.diagnostics[0].code == DiagnosticCode.InvalidTypeFunction, functions);
+    }
+
+    analyzed(types ~ "def opEquals(a: Point, b: Point): Bool => a.x == b.x
+def opHash(p: Point): UInt => 0
+def opString(p: Point): String => \"point\"
+def opEquals<T>(a: Box<T>, b: Box<T>): Bool => true
+def opHash<T>(b: Box<T>): UInt => 0
+def opString<B, A>(p: Pair<A, B>): String => \"pair\"
+def hash(p: Point): Int => p.x
+def main(): Unit {}").shouldHaveNoDiagnostics();
+
+    rejects("def opEquals(a: Point, b: Int): Bool => true");
+    rejects("def opEquals(a: Point): Bool => true");
+    rejects("def opEquals(a: Int, b: Int): Bool => true");
+    rejects("def opString(p: Point): Int => p.x");
+    rejects("def opString(text: String): String => text");
+    rejects("def opString(mutable p: Point): String => \"point\"");
+    rejects("def opHash(p: Point): Int => p.x");
+    rejects("def opHash(n: Int): UInt => 0");
+    rejects("def opString(b: Box<Int>): String => \"box\"");
+    rejects("def opString<T>(p: Pair<T, T>): String => \"pair\"");
+    rejects("def opString<T: Named>(b: Box<T>): String => name(b.value)");
+    rejects("def opString<T, U>(b: Box<T>): String => \"box\"");
+    rejects("def opEquals(a: Point, b: Point): Bool => true");
+    rejects("def opHash(p: Point): UInt => 0");
+}

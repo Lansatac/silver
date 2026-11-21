@@ -1,0 +1,1 @@
+T0054: `opString` is for every `Box<T>`, so it takes the type with type parameters of its own, each once and none with a bound

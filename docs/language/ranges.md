@@ -113,6 +113,23 @@ busy([1, 2, 3])         // 3, from the array's length, and the lambda doesn't ru
 busy(Countdown(5))      // 5, by stepping
 ```
 
+## Iterable
+
+A collection that isn't a range itself says which range steps it:
+
+```silver
+interface Iterable<R> {
+    def iterate(value: Self): R
+}
+
+conform Dictionary<K, V>: Iterable<Entries<K, V>>
+```
+
+- `for x in c`, where `c` isn't a range and is an `Iterable<R>`, calls `iterate(c)` once and loops over what it gives, which has to be a range.
+- A range is looped over as it is, whether or not it's an `Iterable` too.
+- The adapters and consumers take a range, so a chain starts from `c.iterate()`.
+- `Iterable` is declared in `lang`, beside `Range`.
+
 ## Sources
 
 | Function | Gives |
@@ -212,7 +229,7 @@ These are listed in the [ranges proposal](../proposals/ranges.md#open-questions)
 
 ## Current implementation
 
-- Everything above is built, in plain Silver in `stdlib/std/range.ag`.
+- Everything above is built, in plain Silver in `stdlib/std/range.ag`, except `Iterable`: a `for` takes only a range.
 - `array` steps every range. Sizing its result first needs a way to make an array with room for a known number of items, which there isn't yet.
 - Not built yet, as designed in the proposal: `sum`, `Backward` and `reversed`. `sorted` and `sortedBy` are a merge sort written in Silver.
 - An adapter's type can be built with its constructor by a module that imports it, which skips what `take` and `step` check: `Stepped(xs, 0)` divides by zero when asked for its length.

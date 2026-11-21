@@ -1,0 +1,1 @@
+T0054: `opEquals` is what `==` means for a declared type, so it takes two values of that type and returns a `Bool`, as in `def opEquals(a: Point, b: Point): Bool`

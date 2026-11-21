@@ -100,9 +100,9 @@ for i in r { print(i) }     // 2345
 
 A range with a bound left out exists only inside brackets.
 
-## Maps
+## Dictionaries
 
-Maps share the bracket syntax, with `:` between key and value, as in `["a": 1]`. See [Maps](maps.md).
+Dictionaries share the bracket syntax, with `:` between key and value, as in `["a": 1]`. See [Dictionaries](dictionaries.md).
 
 ## Open questions
 
@@ -115,4 +115,4 @@ Maps share the bracket syntax, with `:` between key and value, as in `["a": 1]`.
 - `xs[i] = v` copies the whole array every time, even when nothing else holds it.
 - An `Interval`'s `length`, `opIndex`, `next`, `nextBack` and `contains` are written once per integer type, since a bound can't ask for an integer yet. So an error about one of those calls lists every integer type's, and each name is overloaded, so using one as a value needs a function type, as in `val f: ([Int]) -> Int = length`.
 - A panic in an `Interval`'s `opIndex`, or in slicing an array with one, is reported inside `lang` rather than at the call.
-- `==` on two intervals compares their bounds, as for any product, so two empty intervals with different bounds are unequal. Equality by elements needs a type's own `opEquals`, which isn't built.
+- `==` on two intervals compares their bounds, as for any product, so two empty intervals with different bounds are unequal. Equality by elements isn't written yet: it needs to compare the bounds, and an `opEquals` is for every instance of its type, with no bound on what the interval is of.

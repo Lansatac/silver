@@ -1,0 +1,8 @@
+// Equal values have to hash alike, so an `opEquals` comes with an `opHash`.
+type Lonely(x: Int)
+
+def opEquals(a: Lonely, b: Lonely): Bool => true
+
+def main(): Unit {
+    printl(Lonely(1) == Lonely(2))
+}

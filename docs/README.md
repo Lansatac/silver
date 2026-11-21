@@ -26,13 +26,13 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Types](language/types.md) | Built-in types, promotion, equality, ordering, printing | Mostly implemented |
 | [Numbers](language/numbers.md) | Numeric types, literals, operators, overflow, conversions | Implemented |
 | [Bindings](language/bindings.md) | `val`, `mutable val`, discards, shadowing, constants | Implemented |
-| [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading, operator functions | Partial: no tail calls, `opEquals` or `opString` |
+| [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading, operator functions | Partial: no tail calls |
 | [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented |
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
 | [Errors](language/errors.md) | `T ! E`, `?` and `!` on errors, what panics, `main` | Implemented |
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, `a..b` as an `Interval` | Implemented, except that element assignment always copies |
 | [Ranges](language/ranges.md) | `Range`, sources of your own, `std.range` adapters and consumers | Partial: adapters, sources, consumers, ordering, `Sized`, `Indexed` and `Seq`; `sum` and `reversed` aren't built |
-| [Maps](language/maps.md) | `[K: V]`, lookup and update, insertion order, keys | Designed; only the structural hash is implemented |
+| [Dictionaries](language/dictionaries.md) | `[K: V]`, lookup and update, insertion order, keys | Designed; only the structural hash is implemented |
 | [Strings](language/strings.md) | Text, interpolation, characters, cutting, `std.string` | Partial: no raw or multi-line strings |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, `match` | Implemented, with `invariant` still to be removed |

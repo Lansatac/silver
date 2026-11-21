@@ -1,0 +1,8 @@
+// Equality, hashing and printing belong to the module that declares the type.
+import type_functions_support.shapes
+
+def opString(p: Point): String => "point"
+
+def main(): Unit {
+    printl(Point(1, 2))
+}

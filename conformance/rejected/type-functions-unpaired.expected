@@ -1,0 +1,1 @@
+T0054: `Lonely` has an `opEquals` and no `opHash`: values that are equal have to hash alike, so a type that writes one writes both

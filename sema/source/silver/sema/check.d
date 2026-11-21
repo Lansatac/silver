@@ -12,6 +12,7 @@ import silver.ast;
 import silver.sema.constant_eval;
 import silver.sema.coverage;
 import silver.sema.declare;
+import silver.sema.hooks : checkTypeHooks;
 import silver.sema.recursion;
 import silver.sema.type;
 import silver.sema.resolve;
@@ -259,6 +260,7 @@ private final class TypeChecker
 
         // After every bound is declared, and before anything that can look a bound up among them.
         declareConformances(programModules);
+        checkTypeHooks(programModules, _typing, _resolutions, _collector);
 
         // After every signature, since an invariant's `else` can call anything, and before any body,
         // since a body can build the type. One that another needs first is typed from there.

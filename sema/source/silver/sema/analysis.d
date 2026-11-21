@@ -5,6 +5,7 @@ import silver.sema.check : checkTypes;
 import silver.sema.typing;
 import silver.sema.constant : ConstValue;
 import silver.sema.resolve;
+import silver.sema.table : SideTable;
 import silver.sema.target : Intrinsic, intrinsicNamed, Target;
 import silver.sema.type;
 
@@ -396,6 +397,29 @@ final class Analysis
             (_) {},
         );
         return substitution;
+    }
+
+    /// The `opEquals` that the module of `type` wrote for it, as this instance of the type uses
+    /// it, or one that isn't `found` when its equality is the structural one.
+    FunctionUse equalityOf(Type type) const => written(_typing.equalsFunctions, type);
+    /// ditto, for its `opHash`.
+    FunctionUse hashOf(Type type) const => written(_typing.hashFunctions, type);
+    /// ditto, for its `opString`.
+    FunctionUse stringOf(Type type) const => written(_typing.stringFunctions, type);
+
+    private FunctionUse written(const ref SideTable!(Id!TypeDecl, Id!FunctionDecl) table, Type type) const
+    {
+        return _typing.types[type].match!(
+            (const NominalData nominal) {
+                auto func = nominal.decl in table;
+                if (func is null) return FunctionUse.init;
+                Substitution s;
+                auto fits = matchType(signatureOf(*func).params[0], type, s);
+                assert(fits, "a type's own function takes every instance of it");
+                return FunctionUse(*func, typeParametersOf(*func).map!(p => s[p.id]).array, null);
+            },
+            _ => FunctionUse.init,
+        );
     }
 
     /// The operands of the `~` chain `concat` heads, flattened, so that `a ~ b ~ c` is one

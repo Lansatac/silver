@@ -1,0 +1,8 @@
+// An `opEquals` takes two values of one declared type.
+type Point(x: Int, y: Int)
+
+def opEquals(a: Point, b: Int): Bool => a.x == b
+
+def main(): Unit {
+    printl(Point(1, 2) == Point(1, 2))
+}

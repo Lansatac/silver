@@ -1,0 +1,4 @@
+module type_functions_support.shapes
+
+type Point(x: Int, y: Int)
+type Box<T>(value: T)

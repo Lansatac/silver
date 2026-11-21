@@ -360,28 +360,36 @@ private final class Lowering
 
     void lowerPending()
     {
-        while (_pending.length > 0)
+        // Comparing or hashing a capture can call a type's own `opEquals` or `opHash`, which is
+        // lowered from source and can hold lambdas of its own, so this goes round until nothing is left.
+        for (auto more = true; more;)
         {
-            auto key = _pending[0];
-            _pending = _pending[1 .. $];
-            auto lowered = lowerFunction(key);
-            functions[_slots[key]] = lowered;
+            while (_pending.length > 0)
+            {
+                auto key = _pending[0];
+                _pending = _pending[1 .. $];
+                auto lowered = lowerFunction(key);
+                functions[_slots[key]] = lowered;
+            }
+            more = false;
+            if (_comparesFunctions && compareCaptures()) more = true;
+            if (_hashesFunctions && hashCaptures()) more = true;
         }
-        if (_comparesFunctions) compareCaptures();
-        if (_hashesFunctions) hashCaptures();
     }
 
-    /// Gives each lambda with captures a `captureHash`, once every function is lowered, as
-    /// `compareCaptures` does.
-    private void hashCaptures()
+    /// Gives each lambda with captures that hasn't one a `captureHash`, once every function is
+    /// lowered, as `compareCaptures` does. Whether it made any.
+    private bool hashCaptures()
     {
+        auto made = false;
         foreach (slot; _lambdaTypes.keys.sort)
         {
-            if (functions[slot].captures.length == 0) continue;
+            if (functions[slot].captures.length == 0 || functions[slot].captureHash != noFunction) continue;
             auto hasher = captureHashFunction(slot);
             functions[slot].captureHash = hasher;
+            made = true;
         }
-        assert(_pending.length == 0, "hashing is derived, and calls nothing that's lowered from source");
+        return made;
     }
 
     /// The function hashing the captures of a closure of the lambda at `target`, in order.
@@ -404,18 +412,21 @@ private final class Lowering
         return slot;
     }
 
-    /// Gives each lambda with captures a `captureEquality`. It's made only once every function is
-    /// lowered, since a comparison can reach a closure of any lambda in the program.
-    private void compareCaptures()
+    /// Gives each lambda with captures that hasn't one a `captureEquality`. It's made only once
+    /// every function is lowered, since a comparison can reach a closure of any lambda in the
+    /// program. Whether it made any.
+    private bool compareCaptures()
     {
+        auto made = false;
         foreach (slot; _lambdaTypes.keys.sort)
         {
-            if (functions[slot].captures.length == 0) continue;
+            if (functions[slot].captures.length == 0 || functions[slot].captureEquality != noFunction) continue;
             // Made first, since making it can move `functions`.
             auto compare = captureEqualityFunction(slot);
             functions[slot].captureEquality = compare;
+            made = true;
         }
-        assert(_pending.length == 0, "equality is derived, and calls nothing that's lowered from source");
+        return made;
     }
 
     /// The function telling whether two closures of the lambda at `target` hold equal captures.
@@ -2322,7 +2333,15 @@ private final class Lowering
         auto type = a.type;
         if (types.isFunction(type)) _comparesFunctions = true;
         if (isPrimitive(type) || types.isFunction(type) || isCellType(type)) return prim(PrimOp.Equal, types.bool_, a, b);
+        auto own = _analysis.equalityOf(type);
+        if (own.found) return Expr(types.bool_, a.span, ExprKind(Call(writtenFunction(own), [a, b])));
         return Expr(types.bool_, a.span, ExprKind(Call(equalityFunction(type), [a, b])));
+    }
+
+    /// Where the instance of a type's own `opEquals`, `opHash` or `opString` that `use` names is.
+    private size_t writtenFunction(const FunctionUse use)
+    {
+        return slotFor(InstanceKey(use.func, use.typeArgs.idup, null));
     }
 
     /// The function telling whether two values of `type` are equal: field by field, tag then
@@ -2404,6 +2423,8 @@ private final class Lowering
         {
             return Expr(types.string_, span, ExprKind(Prim(PrimOp.Format, [value])));
         }
+        auto own = _analysis.stringOf(type);
+        if (own.found) return Expr(types.string_, span, ExprKind(Call(writtenFunction(own), [value])));
         return Expr(types.string_, span, ExprKind(Call(formatFunction(type), [value])));
     }
 
@@ -2519,8 +2540,8 @@ private final class Lowering
         }
         if (types.isFunction(type)) _hashesFunctions = true;
         if (isPrimitive(type) || types.isFunction(type) || isCellType(type)) return prim(PrimOp.Hash, types.uint_, value);
-        // A type that writes its own `opHash` will be hashed by it here (silver-njy.5). `Map` is
-        // the first, combining its entries' hashes in an order that doesn't depend on theirs.
+        auto own = _analysis.hashOf(type);
+        if (own.found) return Expr(types.uint_, span, ExprKind(Call(writtenFunction(own), [value])));
         return Expr(types.uint_, span, ExprKind(Call(hashFunction(type), [value])));
     }
 
