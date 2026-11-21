@@ -276,6 +276,14 @@ private struct Layout
             found.problem = format("no package is named '%s', or by any longer start of '%s'%s", chain[0],
                 chain.join("."), hint(packageHint is null ? null : packageHint(chain[0])));
         }
+        else if (found.package_.directory.length == 0)
+        {
+            found.problem = length == chain.length
+                ? format("'%s' is a package that only holds its parts, so it has no module of its own",
+                    found.package_.name)
+                : format("the package '%s' only holds its parts, so it has no modules of its own, and no part "
+                    ~ "of it is named by a start of '%s'", found.package_.name, chain.join("."));
+        }
         else if (length == chain.length)
         {
             found.problem = format("'%s' is a package, at %s, and a module's name is the package's followed by its "
@@ -352,6 +360,8 @@ private struct Layout
             if (p.name in seen)
                 problem(DiagnosticCode.InvalidPackages, format("There are two packages named '%s'", p.name));
             seen[p.name] = true;
+            // A package can exist only to hold its parts together, and then has nowhere for modules.
+            if (p.directory.length == 0 && p.name.length > 0 && p.parts.length > 0) continue;
             if (!exists(p.directory) || !isDir(p.directory))
             {
                 problem(DiagnosticCode.InvalidPackages, format("The package '%s' is at %s, which isn't a directory",
@@ -599,7 +609,8 @@ private string langModulePath(const string[] chain)
 
 /// Reads packages as the command line gives them. Each of `declared` is `name=directory`, each of
 /// `uses` is `name=package,package` for what the package `name` uses, or `package,package` for what
-/// a file with no `module` line uses, and each of `parts` is `name=part,part`. A relative directory
+/// a file with no `module` line uses, and each of `parts` is `name=part,part`, which declares `name`
+/// as a package with no directory when none of `declared` does. A relative directory
 /// is taken from `base`. The standard library is added unless one of `declared` is named as it is.
 /// Returns what's wrong with how one is written, or null; what's wrong with what they say is for
 /// `load` to report.
@@ -647,6 +658,12 @@ string describePackages(const string[] declared, const string[] uses, const stri
                         ~ "with no `module` line only what it uses, as `--uses geometry`, not `%s`", option)
                     : format("--parts takes a package and its parts, as `--parts silver=silver.core`, not `%s`", option);
             auto owner = find(option[0 .. at]);
+            // A package that only holds its parts has no directory, so `--parts` alone declares it.
+            if (owner is null && i == 1)
+            {
+                packages.declared ~= Package(option[0 .. at]);
+                owner = &packages.declared[$ - 1];
+            }
             if (owner is null)
                 return format("%s names '%s', which no --package declares", flag, option[0 .. at]);
             if (i == 0) owner.uses ~= listOf(option[at + 1 .. $]);
@@ -1621,6 +1638,49 @@ unittest
     context = new SourceContext;
     load("def f(): Int => 1", "main.ag", Packages([Package("a", buildPath(directory, "a"), ["a"])], ["a"]), null, context);
     context.collector.errors.array.map!(e => e.message).array.should.equal(["The package 'a' lists itself among what it uses"]);
+}
+
+@("a package can have parts and no directory, and any number of its parts can be programs")
+unittest
+{
+    auto directory = makeModuleDirectory("packages-parts-only", [
+        "words/list.ag": "module kit.words.list\n\ndef word(): Int => 1",
+        "count/main.ag": "module kit.count.main\n\nimport kit.words.list\n\ndef main(): Unit {}",
+        "tool/main.ag": "module kit.tool.main\n\nimport kit.words.list\n\ndef main(): Unit {}",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto declared = [
+        Package("kit", null, [], ["kit.words", "kit.count", "kit.tool"]),
+        Package("kit.words", buildPath(directory, "words")),
+        Package("kit.count", buildPath(directory, "count"), ["kit.words"]),
+        Package("kit.tool", buildPath(directory, "tool"), ["kit.words"]),
+    ];
+    foreach (part; ["count", "tool"])
+    {
+        auto context = new SourceContext;
+        auto file = buildPath(directory, part, "main.ag");
+        auto program = load(readText(file), file, Packages(declared), null, context);
+        context.collector.errors.array.map!(e => e.message).array.should.equal(cast(string[])[]);
+        program.packageOf["kit." ~ part ~ ".main"].should.equal("kit." ~ part);
+        program.packageOf["kit.words.list"].should.equal("kit.words");
+    }
+
+    string[] problems(string source, Package[] packages)
+    {
+        auto context = new SourceContext;
+        load(source, "main.ag", Packages(packages, ["kit"]), null, context);
+        return context.collector.errors.map!(e => cast(string) e.code ~ ": " ~ e.message).array;
+    }
+    problems("import kit", declared)[0].should.contain("L0001: Module 'kit' not found: 'kit' is a package that only holds its parts");
+    problems("import kit.missing.x", declared)[0].should.contain("no part of it is named by a start of 'kit.missing.x'");
+    problems("", [Package("kit", null)])[0].should.contain("isn't a directory");
+
+    Packages described;
+    describePackages(["kit.words=words"], ["kit"], ["kit=kit.words"], null, described).should.equal(null);
+    described.declared[1].should.equal(Package("kit", null, [], ["kit.words"]));
+    describePackages([], ["kit=kit.words"], ["kit=kit.words"], null, described)
+        .should.contain("--uses names 'kit', which no --package declares");
 }
 
 @("a description that can't be followed is reported, and nothing more is loaded")

@@ -1,0 +1,5 @@
+module kit.words.split
+
+import std.string
+
+def words(text: String): [String] => text.split(" ")

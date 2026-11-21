@@ -1,0 +1,5 @@
+--package kit.words=packages_fixtures/kit_words
+--package kit.count=packages_fixtures/kit_count
+--parts kit=kit.words,kit.count
+--uses kit.count=kit.words
+--uses kit.words,kit.count

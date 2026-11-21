@@ -1,0 +1,5 @@
+module kit.count.tally
+
+import kit.words.split
+
+def tally(text: String): Int => words(text).length()

@@ -353,6 +353,43 @@ unittest
     assert(takeCommand(args) == "run");
 }
 
+/// The options whose value is the next word, as `-o out`. `--output=out` needs no entry.
+immutable optionsWithValues = ["--package", "--uses", "--parts", "--backend", "-b", "--output", "-o", "--filter",
+    "--format"];
+
+/// Takes what follows the file off `args` and returns it. The file is the first word that isn't an
+/// option or an option's value, and options stop there: what follows is for the program. getopt's own
+/// `stopOnFirstNonOption` can't do this, since it takes an option's value for the first non-option.
+string[] takeAfterFile(ref string[] args)
+{
+    import std.algorithm : canFind, startsWith;
+
+    for (size_t i = 1; i < args.length; i++)
+    {
+        if (optionsWithValues.canFind(args[i])) i++;
+        else if (!args[i].startsWith("-") || args[i] == "-")
+        {
+            auto after = args[i + 1 .. $];
+            args = args[0 .. i + 1];
+            return after;
+        }
+    }
+    return null;
+}
+
+@("options stop at the file, which is the first word that's neither an option nor an option's value")
+unittest
+{
+    auto args = ["silverc", "--package", "a=a", "--parts", "k=a,b", "--uses", "a", "-b", "llvm", "f.ag"];
+    assert(takeAfterFile(args) == [] && args.length == 10);
+    args = ["silverc", "-O", "--emit-llvm", "--output=out", "f.ag", "-O", "x"];
+    assert(takeAfterFile(args) == ["-O", "x"] && args == ["silverc", "-O", "--emit-llvm", "--output=out", "f.ag"]);
+    args = ["silverc", "-o", "f.ag"];
+    assert(takeAfterFile(args) == [] && args.length == 3);
+    args = ["silverc", "f.ag", "-o", "out"];
+    assert(takeAfterFile(args) == ["-o", "out"] && args == ["silverc", "f.ag"]);
+}
+
 /// What's wrong with `command` (`run`, `build` or `test`), given `files`, which is what its options
 /// left, and those options, or null. `format` is what `--format` gave, or null without it.
 string commandLineMistake(string command, const string[] files, string outputPath, bool optimize,
@@ -604,6 +641,7 @@ int run(string[] args)
     string format;
     GetoptResult arguments;
     immutable command = takeCommand(args);
+    auto afterFile = takeAfterFile(args);
     if (auto mistake = takeOptimization(args, optimize))
     {
         stderr.writeln(mistake, "\nRun `silverc --help` for the options.");
@@ -614,7 +652,7 @@ int run(string[] args)
         arguments = getopt(
     args,
     config.caseSensitive,
-    config.stopOnFirstNonOption,
+    // An option that takes a value is in `optionsWithValues` too.
     "package", "a package, as name=directory: the module name.a.b is directory/a/b.ag", &packageOptions,
     "uses", "what a package uses, as name=package,package, or for a file with no module line, package,package",
         &usesOptions,
@@ -640,7 +678,7 @@ int run(string[] args)
         defaultGetoptPrinter("The Silver interpreter and compiler.\n" ~ usage, arguments.options);
         return 0;
     }
-    if (auto mistake = commandLineMistake(command, args[1 .. $], outputPath, optimize, backend, filters, format))
+    if (auto mistake = commandLineMistake(command, args[1 .. $] ~ afterFile, outputPath, optimize, backend, filters, format))
     {
         stderr.writeln(mistake);
         return 1;

@@ -34,6 +34,7 @@ struct Package
     /// One or more segments, as `silver.core`. Empty only for a test's fixtures, whose modules are
     /// named by their whole path, and which use and are used by every package.
     string name;
+    /// Empty for a package that has parts and no modules of its own.
     string directory;
     /// The packages it may import from beside itself, other than `lang`, which every package uses.
     string[] uses;

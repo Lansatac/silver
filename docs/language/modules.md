@@ -216,7 +216,7 @@ Inside the forwarding module, its own functions come first, and what it forwards
 
 - Renamed imports aren't available.
 - A program is still compiled whole, with every package it reaches.
-- [The `silver` tool](../silver.md) doesn't read a `silver.toml` yet. Until it does, packages are given on the command line, to `silver` or to the compiler, `silverc`. `--package name=directory` declares one, `--uses name=a,b` lists what the package `name` uses, `--uses a,b` lists what a file with no `module` line uses, and `--parts name=a,b` lists a package's parts. Each can be repeated, and a list given twice adds up. The standard library is the package `std` in the compiler's directory, unless `--package std=...` puts another in its place.
+- [The `silver` tool](../silver.md) doesn't read a `silver.toml` yet. Until it does, packages are given on the command line, to `silver` or to the compiler, `silverc`. `--package name=directory` declares one, `--uses name=a,b` lists what the package `name` uses, `--uses a,b` lists what a file with no `module` line uses, and `--parts name=a,b` lists a package's parts. A package given parts and no `--package` has no modules of its own. Each can be repeated, and a list given twice adds up. The standard library is the package `std` in the compiler's directory, unless `--package std=...` puts another in its place.
 
   ```
   silver hello.ag
@@ -224,6 +224,8 @@ Inside the forwarding module, its own functions come first, and what it forwards
   silver --package app=src --package geometry=lib/geometry --uses app=geometry src/main.ag
   silver --package silver=source --package silver.core=core/source --parts silver=silver.core
       --uses silver=silver.core source/app.ag
+  silver --package kit.words=words --package kit.count=count --parts kit=kit.words,kit.count
+      --uses kit.count=kit.words count/main.ag
   silver test --package geometry=lib/geometry lib/geometry
   ```
 
@@ -235,7 +237,6 @@ Inside the forwarding module, its own functions come first, and what it forwards
 - Lists of what packages use that form a cycle are `L0012`. A description that can't be followed is `L0013`: a list naming a package that isn't declared or `lang`, two packages of one name, a directory that isn't one, two packages whose directories are the same or one inside the other, or a part listed by two parents or listing parts of its own. Declaring a package in `lang` is `L0004`. A file with no `module` line may be named as a package, even one it uses, since a package's own name isn't a module's.
 - Messages about what isn't listed or declared end with the option that fixes it, as "Give `--uses geometry` to list it".
 - Parts are checked as above and mean nothing else yet: what the parts of a package share isn't built.
-- A package with parts has to be given a directory, even when it has no modules of its own. An empty one will do.
 - `lang` is the module `lang` and the modules under it, read only from the compiler's own directory. What every module sees without an import, whatever the prelude, is what the module `lang` forwards: `lang.array`, `lang.interval`, `lang.io`, `lang.ord`, `lang.panic`, `lang.range`, `lang.testing`, and `bytes` and `next` from `lang.string`. `lang`'s other modules are reached by importing them, or through the `std` modules that forward them, as `std.ref` does `lang.ref`.
 - A module named as part of `lang`, by its `module` line or, without one, by its file name, is an error (`L0004`) unless it is the compiler's own file, so a program can't add to `lang` or replace it. An import in a module of `lang` of anything outside `lang` is an error too (`L0005`).
 - The build can't name another prelude yet: `silver` always uses `std.prelude`, which forwards `std.of` (for `Of`) and `std.range`, and declares nothing itself. The other `std` modules are reached by importing them. A prelude that isn't found is an error.
