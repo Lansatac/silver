@@ -1,0 +1,14 @@
+{
+	"name": "frontend",
+	"description": "silver: the front end, which finds a project and calls the compiler, silverc.",
+	"targetType": "executable",
+	"targetName": "silver",
+	"targetPath": "..",
+	"configurations": [
+		{ "name": "application" },
+		{
+			"name": "unittest",
+			"targetName": "silver-test-frontend"
+		}
+	]
+}

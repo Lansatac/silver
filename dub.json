@@ -11,7 +11,8 @@
 		"./interpreter/",
 		"./codegen/",
 		"./testing/",
-		"./conformance/"
+		"./conformance/",
+		"./frontend/"
 	],
 	"license": "MIT",
 	"copyright": "Copyright © 2026, Jason Yegge",
@@ -27,7 +28,11 @@
 	},
 	"targetType": "executable",
 	"configurations": [
-		{ "name": "application" },
+		{
+			"name": "application",
+			"targetName": "silverc",
+			"preGenerateCommands": ["\"$DUB\" build :frontend --root=\"$PACKAGE_DIR\""]
+		},
 		{
 			"name": "unittest",
 			"targetName": "silver-test-application",

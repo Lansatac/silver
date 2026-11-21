@@ -324,27 +324,52 @@ unittest
     assert(takeOptimization(args, optimize) !is null);
 }
 
-immutable usage = "Usage: silver [OPTION]... <file>         run <file>\n"
-    ~ "       silver build [OPTION]... <file>   compile <file> to an executable with LLVM\n"
-    ~ "       silver test [OPTION]... <path>    run the tests in <path>, a file or a directory";
+immutable usage = "Usage: silverc [run] [OPTION]... <file>   run <file>\n"
+    ~ "       silverc build [OPTION]... <file>   compile <file> to an executable with LLVM\n"
+    ~ "       silverc test [OPTION]... <path>    run the tests in <path>, a file or a directory";
 
-/// What's wrong with the command line `args` (after its options were taken) and those options, or null.
-/// `args[1]` is `build` or `test` for those commands, and the file is what follows. `format` is
-/// what `--format` gave, or null without it.
-string commandLineMistake(string[] args, string outputPath, bool optimize, Backend backend,
-    const string[] filters = null, string format = null)
+/// Takes the command off the front of `args`. Only the first word can be one, so a file named
+/// `build` is run by giving it as `./build`, or after an option.
+string takeCommand(ref string[] args)
 {
-    immutable command = args.length >= 2 && (args[1] == "build" || args[1] == "test") ? args[1] : "";
+    if (args.length < 2 || (args[1] != "run" && args[1] != "build" && args[1] != "test")) return "run";
+    immutable command = args[1];
+    args = args[0] ~ args[2 .. $];
+    return command;
+}
+
+@("only the first word is a command, and a file with no command is run")
+unittest
+{
+    auto args = ["silverc", "build", "-o", "out", "f.ag"];
+    assert(takeCommand(args) == "build" && args == ["silverc", "-o", "out", "f.ag"]);
+    args = ["silverc", "run", "test"];
+    assert(takeCommand(args) == "run" && args == ["silverc", "test"]);
+    args = ["silverc", "./build"];
+    assert(takeCommand(args) == "run" && args == ["silverc", "./build"]);
+    args = ["silverc", "-b", "llvm", "build"];
+    assert(takeCommand(args) == "run" && args.length == 4);
+    args = ["silverc"];
+    assert(takeCommand(args) == "run");
+}
+
+/// What's wrong with `command` (`run`, `build` or `test`), given `files`, which is what its options
+/// left, and those options, or null. `format` is what `--format` gave, or null without it.
+string commandLineMistake(string command, const string[] files, string outputPath, bool optimize,
+    Backend backend, const string[] filters = null, string format = null)
+{
     immutable building = command == "build";
     immutable testing = command == "test";
-    immutable files = args.length - (command.empty ? 1 : 2);
-    if (files != 1)
+    if (files.length != 1)
     {
-        // `-o f.ag` takes the file as its value.
-        return (files == 0 && !outputPath.empty
+        // `-o f.ag` takes the file as its value. Options stop at the file, so that what follows it
+        // can be the program's once a program can read it.
+        return (files.length == 0 && !outputPath.empty
             ? "-o needs a value, and took `" ~ outputPath ~ "`, which leaves no file to compile."
-            : files == 0 ? "No file was given." : "Too many arguments.")
-            ~ "\n" ~ usage ~ "\nRun `silver --help` for the options.";
+            : files.length == 0 ? "No file was given."
+            : "Too many arguments: `" ~ files[1] ~ "` follows `" ~ files[0] ~ "`. Options go before the"
+                ~ " file, and a program can't be given arguments yet.")
+            ~ "\n" ~ usage ~ "\nRun `silverc --help` for the options.";
     }
     if (!outputPath.empty && !building)
     {
@@ -380,18 +405,18 @@ unittest
 {
     import std.algorithm : canFind;
 
-    assert(commandLineMistake(["silver", "build"], "", false, Backend.interpreter).canFind("No file was given"));
-    assert(commandLineMistake(["silver", "test"], "", false, Backend.interpreter).canFind("No file was given"));
-    assert(commandLineMistake(["silver", "build"], "hello.ag", false, Backend.interpreter).canFind("-o needs a value"));
-    assert(commandLineMistake(["silver", "build"], "", true, Backend.interpreter).canFind("No file was given"));
-    assert(commandLineMistake(["silver"], "", false, Backend.interpreter).canFind("No file was given"));
-    assert(commandLineMistake(["silver", "a.ag", "b.ag"], "", false, Backend.interpreter).canFind("Too many"));
-    assert(commandLineMistake(["silver", "build", "a.ag", "b.ag"], "", false, Backend.interpreter).canFind("Too many"));
-    assert(commandLineMistake(["silver", "build", "a.ag"], "out", true, Backend.interpreter) is null);
-    assert(commandLineMistake(["silver", "a.ag"], "out", false, Backend.interpreter).canFind("applies to `silver build`"));
-    assert(commandLineMistake(["silver", "a.ag"], "", true, Backend.interpreter).canFind("compiled programs"));
-    assert(commandLineMistake(["silver", "a.ag"], "", true, Backend.llvm) is null);
-    assert(commandLineMistake(["silver", "test", "a"], "", true, Backend.interpreter).canFind("-b both"));
+    assert(commandLineMistake("build", [], "", false, Backend.interpreter).canFind("No file was given"));
+    assert(commandLineMistake("test", [], "", false, Backend.interpreter).canFind("No file was given"));
+    assert(commandLineMistake("build", [], "hello.ag", false, Backend.interpreter).canFind("-o needs a value"));
+    assert(commandLineMistake("build", [], "", true, Backend.interpreter).canFind("No file was given"));
+    assert(commandLineMistake("run", [], "", false, Backend.interpreter).canFind("No file was given"));
+    assert(commandLineMistake("run", ["a.ag", "b.ag"], "", false, Backend.interpreter).canFind("Too many"));
+    assert(commandLineMistake("build", ["a.ag", "b.ag"], "", false, Backend.interpreter).canFind("Too many"));
+    assert(commandLineMistake("build", ["a.ag"], "out", true, Backend.interpreter) is null);
+    assert(commandLineMistake("run", ["a.ag"], "out", false, Backend.interpreter).canFind("applies to `silver build`"));
+    assert(commandLineMistake("run", ["a.ag"], "", true, Backend.interpreter).canFind("compiled programs"));
+    assert(commandLineMistake("run", ["a.ag"], "", true, Backend.llvm) is null);
+    assert(commandLineMistake("test", ["a"], "", true, Backend.interpreter).canFind("-b both"));
 }
 
 @("an unwritable path is reported, not thrown")
@@ -405,13 +430,12 @@ unittest
 {
     import std.algorithm : canFind;
 
-    auto test = ["silver", "test", "a.ag"];
-    assert(commandLineMistake(test, "", false, Backend.interpreter, ["x", "y"], "json") is null);
-    assert(commandLineMistake(test, "", false, Backend.interpreter, null, "text") is null);
-    assert(commandLineMistake(["silver", "a.ag"], "", false, Backend.interpreter, ["x"]).canFind("--filter applies"));
-    assert(commandLineMistake(["silver", "build", "a.ag"], "", false, Backend.interpreter, null, "json").canFind("--format applies"));
-    assert(commandLineMistake(test, "", false, Backend.interpreter, ["x", ""]).canFind("empty one"));
-    assert(commandLineMistake(test, "", false, Backend.interpreter, null, "xml").canFind("there's text, the default, and json"));
+    assert(commandLineMistake("test", ["a.ag"], "", false, Backend.interpreter, ["x", "y"], "json") is null);
+    assert(commandLineMistake("test", ["a.ag"], "", false, Backend.interpreter, null, "text") is null);
+    assert(commandLineMistake("run", ["a.ag"], "", false, Backend.interpreter, ["x"]).canFind("--filter applies"));
+    assert(commandLineMistake("build", ["a.ag"], "", false, Backend.interpreter, null, "json").canFind("--format applies"));
+    assert(commandLineMistake("test", ["a.ag"], "", false, Backend.interpreter, ["x", ""]).canFind("empty one"));
+    assert(commandLineMistake("test", ["a.ag"], "", false, Backend.interpreter, null, "xml").canFind("there's text, the default, and json"));
 }
 
 version (unittest)
@@ -579,9 +603,10 @@ int run(string[] args)
     string[] filters;
     string format;
     GetoptResult arguments;
+    immutable command = takeCommand(args);
     if (auto mistake = takeOptimization(args, optimize))
     {
-        stderr.writeln(mistake, "\nRun `silver --help` for the options.");
+        stderr.writeln(mistake, "\nRun `silverc --help` for the options.");
         return 1;
     }
     try
@@ -589,6 +614,7 @@ int run(string[] args)
         arguments = getopt(
     args,
     config.caseSensitive,
+    config.stopOnFirstNonOption,
     "package", "a package, as name=directory: the module name.a.b is directory/a/b.ag", &packageOptions,
     "uses", "what a package uses, as name=package,package, or for a file with no module line, package,package",
         &usesOptions,
@@ -606,7 +632,7 @@ int run(string[] args)
     }
     catch (Exception e)
     {
-        stderr.writeln(e.msg, "\nRun `silver --help` for the options.");
+        stderr.writeln(e.msg, "\nRun `silverc --help` for the options.");
         return 1;
     }
     if (arguments.helpWanted)
@@ -614,7 +640,7 @@ int run(string[] args)
         defaultGetoptPrinter("The Silver interpreter and compiler.\n" ~ usage, arguments.options);
         return 0;
     }
-    if (auto mistake = commandLineMistake(args, outputPath, optimize, backend, filters, format))
+    if (auto mistake = commandLineMistake(command, args[1 .. $], outputPath, optimize, backend, filters, format))
     {
         stderr.writeln(mistake);
         return 1;
@@ -622,11 +648,11 @@ int run(string[] args)
     Packages packages;
     if (auto mistake = describePackages(packageOptions, usesOptions, partsOptions, null, packages))
     {
-        stderr.writeln(mistake, "\nRun `silver --help` for the options.");
+        stderr.writeln(mistake, "\nRun `silverc --help` for the options.");
         return 1;
     }
-    immutable building = args[1] == "build";
-    immutable testing = args[1] == "test";
+    immutable building = command == "build";
+    immutable testing = command == "test";
     immutable optimization = optimize ? Optimization.full : Optimization.none;
 
 	auto programFile = args[$ - 1];

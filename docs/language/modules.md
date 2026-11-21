@@ -53,7 +53,23 @@ import geometry.area                    // another package: hello.ag has to list
 def main(): Unit { print(floor(2.5)) }
 ```
 
-How a package is written down, and where a package's source comes from, belong to the `silver` tool and aren't part of the language.
+A package's own name is a module's too, when the package's directory has a file named `package.ag`. That file is the package's root module, and usually forwards what the package offers:
+
+```silver
+// cards/package.ag
+module cards
+
+forward import cards.deck
+```
+
+```silver
+import cards                            // cards/package.ag
+import cards.deck                       // cards/deck.ag
+```
+
+Only a package's directory has one. A module deeper in is a file beside the folder of the same name, as `geometry/shapes.ag` beside `geometry/shapes/`. So no module of a package `cards` can be named `cards.package`.
+
+How a package is written down, and where a package's source comes from, belong to [the `silver` tool](../silver.md) and aren't part of the language.
 
 ### Parts
 
@@ -61,7 +77,8 @@ A package can list others as its parts, as `silver` lists `silver.ast`, `silver.
 
 - Only the parent's list makes a package a part. A name that extends another package's means nothing by itself.
 - Where a rule asks which package owns a declaration, the parts of one package count as one.
-- When the parent is a program, only the part with the `main` is the program. The others are libraries, and other packages can depend on them.
+- A part with a `main` is a program, and there can be several. The other parts are libraries, and other packages can depend on them.
+- A package with parts needn't have modules of its own. It can exist only to hold its parts together.
 
 ### The package the compiler knows
 
@@ -190,7 +207,6 @@ Inside the forwarding module, its own functions come first, and what it forwards
 
 ## Open questions
 
-- How a package is described: its name, directory, parts and what it uses.
 - The syntax for renamed imports.
 - A visibility level wider than a file and narrower than public, for what the parts of a package share.
 - Whether a library's tests may see more than the library does.
@@ -200,7 +216,7 @@ Inside the forwarding module, its own functions come first, and what it forwards
 
 - Renamed imports aren't available.
 - A program is still compiled whole, with every package it reaches.
-- Until there's a way to describe a package, `silver` is given them on the command line. `--package name=directory` declares one, `--uses name=a,b` lists what the package `name` uses, `--uses a,b` lists what a file with no `module` line uses, and `--parts name=a,b` lists a package's parts. Each can be repeated, and a list given twice adds up. The standard library is the package `std` in the compiler's directory, unless `--package std=...` puts another in its place.
+- [The `silver` tool](../silver.md) doesn't read a `silver.toml` yet. Until it does, packages are given on the command line, to `silver` or to the compiler, `silverc`. `--package name=directory` declares one, `--uses name=a,b` lists what the package `name` uses, `--uses a,b` lists what a file with no `module` line uses, and `--parts name=a,b` lists a package's parts. Each can be repeated, and a list given twice adds up. The standard library is the package `std` in the compiler's directory, unless `--package std=...` puts another in its place.
 
   ```
   silver hello.ag
@@ -212,13 +228,14 @@ Inside the forwarding module, its own functions come first, and what it forwards
   ```
 
 - `std` is used without being listed, as the package of `std.prelude`, so a file `hello.ag` that imports `std.math` runs as `silver hello.ag`, and `silver test`, `silver build` and a companion test file see it the same way. Giving `--uses std` as well is allowed and changes nothing.
-- A package's own name isn't a module's: in a package `geometry`, `import geometry` isn't found (`L0001`), since a module's path under the directory can't be empty. `lang` is the exception, whose module `lang` is the compiler's.
+- `package.ag` isn't built, so a package's own name isn't a module's: in a package `geometry`, `import geometry` isn't found (`L0001`). `lang` is the exception, whose module `lang` is the compiler's.
 - A starting file with a `module` line has to be the file its package and the rest of its name say, and one whose name no package's starts is an error, as is an imported file whose `module` line isn't the name it was imported by (all `L0003`).
 - An import from a package that the importing module's package doesn't list is `L0010`, and isn't followed. A part imports its parent, or another part, only by listing it, as for any package.
 - A package that uses a program is `L0011`, reported at the program's `main`. Every `.ag` file with a `module` line under a used package's directory is read to find one, other than companion test files, so a `main` in a module nothing imports still counts. A file there with no `module` line is a program of its own and doesn't count, so a script can sit beside the modules it uses. A syntax error in a module that's read only for this says so, and a directory that can't be read is `L0009`.
 - Lists of what packages use that form a cycle are `L0012`. A description that can't be followed is `L0013`: a list naming a package that isn't declared or `lang`, two packages of one name, a directory that isn't one, two packages whose directories are the same or one inside the other, or a part listed by two parents or listing parts of its own. Declaring a package in `lang` is `L0004`. A file with no `module` line may be named as a package, even one it uses, since a package's own name isn't a module's.
 - Messages about what isn't listed or declared end with the option that fixes it, as "Give `--uses geometry` to list it".
 - Parts are checked as above and mean nothing else yet: what the parts of a package share isn't built.
+- A package with parts has to be given a directory, even when it has no modules of its own. An empty one will do.
 - `lang` is the module `lang` and the modules under it, read only from the compiler's own directory. What every module sees without an import, whatever the prelude, is what the module `lang` forwards: `lang.array`, `lang.interval`, `lang.io`, `lang.ord`, `lang.panic`, `lang.range`, `lang.testing`, and `bytes` and `next` from `lang.string`. `lang`'s other modules are reached by importing them, or through the `std` modules that forward them, as `std.ref` does `lang.ref`.
 - A module named as part of `lang`, by its `module` line or, without one, by its file name, is an error (`L0004`) unless it is the compiler's own file, so a program can't add to `lang` or replace it. An import in a module of `lang` of anything outside `lang` is an error too (`L0005`).
 - The build can't name another prelude yet: `silver` always uses `std.prelude`, which forwards `std.of` (for `Of`) and `std.range`, and declares nothing itself. The other `std` modules are reached by importing them. A prelude that isn't found is an error.

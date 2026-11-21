@@ -5,7 +5,7 @@
 # qualified name to another checkout of the package, such as a git worktree.
 cd "$(dirname "$0")" || exit 1
 
-packages=(:ast :syntax :loader :sema :core :interpreter :codegen :testing :conformance)
+packages=(:ast :syntax :loader :sema :core :interpreter :codegen :testing :conformance :frontend)
 failed=()
 
 for package in "${packages[@]}" root; do
