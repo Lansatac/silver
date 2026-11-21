@@ -6,15 +6,13 @@ These documents describe the language as designed. Where the implementation does
 
 ## Running and building
 
-- `silver <file>` runs a program with the interpreter, and `silver -b llvm <file>` compiles it and runs the result.
-- `silver build <file>` compiles it to an executable, which `-o` names. With `--emit-llvm` it writes the LLVM IR instead.
-- `silver test <path>` runs tests: see [Testing](language/testing.md#running-tests).
-- In a project, `silver run` and `silver build` with no file take the program of the package `silver` is started in, and `silver run <directory>` the program of the package or part there; `silver test` with no path runs that package's tests and its parts': see [The `silver` tool](silver.md#commands).
-- `--package name=directory` declares a [package](language/modules.md#packages), `--uses name=a,b` lists what it uses, `--uses a,b` what a file with no `module` line uses, and `--parts name=a,b` its parts: see [Modules](language/modules.md#current-implementation). The standard library is the package `std`, which every package and file uses without listing it, as the prelude's package.
-
+- `silver <file>` runs a program with the interpreter, and `silver -b llvm <file>` compiles it and runs the result. A single file needs no project: with no `silver.toml` at or above it, it uses the standard library and nothing else.
+- A project is a directory with a `silver.toml`, which names its [package](language/modules.md#packages) and says what it uses: see [The `silver` tool](silver.md#projects). In one, `silver run` with no file runs the program of the package it's started in, and `silver run <directory>` the program of the package or part there. A file in a project is run by naming it, and sees what its package describes.
+- `silver build`, with a file or without, compiles the same program to an executable, which `-o` names. With `--emit-llvm` it writes the LLVM IR instead.
+- `silver test <path>` runs the tests in a file or a directory, and `silver test` with no path those of the package it's started in and of its parts: see [Testing](language/testing.md#running-tests).
 - Options go before the file. What follows the file is to be the program's, and since a program can't read arguments yet, anything there is an error.
 
-`silver` is a front end: it calls the compiler, `silverc`, which takes the same commands and is where the options are read. A project's packages are written down in a `silver.toml` file, which `silver` finds from the file named, or from where it's started when none is, and reads before calling the compiler: see [The `silver` tool](silver.md). The options above are for a file in no project, and are how `silver` gives the packages to `silverc`.
+`silver` is a front end. It finds the project, reads its `silver.toml` and those of the packages it uses, and calls the compiler, `silverc`, with the same command and options, adding each package as options of the compiler's own: see [Modules](language/modules.md#current-implementation). The options, such as `-b`, `-o` and `-O`, are `silverc`'s, and `silverc --help` lists them. The standard library is the package `std`, which every package and file uses without listing it, as the prelude's package.
 
 Silver is designed to be compiled a package at a time. A package compiles to its signatures, the bodies of its generic and inlinable functions, and object code. A package that uses it instantiates those generics itself and is rebuilt when the package changes. There is no stable binary interface: a compiled package can't be swapped without rebuilding what uses it. Today every program is still compiled whole.
 
@@ -44,6 +42,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: packages' parts share nothing yet, and there are no renamed imports; the build can't name another prelude |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the natives of `lang` and the standard library |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, `panics`, the test runner | Partial: no library hooks |
+| [The `silver` tool](silver.md) | Its commands, `silver.toml`, finding a project, scripts | Partial: a used package only by a path; a script in no project can't say it needs a package; a program can't read arguments |
 
 ## Not designed yet
 

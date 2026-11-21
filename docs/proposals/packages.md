@@ -1,6 +1,6 @@
 # Proposal: packages
 
-**Status: decided, and built except what parts share, and part of the `silver` front end: commands with no file.** The rules are described in [Modules](../language/modules.md#packages), and the front end and its file in [The `silver` tool](../silver.md). This document keeps the reasoning and what was rejected. A program is still compiled whole. `lang` is in place: only it may declare intrinsics, and the compiler names no other package. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
+**Status: decided, and built except what the parts of a package share.** The rules are described in [Modules](../language/modules.md#packages), and the front end and its file in [The `silver` tool](../silver.md). This document keeps the reasoning and what was rejected. A program is still compiled whole. `lang` is in place: only it may declare intrinsics, and the compiler names no other package. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
 
 ## Summary
 
@@ -15,7 +15,7 @@ core/source/tree/node.ag      module silver.core.tree.node
 
 A package lists the packages it uses. One with a `main` is a program, and nothing can depend on it. The compiler knows one package by name, `lang`, and the standard library is an ordinary package.
 
-The lines that describe a package here, as `package silver.core at core/source`, are a notation for this document. A package will be written down in a TOML file whose fields aren't designed.
+The lines that describe a package here, as `package silver.core at core/source`, are a notation for this document. A package is written down in a `silver.toml` file, described in [The `silver` tool](../silver.md#projects).
 
 ## Motivation
 
@@ -31,7 +31,7 @@ The lines that describe a package here, as `package silver.core at core/source`,
   - `silverc` is the compiler. It's given every package fact on its command line (the name, directory, uses and parts of each package) and never reads a package file or touches the network. Every rule that changes what a program means lives here.
   - `silver` is the front end and package manager. It finds the project, reads its package file, works out where each dependency's source is, and calls `silverc`. `silver run`, `silver build` and `silver test` are its commands.
   - So a package file can change format, or another tool can drive `silverc`, without the language changing. Two programs can later be merged into one more easily than one can be split. A package compiled on its own, which separate compilation needs, is one `silverc` call, as a crate is one `rustc` call under Cargo.
-  - Both exist. Until `silver` reads a package file it passes its command line on, so the package flags can be given to either.
+  - Both exist. In a project, `silver` reads the package files and gives `silverc` the flags. For a file in no project it passes its command line on unchanged.
 - **A package file is TOML (decided),** read only by `silver`, named `silver.toml` and kept in the package's directory. Its fields are in [The `silver` tool](../silver.md#projects). It's TOML because it has comments, it's what package manifests have converged on, and it has few surprises. The compiler doesn't read it, so it needn't be Silver's syntax.
 
 ## The proposal
@@ -49,11 +49,11 @@ The lines that describe a package here, as `package silver.core at core/source`,
 - A package lists the packages it uses, and may import only from those and itself.
 - Every package and every script uses the prelude's package without listing it, as every module imports the prelude without naming it (decided). With the standard prelude that's `std`, so `silver hello.ag` can import `std.math`. The compiler doesn't name `std` for this: it's whatever package the build's prelude is in. `lang` is still exempt from lists, and still imports nothing outside itself.
 - The list has no cycles.
-- The list and each package's directory are given to the compiler as flags, as `--package lib=path/to/lib`. That stays the compiler's interface once a package file exists: `silver` turns the file into these flags.
+- The list and each package's directory are given to the compiler as flags, as `--package lib=path/to/lib`. That stays the compiler's interface with a package file: `silver` turns the file into these flags.
 
 ### A package file makes a package (decided)
 
-- A directory is a package only when it holds a `silver.toml`, which gives the name. `silver` finds it by looking in the directory of the file it was given and then upward.
+- A directory is a package only when it holds a `silver.toml`, which gives the name. `silver` finds it by looking in the directory of the file it was given, or the one it was started in when no file is given, and then upward.
 - So a module is always named by its package, as `geometry.area`, and never by its bare file name, however small the project.
 - A package's own name is a module's when its directory has a `package.ag`. Only the package's directory has one: a module deeper in already has a place, as a file beside the folder of its name.
 
@@ -151,8 +151,8 @@ So `xs.map(f)` needs no import, the functions behind it are plain Silver in `std
 
 ## Open questions
 
-1. Where a used package's source may come from besides a path (git, a registry), versions and a lock file.
-2. How a script in no project says it needs a package.
-3. The visibility shared by the parts of a package.
-4. Whether tests in a library may see more than the library does.
-5. Whether a part can list parts of its own.
+1. The visibility shared by the parts of a package.
+2. Whether tests in a library may see more than the library does.
+3. Whether a part can list parts of its own. Today it can't.
+
+What belongs to the tool, as where a used package's source may come from besides a path and how a script outside a project says it needs a package, is listed in [The `silver` tool](../silver.md#open-questions).

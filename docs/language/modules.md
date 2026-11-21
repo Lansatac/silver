@@ -48,7 +48,7 @@ core/source/tree/node.ag      module silver.core.tree.node
 ```silver
 // hello.ag, with no module line
 import std.math                         // the prelude's package: needs no listing
-import geometry.area                    // another package: hello.ag has to list `geometry`
+import geometry.area                    // another package: reached only if the package hello.ag is under uses `geometry`
 
 def main(): Unit { print(floor(2.5)) }
 ```
@@ -210,26 +210,34 @@ Inside the forwarding module, its own functions come first, and what it forwards
 - The syntax for renamed imports.
 - A visibility level wider than a file and narrower than public, for what the parts of a package share.
 - Whether a library's tests may see more than the library does.
+- Whether a part can list parts of its own.
 - How a module hides a type's representation. A type's fields are all public, so anyone can construct it, read it or use `with` on it. A condition on the fields is [checked by a function](user-types.md#checking-a-condition), which nothing obliges other code to call. Two levels are wanted: construction private to the module with the fields still readable, which is enough for a condition, and an `opaque type`, with a public name and a constructor, fields and patterns private to its module, for a representation that should be free to change.
 
 ## Current implementation
 
 - Renamed imports aren't available.
 - A program is still compiled whole, with every package it reaches.
-- [The `silver` tool](../silver.md) reads a project's `silver.toml` and gives the compiler, `silverc`, the packages it describes. Without one, packages are given on the command line, to `silver` or to `silverc`, and that is also how `silver` gives them to `silverc`. `--package name=directory` declares one, `--uses name=a,b` lists what the package `name` uses, `--uses a,b` lists what a file with no `module` line uses, and `--parts name=a,b` lists a package's parts. `--scripts-in name=directory` says a file with no `module` line under `directory` is beside the package `name`: it uses what `name` uses, and `name` too unless it's a program. The deepest such directory holding the file counts, and the package has to be declared, with its modules under that directory. `--skip directory`, for `test` only, leaves out the files under a directory inside the one tested, which `silver` gives for a project of its own there. `--program name`, for `run` and `build` in place of a file, starts from the program of the package `name`: its module that declares `main`, or its one part that's a program. A package with none is `L0014`, one with more than one, between itself and its parts, is `L0015`, which lists them with their directories, and one with more than one module that declares `main` is `L0016`. `--program` is given once. A file with no `module` line is never a package's program. A package given parts and no `--package` has no modules of its own. Each can be repeated, and a list given twice adds up. The standard library is the package `std` in the compiler's directory, unless `--package std=...` puts another in its place.
+- A project's packages are written in its `silver.toml`, which [the `silver` tool](../silver.md) reads. `silver` gives them to the compiler, `silverc`, as options on its command line, and those options are the contract between the two: the compiler never reads a package file. A user in a project writes the file and none of these options. They are `silverc`'s:
+  - `--package name=directory` declares a package, and `--parts name=a,b` lists a package's parts. A package given parts and no `--package` has no modules of its own.
+  - `--uses name=a,b` lists what the package `name` uses, and `--uses a,b` what a file with no `module` line uses.
+  - `--package-file name=file` names the file that describes a package, so that a message about the package names that file and its `uses` instead of an option.
+  - `--scripts-in name=directory` says a file with no `module` line under `directory` is beside the package `name`: it uses what `name` uses, and `name` too unless it's a program. The deepest such directory holding the file counts, and the package has to be declared, with its modules under that directory.
+  - `--program name`, for `run` and `build` in place of a file, starts from the program of the package `name`: its module that declares `main`, or its one part that's a program. A package with none is `L0014`, one with more than one, between itself and its parts, is `L0015`, which lists them with their directories, and one with more than one module that declares `main` is `L0016`. `--program` is given once. A file with no `module` line is never a package's program.
+  - `--skip directory`, for `test` only, leaves out the files under a directory inside the one tested, which `silver` gives for a project of its own there.
+  - Each can be repeated, and a list given twice adds up. The standard library is the package `std` in the compiler's directory, unless `--package std=...` puts another in its place.
 
   ```
-  silver hello.ag
-  silver --package geometry=lib/geometry --uses geometry app.ag
-  silver --package app=src --package geometry=lib/geometry --uses app=geometry src/main.ag
-  silver --package silver=source --package silver.core=core/source --parts silver=silver.core
+  silverc run hello.ag
+  silverc run --package geometry=lib/geometry --uses geometry app.ag
+  silverc run --package app=src --package geometry=lib/geometry --uses app=geometry src/main.ag
+  silverc run --package silver=source --package silver.core=core/source --parts silver=silver.core
       --uses silver=silver.core source/app.ag
-  silver --package kit.words=words --package kit.count=count --parts kit=kit.words,kit.count
-      --uses kit.count=kit.words count/main.ag
-  silver test --package geometry=lib/geometry lib/geometry
+  silverc run --package kit.words=words --package kit.count=count --parts kit=kit.words,kit.count
+      --uses kit.count=kit.words --program kit
+  silverc test --package geometry=lib/geometry lib/geometry
   ```
 
-- `std` is used without being listed, as the package of `std.prelude`, so a file `hello.ag` that imports `std.math` runs as `silver hello.ag`, and `silver test`, `silver build` and a companion test file see it the same way. Giving `--uses std` as well is allowed and changes nothing.
+- `std` is used without being listed, as the package of `std.prelude`, so a file `hello.ag` that imports `std.math` runs as `silver hello.ag`, and `silver test`, `silver build` and a companion test file see it the same way. Giving `silverc` `--uses std` as well is allowed and changes nothing, but a `silver.toml` that lists `std`, in `uses` or under `[paths]`, is refused (`F0029`).
 - A package's root module is its directory's `package.ag`, found by `import cards` and started from as any module is, with a companion test file `package.test.ag`. Without one, `import cards` isn't found (`L0001`), and the message says to add it or to import a module of the package. A package that only holds its parts has no directory, so no root module either. `lang` follows the same rule: its root module is `lang/package.ag` in the compiler's directory.
 - A module whose last segment is `package` is an error wherever it would be, not only in the package's directory: `import cards.package` and `import geometry.shapes.package` aren't found (`L0001`), and a file whose `module` line names one is `L0003`, as is a `package.ag` in the package's directory whose `module` line isn't the package's name. A package's name can't have `package` as its last segment either (`L0013`), so no root module is named that way. A segment `package` elsewhere in a name is ordinary. So a `package.ag` below a package's directory is never a module, and isn't read when looking for a `main`; when one is where a module's name points, the message says to move it to the file beside the folder.
 - A starting file with a `module` line has to be the file its package and the rest of its name say, and one whose name no package's starts is an error, as is an imported file whose `module` line isn't the name it was imported by (all `L0003`).
