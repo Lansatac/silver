@@ -280,6 +280,146 @@ unittest
     assert(plan("silverc", request(["test", "group"]), scripts).scriptHomes == ["group.lib"]);
 }
 
+@("with no file, silver run runs the program of the package started in, from its root, a subdirectory or a part, on both backends")
+unittest
+{
+    auto shop = buildPath(fixtures, "uses-path", "shop");
+    auto tool = buildPath(fixtures, "compiler-shape");
+    foreach (backend; [["-b", "interpreter"], ["-b", "llvm"]])
+    {
+        expectRan(silver(["run"] ~ backend, shop), "25\n5\n");
+        expectRan(silver(["run"] ~ backend, buildPath(shop, "src")), "25\n5\n");
+        expectRan(silver(["run"] ~ backend, buildPath(tool, "compiler")), "parsed node 9\n");
+        expectRan(silver(["run"] ~ backend, buildPath(tool, "compiler", "source")), "parsed node 9\n");
+        expectRan(silver(["run"] ~ backend, buildPath(tool, "frontend")), "the front end\n");
+    }
+    auto p = plan("silverc", request(["run", "-b", "llvm"]), buildPath(shop, "src"));
+    assert(p.program == "shop" && p.arguments[$ - 4 .. $] == ["--program", "shop", "-b", "llvm"], p.arguments.join(" "));
+    assert(p.arguments.canFind("--scripts-in"), p.arguments.join(" "));
+}
+
+@("several programs are listed with their directories, and one is chosen by its directory")
+unittest
+{
+    auto tool = buildPath(fixtures, "compiler-shape");
+    expectRan(silver(["run"], tool), "Error L0015: The package 'tool' holds more than one program, so which to run has to "
+        ~ "be said:\n  'tool.compiler', at compiler, whose `main` is in " ~ buildPath("compiler", "source", "main.ag")
+        ~ "\n  'tool.frontend', at frontend, whose `main` is in " ~ buildPath("frontend", "main.ag") ~ "\nChoose a part by "
+        ~ "its directory, as `silver run compiler`\n", 1);
+    assert(silver(["build"], tool).output.canFind("so which to build has to be said"));
+    foreach (backend; [["-b", "interpreter"], ["-b", "llvm"]])
+    {
+        expectRan(silver(["run"] ~ backend ~ "compiler", tool), "parsed node 9\n");
+        expectRan(silver(["run"] ~ backend ~ buildPath(tool, "frontend"), tempDir), "the front end\n");
+    }
+    expectRan(silver(["run", "compiler/source"], tool), "Error F0034: " ~ buildPath("compiler", "source")
+        ~ " is a directory, and no package or part that silver.toml describes is there, so it has no program to run. Its packages "
+        ~ "are 'tool' at ., 'tool.ast' at ast, 'tool.syntax' at syntax, 'tool.compiler' at compiler, 'tool.frontend' at "
+        ~ "frontend; name one of those directories, or a file\n", 1);
+    expectRan(silver(["run", "compiler", "x"], tool), "`x` follows the directory compiler, and what follows it is for the "
+        ~ "program, which can't be given arguments yet.\n", 1);
+}
+
+@("a package with a main of its own and a part that's a program lists its own as chosen by its file, and the part by its directory")
+unittest
+{
+    auto directory = makeTree("frontend-root-and-part-programs", [
+        "silver.toml": "name = \"par\"\nsource = \"src\"\n\n[[part]]\nname = \"par.tool\"\npath = \"tool\"\n",
+        "src/main.ag": "module par.main\n\ndef main(): Unit {\n    printl(\"par\")\n}\n",
+        "tool/main.ag": "module par.tool.main\n\ndef main(): Unit {\n    printl(\"tool\")\n}\n",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    expectRan(silver(["run"], directory), "Error L0015: The package 'par' holds more than one program, so which to run "
+        ~ "has to be said:\n  'par' itself, whose `main` is in " ~ buildPath("src", "main.ag") ~ ", chosen by naming that "
+        ~ "file\n  'par.tool', at tool, whose `main` is in " ~ buildPath("tool", "main.ag") ~ "\nChoose a part by its "
+        ~ "directory, as `silver run tool`, or the program of 'par' itself by its file, as `silver run "
+        ~ buildPath("src", "main.ag") ~ "`\n", 1);
+    expectRan(silver(["run", "tool"], directory), "tool\n");
+    expectRan(silver(["run", buildPath("src", "main.ag")], directory), "par\n");
+}
+
+@("a library given to run says it's a library, and that its tests are run with silver test")
+unittest
+{
+    immutable message = "Error L0014: The package 'tool.ast' is a library: none of its modules declares `main`, so it "
+        ~ "has no program to run\nIts tests are run with `silver test`\nA file with no `module` line is a program of its own, "
+        ~ "and is run by naming it, as `silver run demo.ag`\n";
+    expectRan(silver(["run"], buildPath(fixtures, "compiler-shape", "ast")), message, 1);
+    expectRan(silver(["run", "ast"], buildPath(fixtures, "compiler-shape")), message, 1);
+    // A library's scripts beside it are programs of their own, not the library's.
+    assert(silver(["run"], buildPath(fixtures, "scripts", "shapes")).output.canFind("'shapes' is a library"));
+}
+
+@("silver build with no file names the executable after the package, and -o still says where")
+unittest
+{
+    import std.file : remove;
+
+    auto shop = buildPath(fixtures, "uses-path", "shop");
+    auto built = buildPath(shop, "shop" ~ exe);
+    if (exists(built)) remove(built);
+    expectRan(silver(["build"], shop), "");
+    scope (exit) remove(built);
+    expectRan(runIn([built], tempDir), "25\n5\n");
+
+    auto directory = makeTree("frontend-build-no-file", null);
+    scope (exit) rmdirRecurse(directory);
+    auto output = buildPath(directory, "front" ~ exe);
+    expectRan(silver(["build", "-o", output, "frontend"], buildPath(fixtures, "compiler-shape")), "");
+    expectRan(runIn([output], directory), "the front end\n");
+    // A part's executable is named after the last segment of its name, in the working directory.
+    expectRan(silver(["build", buildPath(fixtures, "compiler-shape", "frontend")], directory), "");
+    expectRan(runIn([buildPath(directory, "frontend" ~ exe)], directory), "the front end\n");
+    version (Posix)
+    {
+        // The default name is the part's directory, which isn't written over.
+        expectRan(silver(["build", "frontend"], buildPath(fixtures, "compiler-shape")), "The executable would be "
+            ~ "written to frontend, which is a directory: give where to write it with -o.\n", 1);
+    }
+}
+
+@("with no path, silver test runs the tests of the package started in and of its parts, on both backends")
+unittest
+{
+    auto tool = buildPath(fixtures, "compiler-shape");
+    foreach (backend; ["interpreter", "llvm", "both"])
+    {
+        expectRan(silver(["test", "-b", backend], tool), "2 passed, 0 failed\n");
+        expectRan(silver(["test", "-b", backend], buildPath(tool, "ast")), "2 passed, 0 failed\n");
+        expectRan(silver(["test", "-b", backend], buildPath(fixtures, "uses-path", "geometry")), "1 passed, 0 failed\n");
+        expectRan(silver(["test", "-b", backend], buildPath(fixtures, "scripts", "shapes")), "2 passed, 0 failed\n");
+    }
+    // From inside a part, only that part's tests.
+    expectRan(silver(["test"], buildPath(tool, "compiler", "source")), "No tests found\n");
+    auto p = plan("silverc", request(["test", "--filter", "node"]), buildPath(tool, "compiler", "source"));
+    assert(p.arguments[$ - 3 .. $] == ["--filter", "node", buildPath(tool, "compiler")], p.arguments.join(" "));
+    assert(p.scriptHomes == ["tool.compiler"]);
+    assert(plan("silverc", request(["test"]), tool).arguments[$ - 1] == ".");
+}
+
+@("silver test --format json with no path is one JSON document")
+unittest
+{
+    import std.json : parseJSON;
+
+    auto ran = silver(["test", "--format", "json", "-b", "both"], buildPath(fixtures, "compiler-shape"));
+    assert(ran.status == 0, ran.output);
+    auto report = parseJSON(ran.output);
+    assert(report["summary"]["passed"].integer == 2, ran.output);
+}
+
+@("with no file and no project, silver says there's nothing here and runs nothing")
+unittest
+{
+    auto directory = makeTree("frontend-no-file-no-project", null);
+    scope (exit) rmdirRecurse(directory);
+    expectRan(silver(["run"], directory), "Error F0033: There's no silver.toml in " ~ directory ~ " or any directory "
+        ~ "above it, so there's no project here to run: name a file, as `silver run hello.ag`\n", 1);
+    assert(silver(["test", "-b", "llvm"], directory).output.startsWith("Error F0033: "));
+    auto help = silver(["build", "--help"], directory);
+    assert(help.status == 0 && help.output.startsWith("Usage: silver build"), help.output);
+}
+
 @("silver test over a directory leaves out a project of its own inside it, and still tests one the project uses")
 unittest
 {

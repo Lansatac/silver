@@ -10,7 +10,8 @@ import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, 
 import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, optimizeIr, Toolchain;
 import silver.core : lowerProgram, printCore = print;
 import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed, RuntimeError;
-import silver.loader : describePackageFiles, describePackages, describeScriptHomes, load, Packages, standardPrelude;
+import silver.loader : describePackageFiles, describePackages, describeScriptHomes, load, Packages, programStart,
+    standardPrelude;
 import silver.sema : analyze, Analysis, Target;
 
 /// Loads and analyzes `programFile`. Problems go to `context.collector`, which the caller
@@ -160,10 +161,27 @@ bool compileToExecutable(string programFile, const Packages packages, string out
 }
 
 /// Compiles the program in `programFile` to an executable, or only to LLVM IR if `emitLlvm`:
-/// the IR codegen writes, or when optimizing, what clang makes of it.
-int build(string programFile, const Packages packages, string outputPath, bool emitLlvm, Optimization optimization)
+/// the IR codegen writes, or when optimizing, what clang makes of it. Without `outputPath`, what's
+/// written is named `name`, or after the file when that's null, in the working directory.
+int build(string programFile, const Packages packages, string outputPath, bool emitLlvm, Optimization optimization,
+    string name = null)
 {
-    auto name = programFile.baseName.stripExtension;
+    if (name is null) name = programFile.baseName.stripExtension;
+    if (outputPath.empty)
+    {
+        auto written = emitLlvm ? name ~ ".ll" : executablePath(name);
+        if (written.exists && written.isDir)
+        {
+            stderr.writeln("The ", emitLlvm ? "IR" : "executable", " would be written to ", written,
+                ", which is a directory: give where to write it with -o.");
+            return 1;
+        }
+    }
+    else if (outputPath.exists && outputPath.isDir)
+    {
+        stderr.writeln("-o names ", outputPath, ", which is a directory: give the file to write.");
+        return 1;
+    }
     if (emitLlvm)
     {
         string[] libraries;
@@ -327,7 +345,9 @@ unittest
 
 immutable usage = "Usage: silverc [run] [OPTION]... <file>   run <file>\n"
     ~ "       silverc build [OPTION]... <file>   compile <file> to an executable with LLVM\n"
-    ~ "       silverc test [OPTION]... <path>    run the tests in <path>, a file or a directory";
+    ~ "       silverc test [OPTION]... <path>    run the tests in <path>, a file or a directory\n"
+    ~ "       silverc run|build [OPTION]... --program <package>\n"
+    ~ "                                          run or compile the program of <package>, in place of a file";
 
 /// Takes the command off the front of `args`. Only the first word can be one, so a file named
 /// `build` is run by giving it as `./build`, or after an option.
@@ -358,8 +378,8 @@ unittest
 /// `silver`, keeps a copy of this list to find the file among the options it passes on
 /// (`compilerOptionsWithValues` in frontend/source/silver/frontend/package.d), and a test there reads
 /// this one to check the two agree.
-immutable optionsWithValues = ["--package", "--uses", "--parts", "--package-file", "--scripts-in", "--backend", "-b",
-    "--output", "-o", "--filter", "--format", "--skip"];
+immutable optionsWithValues = ["--package", "--uses", "--parts", "--package-file", "--scripts-in", "--program",
+    "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip"];
 
 /// Takes what follows the file off `args` and returns it. The file is the first word that isn't an
 /// option or an option's value, and options stop there: what follows is for the program. getopt's own
@@ -446,14 +466,68 @@ unittest
     assert(written.canFind("--scripts-in names 'nope', which no --package or --parts declares"), written);
 }
 
+@("--program runs a declared package's program in place of a file, and is refused with a file, for test, or undeclared")
+unittest
+{
+    import std.algorithm : canFind;
+
+    auto directory = testDirectory("program", [
+        "app/main.ag": "module app.main\n\ndef main(): Unit {}",
+        "geo/shapes.ag": "module geo.shapes\n\ndef sides(): Int => 4",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto app = buildPath(directory, "app");
+    auto saved = stderr;
+    stderr = File(buildPath(directory, "stderr.txt"), "w");
+    scope (exit) stderr = saved;
+
+    auto packages = ["--package", "app=" ~ app, "--package", "geo=" ~ buildPath(directory, "geo")];
+    assert(run(["silverc", "run"] ~ packages ~ ["--program", "app"]) == 0);
+    Toolchain toolchain;
+    immutable compiles = findToolchain(toolchain) is null;
+    if (compiles) assert(run(["silverc", "run", "-b", "llvm"] ~ packages ~ ["--program", "app"]) == 0);
+    assert(run(["silverc", "run"] ~ packages ~ ["--program", "geo"]) == 1);
+    assert(run(["silverc", "run"] ~ packages ~ ["--program", "nope"]) == 1);
+    assert(run(["silverc", "run"] ~ packages ~ ["--program", "app", buildPath(app, "main.ag")]) == 1);
+    assert(run(["silverc", "test"] ~ packages ~ ["--program", "app", app]) == 1);
+    assert(run(["silverc", "run"] ~ packages ~ ["--program", "app", "--program", "geo"]) == 1);
+    assert(run(["silverc", "build", "-o", directory] ~ packages ~ ["--program", "app"]) == 1);
+    auto output = buildPath(directory, "built");
+    if (compiles)
+    {
+        assert(run(["silverc", "build", "-o", executablePath(output)] ~ packages ~ ["--program", "app"]) == 0);
+        assert(executablePath(output).exists);
+    }
+    stderr.close();
+    auto written = readText(buildPath(directory, "stderr.txt"));
+    assert(written.canFind("Error L0014: The package 'geo' is a library"), written);
+    assert(written.canFind("--program names 'nope', which no --package or --parts declares"), written);
+    assert(written.canFind("--program says which package's program to run, so no file is given with it, and `"), written);
+    assert(written.canFind("--program applies to `run` and `build`: `silverc test` is given"), written);
+    assert(written.canFind("--program is given once, naming one package, and was given 2 times."), written);
+    assert(written.canFind(", which is a directory: give the file to write."), written);
+}
+
 /// What's wrong with `command` (`run`, `build` or `test`), given `files`, which is what its options
-/// left, and those options, or null. `format` is what `--format` gave, or null without it.
+/// left, and those options, or null. `format` is what `--format` gave, and `program` what `--program`
+/// gave, or null without them. `fromPackageFiles` says whether `silver` gave the packages.
 string commandLineMistake(string command, const string[] files, string outputPath, bool optimize,
-    Backend backend, const string[] filters = null, string format = null, const string[] skipped = null)
+    Backend backend, const string[] filters = null, string format = null, const string[] skipped = null,
+    string program = null, bool fromPackageFiles = false)
 {
     immutable building = command == "build";
     immutable testing = command == "test";
-    if (files.length != 1)
+    if (program !is null && testing)
+    {
+        return "--program applies to `run` and `build`: `" ~ (fromPackageFiles ? "silver" : "silverc")
+            ~ " test` is given a directory or a file.";
+    }
+    if (program !is null && files.length > 0)
+    {
+        return "--program says which package's program to " ~ command ~ ", so no file is given with it, and `"
+            ~ files[0] ~ "` was.";
+    }
+    if (program is null && files.length != 1)
     {
         // `-o f.ag` takes the file as its value. Options stop at the file, so that what follows it
         // can be the program's once a program can read it.
@@ -508,9 +582,11 @@ string skipMistake(string path, const string[] skipped)
     {
         if (!directory.exists || !directory.isDir)
             return "--skip names " ~ directory ~ ", which isn't a directory.";
+        if (!path.isDir)
+            return "--skip applies when a directory is tested, and " ~ path ~ " is a file.";
         auto inner = pathSplitter(buildNormalizedPath(absolutePath(directory))).array;
         auto outer = pathSplitter(buildNormalizedPath(absolutePath(path))).array;
-        if (!path.isDir || inner.length <= outer.length
+        if (inner.length <= outer.length
             || !inner[0 .. outer.length].equal!((a, b) => filenameCmp(a, b) == 0)(outer))
             return "--skip names " ~ directory ~ ", which isn't inside " ~ path ~ ", the directory tested.";
     }
@@ -534,7 +610,8 @@ unittest
     assert(skipMistake(directory, [buildPath(directory, "gone")]).canFind("isn't a directory"));
     assert(skipMistake(directory, [directory]).canFind("isn't inside"));
     assert(skipMistake(inner, [buildPath(directory, "other")]).canFind("isn't inside"));
-    assert(skipMistake(buildPath(directory, "a.ag"), [inner]).canFind("isn't inside"));
+    assert(skipMistake(buildPath(directory, "a.ag"), [inner]) == "--skip applies when a directory is tested, and "
+        ~ buildPath(directory, "a.ag") ~ " is a file.");
     assert(commandLineMistake("run", ["a.ag"], "", false, Backend.interpreter, null, null, [inner])
         .canFind("--skip applies to `silver test`"));
 
@@ -743,12 +820,16 @@ unittest
 /// Runs the driver with the command line `args`, returning the exit status.
 int run(string[] args)
 {
+    import std.algorithm : canFind;
+    import std.array : split;
+
     string[] packageOptions;
     string[] usesOptions;
     string[] partsOptions;
     string[] packageFileOptions;
     string[] scriptsInOptions;
     string[] skipped;
+    string[] programs;
     string outputPath;
     bool emitLlvm;
     bool emitCore;
@@ -778,6 +859,8 @@ int run(string[] args)
         ~ " these options; silver gives it", &packageFileOptions,
     "scripts-in", "a directory whose files with no module line are beside a package, as name=directory: such a file"
         ~ " uses what the package uses, and the package too unless it's a program; silver gives it", &scriptsInOptions,
+    "program", "run, build: in place of a file, a package whose program to start from: the package's own, or the one"
+        ~ " of its parts that's a program; silver gives it when no file is named", &programs,
     "backend|b", "run, test: how to run the program: interpreter (default), llvm, or for tests, both", &backend,
     "output|o", "build: where to write the executable (or the IR, with --emit-llvm)", &outputPath,
     "optimize|O", "build, and run or test with -b llvm: have clang optimize the compiled program."
@@ -801,8 +884,14 @@ int run(string[] args)
         defaultGetoptPrinter("The Silver interpreter and compiler.\n" ~ usage, arguments.options);
         return 0;
     }
+    if (programs.length > 1)
+    {
+        stderr.writeln("--program is given once, naming one package, and was given ", programs.length, " times.");
+        return 1;
+    }
+    immutable program = programs.length == 0 ? null : programs[0];
     if (auto mistake = commandLineMistake(command, args[1 .. $] ~ afterFile, outputPath, optimize, backend, filters, format,
-        skipped))
+        skipped, program, packageFileOptions.length > 0))
     {
         stderr.writeln(mistake);
         return 1;
@@ -811,6 +900,8 @@ int run(string[] args)
     auto mistake = describePackages(packageOptions, usesOptions, partsOptions, null, packages);
     if (mistake is null) mistake = describePackageFiles(packageFileOptions, packages);
     if (mistake is null) mistake = describeScriptHomes(scriptsInOptions, null, packages);
+    if (mistake is null && program !is null && !packages.declared.canFind!(p => p.name == program))
+        mistake = "--program names '" ~ program ~ "', which no --package or --parts declares";
     if (mistake !is null)
     {
         stderr.writeln(mistake, "\nRun `silverc --help` for the options.");
@@ -820,7 +911,18 @@ int run(string[] args)
     immutable testing = command == "test";
     immutable optimization = optimize ? Optimization.full : Optimization.none;
 
-	auto programFile = args[$ - 1];
+    string programFile;
+    string outputName;
+    if (program !is null)
+    {
+        auto context = new SourceContext();
+        string chosen;
+        programFile = programStart(program, command, packages, context, chosen);
+        printDiagnostics(context);
+        if (programFile is null || context.collector.hasErrors) return 1;
+        outputName = chosen.split(".")[$ - 1];
+    }
+    else programFile = args[$ - 1];
     if (testing)
     {
         if (!programFile.exists)
@@ -844,7 +946,7 @@ int run(string[] args)
 
     if (building)
     {
-        return build(programFile, packages, outputPath, emitLlvm, optimization);
+        return build(programFile, packages, outputPath, emitLlvm, optimization, outputName);
     }
     final switch (backend)
     {
@@ -854,4 +956,23 @@ int run(string[] args)
             stderr.writeln("Only `silver test` runs a program both ways");
             return 1;
     }
+}
+
+@("--program for a package whose directory isn't there says so, and doesn't call the package a library")
+unittest
+{
+    import std.algorithm : canFind;
+
+    auto directory = testDirectory("program-missing", ["app/main.ag": "module app.main\n\ndef main(): Unit {}"]);
+    scope (exit) rmdirRecurse(directory);
+    auto saved = stderr;
+    stderr = File(buildPath(directory, "stderr.txt"), "w");
+    scope (exit) stderr = saved;
+
+    assert(run(["silverc", "run", "--package", "app=" ~ buildPath(directory, "nope"), "--program", "app"]) == 1);
+    stderr.close();
+    auto written = readText(buildPath(directory, "stderr.txt"));
+    assert(!written.canFind("is a library"), written);
+    assert(written.canFind("Error L0013: The package 'app' is at ") && written.canFind(", which isn't a directory"),
+        written);
 }

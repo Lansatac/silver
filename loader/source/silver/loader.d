@@ -611,19 +611,28 @@ private struct Layout
     }
 
     /// The first module of the package `name`, by name, that declares `main`, and where; or null.
-    /// Every `.ag` file under the package's directory with a `module` line is read, other than
+    Tuple!(string, Span) mainOf(string name, SourceContext context, string why = null) const
+    {
+        auto found = mainsOf(name, context, why, false);
+        return found.length == 0 ? typeof(return).init : found[0];
+    }
+
+    /// The modules of the package `name`, by name, that declare `main`, and where: the first, or with
+    /// `every`, all of them. Every `.ag` file under the package's directory with a `module` line is read, other than
     /// companion test files and those whose names put them in another package or in none, as a
     /// `package.ag` below the package's directory. The root module is among them. A file with no
     /// `module` line is a program of its own and not one of the package's modules.
-    Tuple!(string, Span) mainOf(string name, SourceContext context) const
+    Tuple!(string, Span)[] mainsOf(string name, SourceContext context, string why, bool every) const
     {
         import std.path : pathSplitter, relativePath;
         import silver.syntax.parse : ParseException;
 
         auto package_ = named(name);
-        if (package_ is null || !exists(package_.directory) || !isDir(package_.directory)) return typeof(return).init;
-        immutable why = format("It was read because every module of a package that's used is, to check that the "
-            ~ "package '%s' isn't a program", name);
+        if (package_ is null || !exists(package_.directory) || !isDir(package_.directory)) return null;
+        typeof(return) mains;
+        if (why is null)
+            why = format("It was read because every module of a package that's used is, to check that the package "
+                ~ "'%s' isn't a program", name);
         foreach (path; filesUnder(package_.directory, name, why, context))
         {
             if (isCompanionFile(path)) continue;
@@ -661,10 +670,13 @@ private struct Layout
                 auto main = declaration.kind.match!(
                     (const FunctionDecl f) => f.name == "main" ? f.nameSpan : Span(),
                     _ => Span());
-                if (main.file !is null) return typeof(return)(chain.join("."), main);
+                if (main.file is null) continue;
+                mains ~= Tuple!(string, Span)(chain.join("."), main);
+                if (!every) return mains;
+                break;
             }
         }
-        return typeof(return).init;
+        return mains;
     }
 }
 
@@ -951,6 +963,85 @@ string describeScriptHomes(const string[] options, string base, ref Packages pac
     return null;
 }
 
+/// The file the program of the package `name` starts from, for the command `command` (`run` or
+/// `build`), and in `chosen` the package whose program it is; or null after reporting to `context`
+/// why there's none to choose. The programs are the package itself when a module of it declares
+/// `main`, and each of its parts that has one. A file with no `module` line is never one. The
+/// package has to be declared.
+string programStart(string name, string command, const Packages packages, SourceContext context, out string chosen)
+{
+    auto layout = Layout(packages.declared, packages.scriptUses, packages.usesHint, packages.packageHint);
+    auto package_ = layout.named(name);
+    assert(package_ !is null, "--program names an undeclared package");
+    immutable why = format("It was read to find which module of '%s' declares `main`", name);
+    immutable verb = command == "build" ? "build" : "run";
+    // A part is shown at the directory it's known by, which `--scripts-in` gives when its modules are below it.
+    string directoryOf(string package_)
+    {
+        foreach (ref home; packages.scriptHomes)
+        {
+            if (home.package_ == package_) return home.directory;
+        }
+        return layout.named(package_).directory;
+    }
+    if (!layout.described(context)) return null;
+    immutable tool = packages.fromPackageFiles ? "silver" : "silverc";
+    string[] names;
+    Tuple!(string, Span)[] mains;
+    foreach (candidate; [name] ~ package_.parts)
+    {
+        if (layout.named(candidate) is null) continue;
+        auto found = layout.mainsOf(candidate, context, why, true);
+        if (found.length > 1)
+        {
+            context.collector.reportError(DiagnosticCode.SeveralMains, Span(), format("The package '%s' has more than "
+                ~ "one module that declares `main`, so it has no one program to %s:\n%s\nName the file to %s, as `%s "
+                ~ "%s %s`", candidate, verb, found.map!(m => "  " ~ m[1].file).join("\n"), verb, tool, verb,
+                found[0][1].file));
+            return null;
+        }
+        if (found.length == 0) continue;
+        names ~= candidate;
+        mains ~= found[0];
+    }
+    if (names.length == 1)
+    {
+        chosen = names[0];
+        return mains[0][1].file;
+    }
+    immutable tests = packages.fromPackageFiles ? "Its tests are run with `silver test`"
+        : "Its tests are run with `silverc test`, given a directory or a file";
+    immutable scripts = format("A file with no `module` line is a program of its own, and is run by naming it, as "
+        ~ "`%s %s demo.ag`", tool, verb);
+    if (names.length == 0)
+    {
+        context.collector.reportError(DiagnosticCode.NoProgram, Span(), package_.parts.length == 0
+            ? format("The package '%s' is a library: none of its modules declares `main`, so it has no program to "
+                ~ "%s\n%s\n%s", name, verb, tests, scripts)
+            : format("The package '%s' %s, and none of its parts is a program: no module of %s declares `main`, so "
+                ~ "there's no program to %s\n%s\n%s", name, package_.directory.length == 0 ? "only holds its parts"
+                    : "is a library", package_.directory.length == 0 ? "theirs" : "it or of them", verb, tests, scripts));
+        return null;
+    }
+    // The package's own program can't be chosen by its directory, which would name the package again.
+    string[] lines;
+    foreach (i, candidate; names)
+    {
+        lines ~= candidate == name
+            ? format("  '%s' itself, whose `main` is in %s, chosen by naming that file", candidate, mains[i][1].file)
+            : format("  '%s', at %s, whose `main` is in %s", candidate, directoryOf(candidate), mains[i][1].file);
+    }
+    auto first = names[0] == name ? names[1] : names[0];
+    string choose = packages.fromPackageFiles
+        ? format("Choose a part by its directory, as `silver %s %s`", verb, directoryOf(first))
+        : format("Choose a part with `--program`, as `--program %s`", first);
+    if (names[0] == name)
+        choose ~= format(", or the program of '%s' itself by its file, as `%s %s %s`", name, tool, verb,
+            mains[0][1].file);
+    context.collector.reportError(DiagnosticCode.SeveralPrograms, Span(), format("The package '%s' holds more than one "
+        ~ "program, so which to %s has to be said:\n%s\n%s", name, verb, lines.join("\n"), choose));
+    return null;
+}
 /// `given`, and the standard library that ships with the compiler unless one of `given` is named as it is.
 Package[] withStandardLibrary(Package[] given)
 {
@@ -2488,6 +2579,101 @@ unittest
     mistake(["geo=.", "kit.a=."]).should.contain("to both 'geo' and 'kit.a'");
 }
 
+@("a package's program starts from its module that declares main, or from its one part that's a program")
+unittest
+{
+    auto directory = makeModuleDirectory("program-start", [
+        "app/main.ag": "module app.main\ndef main(): Unit {}",
+        "app/util.ag": "module app.util\ndef one(): Int => 1",
+        "root/package.ag": "module root\ndef main(): Unit {}",
+        "geo/shapes.ag": "module geo.shapes\ndef sides(): Int => 4",
+        "kit/a/x.ag": "module kit.a.x\ndef x(): Int => 1",
+        "kit/b/main.ag": "module kit.b.main\ndef main(): Unit {}",
+        "kit/c/src/main.ag": "module kit.c.main\ndef main(): Unit {}",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    string start(string name, string[] declared, string[] parts, out string chosen)
+    {
+        Packages packages;
+        assert(describePackages(declared, [], parts, directory, packages) is null);
+        auto context = new SourceContext;
+        auto file = programStart(name, "run", packages, context, chosen);
+        assert(context.collector.errors.empty, context.collector.errors.front.message);
+        return file;
+    }
+    string chosen;
+    start("app", ["app=app"], [], chosen).should.equal(buildPath(directory, "app", "main.ag"));
+    chosen.should.equal("app");
+    start("root", ["root=root"], [], chosen).should.equal(buildPath(directory, "root", "package.ag"));
+    start("kit", ["kit.a=kit/a", "kit.b=kit/b"], ["kit=kit.a,kit.b"], chosen).should.equal(buildPath(directory, "kit/b",
+        "main.ag"));
+    chosen.should.equal("kit.b");
+    // A part is a package of its own, so its program is its own.
+    start("kit.b", ["kit.a=kit/a", "kit.b=kit/b"], ["kit=kit.a,kit.b"], chosen).should.equal(buildPath(directory,
+        "kit/b", "main.ag"));
+}
+
+@("a package with no program is reported as a library, and one with several lists them and says how to choose")
+unittest
+{
+    auto directory = makeModuleDirectory("program-none-or-several", [
+        "app/main.ag": "module app.main\ndef main(): Unit {}",
+        "geo/shapes.ag": "module geo.shapes\ndef sides(): Int => 4",
+        "geo/demo.ag": "def main(): Unit {}",
+        "kit/a/x.ag": "module kit.a.x\ndef x(): Int => 1",
+        "kit/b/main.ag": "module kit.b.main\ndef main(): Unit {}",
+        "kit/c/src/main.ag": "module kit.c.main\ndef main(): Unit {}",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    string problem(string name, string[] declared, string[] parts, string[] homes = [], string[] files = [],
+        string command = "run")
+    {
+        Packages packages;
+        assert(describePackages(declared, [], parts, directory, packages) is null);
+        assert(describePackageFiles(files, packages) is null);
+        assert(describeScriptHomes(homes, directory, packages) is null);
+        auto context = new SourceContext;
+        string chosen;
+        programStart(name, command, packages, context, chosen).should.equal(null);
+        chosen.should.equal(null);
+        auto errors = context.collector.errors.array;
+        assert(errors.length == 1);
+        return cast(string) errors[0].code ~ ": " ~ errors[0].message;
+    }
+    // A file with no module line is a program of its own, not the package's.
+    problem("geo", ["geo=geo"], []).should.equal("L0014: The package 'geo' is a library: none of its modules declares "
+        ~ "`main`, so it has no program to run\nIts tests are run with `silverc test`, given a directory or a file\n"
+        ~ "A file with no `module` line is a program of its own, and is run by naming it, as `silverc run demo.ag`");
+    problem("geo", ["geo=geo"], [], [], ["geo=silver.toml"], "build").should.equal("L0014: The package 'geo' is a "
+        ~ "library: none of its modules declares `main`, so it has no program to build\nIts tests are run with "
+        ~ "`silver test`\nA file with no `module` line is a program of its own, and is run by naming it, as `silver build demo.ag`");
+    problem("kit", ["kit.a=kit/a"], ["kit=kit.a"]).should.equal("L0014: The package 'kit' only holds its parts, and "
+        ~ "none of its parts is a program: no module of theirs declares `main`, so there's no program to run\nIts tests "
+        ~ "are run with `silverc test`, given a directory or a file\nA file with no `module` line is a program of its own, and is run "
+        ~ "by naming it, as `silverc run demo.ag`");
+    problem("geo", ["geo=geo", "kit.a=kit/a"], ["geo=kit.a"]).should.startWith("L0014: The package 'geo' is a library, "
+        ~ "and none of its parts is a program: no module of it or of them declares `main`");
+
+    auto kit = ["kit.a=kit/a", "kit.b=kit/b", "kit.c=kit/c/src"];
+    auto b = buildPath(directory, "kit/b");
+    auto c = buildPath(directory, "kit/c");
+    problem("kit", kit, ["kit=kit.a,kit.b,kit.c"], ["kit.c=kit/c"]).should.equal("L0015: The package 'kit' holds more "
+        ~ "than one program, so which to run has to be said:\n"
+        ~ "  'kit.b', at " ~ b ~ ", whose `main` is in " ~ buildPath(b, "main.ag") ~ "\n"
+        ~ "  'kit.c', at " ~ c ~ ", whose `main` is in " ~ buildPath(directory, "kit/c/src", "main.ag") ~ "\n"
+        ~ "Choose a part with `--program`, as `--program kit.b`");
+    problem("kit", kit, ["kit=kit.a,kit.b,kit.c"], ["kit.b=kit/b"], ["kit.b=silver.toml"], "build")
+        .should.endWith("\nChoose a part by its directory, as `silver build " ~ b ~ "`");
+    // The package's own program is among them, and is chosen by its file.
+    auto itself = problem("app", ["app=app", "kit.b=kit/b"], ["app=kit.b"]);
+    itself.should.contain("\n  'app' itself, whose `main` is in " ~ buildPath(directory, "app", "main.ag") ~ ", chosen "
+        ~ "by naming that file\n  'kit.b', at " ~ b ~ ",");
+    itself.should.endWith("\nChoose a part with `--program`, as `--program kit.b`, or the program of 'app' itself by its "
+        ~ "file, as `silverc run " ~ buildPath(directory, "app", "main.ag") ~ "`");
+}
+
 @("a package whose name ends in the segment package can't make a module named <package>.package")
 unittest
 {
@@ -2565,4 +2751,26 @@ unittest
     context = new SourceContext;
     load("import geo.lines", "main.ag", packages, null, context);
     context.collector.errors.front.message.should.not.contain("root module");
+}
+
+@("a package with two modules that declare main has no one program to start from, and says which files")
+unittest
+{
+    auto directory = makeModuleDirectory("program-two-mains", [
+        "two/a.ag": "module two.a\ndef main(): Unit {}",
+        "two/b.ag": "module two.b\ndef main(): Unit {}",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    Packages packages;
+    assert(describePackages(["two=two"], [], [], directory, packages) is null);
+    auto context = new SourceContext;
+    string chosen;
+    programStart("two", "run", packages, context, chosen).should.equal(null);
+    auto errors = context.collector.errors.array;
+    assert(errors.length == 1, "the first module declaring main was chosen silently");
+    errors[0].code.should.equal(DiagnosticCode.SeveralMains);
+    errors[0].message.should.startWith("The package 'two' has more than one module that declares `main`");
+    errors[0].message.should.contain(buildPath(directory, "two", "a.ag"));
+    errors[0].message.should.contain(buildPath(directory, "two", "b.ag"));
 }

@@ -49,6 +49,10 @@ enum ProjectCode : string
     UsesWithoutModules = "F0031",
     /// An empty string where a directory goes.
     EmptyDirectory = "F0032",
+    /// No file named, and no package file at or above the working directory.
+    NoProject = "F0033",
+    /// A directory given to `run` or `build` that's no package's or part's directory.
+    NotAPackageDirectory = "F0034",
 }
 
 /// One mistake in a package file, or in reading one.
@@ -64,6 +68,7 @@ struct Mistake
 /// `mistake` as the compiler gives its diagnostics, with its file shown as `shown` gives it.
 string formatMistake(const Mistake mistake, string delegate(string) shown = null)
 {
+    if (mistake.file is null) return "Error " ~ mistake.code ~ ": " ~ mistake.message;
     auto file = shown is null ? mistake.file : shown(mistake.file);
     if (mistake.span.line == 0) return file ~ ": Error " ~ mistake.code ~ ": " ~ mistake.message;
     return formatTomlError(file, TomlError(cast(TomlCode) mistake.code, mistake.span, mistake.message));
@@ -226,6 +231,61 @@ const(Facts)[] scriptHomes(const Project project, string path)
         }
     }
     return deepest is null ? inside : *deepest ~ inside;
+}
+
+/// The package or part of the project's own file whose home holds `directory`, the deepest, or the
+/// file's package when none does: the package `silver` is started in there.
+const(Facts)* startedIn(const Project project, string directory)
+{
+    import std.path : absolutePath, buildNormalizedPath;
+
+    directory = buildNormalizedPath(absolutePath(directory));
+    const(Facts)* deepest;
+    foreach (ref p; project.packages)
+    {
+        if (!samePath(p.file, project.file) || !within(directory, p.home)) continue;
+        if (deepest is null || segments(p.home).length > segments(deepest.home).length) deepest = &p;
+    }
+    return deepest is null ? &project.packages[0] : deepest;
+}
+
+/// The package or part of the project's own file whose home is `directory`, or null.
+const(Facts)* homedAt(const Project project, string directory)
+{
+    foreach (ref p; project.packages)
+    {
+        if (samePath(p.file, project.file) && samePath(p.home, directory)) return &p;
+    }
+    return null;
+}
+
+/// The packages and parts of the project's own file, each with its home as `shown` gives it, as a
+/// list for a message.
+string homesOf(const Project project, string delegate(string) shown)
+{
+    import std.array : join;
+
+    string[] listed;
+    foreach (ref p; project.packages)
+    {
+        if (samePath(p.file, project.file)) listed ~= quoted(p.name) ~ " at " ~ shown(p.home);
+    }
+    return listed.join(", ");
+}
+
+/// `package_` and its parts, those with modules, whose homes the compiler is told so that what it
+/// says about their programs names the directories they're chosen by.
+const(Facts)[] programHomes(const Project project, const Facts package_)
+{
+    const(Facts)[] homes;
+    foreach (ref p; project.packages)
+    {
+        if (p.directory is null) continue;
+        bool part;
+        foreach (name; package_.parts) part = part || name == p.name;
+        if (part || p.name == package_.name) homes ~= p;
+    }
+    return homes;
 }
 
 /// The directories under `directory` with a package file that `project` didn't read, each another
@@ -1194,6 +1254,48 @@ unittest
     assert(of(app, "app") == ["app", "app.tools"]);
     assert(of(app, "geo", "shapes", "circle.ag") == ["geo"]);
     assert(of(app, "elsewhere.ag") == []);
+}
+
+@("the package started in is the deepest of the project's own file whose home holds the directory, and its file's package otherwise")
+unittest
+{
+    auto files = compilerShape.dup;
+    files["tool/ast/deep/"] = "";
+    files["tool/notes/"] = "";
+    files["geo/silver.toml"] = "name = \"geo\"";
+    files["app/silver.toml"] = "name = \"app\"\nsource = \"src\"\nuses = [\"geo\"]\n[paths]\ngeo = \"../geo\"";
+    files["app/src/inner/"] = "";
+    auto directory = makeTree("project-started-in", files);
+    scope (exit) rmdirRecurse(directory);
+    string at(const Project p, string[] path...) => startedIn(p, buildPath(directory ~ path)).name;
+
+    auto tool = project(buildPath(directory, "tool", "silver.toml"));
+    assert(at(tool, "tool") == "tool");
+    assert(at(tool, "tool", "notes") == "tool");
+    assert(at(tool, "tool", "ast") == "tool.ast");
+    assert(at(tool, "tool", "ast", "deep") == "tool.ast");
+    assert(at(tool, "tool", "compiler") == "tool.compiler");
+    assert(at(tool, "tool", "compiler", "source") == "tool.compiler");
+    assert(at(tool, "elsewhere") == "tool");
+    auto app = project(buildPath(directory, "app", "silver.toml"));
+    assert(at(app, "app", "src", "inner") == "app");
+    // A package the project uses is another file's, even where its home holds the directory.
+    assert(at(app, "geo") == "app");
+
+    assert(homedAt(tool, buildPath(directory, "tool", "compiler")).name == "tool.compiler");
+    assert(homedAt(tool, buildPath(directory, "tool")).name == "tool");
+    assert(homedAt(tool, buildPath(directory, "tool", "compiler", "source")) is null);
+    assert(homedAt(app, buildPath(directory, "geo")) is null);
+    assert(homesOf(tool, (string path) => shownFrom(buildPath(directory, "tool"), path)) == "'tool' at ., 'tool.ast' at "
+        ~ "ast, 'tool.syntax' at syntax, 'tool.compiler' at compiler, 'tool.frontend' at frontend");
+
+    import std.algorithm : map;
+    import std.array : array;
+    auto names = (const Facts[] facts) => facts.map!(f => f.name.idup).array;
+    assert(names(programHomes(tool, factsOf(tool, "tool"))) == ["tool.ast", "tool.syntax", "tool.compiler",
+        "tool.frontend"]);
+    assert(names(programHomes(tool, factsOf(tool, "tool.ast"))) == ["tool.ast"]);
+    assert(names(programHomes(app, factsOf(app, "app"))) == ["app"]);
 }
 
 @("the compiler is given every package's directory, uses, parts and file, relative where that's inside")

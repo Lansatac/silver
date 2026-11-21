@@ -8,15 +8,62 @@ import std.path : buildPath, dirName;
 import std.process : environment, ProcessException, spawnProcess, wait;
 import std.stdio : stderr, stdout;
 
-immutable usage = "Usage: silver <file>                     run <file>\n"
-    ~ "       silver run [OPTION]... <file>     the same\n"
-    ~ "       silver build [OPTION]... <file>   compile <file> to an executable\n"
-    ~ "       silver test [OPTION]... <path>    run the tests in <path>, a file or a directory\n"
+immutable usage = "Usage: silver <file>                           run <file>\n"
+    ~ "       silver run [OPTION]... <file>           the same\n"
+    ~ "       silver build [OPTION]... <file>         compile <file> to an executable\n"
+    ~ "       silver test [OPTION]... <path>          run the tests in <path>, a file or a directory\n"
+    ~ "       silver run|build [OPTION]...            run or compile the program of the project here\n"
+    ~ "       silver run|build [OPTION]... <directory>\n"
+    ~ "                                               the program of the package or part at <directory>\n"
+    ~ "       silver test [OPTION]...                 run the tests of the project here\n"
     ~ "\n"
     ~ "A word that isn't one of these commands is a file, so a file named `build` is `silver ./build`.\n"
     ~ "Options go before the file, and are the compiler's: run `silverc --help` for them, other than\n"
     ~ "--show-command, which prints the compiler's command line before running it.\n"
-    ~ "A silver.toml in the file's directory or above describes its project's packages.";
+    ~ "A silver.toml in the file's directory or above describes its project's packages. With no file,\n"
+    ~ "it's looked for from the working directory. Run `silver <command> --help` for more on each.";
+
+/// What `silver <command> --help` prints.
+immutable string[string] commandUsage;
+
+shared static this()
+{
+    immutable options = "\n\nOptions go before the file, and are the compiler's: run `silverc --help` for them, other than\n"
+        ~ "--show-command, which prints the compiler's command line before running it.";
+    immutable startedIn = "The package silver is started in is the deepest package or part of the nearest silver.toml at\n"
+        ~ "or above the working directory whose directory holds it: the silver.toml's directory for a\n"
+        ~ "package, and its `path` for a part.";
+    commandUsage = [
+        "run": "Usage: silver run [OPTION]... <file>        run <file>\n"
+            ~ "       silver run [OPTION]...               run the program of the package silver is started in\n"
+            ~ "       silver run [OPTION]... <directory>   run the program of the package or part at <directory>\n\n"
+            ~ startedIn ~ "\nA package's program is its module that declares `main`, or its one part that's a program. When\n"
+            ~ "several parts are programs, silver lists them, and one is run by its directory, as\n"
+            ~ "`silver run compiler`. A library has no program, and its tests are run with `silver test`." ~ options,
+        "build": "Usage: silver build [OPTION]... <file>        compile <file> to an executable\n"
+            ~ "       silver build [OPTION]...               compile the program of the package silver is started in\n"
+            ~ "       silver build [OPTION]... <directory>   compile the program of the package or part at <directory>\n\n"
+            ~ startedIn ~ "\nThe program is chosen as `silver run` chooses it. Without -o, the executable is written to the\n"
+            ~ "working directory, named after the file, or for a package's program, after the last segment of\n"
+            ~ "the name of the package whose program it is." ~ options,
+        "test": "Usage: silver test [OPTION]... <path>   run the tests in <path>, a file or a directory\n"
+            ~ "       silver test [OPTION]...          run the tests of the package silver is started in, and of its parts\n\n"
+            ~ startedIn ~ "\nWith no path, the tests are those under that package's directory, as `silver test <directory>`.\n"
+            ~ "A directory under it with a silver.toml the project doesn't use is another project, and is left out."
+            ~ options,
+    ];
+}
+
+/// The help `silver` prints for `request`, or null when it doesn't ask for help.
+string helpFor(Request request)
+{
+    import std.algorithm : canFind;
+
+    if (request.help) return "The Silver language's tool.\n" ~ usage;
+    auto options = split(request.rest).options;
+    if (options.canFind("--help") || options.canFind("-h")) return commandUsage[request.command];
+    return null;
+}
 
 immutable commands = ["run", "build", "test"];
 
@@ -57,8 +104,8 @@ unittest
 /// The compiler's options whose value is the next word, so that the file can be found among the
 /// options. A copy of `optionsWithValues` in source/silver/driver.d, which this package can't import;
 /// a test reads that one to check the two agree.
-immutable compilerOptionsWithValues = ["--package", "--uses", "--parts", "--package-file", "--scripts-in", "--backend",
-    "-b", "--output", "-o", "--filter", "--format", "--skip"];
+immutable compilerOptionsWithValues = ["--package", "--uses", "--parts", "--package-file", "--scripts-in", "--program",
+    "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip"];
 
 /// `silver`'s own option, which prints the compiler's command line before running it.
 enum showCommand = "--show-command";
@@ -161,15 +208,18 @@ struct Plan
     string projectFile;
     /// The packages and parts the compiler is told files with no `module` line may be beside.
     string[] scriptHomes;
+    /// The package whose program `run` or `build` starts from, when no file is named, or null.
+    string program;
 }
 
-/// Where to look for a project's package file for `file`, the file or directory named, or null
-/// when nothing is named and there's nowhere to look.
+/// Where to look for a project's package file for `file`, the file or directory named: the working
+/// directory when nothing is named, and null when there's nowhere to look.
 string searchStart(string file, string workingDirectory)
 {
     import std.path : absolutePath, buildNormalizedPath;
 
-    if (file is null || file == "-") return null;
+    if (file is null) return buildNormalizedPath(absolutePath(workingDirectory));
+    if (file == "-") return null;
     auto path = buildNormalizedPath(absolutePath(file, workingDirectory));
     if (isDirectory(path)) return path;
     auto directory = path.dirName;
@@ -178,22 +228,42 @@ string searchStart(string file, string workingDirectory)
 
 /// What `silver` does for `request`, run from `workingDirectory`, with `compiler` as the compiler.
 /// The project's facts go before the request's own options, so that options given by hand follow them.
+/// With no file, `run` and `build` take the program of the package started in, and `test` its
+/// directory; given a directory, `run` and `build` take the program of the package whose directory it is.
 Plan plan(string compiler, Request request, string workingDirectory)
 {
-    import silver.frontend.project : compilerOptions, findPackageFile, formatMistake, Mistake, otherProjects, Project,
-        readProject, scriptHomes, shownFrom;
+    import silver.frontend.project : compilerOptions, findPackageFile, formatMistake, homedAt, homesOf, Mistake,
+        otherProjects, programHomes, Project, ProjectCode, readProject, scriptHomes, shownFrom, startedIn;
+    import silver.frontend.toml : Span;
     import std.algorithm : map;
     import std.array : array;
-    import std.path : absolutePath;
+    import std.path : absolutePath, buildNormalizedPath;
 
     auto arguments = split(request.rest);
     Plan result;
     result.show = arguments.show;
+    immutable testing = request.command == "test";
+    if (arguments.file == "help" && request.command == "run" && !exists(absolutePath("help", workingDirectory)))
+    {
+        result.mistake = "There's no file named help to run: `silver --help` describes silver's commands.";
+        return result;
+    }
+    auto named = arguments.file is null || arguments.file == "-" ? null
+        : buildNormalizedPath(absolutePath(arguments.file, workingDirectory));
+    immutable byDirectory = !testing && named !is null && isDirectory(named);
     string[] facts;
     if (auto start = searchStart(arguments.file, workingDirectory))
     {
         auto shown = (string path) => shownFrom(workingDirectory, path);
         result.projectFile = findPackageFile(start);
+        if (result.projectFile is null && arguments.file is null)
+        {
+            result.mistake = formatMistake(Mistake(null, ProjectCode.NoProject, Span(), "There's no silver.toml in "
+                ~ start ~ " or any directory above it, so there's no project here to " ~ request.command ~ ": name "
+                ~ (testing ? "a file or a directory, as `silver test hello.ag`" : "a file, as `silver "
+                    ~ request.command ~ " hello.ag`")));
+            return result;
+        }
         if (result.projectFile !is null)
         {
             Project project;
@@ -203,11 +273,38 @@ Plan plan(string compiler, Request request, string workingDirectory)
                 result.mistake = formatMistake(mistake, shown);
                 return result;
             }
-            auto homes = scriptHomes(project, absolutePath(arguments.file, workingDirectory));
-            facts = compilerOptions(project, shown, homes);
-            if (request.command == "test" && isDirectory(absolutePath(arguments.file, workingDirectory)))
+            if (arguments.file is null || byDirectory)
             {
-                foreach (other; otherProjects(project, start)) facts ~= ["--skip", shown(other)];
+                auto at = arguments.file is null ? startedIn(project, start) : homedAt(project, named);
+                if (at is null)
+                {
+                    result.mistake = formatMistake(Mistake(null, ProjectCode.NotAPackageDirectory, Span(),
+                        shown(named) ~ " is a directory, and no package or part that " ~ shown(result.projectFile)
+                        ~ " describes is there, so it has no program to " ~ request.command ~ ". Its packages are "
+                        ~ homesOf(project, shown) ~ "; name one of those directories, or a file"));
+                    return result;
+                }
+                if (arguments.after.length > 0)
+                {
+                    result.mistake = "`" ~ arguments.after[0] ~ "` follows the directory " ~ arguments.file ~ ", and "
+                        ~ "what follows it is for the program, which can't be given arguments yet.";
+                    return result;
+                }
+                if (!testing)
+                {
+                    result.program = at.name;
+                    result.arguments = [compiler, request.command] ~ compilerOptions(project, shown,
+                        programHomes(project, *at)) ~ ["--program", at.name] ~ arguments.options;
+                    return result;
+                }
+                named = at.home;
+                arguments.file = shown(at.home);
+            }
+            auto homes = scriptHomes(project, named);
+            facts = compilerOptions(project, shown, homes);
+            if (testing && isDirectory(named))
+            {
+                foreach (other; otherProjects(project, named)) facts ~= ["--skip", shown(other)];
             }
             result.scriptHomes = homes.map!(h => h.name.idup).array;
         }
@@ -224,12 +321,48 @@ unittest
     scope (exit) rmdirRecurse(directory);
     Plan of(string[] words) => plan("silverc", request(words), directory);
 
-    assert(of(["build"]).arguments == ["silverc", "build"]);
     assert(of(["./build"]).arguments == ["silverc", "run", "./build"]);
     assert(of(["-b", "llvm", "test"]).arguments == ["silverc", "run", "-b", "llvm", "test"]);
     auto hello = of(["--show-command", "-b", "llvm", "hello.ag"]);
     assert(hello.arguments == ["silverc", "run", "-b", "llvm", "hello.ag"] && hello.show && hello.projectFile is null);
     assert(of(["missing/x.ag"]).arguments == ["silverc", "run", "missing/x.ag"]);
+}
+
+@("with no file and no package file at or above the working directory there's nothing to run, build or test")
+unittest
+{
+    auto directory = makeTree("frontend-no-file", ["sub/": ""]);
+    scope (exit) rmdirRecurse(directory);
+    auto sub = buildPath(directory, "sub");
+    foreach (command; ["run", "build", "test"])
+    {
+        auto p = plan("silverc", request([command, "-b", "llvm"]), sub);
+        assert(p.arguments is null && p.mistake == "Error F0033: There's no silver.toml in " ~ sub ~ " or any directory "
+            ~ "above it, so there's no project here to " ~ command ~ ": name a file" ~ (command == "test"
+                ? " or a directory, as `silver test hello.ag`" : ", as `silver " ~ command ~ " hello.ag`"), p.mistake);
+    }
+    // Given a directory, the line is passed on as before.
+    assert(plan("silverc", request(["run", "sub"]), directory).arguments == ["silverc", "run", "sub"]);
+    assert(plan("silverc", request(["help"]), directory).mistake == "There's no file named help to run: `silver --help` "
+        ~ "describes silver's commands.");
+}
+
+@("silver's help describes its own commands, and each command's help points at the compiler's for the options")
+unittest
+{
+    import std.algorithm : canFind, startsWith;
+
+    assert(helpFor(request([])).canFind("silver run|build [OPTION]...            run or compile the program of the project here"));
+    assert(helpFor(request(["--help"])).canFind("Run `silver <command> --help`"));
+    foreach (command; ["run", "build", "test"])
+    {
+        auto help = helpFor(request([command, "--help"]));
+        assert(help.startsWith("Usage: silver " ~ command) && help.canFind("run `silverc --help` for them"), help);
+        assert(helpFor(request([command, "-b", "llvm", "-h"])) == help);
+    }
+    assert(helpFor(request(["-b", "llvm", "--help"])) == commandUsage["run"]);
+    assert(helpFor(request(["run", "f.ag", "--help"])) is null);
+    assert(helpFor(request(["build", "f.ag"])) is null);
 }
 
 /// `arguments` as a shell would read them back, for showing.
@@ -259,9 +392,9 @@ int run(string[] args)
     import std.file : getcwd;
 
     auto asked = request(args[1 .. $]);
-    if (asked.help)
+    if (auto help = helpFor(asked))
     {
-        stdout.writeln("The Silver language's tool.\n", usage);
+        stdout.writeln(help);
         return 0;
     }
     auto compiler = compilerPath();
