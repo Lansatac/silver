@@ -7,7 +7,7 @@ version (unittest):
 
 import silver.frontend : makeTree, plan, Plan, request;
 import std.algorithm : canFind, endsWith, startsWith;
-import std.array : replace;
+import std.array : join, replace;
 import std.file : exists, rmdirRecurse, tempDir;
 import std.path : buildNormalizedPath, buildPath, dirName;
 static import std.process;
@@ -173,10 +173,163 @@ unittest
     Plan p = plan("silverc", request(["test", "--filter", "node", "-b", "both", "--format=json", "ast"]),
         buildPath(fixtures, "compiler-shape"));
     assert(p.projectFile == buildPath(fixtures, "compiler-shape", "silver.toml"), p.projectFile);
-    assert(p.containing == "tool.ast");
+    assert(p.scriptHomes == ["tool.ast"]);
     assert(p.arguments[$ - 6 .. $] == ["--filter", "node", "-b", "both", "--format=json", "ast"]);
     assert(p.arguments[0 .. 4] == ["silverc", "test", "--package", "tool.ast=ast"]);
     p = plan("silverc", request(["--package", "x=y", "main.ag", "after"]), buildPath(fixtures, "uses-part"));
     assert(p.arguments[$ - 4 .. $] == ["--package", "x=y", "main.ag", "after"]);
     assert(p.arguments.canFind("lint=."));
+}
+
+@("a library's scripts beside its modules use it and what it uses, on both backends")
+unittest
+{
+    auto scripts = buildPath(fixtures, "scripts");
+    auto shapes = buildPath(scripts, "shapes");
+    foreach (backend; [["-b", "interpreter"], ["-b", "llvm"]])
+    {
+        expectRan(planned(backend ~ "demo.ag", shapes), "9\n");
+        expectRan(planned(backend ~ "bench.ag", shapes), "17\n");
+        expectRan(planned(backend ~ buildPath("shapes", "demo.ag"), scripts), "9\n");
+    }
+    auto p = plan("silverc", request(["demo.ag"]), shapes);
+    assert(p.scriptHomes == ["shapes"] && p.arguments.canFind("shapes=."), p.arguments[2 .. $].join(" "));
+}
+
+@("a script started by its path from another directory behaves as it does from its own")
+unittest
+{
+    auto shapes = buildPath(fixtures, "scripts", "shapes");
+    expectRan(silver([buildPath(shapes, "demo.ag")], tempDir), "9\n");
+    expectRan(silver(["-b", "llvm", buildPath(shapes, "bench.ag")], tempDir), "17\n");
+    expectRan(silver([buildPath(fixtures, "scripts", "shop", "tryout.ag")], tempDir), "tryout 2\n");
+}
+
+@("a script beside a program's package file uses what the program uses, and is told it can't use the program")
+unittest
+{
+    auto shop = buildPath(fixtures, "scripts", "shop");
+    foreach (backend; ["interpreter", "llvm"])
+        expectRan(planned(["-b", backend, "tryout.ag"], shop), "tryout 2\n");
+    expectRan(planned([buildPath("src", "main.ag")], shop), "shop 1\n");
+
+    auto directory = makeTree("frontend-script-program", [
+        "silver.toml": "name = \"app\"\nsource = \"src\"\n",
+        "src/main.ag": "module app.main\n\ndef main(): Unit {}\n",
+        "tryout.ag": "import app.main\n\ndef main(): Unit {}\n",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    expectRan(silver(["tryout.ag"], directory), "tryout.ag(1,1): Error L0010: 'tryout' is a file with no `module` line "
+        ~ "under the directory of the package 'app', and it can't import 'app.main': 'app.main' declares `main`, so 'app' "
+        ~ "is a program, and nothing can use a program, not even a file beside it\nA file beside a program uses only what "
+        ~ "the program uses: move what both need to a library they use\n", 1);
+}
+
+@("a script in a project under none of its packages uses the standard library alone, and is told where one that needs more goes")
+unittest
+{
+    auto group = buildPath(fixtures, "scripts", "group");
+    foreach (backend; ["interpreter", "llvm"])
+    {
+        expectRan(planned(["-b", backend, "scratch.ag"], group), "8\n");
+        expectRan(planned(["-b", backend, buildPath("lib", "try.ag")], group), "hello\n");
+    }
+    assert(plan("silverc", request(["scratch.ag"]), group).scriptHomes.length == 0);
+
+    auto directory = makeTree("frontend-script-homeless", [
+        "silver.toml": "name = \"g\"\n\n[[part]]\nname = \"g.lib\"\npath = \"lib\"\n",
+        "lib/words.ag": "module g.lib.words\n\ndef word(): String => \"w\"\n",
+        "scratch.ag": "import g.lib.words\n\ndef main(): Unit {}\n",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto ran = silver(["scratch.ag"], directory);
+    assert(ran.status == 1 && ran.output.endsWith("\nA file with no `module` line that's under no package's directory "
+        ~ "uses only the standard library, so one that needs 'g.lib' belongs under the directory of that package or of "
+        ~ "one that uses it\n"), ran.output);
+    assert(!ran.output.canFind("--uses"), ran.output);
+}
+
+@("a script that imports what its library doesn't use is told to list it in the library's uses")
+unittest
+{
+    auto directory = makeTree("frontend-script-hint", [
+        "geo/silver.toml": "name = \"geo\"\n",
+        "geo/shapes.ag": "module geo.shapes\n\ndef sides(): Int => 4\n",
+        "units/silver.toml": "name = \"units\"\n",
+        "units/length.ag": "module units.length\n\ndef metre(): Int => 1\n",
+        "geo/demo.ag": "import geo.shapes\nimport units.length\n\ndef main(): Unit {}\n",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto ran = silver(["demo.ag"], buildPath(directory, "geo"));
+    assert(ran.status == 1 && ran.output.endsWith("\nA file with no `module` line under the directory of the package "
+        ~ "'geo' uses what 'geo' uses\nList it in `uses` in silver.toml, with its directory under `[paths]` there\n"),
+        ran.output);
+}
+
+@("silver test runs the tests of every script in a directory, each beside its own package, on both backends")
+unittest
+{
+    auto scripts = buildPath(fixtures, "scripts");
+    foreach (backend; ["interpreter", "llvm"])
+    {
+        expectRan(planned(["test", "-b", backend, "shapes"], scripts), "2 passed, 0 failed\n");
+        // The root holds only its parts: scratch.ag uses std alone and lib/try.ag uses its part.
+        expectRan(planned(["test", "-b", backend, "group"], scripts), "2 passed, 0 failed\n");
+        expectRan(planned(["test", "-b", backend, "."], buildPath(scripts, "group")), "2 passed, 0 failed\n");
+    }
+    assert(plan("silverc", request(["test", "group"]), scripts).scriptHomes == ["group.lib"]);
+}
+
+@("silver test over a directory leaves out a project of its own inside it, and still tests one the project uses")
+unittest
+{
+    auto directory = makeTree("frontend-script-nested-project", [
+        "outer/silver.toml": "name = \"outer\"
+source = \"src\"
+uses = [\"used\"]
+[paths]
+used = \"used\"
+",
+        "outer/src/k.ag": "module outer.k
+
+import used.u
+
+def k(): Int => u()
+
+test \"k\" => expect(k() == 4)
+",
+        "outer/used/silver.toml": "name = \"used\"
+",
+        "outer/used/u.ag": "module used.u
+
+def u(): Int => 4
+
+test \"u\" => expect(u() == 4)
+",
+        "outer/nested/silver.toml": "name = \"nested\"
+",
+        "outer/nested/x.ag": "import outer.k
+
+def main(): Unit {}
+
+test \"k\" => expect(k() == 4)
+",
+        "outer/nested/deeper/silver.toml": "name = \"deeper\"
+",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    // Run by itself, or tested from its own directory, x.ag can't import outer.k: it's under 'nested'.
+    assert(silver([buildPath("outer", "nested", "x.ag")], directory).status == 1);
+    assert(silver(["test", buildPath("outer", "nested")], directory).status == 1);
+    // From the directory above, nested is another project and isn't tested, and used, which outer uses, is.
+    foreach (backend; ["interpreter", "llvm", "both"])
+        expectRan(silver(["test", "-b", backend, "outer"], directory), "2 passed, 0 failed
+");
+    auto json = silver(["test", "--format", "json", "outer"], directory);
+    assert(json.status == 0 && !json.output.canFind("x.ag"), json.output);
+    auto p = plan("silverc", request(["test", "outer"]), directory);
+    assert(p.arguments.canFind("--skip") && p.arguments.canFind(buildPath("outer", "nested")), p.arguments.join(" "));
+    assert(!p.arguments.canFind(buildPath("outer", "nested", "deeper")) && !p.arguments.canFind(buildPath("outer", "used")));
+    // A file is tested as it is, with nothing skipped.
+    assert(!plan("silverc", request(["test", buildPath("outer", "src", "k.ag")]), directory).arguments.canFind("--skip"));
 }

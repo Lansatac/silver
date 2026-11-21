@@ -1,0 +1,6 @@
+# A library with runnable files beside its modules, each a program that uses it.
+name = "shapes"
+uses = ["units"]
+
+[paths]
+units = "../units"

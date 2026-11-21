@@ -1,0 +1,7 @@
+# A program whose modules are in src, with a script beside its package file.
+name = "shop"
+source = "src"
+uses = ["units"]
+
+[paths]
+units = "../units"

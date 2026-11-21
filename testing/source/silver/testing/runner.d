@@ -68,13 +68,27 @@ bool selects(const string[] filters, string name)
     return filters.length == 0 || filters.any!(f => name.canFind(f));
 }
 
-/// Every `.ag` file at `path`: the file itself, or each one under the directory, in order. A
-/// companion test file is run with its module, so it's left out when the module is there.
-string[] testFiles(string path)
+/// Every `.ag` file at `path`: the file itself, or each one under the directory, in order, other
+/// than those under a directory of `skipped`, which isn't looked into. A companion test file is run
+/// with its module, so it's left out when the module is there.
+string[] testFiles(string path, const string[] skipped = null)
 {
+    import std.path : buildNormalizedPath, absolutePath, filenameCmp;
+
     if (!isDir(path)) return [path];
-    return dirEntries(path, "*.ag", SpanMode.depth).map!(e => e.name)
-        .filter!(f => !isCompanionFile(f) || !exists(companionModuleFile(f))).array.sort.release;
+    auto left = skipped.map!(s => buildNormalizedPath(absolutePath(s))).array;
+    string[] files;
+    void walk(string directory)
+    {
+        if (left.any!(s => filenameCmp(s, buildNormalizedPath(absolutePath(directory))) == 0)) return;
+        foreach (entry; dirEntries(directory, SpanMode.shallow))
+        {
+            if (entry.isDir) walk(entry.name);
+            else if (extension(entry.name) == ".ag") files ~= entry.name;
+        }
+    }
+    walk(path);
+    return files.filter!(f => !isCompanionFile(f) || !exists(companionModuleFile(f))).array.sort.release;
 }
 
 /// Runs the tests that `file` and its companion test file declare, though not those of the

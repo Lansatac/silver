@@ -1,0 +1,7 @@
+import group.lib.words
+
+def main(): Unit {
+    printl(greeting())
+}
+
+test "the greeting" => expect(greeting() == "hello")

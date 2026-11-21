@@ -1,0 +1,8 @@
+// A file with no module line beside a library uses what the library uses, and the library itself.
+import shapes.circle
+import shapes.render.text
+
+def main(): Unit {
+    printl(describe(Circle(3)))
+    printl(area(Circle(1)))
+}

@@ -1,0 +1,3 @@
+module group.lib.words
+
+def greeting(): String => "hello"

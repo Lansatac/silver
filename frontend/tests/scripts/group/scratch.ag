@@ -1,0 +1,7 @@
+import std.math
+
+def main(): Unit {
+    printl(powInt(2, 3))
+}
+
+test "std alone" => expect(powInt(3, 2) == 9)

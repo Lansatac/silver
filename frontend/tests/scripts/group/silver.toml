@@ -1,0 +1,6 @@
+# A root that only holds its parts.
+name = "group"
+
+[[part]]
+name = "group.lib"
+path = "lib"

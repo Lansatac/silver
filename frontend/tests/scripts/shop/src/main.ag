@@ -1,0 +1,7 @@
+module shop.main
+
+import units.length
+
+def main(): Unit {
+    printl("shop {scale()}")
+}

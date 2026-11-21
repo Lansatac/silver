@@ -57,8 +57,8 @@ unittest
 /// The compiler's options whose value is the next word, so that the file can be found among the
 /// options. A copy of `optionsWithValues` in source/silver/driver.d, which this package can't import;
 /// a test reads that one to check the two agree.
-immutable compilerOptionsWithValues = ["--package", "--uses", "--parts", "--package-file", "--backend", "-b", "--output",
-    "-o", "--filter", "--format"];
+immutable compilerOptionsWithValues = ["--package", "--uses", "--parts", "--package-file", "--scripts-in", "--backend",
+    "-b", "--output", "-o", "--filter", "--format", "--skip"];
 
 /// `silver`'s own option, which prints the compiler's command line before running it.
 enum showCommand = "--show-command";
@@ -159,8 +159,8 @@ struct Plan
     string mistake;
     /// The project's package file, absolute, or null when there's none.
     string projectFile;
-    /// The package or part whose directory of modules holds the file, or null.
-    string containing;
+    /// The packages and parts the compiler is told files with no `module` line may be beside.
+    string[] scriptHomes;
 }
 
 /// Where to look for a project's package file for `file`, the file or directory named, or null
@@ -180,8 +180,10 @@ string searchStart(string file, string workingDirectory)
 /// The project's facts go before the request's own options, so that options given by hand follow them.
 Plan plan(string compiler, Request request, string workingDirectory)
 {
-    import silver.frontend.project : compilerOptions, containingPackage, findPackageFile, formatMistake, Mistake,
-        Project, readProject, shownFrom;
+    import silver.frontend.project : compilerOptions, findPackageFile, formatMistake, Mistake, otherProjects, Project,
+        readProject, scriptHomes, shownFrom;
+    import std.algorithm : map;
+    import std.array : array;
     import std.path : absolutePath;
 
     auto arguments = split(request.rest);
@@ -201,8 +203,13 @@ Plan plan(string compiler, Request request, string workingDirectory)
                 result.mistake = formatMistake(mistake, shown);
                 return result;
             }
-            facts = compilerOptions(project, shown);
-            result.containing = containingPackage(project, absolutePath(arguments.file, workingDirectory));
+            auto homes = scriptHomes(project, absolutePath(arguments.file, workingDirectory));
+            facts = compilerOptions(project, shown, homes);
+            if (request.command == "test" && isDirectory(absolutePath(arguments.file, workingDirectory)))
+            {
+                foreach (other; otherProjects(project, start)) facts ~= ["--skip", shown(other)];
+            }
+            result.scriptHomes = homes.map!(h => h.name.idup).array;
         }
     }
     result.arguments = [compiler, request.command] ~ facts ~ arguments.options

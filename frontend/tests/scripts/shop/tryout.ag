@@ -1,0 +1,5 @@
+import units.length
+
+def main(): Unit {
+    printl("tryout {scale() + 1}")
+}

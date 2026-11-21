@@ -1,0 +1,2 @@
+L0010: 'packages-script-program' is a file with no `module` line under the directory of the package 'tool', and it can't import 'tool.util': 'tool.cli' declares `main`, so 'tool' is a program, and nothing can use a program, not even a file beside it
+A file beside a program uses only what the program uses: move what both need to a library they use

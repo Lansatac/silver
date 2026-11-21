@@ -19,6 +19,7 @@ silver test                run the tests of the project here
 - A file can start with `#!/usr/bin/env silver` and be run as `./hello.ag`.
 - With no file, `run` and `build` take the program of the package `silver` was started in. A library is reported as one. In a package with several parts that are programs, `silver` lists them, and one is chosen by its directory, as `silver run compiler`.
 - With no path, `test` runs the tests of the package `silver` was started in, and of its parts.
+- `test` over a directory leaves out any directory under it with a `silver.toml` that the project doesn't use: that's another project, tested from its own directory. One the project uses is tested with it.
 - `--show-command`, given before the file like any option, prints the command line `silver` runs the compiler with, then runs it. It's for when `silver` and `silverc` seem to disagree.
 
 ## Projects
@@ -113,6 +114,7 @@ A file with no `module` line is a script: a whole program in one file, which not
 
 - With no `silver.toml` at or above it, a script uses the standard library and nothing else. No package file is ever needed to run one file.
 - A script under a package's directory uses what that package uses. When the package is a library, the script uses the package too.
+- A package's directory here is the one its `silver.toml` is in, and a part's is its `path`, even when `source` puts the modules below it, so a script beside a `silver.toml` is under that package. When several hold a script, the deepest does, so a script in a part's directory is under the part.
 - A script is never part of the package. It's a program of its own beside it.
 
 So a library can keep runnable files beside its modules, each a program that uses it:
@@ -151,5 +153,7 @@ And a program can keep scripts under it that never import it, as a test harness 
 - Where the design leaves it open, `silver` refuses: a `source` or a part's `path` outside the directory it's taken from, a part, or a package's or part's `source`, in or under a directory with a `silver.toml` of its own below the file, since that file's package would hold its files, a part at the file's own directory, a part with its package's name or another part's, two parts at one path, a name listed twice in `uses`, `std` in `uses` or under `[paths]`, a name under `[paths]` that's the file's own package or one of its parts, and `uses` on a package with parts and no `source`. When any package of a file is reached, every package and part in that file is read and followed and given to `silverc`, so a mistake in one part's `[paths]` entry, such as a directory that isn't there, stops every run that reaches the file, including one from a package elsewhere that uses a different part. An entry under `[paths]` is followed only when something uses it.
 - `run`, `build` and `test` need a file or a path. `-` as the file is passed on with no search for a project.
 - A directory named `silver.toml` isn't a package file, and the search carries on above it.
-- A file with no `module` line in a project uses the standard library and nothing else, as one with no project does, and what `silverc` says about what it uses names the options, which can still be given for it by hand.
+- For a file or directory in a project, `silver` tells `silverc` which packages' directories hold it with `--scripts-in`: the deepest package or part whose directory holds the file, and for a directory, also each one whose directory is inside it. A package that only holds its parts gets none. Whether the file is a script, and whether its package is a program, `silverc` decides, so `silver` never reads a `.ag` file. `silver test` over a directory gives each script there the package it's under, or none.
+- A script under a package's directory that imports what the package doesn't use is told to list it in that package's `uses`. One under a program that imports the program is told a program can't be used, even by a file beside it. One under none of the project's packages is told it uses only the standard library, and that a script that needs a package belongs under that package's directory or under the directory of one that uses it. `--uses a,b` given by hand still adds to what a script uses.
+- `silver test` over a directory gives `silverc` each directory under it with a `silver.toml` that no package `silver` read for the run is described in, as `--skip`, and doesn't look inside it for more. A project left out this way isn't mentioned in the report.
 - A program can't read arguments, so anything after the file is an error.

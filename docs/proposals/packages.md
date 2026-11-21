@@ -1,6 +1,6 @@
 # Proposal: packages
 
-**Status: decided, and built except what parts share, and parts of the `silver` front end: commands with no file, and what a script in a project uses.** The rules are described in [Modules](../language/modules.md#packages), and the front end and its file in [The `silver` tool](../silver.md). This document keeps the reasoning and what was rejected. A program is still compiled whole. `lang` is in place: only it may declare intrinsics, and the compiler names no other package. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
+**Status: decided, and built except what parts share, and part of the `silver` front end: commands with no file.** The rules are described in [Modules](../language/modules.md#packages), and the front end and its file in [The `silver` tool](../silver.md). This document keeps the reasoning and what was rejected. A program is still compiled whole. `lang` is in place: only it may declare intrinsics, and the compiler names no other package. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
 
 ## Summary
 
@@ -63,6 +63,7 @@ The lines that describe a package here, as `package silver.core at core/source`,
 - That's how several runnable files share modules: the package holds what's shared and is a library, and each runnable file is a script beside it.
 - Under a program, a script can't use the program, since nothing can. It sees what the program uses. A test harness with the programs it runs kept under it is the case.
 - A script in no project, or under none of a project's packages, uses the standard library only. How one would say it needs more is open, and a header in the script is the likely form.
+- Whether the package a script is under is a program is something only the compiler knows, since it alone reads modules. So the front end says which package's directory holds the script, and the compiler applies the rule.
 
 These hold so that no choice is closed off:
 

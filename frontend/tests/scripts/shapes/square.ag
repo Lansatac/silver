@@ -1,0 +1,5 @@
+module shapes.square
+
+import units.length
+
+def area(side: Int): Int => side * side * scale()

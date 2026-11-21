@@ -202,31 +202,71 @@ bool readProject(string file, out Project project, out Mistake mistake)
     return true;
 }
 
-/// The package or part whose directory of modules holds `path`, the deepest when several do, or
-/// null when none does.
-string containingPackage(const Project project, string path)
+/// The packages and parts with modules whose files with no `module` line `path` may hold: the one
+/// whose home holds `path`, the deepest when several do, and when `path` is a directory, each whose
+/// home is inside it. A script is beside the package whose home it's under, so a script beside a
+/// `silver.toml` whose package keeps its modules in `source` is beside that package.
+const(Facts)[] scriptHomes(const Project project, string path)
 {
     import std.path : absolutePath, buildNormalizedPath;
 
     path = buildNormalizedPath(absolutePath(path));
-    string found;
-    size_t depth;
+    const(Facts)* deepest;
+    const(Facts)[] inside;
     foreach (ref p; project.packages)
     {
-        if (p.directory is null || !within(path, p.directory)) continue;
-        immutable d = segments(p.directory).length;
-        if (found is null || d > depth)
+        if (p.directory is null) continue;
+        if (within(path, p.home))
         {
-            found = p.name;
-            depth = d;
+            if (deepest is null || segments(p.home).length > segments(deepest.home).length) deepest = &p;
+        }
+        else if (within(p.home, path))
+        {
+            inside ~= p;
         }
     }
+    return deepest is null ? inside : *deepest ~ inside;
+}
+
+/// The directories under `directory` with a package file that `project` didn't read, each another
+/// project, the outermost only: a directory with one isn't looked into.
+string[] otherProjects(const Project project, string directory)
+{
+    import std.algorithm : any, sort;
+    import std.file : dirEntries, SpanMode;
+    import std.path : absolutePath, buildNormalizedPath, buildPath;
+
+    string[] found;
+    void walk(string at)
+    {
+        string[] inner;
+        try
+        {
+            foreach (entry; dirEntries(at, SpanMode.shallow, false))
+            {
+                if (entry.isDir) inner ~= entry.name;
+            }
+        }
+        catch (Exception)
+        {
+            return;
+        }
+        foreach (sub; inner.sort)
+        {
+            auto file = buildPath(sub, packageFileName);
+            if (isFile(file) && !project.packages.any!(p => samePath(p.file, file)) && !samePath(project.file, file))
+                found ~= sub;
+            else
+                walk(sub);
+        }
+    }
+    walk(buildNormalizedPath(absolutePath(directory)));
     return found;
 }
 
-/// The compiler's options for `project`: each package's directory, uses, parts and file, with
-/// paths as `shown` gives them.
-string[] compilerOptions(const Project project, string delegate(string) shown)
+/// The compiler's options for `project`: each package's directory, uses, parts and file, and the
+/// home of each of `homes` as a directory of files beside it, with paths as `shown` gives them.
+string[] compilerOptions(const Project project, string delegate(string) shown, const Facts[] homes = null)
 {
     import std.array : join;
 
@@ -247,6 +287,7 @@ string[] compilerOptions(const Project project, string delegate(string) shown)
     {
         options ~= ["--package-file", p.name ~ "=" ~ shown(p.file)];
     }
+    foreach (ref p; homes) options ~= ["--scripts-in", p.name ~ "=" ~ shown(p.home)];
     return options;
 }
 
@@ -1120,26 +1161,39 @@ unittest
     assert(broken.file == buildPath(directory, "broken", "silver.toml") && broken.span.line == 2);
 }
 
-@("a path belongs to the package or part whose directory of modules holds it, the deepest")
+@("a script is beside the package or part whose home holds it, the deepest, and a directory holds those inside it")
 unittest
 {
+    import std.algorithm : map;
+    import std.array : array;
+
     auto files = compilerShape.dup;
     files["geo/silver.toml"] = "name = \"geo\"";
     files["geo/shapes/"] = "";
-    files["app/silver.toml"] = "name = \"app\"\nsource = \"src\"\nuses = [\"geo\"]\n[paths]\ngeo = \"../geo\"";
+    files["app/silver.toml"] = "name = \"app\"\nsource = \"src\"\nuses = [\"geo\"]\n[paths]\ngeo = \"../geo\"\n"
+        ~ "[[part]]\nname = \"app.tools\"\npath = \"tools\"";
     files["app/src/"] = "";
-    auto directory = makeTree("project-containing", files);
+    files["app/tools/"] = "";
+    auto directory = makeTree("project-script-homes", files);
     scope (exit) rmdirRecurse(directory);
+    string[] of(const Project p, string[] path...) => scriptHomes(p, buildPath(directory ~ path)).map!(f => f.name.idup).array;
+
     auto tool = project(buildPath(directory, "tool", "silver.toml"));
-    assert(containingPackage(tool, buildPath(directory, "tool", "ast", "node.ag")) == "tool.ast");
-    assert(containingPackage(tool, buildPath(directory, "tool", "compiler", "source", "main.ag")) == "tool.compiler");
-    assert(containingPackage(tool, buildPath(directory, "tool", "compiler", "build.ag")) is null);
-    assert(containingPackage(tool, buildPath(directory, "tool", "scratch.ag")) is null);
-    assert(containingPackage(tool, buildPath(directory, "tool", "ast")) == "tool.ast");
+    assert(of(tool, "tool", "ast", "node.ag") == ["tool.ast"]);
+    assert(of(tool, "tool", "compiler", "source", "main.ag") == ["tool.compiler"]);
+    // Beside the part's own files, outside its source.
+    assert(of(tool, "tool", "compiler", "build.ag") == ["tool.compiler"]);
+    // The parent only holds its parts, so a file beside them is beside nothing.
+    assert(of(tool, "tool", "scratch.ag") == []);
+    assert(of(tool, "tool", "ast") == ["tool.ast"]);
+    assert(of(tool, "tool") == ["tool.ast", "tool.syntax", "tool.compiler", "tool.frontend"]);
     auto app = project(buildPath(directory, "app", "silver.toml"));
-    assert(containingPackage(app, buildPath(directory, "app", "src", "deep", "x.ag")) == "app");
-    assert(containingPackage(app, buildPath(directory, "app", "script.ag")) is null);
-    assert(containingPackage(app, buildPath(directory, "geo", "shapes", "circle.ag")) == "geo");
+    assert(of(app, "app", "src", "deep", "x.ag") == ["app"]);
+    assert(of(app, "app", "tryout.ag") == ["app"]);
+    assert(of(app, "app", "tools", "x.ag") == ["app.tools"]);
+    assert(of(app, "app") == ["app", "app.tools"]);
+    assert(of(app, "geo", "shapes", "circle.ag") == ["geo"]);
+    assert(of(app, "elsewhere.ag") == []);
 }
 
 @("the compiler is given every package's directory, uses, parts and file, relative where that's inside")
@@ -1172,6 +1226,8 @@ unittest
         "--package-file", "tool.compiler=" ~ tool("silver.toml"),
         "--package-file", "tool.frontend=" ~ tool("silver.toml"),
     ], options.to!string);
+    auto homes = compilerOptions(p, (string path) => shownFrom(lint, path), scriptHomes(p, tool("compiler")));
+    assert(homes[options.length .. $] == ["--scripts-in", "tool.compiler=" ~ tool("compiler")], homes.to!string);
     assert(shownFrom(directory, buildPath(directory, "tool", "ast")) == buildPath("tool", "ast"));
     assert(shownFrom(buildPath(directory, "tool"), buildPath(directory, "lint")) == buildPath(directory, "lint"));
 }

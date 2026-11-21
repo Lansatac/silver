@@ -1,0 +1,6 @@
+// A file with no module line beside a program uses what the program uses, and never the program.
+import tool.util
+
+def main(): Unit {
+    printl(twice(2))
+}

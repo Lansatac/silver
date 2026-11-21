@@ -1,0 +1,8 @@
+import shapes.square
+import units.length
+
+def main(): Unit {
+    printl(area(4) + scale())
+}
+
+test "the scale" => expect(scale() == 1)

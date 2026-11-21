@@ -1,0 +1,3 @@
+module units.length
+
+def scale(): Int => 1

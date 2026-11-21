@@ -16,8 +16,8 @@ version (unittest)
     import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, Toolchain;
     import silver.core : lowerProgram, CoreProgram = Program;
     import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed;
-    import silver.loader : describePackages, isCompanionFile, load, Packages, standardLibraryPath, standardPrelude,
-        withStandardLibrary;
+    import silver.loader : describePackages, describeScriptHomes, isCompanionFile, load, Packages, standardLibraryPath,
+        standardPrelude, withStandardLibrary;
     import silver.sema : analyze, Analysis, Target;
     import silver.testing : report, runFile, succeeded, TestBackend, testFiles;
 
@@ -164,6 +164,7 @@ version (unittest)
         Packages packages;
         auto mistake = describePackages(options.get("--package", null), options.get("--uses", null),
             options.get("--parts", null), directory, packages);
+        if (mistake is null) mistake = describeScriptHomes(options.get("--scripts-in", null), directory, packages);
         assert(mistake is null, described ~ ": " ~ mistake);
         return packages;
     }

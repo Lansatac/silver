@@ -1,0 +1,8 @@
+#!/usr/bin/env silver
+import shapes.square
+
+def main(): Unit {
+    printl(area(3))
+}
+
+test "a square of side 2" => expect(area(2) == 4)
