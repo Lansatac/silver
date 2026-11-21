@@ -1,0 +1,7 @@
+// Where a module has a `Seq` of its own, an error names std.range's in full.
+type Seq(items: [Int])
+
+def main(): Unit {
+    val s: Seq = [1, 2].seq()
+    printl(s)
+}

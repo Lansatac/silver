@@ -1,7 +1,7 @@
-// The prelude is farther than any import: what a blanket import brings by a name hides the prelude's
-// type or interface of that name, and its function of the same parameters. A local can be named
-// like a function of its own module, and hides it there, while a method call still finds the function.
-import levels_support.collections
+// A library's type, interface or function of the prelude's name and parameters is ambiguous beside
+// the prelude's, and listing the names in the import settles it. A local can be named like a
+// function of its own module, and hides it there, while a method call still finds the function.
+import levels_support.collections : Seq, Sized, size, count, biggest
 import std.range : seq
 
 def total(xs: [Int]): Int => xs.fold(0, (a, b) => a + b)

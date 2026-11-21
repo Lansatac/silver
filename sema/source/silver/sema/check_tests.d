@@ -3141,3 +3141,13 @@ unittest
             file ~ " was accepted as part of lang: " ~ "%s".format(codes));
     }
 }
+
+@("an error about a call's only function of that many arguments, when it's imported, says which others there are")
+unittest
+{
+    analyzed("def last(n: Int, m: Int): Int => m\ndef main(): Unit {\n    printl(last(1))\n}")
+        .onlyMessage(DiagnosticCode.UnsatisfiedBound)
+        .should.endWith("; there's also `main.last(Int, Int)`, which takes 2 arguments");
+    analyzed("def find(name: String): Int => 1\ndef main(): Unit {\n    printl(find(3))\n}")
+        .onlyMessage(DiagnosticCode.TypeMismatch).should.endWith("type `String`");
+}

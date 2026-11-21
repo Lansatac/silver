@@ -195,7 +195,7 @@ private final class TypeChecker
                 );
             }
         }
-        qualifyShadowedInterval();
+        qualifyShadowedLibraryTypes(program.prelude);
 
         // Before anything that can name one, and even if nothing does, so a bad target is reported.
         foreach (mod; programModules)
@@ -616,7 +616,7 @@ private final class TypeChecker
     }
 
     /// A function a module reaches, at how near it is: 0 for its own, 1 through an import or
-    /// forward that lists its name, 2 through one that brings every name, 3 through the prelude.
+    /// forward that lists its name, 2 through one that brings every name.
     private static struct Leveled
     {
         Id!FunctionDecl func;
@@ -674,7 +674,7 @@ private final class TypeChecker
         auto entries = _resolutions.moduleScopes[m].functionsNamed(name).map!(f => Leveled(f, 0)).array;
         foreach (access; _resolutions.moduleScopes[m].imports)
         {
-            auto level = access.names.canFind(name) ? 1 : !access.everyName ? 0 : access.prelude ? 3 : 2;
+            auto level = access.names.canFind(name) ? 1 : access.everyName ? 2 : 0;
             if (level == 0) continue;
             foreach (f; exportedFunctions(access.name, name)) entries ~= Leveled(f, level);
         }
@@ -2417,20 +2417,28 @@ private final class TypeChecker
         return (*symbol).match!((const Id!TypeDecl decl) => decl, _ => Id!TypeDecl.init);
     }
 
-    /// Names `lang`'s `Interval` in full when a module declares one of its own, so an error
-    /// that mentions both tells them apart.
-    private void qualifyShadowedInterval()
+    /// Names a type of `lang` or of the prelude's package in full when a module outside them
+    /// declares a type of the same name, so an error that mentions both tells them apart.
+    private void qualifyShadowedLibraryTypes(string prelude)
     {
-        auto prelude = intervalDecl();
-        if (!prelude.isValid) return;
-        foreach (name, moduleScope; _resolutions.moduleScopes)
+        auto library = prelude is null ? null : prelude.findSplit(".")[0];
+        bool ofLibrary(string m) => library !is null && (m == library || m.startsWith(library ~ "."));
+        Id!TypeDecl[][string] byName;
+        foreach (moduleScope; _resolutions.moduleScopes)
         {
-            auto symbol = moduleScope.resolveLocalType("Interval");
-            auto own = symbol is null ? Id!TypeDecl.init : (*symbol).match!((const Id!TypeDecl d) => d, _ => Id!TypeDecl.init);
-            if (own.isValid && own != prelude)
+            foreach (name, symbol; moduleScope.localTypes)
             {
-                _types.rename(prelude, "lang.Interval");
-                return;
+                symbol.match!((const Id!TypeDecl decl) { byName[name] ~= decl; }, (_) {});
+            }
+        }
+        foreach (name, decls; byName)
+        {
+            auto home(Id!TypeDecl d) => _resolutions.declarations.typeModules[d];
+            if (!decls.any!(d => !isInLang(home(d)) && !ofLibrary(home(d)))) continue;
+            foreach (d; decls)
+            {
+                if (isInLang(home(d))) _types.rename(d, langPackage ~ "." ~ name);
+                else if (ofLibrary(home(d))) _types.rename(d, home(d) ~ "." ~ name);
             }
         }
     }
@@ -3301,6 +3309,7 @@ private final class TypeChecker
             }
         }
         Type[] typed;
+        auto reported = _collector.diagnostics.length;
         if (auto candidates = call.callee.id in _resolutions.overloads)
         {
             typed = new Type[call.args.length];
@@ -3315,6 +3324,8 @@ private final class TypeChecker
             _typing.chosenSymbols[call.callee.id] = SymbolId(chosen);
             _typing.chosenCallees[expr.id] = chosen;
         }
+        auto candidates = call.callee.id in _resolutions.overloads;
+        scope (exit) if (candidates !is null) noteOtherCounts(reported, call, distinct(*candidates));
         auto generic = genericUse(expr);
         if (generic.found) return applyGeneric(expr, generic, call, expected, ctx, typed);
         // A function named directly is called, not used as a value, so an intrinsic can be.
@@ -3935,6 +3946,31 @@ private final class TypeChecker
         auto typeParams = decl.typeParams.length == 0 ? "" : "<" ~ decl.typeParams.map!(p => bounded(p)).join(", ") ~ ">";
         auto owner = qualified ? _resolutions.declarations.functionModules[f] ~ "." : "";
         return owner ~ decl.name ~ typeParams ~ "(" ~ params ~ ")";
+    }
+
+    /// A call with one candidate that takes its number of arguments is checked against that one
+    /// alone, so when that one is imported, the first error about the call itself, since there
+    /// were `reported`, says which others there are.
+    private void noteOtherCounts(size_t reported, const CallExpr call, const Candidates candidates)
+    {
+        if (_collector.diagnostics.length == reported) return;
+        const(Id!FunctionDecl)[] all;
+        foreach (f; candidates.groups.joiner) if (!all.canFind(f)) all ~= f;
+        auto others = all.filter!(f => signatureOf(f).params.length != call.args.length).array;
+        if (others.length == 0 || others.length + 1 != all.length) return;
+        // The module's own function is the one that was meant.
+        if (candidates.groups[0].any!(f => signatureOf(f).params.length == call.args.length)) return;
+        auto across = acrossModules(all);
+        string counted(Id!FunctionDecl f)
+        {
+            auto params = signatureOf(f).params.length;
+            return "`%s`, which takes %s argument%s".format(overloadLabel(f, across), params, params == 1 ? "" : "s");
+        }
+        bool aboutCall(const Diagnostic d)
+        {
+            return d.span == call.callee.span;
+        }
+        _collector.amendFirstErrorSince(reported, "there's also %-(%s, and %)".format(others.map!(f => counted(f))), &aboutCall);
     }
 
     private void reportNoOverload(Span span, string spelled, const(Trial[])[] groups)
@@ -5981,6 +6017,8 @@ private final class TypeChecker
         auto receiver = _declarer.requireTyped(objectType, access.object.span);
         auto typed = new Type[arguments.length];
         typed[0] = receiver;
+        auto reported = _collector.diagnostics.length;
+        scope (exit) noteOtherCounts(reported, *rewritten, lookup);
 
         Id!FunctionDecl function_;
         if (lookup.count == 1)

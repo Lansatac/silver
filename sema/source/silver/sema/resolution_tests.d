@@ -769,17 +769,18 @@ unittest
     qualified.shouldHaveNoDiagnostics();
 }
 
-@("name resolution ranks the prelude after every import, so an import's name hides the prelude's")
+@("name resolution treats the prelude like any other import when names clash")
 unittest
 {
     auto files = greetingPrelude.dup;
     files["lib.ag"] = "module lib\ndef greet(times: Int): Int => 0\ntype Greeting(n: Int)";
     auto bare = withGreeting("import lib\ndef main(): Unit {\n    val n = greet(1)\n}", files);
-    bare.shouldResolve(At("greet", 1), At("greet", 1, "lib"));
-    bare.shouldHaveNoDiagnostics();
+    bare.shouldReport(DiagnosticCode.AmbiguousName, At("greet", 1));
 
     files["kit/greeting.ag"] ~= "\ntype Greeting(text: String)";
-    withGreeting("import lib\ndef main(): Unit {\n    val g: Greeting = Greeting(1)\n}", files).shouldHaveNoDiagnostics();
+    withGreeting("import lib\ndef main(): Unit {\n    val g: Greeting? = None\n}", files)
+        .shouldReport(DiagnosticCode.AmbiguousName, At("Greeting", 1));
+    withGreeting("import lib : Greeting\ndef main(): Unit {\n    val g: Greeting = Greeting(1)\n}", files).shouldHaveNoDiagnostics();
 
     auto qualified = withGreeting("import lib\ndef main(): Unit {\n    val n = kit.greeting.greet(1)\n}", files);
     qualified.shouldResolve(At("greet", 1), At("greet", 1, "kit.greeting"));

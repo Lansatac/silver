@@ -1,0 +1,7 @@
+// The prelude is an import like any other: a library's `Seq`, brought by an import of every name,
+// is ambiguous beside the prelude's.
+import levels_support.collections
+
+def main(): Unit {
+    val s: Seq? = None
+}

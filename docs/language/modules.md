@@ -26,7 +26,7 @@ def computeQualified(): Float => some.library.helper(1.0)
 
 Module-level declarations can appear in any order.
 
-Two modules are imported into every module without being named. `lang`, the [package the compiler knows](#the-package-the-compiler-knows), provides names like `print`, `read` and `length`, whatever the prelude is, and the prelude provides the rest of what every module sees, as `map`. `lang` is an ordinary implicit blanket import: a conflict with another blanket import is ambiguous, and qualifying settles it, as `lang.print`, while an import that lists the name beats it. The prelude is farther than any import, so a module's own imports hide what it brings by the same name: importing a library that declares its own `Seq` gives that library's.
+Two modules are imported into every module without being named. `lang`, the [package the compiler knows](#the-package-the-compiler-knows), provides names like `print`, `read` and `length`, whatever the prelude is, and the prelude provides the rest of what every module sees, as `map`. Both are ordinary implicit blanket imports with no special priority. A conflict with another blanket import is ambiguous, and qualifying settles it, as `lang.print`; an import that lists the name beats it.
 
 The prelude declares nothing itself. It's a list of `forward import`s of `std` modules, so everything it provides has a module of its own that can be imported by name. It belongs to the standard library, and the build says which module it is: `std.prelude` unless another is named.
 
@@ -125,13 +125,12 @@ Imports can also be renamed, which is part of the design and has no syntax yet.
 
 ## Which declaration a name means
 
-A name can reach a module from its own declarations, from imports that list it, from imports that bring every name, and from the prelude. The first two are explicit: the module wrote the name. Nearer beats farther, in this order:
+A name can reach a module from its own declarations, from imports that list it, and from imports that bring every name. The first two are explicit: the module wrote the name. Nearer beats farther, in this order:
 
 1. the module's own declarations, and selective imports and forwards that list the name,
-2. blanket imports and forwards, including `lang`,
-3. the prelude.
+2. blanket imports and forwards, including the prelude.
 
-For constants, types, aliases, interfaces and sum members, a nearer one hides what farther ones bring by the name:
+For constants, types, aliases, interfaces and sum members, an explicit one hides what blanket imports bring by the name:
 
 ```silver
 import geometry               // declares `val origin`
@@ -157,7 +156,7 @@ origin                        // error: both imports bring an `origin`
 geometry.origin               // fine
 ```
 
-Functions are never hidden by name. All the functions of one name that a module reaches are overloads of each other, so a module's own `first` doesn't hide an imported `first` that takes something else, and an import can list `first` beside the module's own. The same-level rules apply to functions that take the same parameters: two explicit ones are a duplicate, reported where the second is written, an explicit one hides a blanket one, either hides the prelude's, and two blanket ones are ambiguous where a call fits both.
+Functions are never hidden by name. All the functions of one name that a module reaches are overloads of each other, so a module's own `first` doesn't hide an imported `first` that takes something else, and an import can list `first` beside the module's own. The same-level rules apply to functions that take the same parameters: two explicit ones are a duplicate, reported where the second is written, an explicit one hides a blanket one, and two blanket ones are ambiguous where a call fits both.
 
 ```silver
 import graphics : scale       // declares `scale(x: Float)` and `scale(x: Int)`

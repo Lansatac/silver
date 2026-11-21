@@ -64,6 +64,7 @@ def main(): () {
     printl(lengthOf((0..10).step(3)))
     printl(lengthOf((0..9).step(3)))
     printl(lengthOf((0..0).step(3)))
+    printl(lengthOf((0..10).step(9223372036854775807)))
     printl(at((0..10).step(3), 3))
     printl(xs.step(1).array())
     printl(Countdown(7).step(2).array())

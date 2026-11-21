@@ -144,7 +144,7 @@ mutable val built = Countdown(0).seq()
 for i in 1..4 { built = built.append([i]).seq() }
 ```
 
-It's for where one type has to stand for many: two branches that build different chains, a field, an element of an array, a chain built up in a loop, and a recursive function whose result would otherwise contain its own type. It also hides how a range is built. It steps by calling a closure, which costs a call and an allocation for each item, and it has no `length` or indexing.
+It's for where one type has to stand for many: two branches that build different chains, a field, an element of an array, a chain built up in a loop, and a recursive function whose result would otherwise contain its own type. It also hides how a range is built. It steps by calling a closure, which costs a call and an allocation for each item, and it has no `length` or indexing. Each `seq()` over a `Seq` adds a layer that every later step goes through, so a chain built up by a loop of `n` rounds costs `n` calls for each item.
 
 ## Consumers
 
@@ -204,7 +204,7 @@ people.sortedBy(p => (Descending(p.age), p.name))   // Ann, Cy, Bob
 
 ## What the prelude brings
 
-The prelude forwards `std.range`'s functions and the types a program writes: `Sized`, `Indexed`, `Seq` and `Descending`. The adapter types such as `Mapped` and `Taken` are inferred, so they come only with `import std.range`, and a module of your own is free to use those names. A library's own `Seq` or `Sized`, imported, hides the prelude's, since the prelude is [farther than any import](modules.md#which-declaration-a-name-means).
+The prelude forwards `std.range`'s functions and the types a program writes: `Sized`, `Indexed`, `Seq` and `Descending`. The adapter types such as `Mapped` and `Taken` are inferred, so they come only with `import std.range`, and a module of your own is free to use those names. A library that declares its own `Seq` or `Sized` is ambiguous beside the prelude's, as between any two imports that bring every name, and [listing the name or qualifying it](modules.md#which-declaration-a-name-means) settles it.
 
 ## Open questions
 
@@ -215,6 +215,7 @@ These are listed in the [ranges proposal](../proposals/ranges.md#open-questions)
 - Everything above is built, in plain Silver in `stdlib/std/range.ag`.
 - `array` steps every range. Sizing its result first needs a way to make an array with room for a known number of items, which there isn't yet.
 - Not built yet, as designed in the proposal: `sum`, `Backward` and `reversed`. `sorted` and `sortedBy` are a merge sort written in Silver.
+- An adapter's type can be built with its constructor by a module that imports it, which skips what `take` and `step` check: `Stepped(xs, 0)` divides by zero when asked for its length.
 - A panic in an adapter, such as indexing a `Taken` past its length, is reported at the line in `std.range` that panics, not at the caller's index.
 - Passing a type that isn't a range to an adapter says so, but doesn't yet suggest `iterate()` for a type with a `length` and an `opIndex`. `iterate()` on a type that isn't `Indexed` reports the missing `Sized` as well.
 - Assigning a chain where an array is expected is a type mismatch that doesn't yet suggest `array()`.

@@ -1,0 +1,17 @@
+module levels_support.collections
+
+// Names the prelude brings too, declared again by a library.
+type Seq(items: [Int])
+
+interface Sized {
+    def size(value: Self): Int
+}
+
+def size(s: Seq): Int => length(s.items)
+
+conform Seq: Sized
+
+// The same parameters as the prelude's `count`.
+def count<R: Range<T>, T>(range: R): Int => 99
+
+def biggest(s: Seq): Int? => s.items.max()

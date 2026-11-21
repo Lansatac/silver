@@ -379,8 +379,6 @@ package struct ModuleAccess
     const(string)[] names;
     /// Whether one of them is a `forward import`.
     bool forwards;
-    /// Whether it's the prelude, imported without being named, which is farther than any import.
-    bool prelude;
 
     bool provides(string member) const
     {
@@ -462,13 +460,12 @@ package final class Scope
     }
 
     /// The imported modules a bare `name` can come from, nearest first: those whose imports list
-    /// it, then those whose imports bring every name, then the prelude.
+    /// it, then those whose imports bring every name.
     const(string)[][] modulesProvidingByLevel(string name) const
     {
         auto listing = _imports.filter!(i => i.names.canFind(name)).map!(i => i.name).array;
-        auto blanket = _imports.filter!(i => i.everyName && !i.prelude && !i.names.canFind(name)).map!(i => i.name).array;
-        auto prelude = _imports.filter!(i => i.everyName && i.prelude && !i.names.canFind(name)).map!(i => i.name).array;
-        return [listing, blanket, prelude];
+        auto blanket = _imports.filter!(i => i.everyName && !i.names.canFind(name)).map!(i => i.name).array;
+        return [listing, blanket];
     }
 
     /// The modules this one forward imports that a bare `name` can come from.
@@ -519,6 +516,11 @@ package final class Scope
     const(TypeSymbol)* resolveLocalType(string name) const
     {
         return name in _typeTable;
+    }
+
+    const(TypeSymbol[string]) localTypes() const
+    {
+        return _typeTable;
     }
 
     const(TypeSymbol)* resolveType(string name) const
@@ -1115,10 +1117,7 @@ private final class NameResolver
         if (name != langPackage && langPackage in program.modules) imports ~= ModuleAccess(langPackage, true);
         auto prelude = program.prelude;
         if (prelude !is null && name != prelude && !isInLang(name) && prelude in program.modules)
-        {
             imports ~= ModuleAccess(prelude, true);
-            imports[$ - 1].prelude = true;
-        }
         return imports;
     }
 
@@ -1145,7 +1144,6 @@ private final class NameResolver
                         index = imports.length - 1;
                     }
                     auto access = &imports[index];
-                    access.prelude = false;
                     if (importStmt.forward) access.forwards = true;
                     if (importStmt.names.length > 0)
                     {

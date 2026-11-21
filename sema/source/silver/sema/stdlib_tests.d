@@ -158,3 +158,41 @@ unittest
     auto hidden = hiddenByFacades(directory, ["kit.facade"]);
     assert(hidden == ["kit.facade.f hides kit.middle.f", "kit.facade.g hides kit.middle.g"], format("%s", hidden));
 }
+
+@("the prelude forwards every public function of std.range")
+unittest
+{
+    import std.algorithm : canFind, filter;
+    import std.array : array, join;
+    import std.format : format;
+    import std.sumtype : match;
+    import silver.ast;
+    import silver.loader : load, Packages, standardPrelude, withStandardLibrary;
+
+    auto context = new SourceContext;
+    auto program = load("import std.range
+", "main.ag", Packages(withStandardLibrary([])), standardPrelude, context);
+    assert(!context.collector.hasErrors, "std.range failed to load");
+
+    string[] declared;
+    string[] forwarded;
+    foreach (mod; program.sortedModules)
+    {
+        foreach (decl; mod.declarations)
+        {
+            decl.kind.match!(
+                (const ImportStmt i) {
+                    if (mod.name == standardPrelude && i.forward && i.path.join(".") == "std.range")
+                        foreach (n; i.names) forwarded ~= n.name;
+                },
+                (const FunctionDecl f) {
+                    if (mod.name == "std.range" && !f.isPrivate && !declared.canFind(f.name)) declared ~= f.name;
+                },
+                (_) {},
+            );
+        }
+    }
+    assert(declared.length > 30, "std.range's functions weren't found");
+    auto missing = declared.filter!(name => !forwarded.canFind(name)).array;
+    assert(missing.length == 0, format("std.range functions the prelude doesn't forward: %s", missing));
+}

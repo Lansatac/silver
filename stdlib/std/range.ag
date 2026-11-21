@@ -157,7 +157,10 @@ def next<R: Range<T>, T>(s: Stepped<R>): (T, Stepped<R>)? {
     (item, Stepped(remaining, s.by))
 }
 
-def length<R: Sized>(s: Stepped<R>): Int => (length(s.source) + s.by - 1) / s.by
+def length<R: Sized>(s: Stepped<R>): Int {
+    val total = length(s.source)
+    if total == 0 => 0 else (total - 1) / s.by + 1
+}
 def opIndex<R: Indexed<T>, T>(s: Stepped<R>, index: Int): T => s.source[checked(index, length(s)) * s.by]
 
 conform Stepped<R>: Range<T> when R: Range<T>
@@ -391,7 +394,7 @@ def contains<R: Range<T>, T>(range: R, value: T): Bool {
     false
 }
 
-// Its first `count` items, as an array, and the range after them.
+// Its first `n` items, as an array, and the range after them.
 def splitAt<R: Range<T>, T>(range: R, n: Int): ([T], R) {
     mutable val taken: [T] = []
     mutable val remaining = range

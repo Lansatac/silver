@@ -1,0 +1,7 @@
+// A library's `count` of the prelude's parameters, brought by an import of every name, is
+// ambiguous beside the prelude's.
+import levels_support.collections
+
+def main(): Unit {
+    printl([1, 2, 3].count())
+}
