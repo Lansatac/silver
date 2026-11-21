@@ -53,6 +53,11 @@ enum ProjectCode : string
     NoProject = "F0033",
     /// A directory given to `run` or `build` that's no package's or part's directory.
     NotAPackageDirectory = "F0034",
+    /// A package reached through `[paths]` whose directory is inside, or holds, the directory of a
+    /// package whose modules are its whole directory.
+    InsidePackage = "F0035",
+    /// `--package`, `--uses` or `--parts` given by hand inside a project.
+    PackageOptionGiven = "F0036",
 }
 
 /// One mistake in a package file, or in reading one.
@@ -207,7 +212,7 @@ bool readProject(string file, out Project project, out Mistake mistake)
     return true;
 }
 
-/// The packages and parts with modules whose files with no `module` line `path` may hold: the one
+/// The packages and parts whose files with no `module` line `path` may hold: the one
 /// whose home holds `path`, the deepest when several do, and when `path` is a directory, each whose
 /// home is inside it. A script is beside the package whose home it's under, so a script beside a
 /// `silver.toml` whose package keeps its modules in `source` is beside that package.
@@ -220,7 +225,6 @@ const(Facts)[] scriptHomes(const Project project, string path)
     const(Facts)[] inside;
     foreach (ref p; project.packages)
     {
-        if (p.directory is null) continue;
         if (within(path, p.home))
         {
             if (deepest is null || segments(p.home).length > segments(deepest.home).length) deepest = &p;
@@ -905,7 +909,40 @@ struct ProjectReader
             return fail(ProjectCode.TwoDirectories, quoted(name) ~ " is at " ~ directory ~ " here, and already at "
                 ~ known.home ~ ", described in " ~ known.file);
         }
+        if (auto inside = nested(*found)) return fail(ProjectCode.InsidePackage, inside);
         return add(*found, mistake);
+    }
+
+    /// Why a package or part of `file`, not yet followed, and one already reached would have one
+    /// directory of modules inside the other because the outer one has no `source`, or null. The
+    /// compiler refuses any such pair; only this one comes from how a `silver.toml` maps to directories.
+    string nested(const ref PackageFile file)
+    {
+        struct Placed { string name; string modules; string home; }
+        Placed[] added;
+        if (file.modules !is null) added ~= Placed(file.name.name, file.modules, file.directory);
+        foreach (ref p; file.parts)
+        {
+            if (p.modules !is null) added ~= Placed(p.name.name, p.modules, p.directory);
+        }
+        string message(Placed inner, Placed outer)
+        {
+            return quoted(inner.name) ~ " is at " ~ inner.home ~ ", inside the directory of " ~ quoted(outer.name)
+                ~ ", at " ~ outer.home ~ ", whose modules are that whole directory, so a file of " ~ quoted(inner.name)
+                ~ " would be a module of both; giving " ~ quoted(outer.name) ~ " a `source` directory below it "
+                ~ "avoids it";
+        }
+        foreach (ref p; packages)
+        {
+            if (p.directory is null) continue;
+            auto known = Placed(p.name, p.directory, p.home);
+            foreach (a; added)
+            {
+                if (samePath(known.modules, known.home) && within(a.modules, known.modules)) return message(a, known);
+                if (samePath(a.modules, a.home) && within(known.modules, a.modules)) return message(known, a);
+            }
+        }
+        return null;
     }
 }
 
@@ -1243,10 +1280,10 @@ unittest
     assert(of(tool, "tool", "compiler", "source", "main.ag") == ["tool.compiler"]);
     // Beside the part's own files, outside its source.
     assert(of(tool, "tool", "compiler", "build.ag") == ["tool.compiler"]);
-    // The parent only holds its parts, so a file beside them is beside nothing.
-    assert(of(tool, "tool", "scratch.ag") == []);
+    // The parent only holds its parts, and a file beside them is told so.
+    assert(of(tool, "tool", "scratch.ag") == ["tool"]);
     assert(of(tool, "tool", "ast") == ["tool.ast"]);
-    assert(of(tool, "tool") == ["tool.ast", "tool.syntax", "tool.compiler", "tool.frontend"]);
+    assert(of(tool, "tool") == ["tool", "tool.ast", "tool.syntax", "tool.compiler", "tool.frontend"]);
     auto app = project(buildPath(directory, "app", "silver.toml"));
     assert(of(app, "app", "src", "deep", "x.ag") == ["app"]);
     assert(of(app, "app", "tryout.ag") == ["app"]);
@@ -1374,3 +1411,54 @@ unittest
     foreach (m; [source, path, paths]) assert(!m.message.canFind(" , ") && !m.message.canFind("and  isn't"), m.message);
 }
 
+
+@("a used package inside the directory of a package with no source, or holding one, is refused at the [paths] entry")
+unittest
+{
+    auto directory = makeTree("project-nested", [
+        "outer/silver.toml": "name = \"outer\"\nuses = [\"inner\"]\n\n[paths]\ninner = \"inner\"",
+        "outer/inner/silver.toml": "name = \"inner\"",
+        "sourced/silver.toml": "name = \"sourced\"\nsource = \"src\"\nuses = [\"inner\"]\n\n[paths]\ninner = \"inner\"",
+        "dot/silver.toml": "name = \"dot\"\nsource = \".\"\nuses = [\"inner\"]\n\n[paths]\ninner = \"inner\"",
+        "dot/inner/silver.toml": "name = \"inner\"",
+        "sourced/src/": "",
+        "sourced/inner/silver.toml": "name = \"inner\"",
+        "app/silver.toml": "name = \"app\"\nuses = [\"a\", \"b\"]\n\n[paths]\na = \"../a\"\nb = \"../a/b\"",
+        "around/silver.toml": "name = \"around\"\nuses = [\"b\", \"a\"]\n\n[paths]\nb = \"../a/b\"\na = \"../a\"",
+        "a/silver.toml": "name = \"a\"",
+        "a/b/silver.toml": "name = \"b\"\nsource = \"src\"",
+        "a/b/src/": "",
+        "tools/silver.toml": "name = \"tools\"\nuses = [\"kit.core\"]\n\n[paths]\n\"kit.core\" = \"kit/core\"",
+        "tools/kit/silver.toml": "name = \"kit\"\n\n[[part]]\nname = \"kit.core\"\npath = \"core\"",
+        "tools/kit/core/": "",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    Mistake of(string project) => projectMistake(buildPath(directory, project, "silver.toml"), ProjectCode.InsidePackage);
+    string message(string inner, string innerHome, string outer, string outerHome)
+    {
+        import std.path : buildNormalizedPath;
+
+        return "'" ~ inner ~ "' is at " ~ buildNormalizedPath(directory, innerHome) ~ ", inside the directory of '" ~ outer
+            ~ "', at " ~ buildNormalizedPath(directory, outerHome) ~ ", whose modules are that whole directory, so a file "
+            ~ "of '" ~ inner ~ "' would be a module of both; giving '" ~ outer ~ "' a `source` directory below it avoids it";
+    }
+
+    auto outer = of("outer");
+    assert(outer.file == buildPath(directory, "outer", "silver.toml") && outer.span.line == 5 && outer.span.column == 9,
+        formatMistake(outer));
+    assert(outer.message == message("inner", "outer/inner", "outer", "outer"), outer.message);
+    // Reached in either order, the package with no source is the outer one.
+    auto app = of("app");
+    assert(app.span.line == 6 && app.message == message("b", "a/b", "a", "a"), formatMistake(app));
+    auto around = of("around");
+    assert(around.span.line == 6 && around.message == message("b", "a/b", "a", "a"), formatMistake(around));
+    // A part of another file is refused in the same way.
+    auto part = of("tools");
+    assert(part.message == message("kit.core", "tools/kit/core", "tools", "tools"), part.message);
+    // `source = "."` is the whole directory too.
+    assert(of("dot").message == message("inner", "dot/inner", "dot", "dot"), of("dot").message);
+    // With source, the used package's directory holds none of the other's modules.
+    Project project;
+    Mistake mistake;
+    assert(readProject(buildPath(directory, "sourced", "silver.toml"), project, mistake), formatMistake(mistake));
+}

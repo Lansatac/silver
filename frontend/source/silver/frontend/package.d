@@ -110,6 +110,13 @@ immutable compilerOptionsWithValues = ["--package", "--uses", "--parts", "--pack
 /// `silver`'s own option, which prints the compiler's command line before running it.
 enum showCommand = "--show-command";
 
+/// The compiler's option that says `silver` is driving, so its messages name no option. Given on every run.
+enum fromSilver = "--from-silver";
+
+/// The compiler's options that say what packages there are, which inside a project only the
+/// project's `silver.toml` says.
+immutable packageOptions = ["--package", "--uses", "--parts"];
+
 /// A command line after its command, taken apart at the file.
 struct Arguments
 {
@@ -266,6 +273,14 @@ Plan plan(string compiler, Request request, string workingDirectory)
         }
         if (result.projectFile !is null)
         {
+            if (auto given = handGiven(arguments.options))
+            {
+                result.mistake = formatMistake(Mistake(null, ProjectCode.PackageOptionGiven, Span(), given ~ " is "
+                    ~ "given by hand, and inside a project packages are described in its package file, "
+                    ~ shown(result.projectFile) ~ ": what a package uses is its `uses`, its parts are `[[part]]`s, "
+                    ~ "and where a package it uses is goes under `[paths]`"));
+                return result;
+            }
             Project project;
             Mistake mistake;
             if (!readProject(result.projectFile, project, mistake))
@@ -293,7 +308,7 @@ Plan plan(string compiler, Request request, string workingDirectory)
                 if (!testing)
                 {
                     result.program = at.name;
-                    result.arguments = [compiler, request.command] ~ compilerOptions(project, shown,
+                    result.arguments = [compiler, request.command, fromSilver] ~ compilerOptions(project, shown,
                         programHomes(project, *at)) ~ ["--program", at.name] ~ arguments.options;
                     return result;
                 }
@@ -309,9 +324,26 @@ Plan plan(string compiler, Request request, string workingDirectory)
             result.scriptHomes = homes.map!(h => h.name.idup).array;
         }
     }
-    result.arguments = [compiler, request.command] ~ facts ~ arguments.options
+    result.arguments = [compiler, request.command, fromSilver] ~ facts ~ arguments.options
         ~ (arguments.file is null ? [] : [arguments.file]) ~ arguments.after;
     return result;
+}
+
+/// The first of `packageOptions` among `options`, as it's written there, or null. A word that's
+/// another option's value isn't one.
+string handGiven(const string[] options)
+{
+    import std.algorithm : canFind, startsWith;
+
+    for (size_t i = 0; i < options.length; i++)
+    {
+        foreach (name; packageOptions)
+        {
+            if (options[i] == name || options[i].startsWith(name ~ "=")) return name;
+        }
+        if (compilerOptionsWithValues.canFind(options[i])) i++;
+    }
+    return null;
 }
 
 @("with no package file the compiler is given the command line as it is, always with its command")
@@ -321,11 +353,39 @@ unittest
     scope (exit) rmdirRecurse(directory);
     Plan of(string[] words) => plan("silverc", request(words), directory);
 
-    assert(of(["./build"]).arguments == ["silverc", "run", "./build"]);
-    assert(of(["-b", "llvm", "test"]).arguments == ["silverc", "run", "-b", "llvm", "test"]);
+    assert(of(["./build"]).arguments == ["silverc", "run", "--from-silver", "./build"]);
+    assert(of(["-b", "llvm", "test"]).arguments == ["silverc", "run", "--from-silver", "-b", "llvm", "test"]);
     auto hello = of(["--show-command", "-b", "llvm", "hello.ag"]);
-    assert(hello.arguments == ["silverc", "run", "-b", "llvm", "hello.ag"] && hello.show && hello.projectFile is null);
-    assert(of(["missing/x.ag"]).arguments == ["silverc", "run", "missing/x.ag"]);
+    assert(hello.arguments == ["silverc", "run", "--from-silver", "-b", "llvm", "hello.ag"] && hello.show && hello.projectFile is null);
+    assert(of(["missing/x.ag"]).arguments == ["silverc", "run", "--from-silver", "missing/x.ag"]);
+}
+
+@("the compiler's package options are refused inside a project, however written, and passed on outside one")
+unittest
+{
+    auto directory = makeTree("frontend-hand-options", [
+        "project/silver.toml": "name = \"p\"",
+        "project/main.ag": "def main(): Unit {}",
+        "alone/main.ag": "def main(): Unit {}",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto project = buildPath(directory, "project");
+
+    immutable names = ["--package", "--uses", "--parts", "--uses"];
+    foreach (i, option; [["--package", "x=y"], ["--uses", "x"], ["--parts=p=p.a"], ["--uses=x"]])
+    {
+        auto p = plan("silverc", request(option ~ "main.ag"), project);
+        immutable given = names[i];
+        assert(p.arguments is null && p.mistake == "Error F0036: " ~ given ~ " is given by hand, and inside a project "
+            ~ "packages are described in its package file, silver.toml: what a package uses is its `uses`, its parts are "
+            ~ "`[[part]]`s, and where a package it uses is goes under `[paths]`", p.mistake);
+        assert(plan("silverc", request(["test"] ~ option), project).mistake !is null);
+        auto alone = plan("silverc", request(option ~ "main.ag"), buildPath(directory, "alone"));
+        assert(alone.mistake is null && alone.arguments == ["silverc", "run", "--from-silver"] ~ option ~ "main.ag",
+            alone.arguments.commandLine);
+    }
+    // After the file, it's the program's.
+    assert(plan("silverc", request(["main.ag", "--uses", "x"]), project).mistake is null);
 }
 
 @("with no file and no package file at or above the working directory there's nothing to run, build or test")
@@ -342,7 +402,7 @@ unittest
                 ? " or a directory, as `silver test hello.ag`" : ", as `silver " ~ command ~ " hello.ag`"), p.mistake);
     }
     // Given a directory, the line is passed on as before.
-    assert(plan("silverc", request(["run", "sub"]), directory).arguments == ["silverc", "run", "sub"]);
+    assert(plan("silverc", request(["run", "sub"]), directory).arguments == ["silverc", "run", "--from-silver", "sub"]);
     assert(plan("silverc", request(["help"]), directory).mistake == "There's no file named help to run: `silver --help` "
         ~ "describes silver's commands.");
 }
@@ -459,5 +519,23 @@ version (unittest)
             write(full, text);
         }
         return directory;
+    }
+}
+
+@("an option's value that reads like a package option isn't refused as one inside a project")
+unittest
+{
+    auto directory = makeTree("frontend-review-hand-values", [
+        "project/silver.toml": "name = \"p\"",
+        "project/main.ag": "def main(): Unit {}",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto project = buildPath(directory, "project");
+
+    foreach (words; [["build", "-o", "--uses", "main.ag"], ["test", "--filter", "--package", "main.ag"],
+        ["build", "--output", "--parts=x", "main.ag"]])
+    {
+        auto p = plan("silverc", request(words), project);
+        assert(p.mistake is null, p.mistake);
     }
 }

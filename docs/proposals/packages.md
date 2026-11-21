@@ -31,7 +31,7 @@ The lines that describe a package here, as `package silver.core at core/source`,
   - `silverc` is the compiler. It's given every package fact on its command line (the name, directory, uses and parts of each package) and never reads a package file or touches the network. Every rule that changes what a program means lives here.
   - `silver` is the front end and package manager. It finds the project, reads its package file, works out where each dependency's source is, and calls `silverc`. `silver run`, `silver build` and `silver test` are its commands.
   - So a package file can change format, or another tool can drive `silverc`, without the language changing. Two programs can later be merged into one more easily than one can be split. A package compiled on its own, which separate compilation needs, is one `silverc` call, as a crate is one `rustc` call under Cargo.
-  - Both exist. In a project, `silver` reads the package files and gives `silverc` the flags. For a file in no project it passes its command line on unchanged.
+  - Both exist. In a project, `silver` reads the package files and gives `silverc` the flags. For a file in no project it passes its command line on, adding only `--from-silver`.
 - **A package file is TOML (decided),** read only by `silver`, named `silver.toml` and kept in the package's directory. Its fields are in [The `silver` tool](../silver.md#projects). It's TOML because it has comments, it's what package manifests have converged on, and it has few surprises. The compiler doesn't read it, so it needn't be Silver's syntax.
 
 ## The proposal

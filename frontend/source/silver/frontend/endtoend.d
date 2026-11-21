@@ -6,7 +6,7 @@ module silver.frontend.endtoend;
 version (unittest):
 
 import silver.frontend : makeTree, plan, Plan, request;
-import std.algorithm : canFind, endsWith, startsWith;
+import std.algorithm : canFind, count, endsWith, startsWith;
 import std.array : join, replace;
 import std.file : exists, rmdirRecurse, tempDir;
 import std.path : buildNormalizedPath, buildPath, dirName;
@@ -122,7 +122,7 @@ unittest
     expectRan(silver(["run", "-b", "llvm", "src/main.ag"], shop), "25\n5\n");
     auto shown = silver(["--show-command", "src/main.ag"], shop);
     assert(shown.status == 0 && shown.output.endsWith("src/main.ag\n25\n5\n"), shown.output);
-    assert(shown.output.startsWith(built("silverc") ~ " run --package shop=src --package cards="), shown.output);
+    assert(shown.output.startsWith(built("silverc") ~ " run --from-silver --package shop=src --package cards="), shown.output);
     assert(shown.output.canFind(" --uses shop=cards,geometry --uses cards=geometry --package-file shop=silver.toml "),
         shown.output);
 }
@@ -134,7 +134,7 @@ unittest
         ~ "    printl(\"hello\")\n}\n"]);
     scope (exit) rmdirRecurse(directory);
     auto p = plan("silverc", request(["hello.ag"]), directory);
-    assert(p.projectFile is null && p.arguments == ["silverc", "run", "hello.ag"]);
+    assert(p.projectFile is null && p.arguments == ["silverc", "run", "--from-silver", "hello.ag"]);
     expectRan(silver(["hello.ag"], directory), "hello\n");
     expectRan(silver(["-b", "llvm", buildPath(directory, "hello.ag")], tempDir), "hello\n");
 }
@@ -175,9 +175,9 @@ unittest
     assert(p.projectFile == buildPath(fixtures, "compiler-shape", "silver.toml"), p.projectFile);
     assert(p.scriptHomes == ["tool.ast"]);
     assert(p.arguments[$ - 6 .. $] == ["--filter", "node", "-b", "both", "--format=json", "ast"]);
-    assert(p.arguments[0 .. 4] == ["silverc", "test", "--package", "tool.ast=ast"]);
-    p = plan("silverc", request(["--package", "x=y", "main.ag", "after"]), buildPath(fixtures, "uses-part"));
-    assert(p.arguments[$ - 4 .. $] == ["--package", "x=y", "main.ag", "after"]);
+    assert(p.arguments[0 .. 5] == ["silverc", "test", "--from-silver", "--package", "tool.ast=ast"]);
+    p = plan("silverc", request(["-b", "llvm", "main.ag", "after"]), buildPath(fixtures, "uses-part"));
+    assert(p.arguments[$ - 4 .. $] == ["-b", "llvm", "main.ag", "after"]);
     assert(p.arguments.canFind("lint=."));
 }
 
@@ -234,7 +234,7 @@ unittest
         expectRan(planned(["-b", backend, "scratch.ag"], group), "8\n");
         expectRan(planned(["-b", backend, buildPath("lib", "try.ag")], group), "hello\n");
     }
-    assert(plan("silverc", request(["scratch.ag"]), group).scriptHomes.length == 0);
+    assert(plan("silverc", request(["scratch.ag"]), group).scriptHomes == ["group"]);
 
     auto directory = makeTree("frontend-script-homeless", [
         "silver.toml": "name = \"g\"\n\n[[part]]\nname = \"g.lib\"\npath = \"lib\"\n",
@@ -243,9 +243,9 @@ unittest
     ]);
     scope (exit) rmdirRecurse(directory);
     auto ran = silver(["scratch.ag"], directory);
-    assert(ran.status == 1 && ran.output.endsWith("\nA file with no `module` line that's under no package's directory "
-        ~ "uses only the standard library, so one that needs 'g.lib' belongs under the directory of that package or of "
-        ~ "one that uses it\n"), ran.output);
+    assert(ran.status == 1 && ran.output.endsWith("\nA file with no `module` line under the directory of 'g', a "
+        ~ "package that only holds its parts, uses only the standard library, so one that needs 'g.lib' belongs under "
+        ~ "the directory of one of its parts, 'g.lib', or of a package that uses it\n"), ran.output);
     assert(!ran.output.canFind("--uses"), ran.output);
 }
 
@@ -277,7 +277,7 @@ unittest
         expectRan(planned(["test", "-b", backend, "group"], scripts), "2 passed, 0 failed\n");
         expectRan(planned(["test", "-b", backend, "."], buildPath(scripts, "group")), "2 passed, 0 failed\n");
     }
-    assert(plan("silverc", request(["test", "group"]), scripts).scriptHomes == ["group.lib"]);
+    assert(plan("silverc", request(["test", "group"]), scripts).scriptHomes == ["group", "group.lib"]);
 }
 
 @("with no file, silver run runs the program of the package started in, from its root, a subdirectory or a part, on both backends")
@@ -472,4 +472,85 @@ test \"k\" => expect(k() == 4)
     assert(!p.arguments.canFind(buildPath("outer", "nested", "deeper")) && !p.arguments.canFind(buildPath("outer", "used")));
     // A file is tested as it is, with nothing skipped.
     assert(!plan("silverc", request(["test", buildPath("outer", "src", "k.ag")]), directory).arguments.canFind("--skip"));
+}
+
+/// Whether `message` names no command-line option, as `--uses`.
+bool mentionsNoOption(string message)
+{
+    import std.regex : matchFirst, regex;
+
+    return message.matchFirst(regex(`--[a-z]`)).empty;
+}
+
+@("silver run from inside a package tells a file whose module line names no package the name its path gives it")
+unittest
+{
+    auto directory = makeTree("frontend-module-line", [
+        "geometry/silver.toml": "name = \"geometry\"",
+        "geometry/w.ag": "module w\n\ndef main(): Unit {}\n",
+        "geometry/shapes/c.ag": "module c\n\ndef main(): Unit {}\n",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto geometry = buildPath(directory, "geometry");
+    immutable w = "w.ag(1,1): Error L0003: Module 'w' is in no package: no package is named 'w', or by any longer start "
+        ~ "of 'w'\nw.ag is in the package 'geometry', at ., so its `module` line is `module geometry.w`\n";
+    expectRan(silver(["w.ag"], geometry), w, 1);
+    auto c = silver([buildPath("shapes", "c.ag")], geometry);
+    assert(c.status == 1 && c.output.endsWith("so its `module` line is `module geometry.shapes.c`\n"), c.output);
+    auto up = silver([buildPath("..", "w.ag")], buildPath(geometry, "shapes"));
+    assert(up.status == 1 && up.output.endsWith("so its `module` line is `module geometry.w`\n"), up.output);
+}
+
+@("a file in no project that imports a package is told what to write in a silver.toml, and no option is named")
+unittest
+{
+    auto directory = makeTree("frontend-lone-import", [
+        "app.ag": "import geometry.area\n\ndef main(): Unit {}\n",
+        "other.ag": "import geometry.area\n\ndef main(): Unit {}\n",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    expectRan(silver(["app.ag"], directory), "app.ag(1,1): Error L0001: Module 'geometry.area' not found: no package is "
+        ~ "named 'geometry', or by any longer start of 'geometry.area'\nA file in no project uses only the standard "
+        ~ "library. To use 'geometry', put a `silver.toml` at or above it that names a package of its own, with "
+        ~ "'geometry' in its `uses` and the directory of 'geometry', whose own `silver.toml` names it, under `[paths]`\n", 1);
+    auto tested = silver(["test", "."], directory);
+    assert(tested.status == 1 && tested.output.canFind("To use 'geometry'") && mentionsNoOption(tested.output),
+        tested.output);
+}
+
+@("a package used from inside the directory of a package with no source is refused at the [paths] entry")
+unittest
+{
+    auto directory = makeTree("frontend-nested-used", [
+        "outer/silver.toml": "name = \"outer\"\nuses = [\"inner\"]\n\n[paths]\ninner = \"inner\"\n",
+        "outer/main.ag": "def main(): Unit {}\n",
+        "outer/inner/silver.toml": "name = \"inner\"\n",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto outer = buildPath(directory, "outer");
+    expectRan(silver(["main.ag"], outer), "silver.toml(5,9): Error F0035: 'inner' is at " ~ buildPath(outer, "inner")
+        ~ ", inside the directory of 'outer', at " ~ outer ~ ", whose modules are that whole directory, so a file of "
+        ~ "'inner' would be a module of both; giving 'outer' a `source` directory below it avoids it\n", 1);
+}
+
+@("a syntax error in a module of a script's package is printed once, and a package option by hand in a project is refused")
+unittest
+{
+    auto directory = makeTree("frontend-broken-helper", [
+        "kit/silver.toml": "name = \"kit\"\n",
+        "kit/good.ag": "module kit.good\n\ndef one(): Int => 1\n",
+        "kit/bad.ag": "module kit.bad\n\ndef = broken\n",
+        "kit/s.ag": "def main(): Unit {}\n",
+        "kit/t.ag": "import kit.bad\n\ndef main(): Unit {}\n",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto kit = buildPath(directory, "kit");
+    foreach (script; ["s.ag", "t.ag"])
+    {
+        auto ran = silver([script], kit);
+        assert(ran.status == 1 && ran.output.canFind("Error P0001") && ran.output.count("Error") == 1, ran.output);
+    }
+    expectRan(silver(["--uses", "kit", "s.ag"], kit), "Error F0036: --uses is given by hand, and inside a project "
+        ~ "packages are described in its package file, silver.toml: what a package uses is its `uses`, its parts are "
+        ~ "`[[part]]`s, and where a package it uses is goes under `[paths]`\n", 1);
 }

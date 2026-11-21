@@ -10,8 +10,8 @@ import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, 
 import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, optimizeIr, Toolchain;
 import silver.core : lowerProgram, printCore = print;
 import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed, RuntimeError;
-import silver.loader : describePackageFiles, describePackages, describeScriptHomes, load, Packages, programStart,
-    standardPrelude;
+import silver.loader : describePackageFiles, describePackages, describeScriptHomes, describeSilver, load, Packages,
+    programStart, standardPrelude;
 import silver.sema : analyze, Analysis, Target;
 
 /// Loads and analyzes `programFile`. Problems go to `context.collector`, which the caller
@@ -466,6 +466,50 @@ unittest
     assert(written.canFind("--scripts-in names 'nope', which no --package or --parts declares"), written);
 }
 
+@("--from-silver makes the hints say what to write in a silver.toml, and without it they name the options")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.regex : matchFirst, regex;
+
+    auto directory = testDirectory("from-silver", [
+        "app.ag": "import geometry.area\n\ndef main(): Unit {}",
+        "lib/area.ag": "module lib.area\nimport units.length\n\ndef main(): Unit {}",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto app = buildPath(directory, "app.ag");
+    // What a run writes to stderr and, since `test` reports there, stdout.
+    string written(string[] args)
+    {
+        auto savedOut = stdout;
+        auto savedErr = stderr;
+        auto outPath = buildPath(directory, "stdout.txt");
+        auto errPath = buildPath(directory, "stderr.txt");
+        stdout = File(outPath, "w");
+        stderr = File(errPath, "w");
+        immutable status = run(args);
+        stdout.close();
+        stderr.close();
+        stdout = savedOut;
+        stderr = savedErr;
+        assert(status == 1);
+        return readText(errPath) ~ readText(outPath);
+    }
+
+    auto lone = written(["silverc", "run", "--from-silver", app]);
+    assert(lone.canFind("A file in no project uses only the standard library. To use 'geometry', put a `silver.toml`"),
+        lone);
+    assert(lone.matchFirst(regex(`--[a-z]`)).empty, lone);
+    auto tested = written(["silverc", "test", "--from-silver", directory]);
+    assert(tested.canFind("To use 'geometry'") && tested.matchFirst(regex(`--[a-z]`)).empty, tested);
+    auto byHand = written(["silverc", "run", app]);
+    assert(byHand.canFind("Give `--package geometry=<directory>` to declare one"), byHand);
+    auto module_ = written(["silverc", "run", "--from-silver", "--package", "lib=" ~ buildPath(directory, "lib"),
+        buildPath(directory, "lib", "area.ag")]);
+    assert(module_.canFind("'lib' is described in no `silver.toml`") && module_.matchFirst(regex(`--[a-z]`)).empty,
+        module_);
+}
+
 @("--program runs a declared package's program in place of a file, and is refused with a file, for test, or undeclared")
 unittest
 {
@@ -510,16 +554,16 @@ unittest
 
 /// What's wrong with `command` (`run`, `build` or `test`), given `files`, which is what its options
 /// left, and those options, or null. `format` is what `--format` gave, and `program` what `--program`
-/// gave, or null without them. `fromPackageFiles` says whether `silver` gave the packages.
+/// gave, or null without them. `bySilver` says whether `silver` is driving.
 string commandLineMistake(string command, const string[] files, string outputPath, bool optimize,
     Backend backend, const string[] filters = null, string format = null, const string[] skipped = null,
-    string program = null, bool fromPackageFiles = false)
+    string program = null, bool bySilver = false)
 {
     immutable building = command == "build";
     immutable testing = command == "test";
     if (program !is null && testing)
     {
-        return "--program applies to `run` and `build`: `" ~ (fromPackageFiles ? "silver" : "silverc")
+        return "--program applies to `run` and `build`: `" ~ (bySilver ? "silver" : "silverc")
             ~ " test` is given a directory or a file.";
     }
     if (program !is null && files.length > 0)
@@ -536,7 +580,7 @@ string commandLineMistake(string command, const string[] files, string outputPat
             : files.length == 0 ? "No file was given."
             : "Too many arguments: `" ~ files[1] ~ "` follows `" ~ files[0] ~ "`. Options go before the"
                 ~ " file, and a program can't be given arguments yet.")
-            ~ "\n" ~ usage ~ "\nRun `silverc --help` for the options.";
+            ~ (bySilver ? "\nRun `silver --help` for its commands." : "\n" ~ usage ~ "\nRun `silverc --help` for the options.");
     }
     if (!outputPath.empty && !building)
     {
@@ -627,7 +671,7 @@ unittest
 @("a command with no file left is missing its file, whatever options it was given")
 unittest
 {
-    import std.algorithm : canFind;
+    import std.algorithm : canFind, endsWith;
 
     assert(commandLineMistake("build", [], "", false, Backend.interpreter).canFind("No file was given"));
     assert(commandLineMistake("test", [], "", false, Backend.interpreter).canFind("No file was given"));
@@ -636,6 +680,9 @@ unittest
     assert(commandLineMistake("run", [], "", false, Backend.interpreter).canFind("No file was given"));
     assert(commandLineMistake("run", ["a.ag", "b.ag"], "", false, Backend.interpreter).canFind("Too many"));
     assert(commandLineMistake("build", ["a.ag", "b.ag"], "", false, Backend.interpreter).canFind("Too many"));
+    auto fromSilver = commandLineMistake("run", ["a.ag", "b.ag"], "", false, Backend.interpreter, null, null, null, null,
+        true);
+    assert(fromSilver.endsWith("\nRun `silver --help` for its commands.") && !fromSilver.canFind("silverc"), fromSilver);
     assert(commandLineMistake("build", ["a.ag"], "out", true, Backend.interpreter) is null);
     assert(commandLineMistake("run", ["a.ag"], "out", false, Backend.interpreter).canFind("applies to `silver build`"));
     assert(commandLineMistake("run", ["a.ag"], "", true, Backend.interpreter).canFind("compiled programs"));
@@ -830,6 +877,7 @@ int run(string[] args)
     string[] scriptsInOptions;
     string[] skipped;
     string[] programs;
+    bool fromSilver;
     string outputPath;
     bool emitLlvm;
     bool emitCore;
@@ -861,6 +909,8 @@ int run(string[] args)
         ~ " uses what the package uses, and the package too unless it's a program; silver gives it", &scriptsInOptions,
     "program", "run, build: in place of a file, a package whose program to start from: the package's own, or the one"
         ~ " of its parts that's a program; silver gives it when no file is named", &programs,
+    "from-silver", "silver gives it, so that messages say what a user of silver can do rather than naming these"
+        ~ " options", &fromSilver,
     "backend|b", "run, test: how to run the program: interpreter (default), llvm, or for tests, both", &backend,
     "output|o", "build: where to write the executable (or the IR, with --emit-llvm)", &outputPath,
     "optimize|O", "build, and run or test with -b llvm: have clang optimize the compiled program."
@@ -891,13 +941,14 @@ int run(string[] args)
     }
     immutable program = programs.length == 0 ? null : programs[0];
     if (auto mistake = commandLineMistake(command, args[1 .. $] ~ afterFile, outputPath, optimize, backend, filters, format,
-        skipped, program, packageFileOptions.length > 0))
+        skipped, program, packageFileOptions.length > 0 || fromSilver))
     {
         stderr.writeln(mistake);
         return 1;
     }
     Packages packages;
     auto mistake = describePackages(packageOptions, usesOptions, partsOptions, null, packages);
+    if (mistake is null && fromSilver) describeSilver(packages);
     if (mistake is null) mistake = describePackageFiles(packageFileOptions, packages);
     if (mistake is null) mistake = describeScriptHomes(scriptsInOptions, null, packages);
     if (mistake is null && program !is null && !packages.declared.canFind!(p => p.name == program))
