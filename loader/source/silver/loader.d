@@ -686,8 +686,10 @@ private struct Layout
     /// `every`, all of them. Every `.ag` file under the package's directory with a `module` line is read, other than
     /// companion test files and those whose names put them in another package or in none, as a
     /// `package.ag` below the package's directory. The root module is among them. A file with no
-    /// `module` line is a program of its own and not one of the package's modules.
-    Tuple!(string, Span)[] mainsOf(string name, SourceContext context, string why, bool every)
+    /// `module` line is a program of its own and not one of the package's modules. With `unparseable`, a
+    /// module's parse error goes there instead of being reported.
+    Tuple!(string, Span)[] mainsOf(string name, SourceContext context, string why, bool every,
+        Diagnostic[]* unparseable = null)
     {
         import silver.syntax.parse : ParseException;
 
@@ -726,8 +728,14 @@ private struct Layout
                 // One with no module line isn't the package's, so what's wrong with it is its own business.
                 if (startsWithModuleLine(text))
                 {
-                    context.collector.reportError(e.diagnostic.code, e.diagnostic.span, e.diagnostic.message ~ "\n" ~ why);
-                    unparsed ~= path;
+                    auto problem = Diagnostic(e.diagnostic.code, e.diagnostic.span, e.diagnostic.message ~ "\n" ~ why,
+                        Severity.Error);
+                    if (unparseable !is null) *unparseable ~= problem;
+                    else
+                    {
+                        context.collector.report(problem);
+                        unparsed ~= path;
+                    }
                 }
                 continue;
             }
@@ -1130,27 +1138,39 @@ string programStart(string name, string command, const Packages packages, Source
     if (!layout.described(context)) return null;
     immutable tool = packages.fromPackageFiles ? "silver" : "silverc";
     string[] names;
-    Tuple!(string, Span)[] mains;
+    Tuple!(string, Span)[][] mains;
+    Diagnostic[] unparseable;
     foreach (candidate; [name] ~ package_.describes)
     {
         if (layout.named(candidate) is null) continue;
-        auto found = layout.mainsOf(candidate, context, why, true);
-        if (found.length > 1)
-        {
-            context.collector.reportError(DiagnosticCode.SeveralMains, Span(), format("The package '%s' has more than "
-                ~ "one module that declares `main`, so it has no one program to %s:\n%s\nName the file to %s, as `%s "
-                ~ "%s %s`", candidate, verb, found.map!(m => "  " ~ m[1].file).join("\n"), verb, tool, verb,
-                found[0][1].file));
-            return null;
-        }
+        auto found = layout.mainsOf(candidate, context, why, true, &unparseable);
         if (found.length == 0) continue;
         names ~= candidate;
-        mains ~= found[0];
+        mains ~= found;
     }
-    if (names.length == 1)
+    // A module that can't be parsed might declare `main`, so with one, what the package's programs are
+    // isn't known. The one `main` found is started from, as naming its file would be, and what's wrong
+    // with the module is reported by loading only if the program imports it; otherwise nothing is
+    // concluded and the parse errors are all that's said.
+    if (names.length == 1 && mains[0].length == 1)
     {
         chosen = names[0];
-        return mains[0][1].file;
+        return mains[0][0][1].file;
+    }
+    if (unparseable.length > 0)
+    {
+        foreach (problem; unparseable) context.collector.report(problem);
+        return null;
+    }
+    foreach (i, candidate; names)
+    {
+        auto found = mains[i];
+        if (found.length < 2) continue;
+        context.collector.reportError(DiagnosticCode.SeveralMains, Span(), format("The package '%s' has more than "
+            ~ "one module that declares `main`, so it has no one program to %s:\n%s\nName the file to %s, as `%s "
+            ~ "%s %s`", candidate, verb, found.map!(m => "  " ~ m[1].file).join("\n"), verb, tool, verb,
+            found[0][1].file));
+        return null;
     }
     immutable tests = packages.fromPackageFiles ? "Its tests are run with `silver test`"
         : "Its tests are run with `silverc test`, given a directory or a file";
@@ -1172,8 +1192,8 @@ string programStart(string name, string command, const Packages packages, Source
     foreach (i, candidate; names)
     {
         lines ~= candidate == name
-            ? format("  '%s' itself, whose `main` is in %s, chosen by naming that file", candidate, mains[i][1].file)
-            : format("  '%s', at %s, whose `main` is in %s", candidate, directoryOf(candidate), mains[i][1].file);
+            ? format("  '%s' itself, whose `main` is in %s, chosen by naming that file", candidate, mains[i][0][1].file)
+            : format("  '%s', at %s, whose `main` is in %s", candidate, directoryOf(candidate), mains[i][0][1].file);
     }
     auto first = names[0] == name ? names[1] : names[0];
     string choose = packages.fromPackageFiles
@@ -1181,7 +1201,7 @@ string programStart(string name, string command, const Packages packages, Source
         : format("Choose one with `--program`, as `--program %s`", first);
     if (names[0] == name)
         choose ~= format(", or the program of '%s' itself by its file, as `%s %s %s`", name, tool, verb,
-            mains[0][1].file);
+            mains[0][0][1].file);
     context.collector.reportError(DiagnosticCode.SeveralPrograms, Span(), format("The package '%s' holds more than one "
         ~ "program, so which to %s has to be said:\n%s\n%s", name, verb, lines.join("\n"), choose));
     return null;
@@ -3085,6 +3105,71 @@ unittest
     auto context = new SourceContext;
     load("import kit.bad\ndef main(): Unit {}", "main.ag", packages, standardPrelude, context);
     context.collector.errors.array.map!(e => e.code).array.should.equal([DiagnosticCode.ParseError]);
+}
+
+@("a module that can't be parsed leaves a package's program unknown, unless one main is found, which is started from")
+unittest
+{
+    auto directory = makeModuleDirectory("program-unparseable", [
+        "lone/main.ag": "module lone.main\ndef main(): Unit {\n  def = broken\n}",
+        "lone/util.ag": "module lone.util\ndef one(): Int => 1",
+        "app/main.ag": "module app.main\ndef main(): Unit {}",
+        "app/bad.ag": "module app.bad\ndef = broken",
+        "two/a.ag": "module two.a\ndef main(): Unit {}",
+        "two/b.ag": "module two.b\ndef main(): Unit {}",
+        "two/bad.ag": "module two.bad\ndef = broken",
+        "kit/a/main.ag": "module kit.a.main\ndef main(): Unit {}",
+        "kit/b/main.ag": "module kit.b.main\ndef main(): Unit {}",
+        "kit/b/bad.ag": "module kit.b.bad\ndef = broken",
+        "kit/c/bad.ag": "module kit.c.bad\ndef = broken",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    string start(string name, string[] declared, string[] projects, out DiagnosticCode[] codes)
+    {
+        Packages packages;
+        assert(describePackages(declared, [], projects, directory, packages) is null);
+        auto context = new SourceContext;
+        string chosen;
+        auto file = programStart(name, "run", packages, context, chosen);
+        codes = context.collector.errors.map!(e => cast() e.code).array;
+        foreach (e; context.collector.errors)
+        {
+            if (e.code == DiagnosticCode.ParseError)
+                e.message.should.endWith("It was read to find which module of '" ~ name ~ "' declares `main`");
+        }
+        return file;
+    }
+    DiagnosticCode[] codes;
+    // The only module that declares main can't be parsed: not a library, just the parse error.
+    start("lone", ["lone=lone"], [], codes).should.equal(null);
+    codes.should.equal([DiagnosticCode.ParseError]);
+    // Several mains, or several programs, with a module that can't be parsed: no listing that it might change.
+    start("two", ["two=two"], [], codes).should.equal(null);
+    codes.should.equal([DiagnosticCode.ParseError]);
+    start("kit", ["kit.a=kit/a", "kit.b=kit/b"], ["kit=kit.a,kit.b"], codes).should.equal(null);
+    codes.should.equal([DiagnosticCode.ParseError]);
+    // One main found: it's started from, as naming its file would be.
+    start("app", ["app=app"], [], codes).should.equal(buildPath(directory, "app", "main.ag"));
+    codes.length.should.equal(0);
+    start("kit", ["kit.a=kit/a", "kit.c=kit/c"], ["kit=kit.a,kit.c"], codes).should.equal(buildPath(directory, "kit/a",
+        "main.ag"));
+    codes.length.should.equal(0);
+
+    // Loading the program then reports the module once if it's imported, and not at all if it isn't.
+    foreach (imports; [false, true])
+    {
+        Packages packages;
+        assert(describePackages(["app=app"], [], [], directory, packages) is null);
+        auto context = new SourceContext;
+        string chosen;
+        auto file = programStart("app", "run", packages, context, chosen);
+        auto source = (imports ? "module app.main\nimport app.bad\n" : "module app.main\n") ~ "def main(): Unit {}";
+        try load(source, file, packages, standardPrelude, context);
+        catch (DiagnosticException e) context.collector.report(e.diagnostic);
+        auto expected = imports ? [DiagnosticCode.ParseError] : [];
+        context.collector.errors.map!(e => cast() e.code).array.should.equal(expected);
+    }
 }
 
 @("with silver driving, the hints for what no package file describes say what to write in a silver.toml, naming no option")

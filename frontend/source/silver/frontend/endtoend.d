@@ -336,6 +336,19 @@ unittest
     assert(p.arguments.canFind("--scripts-in"), p.arguments.join(" "));
 }
 
+@("a syntax error in the module of a package's main is reported by silver run on the directory, which doesn't call it a library")
+unittest
+{
+    auto directory = makeTree("frontend-program-unparseable", [
+        "silver.toml": "name = \"games\"\n\n[[package]]\nname = \"games.solo\"\npath = \"solo\"\n",
+        "solo/main.ag": "module games.solo.main\n\ndef main(): Unit {\n  def = broken\n}\n",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto ran = silver(["run", "solo"], directory);
+    assert(ran.status == 1 && ran.output.count("Error P0001") == 1 && !ran.output.canFind("L0014")
+        && ran.output.canFind("It was read to find which module of 'games.solo' declares `main`"), ran.output);
+}
+
 @("several programs are listed with their directories, and one is chosen by its directory")
 unittest
 {
