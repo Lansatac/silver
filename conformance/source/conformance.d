@@ -84,8 +84,8 @@ version (unittest)
         return casesIn("errors");
     }
 
-    /// Programs sema rejects, whose `.expected` is the first error as `code: message`. Neither
-    /// backend sees them.
+    /// Programs sema rejects, whose `.expected` is the first error as `code: message`, with each path
+    /// relative to rejected/ and written with `/`. Neither backend sees them.
     Case[] rejectedCases()
     {
         return casesIn("rejected");
@@ -99,7 +99,8 @@ version (unittest)
         Analysis analysis;
         if (loadAndAnalyze(c, context, program, analysis) is null) return "expected `" ~ c.expected.strip ~ "`, but it was accepted";
         auto first = context.collector.errors.front;
-        auto reported = (cast(string) first.code) ~ ": " ~ first.message;
+        auto reported = ((cast(string) first.code) ~ ": " ~ first.message).replace(dirName(c.sourcePath) ~ dirSeparator, "");
+        version (Windows) reported = reported.replace(dirSeparator, "/");
         return reported == c.expected.strip ? null : "expected `" ~ c.expected.strip ~ "`, got `" ~ reported ~ "`";
     }
 

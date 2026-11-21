@@ -1,0 +1,2 @@
+L0003: This file is the module 'deck', by its package and its path, but its `module` line names 'deck.package'
+A package.ag in a package's directory is the package's root module, named as the package: write `module deck`

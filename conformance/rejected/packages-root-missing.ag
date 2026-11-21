@@ -1,0 +1,4 @@
+// shapes has no package.ag, so its own name isn't a module.
+import shapes
+
+def main(): Unit { }

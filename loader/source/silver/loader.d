@@ -34,7 +34,8 @@ string scriptPackage(string moduleName)
 /// Parses `source` (read from `file`) and everything it needs: `lang`, the module `prelude` names
 /// unless it's null, and every imported module, transitively. A module is found by the package
 /// in `packages` whose name is the longest start of the module's name, and then by the rest of its
-/// name as a path under the package's directory. `lang`'s modules are read from
+/// name as a path under the package's directory, or, for the package's own name, as the
+/// directory's `package.ag`. `lang`'s modules are read from
 /// `standardLibraryPath()` alone. Each file's text is added to `context.sources`, so errors can be
 /// reported even if loading fails. An import that isn't found is reported to `context.collector`
 /// and skipped, and so is a prelude that isn't, or an import from a package the importing module's
@@ -79,7 +80,9 @@ Program load(string source, string file, const Packages packages, string prelude
             if (found.package_ is null || found.path is null)
             {
                 context.collector.reportError(DiagnosticCode.ModuleDeclarationMismatch, declaration.span,
-                    format("Module '%s' is in no package: %s", start.name, found.problem));
+                    found.package_ is null ? format("Module '%s' is in no package: %s", start.name, found.problem)
+                        : format("Module '%s' can't be in the package '%s': %s", start.name, found.package_.name,
+                            found.problem));
             }
             else
             {
@@ -87,8 +90,9 @@ Program load(string source, string file, const Packages packages, string prelude
                 if (!sameFile(file, found.path))
                 {
                     context.collector.reportError(DiagnosticCode.ModuleDeclarationMismatch, declaration.span,
-                        format("Module '%s' is in the package '%s', at %s, so it must be the file %s",
-                            start.name, found.package_.name, found.package_.directory, found.path));
+                        format("Module '%s' is in the package '%s', at %s, so it must be the file %s%s",
+                            start.name, found.package_.name, found.package_.directory, found.path,
+                            misplacedRootHint(found.path)));
                 }
             }
         }
@@ -99,8 +103,14 @@ Program load(string source, string file, const Packages packages, string prelude
         layout.scriptModule = start.name;
         program.packageOf[start.name] = layout.script;
     }
+    if (isInLang(start.name) && namesRootFile(start.name.split("."), 1))
+    {
+        context.collector.reportError(DiagnosticCode.ModuleDeclarationMismatch,
+            start.declaration is null ? Span(file, 0, 0) : start.declaration.span,
+            format("Module '%s' can't be in `%s`: %s", start.name, langPackage, layout.locate(start.name.split(".")).problem));
+    }
     // A file with no module line is named after itself, so `lang.ag` would be `lang` too.
-    if (isInLang(start.name) && !sameFile(file, langModulePath(start.name.split("."))))
+    else if (isInLang(start.name) && !sameFile(file, langModulePath(start.name.split("."))))
     {
         context.collector.reportError(DiagnosticCode.NotInLang,
             start.declaration is null ? Span(file, 0, 0) : start.declaration.span,
@@ -192,7 +202,25 @@ Program load(string source, string file, const Packages packages, string prelude
                 if (auto loaded = name in program.modules)
                 {
                     // Only the starting file can be in the map without a `module` line.
-                    if ((*loaded).declaration is null)
+                    if ((*loaded).declaration is null && found.package_ !is null && found.path !is null
+                        && exists(found.path) && !sameFile(found.path, (*loaded).span.file))
+                    {
+                        context.collector.reportError(DiagnosticCode.MissingModuleDeclaration, importNode.span,
+                            format("'%s' is the root module of the package '%s', %s, and the file started from, %s, has "
+                                ~ "no `module` line, so it's named '%s' after its file too\nRename %s",
+                                name, found.package_.name, found.path, (*loaded).span.file, name, (*loaded).span.file));
+                    }
+                    else if ((*loaded).declaration is null && found.package_ !is null && found.package_.name == name
+                        && found.path !is null)
+                    {
+                        context.collector.reportError(DiagnosticCode.ModuleNotFound, importNode.span,
+                            format("Module '%s' not found: the package '%s' has no root module, %s, and the file started "
+                                ~ "from, %s, has no `module` line, so it's named '%s' after its file and couldn't import "
+                                ~ "the root module anyway\nRename %s, or import a module of the package, as '%s.name' "
+                                ~ "for %s", name, name, found.path, (*loaded).span.file, name, (*loaded).span.file, name,
+                                buildPath(found.package_.directory, "name.ag")));
+                    }
+                    else if ((*loaded).declaration is null)
                     {
                         context.collector.reportError(DiagnosticCode.MissingModuleDeclaration, importNode.span,
                             format("'%s' has no module declaration, so it can't be imported\nAdd `module %s` as the first line of %s",
@@ -256,6 +284,11 @@ private struct Layout
         Location found;
         if (isInLang(chain.join(".")))
         {
+            if (namesRootFile(chain, 1))
+            {
+                found.problem = rootFileProblem(chain, 1, buildPath(standardLibraryPath(), langPackage), langPackage);
+                return found;
+            }
             found.path = langModulePath(chain);
             found.problem = format("there's no %s, the only place a module of `%s` can be", found.path, langPackage);
             return found;
@@ -286,15 +319,21 @@ private struct Layout
         }
         else if (length == chain.length)
         {
-            found.problem = format("'%s' is a package, at %s, and a module's name is the package's followed by its "
-                ~ "path under that directory, as '%s.name' for %s", chain.join("."), found.package_.directory,
-                chain.join("."), buildPath(found.package_.directory, "name.ag"));
+            found.path = buildPath(found.package_.directory, rootModuleFile);
+            found.problem = format("'%s' is a package, at %s, and there's no %s, its root module\nAdd %s to give the "
+                ~ "package a module of its own, or import a module of the package, as '%s.name' for %s",
+                chain.join("."), found.package_.directory, found.path, found.path, chain.join("."),
+                buildPath(found.package_.directory, "name.ag"));
+        }
+        else if (namesRootFile(chain, length))
+        {
+            found.problem = rootFileProblem(chain, length, found.package_.directory, found.package_.name);
         }
         else
         {
             found.path = buildPath(found.package_.directory ~ chain[length .. $]) ~ ".ag";
-            found.problem = format("it's in the package '%s', at %s, and there's no %s",
-                found.package_.name, found.package_.directory, found.path);
+            found.problem = format("it's in the package '%s', at %s, and there's no %s%s",
+                found.package_.name, found.package_.directory, found.path, misplacedRootHint(found.path));
         }
         return found;
     }
@@ -357,6 +396,10 @@ private struct Layout
             else if (isInLang(p.name))
                 problem(DiagnosticCode.NotInLang, format("'%s' would be part of `%s`, which ships with the compiler, "
                     ~ "so it can't be declared", p.name, langPackage));
+            else if (p.name.length > 0 && namesRootFile(segmentsOf(p.name), 0))
+                problem(DiagnosticCode.InvalidPackages, format("'%s' can't be a package's name: its last segment is "
+                    ~ "`%s`, and a %s is a package's root module, so the name would be taken for one",
+                    p.name, rootModuleFile.stripExtension, rootModuleFile));
             if (p.name in seen)
                 problem(DiagnosticCode.InvalidPackages, format("There are two packages named '%s'", p.name));
             seen[p.name] = true;
@@ -468,7 +511,8 @@ private struct Layout
 
     /// The first module of the package `name`, by name, that declares `main`, and where; or null.
     /// Every `.ag` file under the package's directory with a `module` line is read, other than
-    /// companion test files and those whose names put them in another package. A file with no
+    /// companion test files and those whose names put them in another package or in none, as a
+    /// `package.ag` below the package's directory. The root module is among them. A file with no
     /// `module` line is a program of its own and not one of the package's modules.
     Tuple!(string, Span) mainOf(string name, SourceContext context) const
     {
@@ -482,9 +526,10 @@ private struct Layout
         foreach (path; filesUnder(package_.directory, name, why, context))
         {
             if (isCompanionFile(path)) continue;
-            auto chain = segmentsOf(name) ~ pathSplitter(relativePath(absolutePath(path.stripExtension),
-                absolutePath(package_.directory))).array;
-            if (locate(chain).package_ !is package_) continue;
+            auto under = pathSplitter(relativePath(absolutePath(path.stripExtension), absolutePath(package_.directory))).array;
+            auto chain = segmentsOf(name) ~ (under == [rootModuleFile.stripExtension] ? [] : under);
+            auto found = locate(chain);
+            if (found.package_ !is package_ || !sameFile(path, found.path)) continue;
             string text;
             try
             {
@@ -604,7 +649,46 @@ private bool validName(string name)
 /// The file the module `chain` of `lang` is, which is only ever the compiler's own.
 private string langModulePath(const string[] chain)
 {
-    return buildPath(standardLibraryPath() ~ chain) ~ ".ag";
+    return chain.length == 1 ? buildPath(standardLibraryPath(), langPackage, rootModuleFile)
+        : buildPath(standardLibraryPath() ~ chain) ~ ".ag";
+}
+
+/// The file in a package's directory that is the package's own module, named as the package.
+enum rootModuleFile = "package.ag";
+
+/// Whether the module `chain`, in a package whose name is its first `length` segments, would be a
+/// file named as the root module. Only the one in the package's directory is a module, and it's named
+/// as the package.
+private bool namesRootFile(const string[] chain, size_t length)
+{
+    return chain.length > length && chain[$ - 1] == rootModuleFile.stripExtension;
+}
+
+/// For a module that would be the file `path` below a package's directory, a line saying to move a
+/// `package.ag` in the folder `path` names to `path`, when there is one; otherwise nothing.
+private string misplacedRootHint(string path)
+{
+    import std.file : isFile;
+
+    if (baseName(path) == rootModuleFile) return "";
+    auto misplaced = buildPath(path.stripExtension, rootModuleFile);
+    if (!exists(misplaced) || !isFile(misplaced)) return "";
+    return format("\nThere's a %s, and a %s is a root module only in a package's own directory: a module deeper in "
+        ~ "is the file beside the folder, so move it to %s", misplaced, rootModuleFile, path);
+}
+
+/// Why `chain`, for which `namesRootFile` holds, isn't a module, worded to follow "not found: ".
+private string rootFileProblem(const string[] chain, size_t length, string directory, string package_)
+{
+    auto name = chain.join(".");
+    if (chain.length == length + 1)
+        return package_.length == 0
+            ? format("no module is named '%s', since a %s is a package's root module", name, rootModuleFile)
+            : format("%s is the root module of the package '%s', so it's `module %s`, and no module is named '%s'",
+                buildPath(directory, rootModuleFile), package_, package_, name);
+    auto folder = buildPath(directory ~ chain[length .. $ - 1]);
+    return format("a %s is a root module only in a package's directory, so no module is named '%s': the module '%s' "
+        ~ "is %s, beside the folder %s", rootModuleFile, name, chain[0 .. $ - 1].join("."), folder ~ ".ag", folder);
 }
 
 /// Reads packages as the command line gives them. Each of `declared` is `name=directory`, each of
@@ -825,8 +909,11 @@ private Module* parseModuleFile(string path, string[] chain, SourceContext conte
     else if (loaded.declaration.path != chain)
     {
         context.collector.reportError(DiagnosticCode.ModuleDeclarationMismatch, loaded.declaration.span,
-            format("This file is the module '%s', by its package and its path, but its `module` line names '%s'",
-                name, loaded.declaration.path.join(".")));
+            format("This file is the module '%s', by its package and its path, but its `module` line names '%s'%s",
+                name, loaded.declaration.path.join("."), baseName(path) == rootModuleFile
+                    && loaded.declaration.path == chain ~ rootModuleFile.stripExtension
+                    ? format("\nA %s in a package's directory is the package's root module, named as the package: "
+                        ~ "write `module %s`", rootModuleFile, name) : ""));
     }
     return loaded;
 }
@@ -1070,7 +1157,7 @@ unittest
 @("standardLibraryPath holds lang and the standard prelude")
 unittest
 {
-    assert(exists(buildPath(standardLibraryPath(), langPackage ~ ".ag")));
+    assert(exists(buildPath(standardLibraryPath(), langPackage, rootModuleFile)));
     assert(exists(buildPath(standardLibraryPath() ~ standardPrelude.split(".")) ~ ".ag"));
 }
 
@@ -1112,11 +1199,12 @@ unittest
 unittest
 {
     auto directory = makeModuleDirectory("lang-replaced",
-        ["lang.ag": "module lang\ndef fake(): Int => 1", "lang/io.ag": "module lang.io\ndef fake(): Int => 1"]);
+        ["lang.ag": "module lang\ndef fake(): Int => 1", "lang/package.ag": "module lang\ndef fake(): Int => 1",
+            "lang/io.ag": "module lang.io\ndef fake(): Int => 1"]);
     scope (exit) rmdirRecurse(directory);
 
     auto program = load("import lang.io", "main.ag", loose(directory), null, new SourceContext);
-    program.modules[langPackage].span.file.should.equal(buildPath(standardLibraryPath(), "lang.ag"));
+    program.modules[langPackage].span.file.should.equal(buildPath(standardLibraryPath(), "lang", "package.ag"));
     program.modules["lang.io"].span.file.should.equal(buildPath(standardLibraryPath(), "lang", "io.ag"));
 }
 
@@ -1164,8 +1252,7 @@ unittest
     import std.file : dirEntries, SpanMode;
 
     auto lang = buildPath(standardLibraryPath(), langPackage);
-    foreach (path; dirEntries(lang, "*.ag", SpanMode.depth).map!(e => e.name).filter!(f => !isCompanionFile(f)).array
-        ~ [lang ~ ".ag"])
+    foreach (path; dirEntries(lang, "*.ag", SpanMode.depth).map!(e => e.name).filter!(f => !isCompanionFile(f)).array)
     {
         auto context = new SourceContext;
         auto program = load(readText(path), path, loose(null), null, context);
@@ -1552,7 +1639,7 @@ unittest
     ownModules(program).should.equal(["kit.a", "kit.b", "loose", "main"]);
 }
 
-@("a package's own name isn't a module, and a name no package starts isn't found")
+@("a package's own name isn't a module without a package.ag, which the message says to add, and a name no package starts isn't found")
 unittest
 {
     auto directory = makeModuleDirectory("packages-root", ["geometry/area.ag": "module geometry.area"]);
@@ -1563,8 +1650,127 @@ unittest
         Packages([Package("geometry", buildPath(directory, "geometry"))], ["geometry"]), null, context);
     auto errors = context.collector.errors.array;
     errors.map!(e => e.code).array.should.equal([DiagnosticCode.ModuleNotFound, DiagnosticCode.ModuleNotFound]);
-    errors[0].message.should.contain("'geometry' is a package");
+    auto root = buildPath(directory, "geometry", "package.ag");
+    errors[0].message.should.equal(format("Module 'geometry' not found: 'geometry' is a package, at %s, and there's no "
+        ~ "%s, its root module\nAdd %s to give the package a module of its own, or import a module of the package, as "
+        ~ "'geometry.name' for %s", buildPath(directory, "geometry"), root, root,
+        buildPath(directory, "geometry", "name.ag")));
     errors[1].message.should.contain("no package is named 'shapes'");
+}
+
+@("a package's package.ag is its root module, imported by the package's name, and usually a facade of forwards")
+unittest
+{
+    auto directory = makeModuleDirectory("packages-root-module", [
+        "cards/package.ag": "module cards\nforward import cards.deck\nforward import cards.suit : Suit",
+        "cards/deck.ag": "module cards.deck\ndef size(): Int => 52",
+        "cards/suit.ag": "module cards.suit\ntype Suit(n: Int)",
+        "core/package.ag": "module silver.core\nforward import silver.core.lower",
+        "core/lower.ag": "module silver.core.lower\nimport cards",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto packages = Packages([
+        Package("cards", buildPath(directory, "cards")),
+        Package("silver.core", buildPath(directory, "core"), ["cards"]),
+    ], ["cards", "silver.core"]);
+    auto context = new SourceContext;
+    auto program = load("import cards\nimport silver.core", "main.ag", packages, null, context);
+    context.collector.diagnostics.length.should.equal(0);
+    ownModules(program).should.equal(["cards", "cards.deck", "cards.suit", "main", "silver.core", "silver.core.lower"]);
+    program.modules["cards"].span.file.should.equal(buildPath(directory, "cards", "package.ag"));
+    program.modules["silver.core"].span.file.should.equal(buildPath(directory, "core", "package.ag"));
+    program.packageOf["cards"].should.equal("cards");
+    program.packageOf["silver.core"].should.equal("silver.core");
+
+    // Started from, alone or with its companion test file.
+    auto file = buildPath(directory, "cards", "package.ag");
+    context = new SourceContext;
+    program = load(readText(file), file, packages, null, context);
+    context.collector.diagnostics.length.should.equal(0);
+    program.entryModule.should.equal("cards");
+    program.packageOf["cards"].should.equal("cards");
+    write(buildPath(directory, "cards", "package.test.ag"), "test \"t\" => expect(cards.deck.size() == 52)");
+    auto companion = companionOf(file);
+    assert(companion !is null);
+    context = new SourceContext;
+    program = load(readText(file), file, packages, null, context, companion);
+    context.collector.diagnostics.length.should.equal(0);
+    program.modules[companionName("cards")].companionOf.should.equal("cards");
+}
+
+@("no module of a package is named after package.ag, in its directory or below, and lang follows the same rule")
+unittest
+{
+    auto directory = makeModuleDirectory("packages-root-misnamed", [
+        "cards/package.ag": "module cards.package",
+        "geometry/shapes.ag": "module geometry.shapes",
+        "geometry/shapes/package.ag": "module geometry.shapes.package",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto packages = Packages([Package("cards", buildPath(directory, "cards")),
+        Package("geometry", buildPath(directory, "geometry"))], ["cards", "geometry"]);
+
+    string[] problems(string source, string file = "main.ag")
+    {
+        auto context = new SourceContext;
+        load(source, file, packages, null, context);
+        return context.collector.errors.map!(e => cast(string) e.code ~ ": " ~ e.message).array;
+    }
+    auto root = buildPath(directory, "cards", "package.ag");
+    problems("import cards").should.equal([format("L0003: This file is the module 'cards', by its package and its path, "
+        ~ "but its `module` line names 'cards.package'\nA package.ag in a package's directory is the package's root "
+        ~ "module, named as the package: write `module cards`")]);
+    problems("import cards.package").should.equal([format("L0001: Module 'cards.package' not found: %s is the root "
+        ~ "module of the package 'cards', so it's `module cards`, and no module is named 'cards.package'", root)]);
+    problems(readText(root), root).should.equal([format("L0003: Module 'cards.package' can't be in the package 'cards': "
+        ~ "%s is the root module of the package 'cards', so it's `module cards`, and no module is named 'cards.package'",
+        root)]);
+
+    auto deeper = buildPath(directory, "geometry", "shapes", "package.ag");
+    auto why = format("a package.ag is a root module only in a package's directory, so no module is named "
+        ~ "'geometry.shapes.package': the module 'geometry.shapes' is %s.ag, beside the folder %s",
+        buildPath(directory, "geometry", "shapes"), buildPath(directory, "geometry", "shapes"));
+    problems("import geometry.shapes.package").should.equal(["L0001: Module 'geometry.shapes.package' not found: " ~ why]);
+    problems(readText(deeper), deeper).should.equal(["L0003: Module 'geometry.shapes.package' can't be in the package "
+        ~ "'geometry': " ~ why]);
+    problems("import geometry.shapes").length.should.equal(0);
+
+    problems("import lang.package")[0].should.contain("L0001: Module 'lang.package' not found: "
+        ~ buildPath(standardLibraryPath(), "lang", "package.ag") ~ " is the root module of the package 'lang'");
+    auto langRoot = buildPath(standardLibraryPath(), "lang", "package.ag");
+    problems("module lang.package", langRoot)[0].should.contain("L0003: Module 'lang.package' can't be in `lang`");
+
+    // A package that only holds its parts has no directory, and so no root module either.
+    auto kit = Packages([Package("kit", null, [], ["kit.words"]), Package("kit.words", buildPath(directory, "geometry"))],
+        ["kit"]);
+    auto context = new SourceContext;
+    load("import kit\nimport kit.package", "main.ag", kit, null, context);
+    context.collector.errors.map!(e => e.message.idup).array.should.equal([
+        "Module 'kit' not found: 'kit' is a package that only holds its parts, so it has no module of its own",
+        "Module 'kit.package' not found: the package 'kit' only holds its parts, so it has no modules of its own, and "
+            ~ "no part of it is named by a start of 'kit.package'"]);
+}
+
+@("the root module is one of the package's files when looking for a main, and a package.ag below the directory isn't")
+unittest
+{
+    auto directory = makeModuleDirectory("packages-root-main", [
+        "tool/package.ag": "module tool\ndef main(): Unit { }",
+        "tool/util.ag": "module tool.util",
+        "lib/util.ag": "module lib.util",
+        "lib/util/package.ag": "module lib.util.package\ndef main(): Unit { }",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto packages = Packages([Package("tool", buildPath(directory, "tool")), Package("lib", buildPath(directory, "lib"))],
+        ["tool", "lib"]);
+    auto context = new SourceContext;
+    load("import tool.util\nimport lib.util", "main.ag", packages, null, context);
+    auto errors = context.collector.errors.array;
+    errors.map!(e => e.code).array.should.equal([DiagnosticCode.UsesProgram]);
+    errors[0].span.file.should.equal(buildPath(directory, "tool", "package.ag"));
+    errors[0].message.should.contain("'tool' declares `main`, so the package 'tool' is a program");
 }
 
 @("a starting file's module line must name the file it is, by its package")
@@ -1859,16 +2065,24 @@ unittest
         null, context));
 }
 
-@("a file with no module line may be named as a package it uses, since a package's own name isn't a module")
+@("a file with no module line may be named as a package it uses, and importing the package's root module from it says to rename it")
 unittest
 {
-    auto directory = makeModuleDirectory("packages-script-named-as-package", ["geo/shapes.ag": "module geo.shapes"]);
+    auto directory = makeModuleDirectory("packages-script-named-as-package",
+        ["geo/shapes.ag": "module geo.shapes", "geo/package.ag": "module geo"]);
     scope (exit) rmdirRecurse(directory);
 
+    auto script = buildPath(directory, "geo.ag");
+    auto packages = Packages([Package("geo", buildPath(directory, "geo"))], ["geo"]);
     auto context = new SourceContext;
-    load("import geo.shapes\ndef main(): Unit { }", buildPath(directory, "geo.ag"),
-        Packages([Package("geo", buildPath(directory, "geo"))], ["geo"]), null, context);
+    load("import geo.shapes\ndef main(): Unit { }", script, packages, null, context);
     context.collector.errors.array.map!(e => cast(string) e.code ~ ": " ~ e.message).array.should.equal([]);
+
+    context = new SourceContext;
+    load("import geo\ndef main(): Unit { }", script, packages, null, context);
+    context.collector.errors.array.map!(e => cast(string) e.code ~ ": " ~ e.message).array.should.equal([format(
+        "L0002: 'geo' is the root module of the package 'geo', %s, and the file started from, %s, has no `module` line, "
+        ~ "so it's named 'geo' after its file too\nRename %s", buildPath(directory, "geo", "package.ag"), script, script)]);
 }
 
 @("a syntax error in a module of a used package that nothing imports says why the file was read, and a broken script there isn't read")
@@ -1916,4 +2130,84 @@ unittest
     problems("import geo.shapes", ["geo"])[0].should.contain("\nGive `--uses geo=units` to list it");
     problems("import shapes.circle", [])[0].should.contain("\nGive `--package shapes=<directory>` to declare one");
     problems("def f(): Int => 1", ["nope"])[0].should.contain("\nGive `--package nope=<directory>` to declare one");
+}
+
+
+@("a package whose name ends in the segment package can't make a module named <package>.package")
+unittest
+{
+    auto directory = makeModuleDirectory("package-named-package", [
+        "cards/deck.ag": "module cards.deck",
+        "inner/package.ag": "module cards.package",
+        "middle/y.ag": "module cards.package.x.y",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto context = new SourceContext;
+    auto program = load("import cards.package", "main.ag", Packages([Package("cards", buildPath(directory, "cards")),
+        Package("cards.package", buildPath(directory, "inner"))], ["cards", "cards.package"]), null, context);
+    assert(!context.collector.errors.empty, "the module 'cards.package' was accepted, as the package 'cards.package''s root");
+    assert("cards.package" !in program.modules);
+    context.collector.errors.map!(e => cast(string) e.code ~ ": " ~ e.message).array.should.equal([
+        "L0013: 'cards.package' can't be a package's name: its last segment is `package`, and a package.ag is a "
+            ~ "package's root module, so the name would be taken for one"]);
+
+    context = new SourceContext;
+    load("def f(): Int => 1", "main.ag", Packages([Package("package", buildPath(directory, "inner"))]), null, context);
+    context.collector.errors.map!(e => e.code).array.should.equal([DiagnosticCode.InvalidPackages]);
+
+    // A middle segment is an ordinary one, in a package's name as in a module's.
+    context = new SourceContext;
+    program = load("import cards.package.x.y", "main.ag", Packages([Package("cards.package.x",
+        buildPath(directory, "middle"))], ["cards.package.x"]), null, context);
+    context.collector.errors.empty.should.equal(true);
+    assert("cards.package.x.y" in program.modules);
+}
+
+@("a script named after a package with no root module that imports the package isn't told to add a module line")
+unittest
+{
+    auto directory = makeModuleDirectory("script-imports-missing-root", ["geo/shapes.ag": "module geo.shapes"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto script = buildPath(directory, "geo.ag");
+    auto context = new SourceContext;
+    load("import geo\ndef main(): Unit { }", script, Packages([Package("geo", buildPath(directory, "geo"))], ["geo"]),
+        null, context);
+    auto errors = context.collector.errors.array;
+    errors.length.should.equal(1);
+    // Adding `module geo` to geo.ag makes it claim to be geo/package.ag, which is L0003.
+    errors[0].message.should.not.contain("Add `module geo`");
+    errors[0].message.should.contain(buildPath(directory, "geo", "package.ag"));
+    errors[0].message.should.equal(format("Module 'geo' not found: the package 'geo' has no root module, %s, and the "
+        ~ "file started from, %s, has no `module` line, so it's named 'geo' after its file and couldn't import the root "
+        ~ "module anyway\nRename %s, or import a module of the package, as 'geo.name' for %s",
+        buildPath(directory, "geo", "package.ag"), script, script, buildPath(directory, "geo", "name.ag")));
+}
+
+@("a package.ag in the folder a module's name maps to says it belongs beside the folder, when imported or started from")
+unittest
+{
+    auto directory = makeModuleDirectory("misplaced-root", ["geo/shapes/package.ag": "module geo.shapes"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto misplaced = buildPath(directory, "geo", "shapes", "package.ag");
+    auto hint = format("\nThere's a %s, and a package.ag is a root module only in a package's own directory: a module "
+        ~ "deeper in is the file beside the folder, so move it to %s", misplaced, buildPath(directory, "geo", "shapes.ag"));
+    auto packages = Packages([Package("geo", buildPath(directory, "geo"))], ["geo"]);
+    auto context = new SourceContext;
+    load("import geo.shapes", "main.ag", packages, null, context);
+    auto errors = context.collector.errors.array;
+    errors.map!(e => e.code).array.should.equal([DiagnosticCode.ModuleNotFound]);
+    errors[0].message.should.endWith(hint);
+
+    context = new SourceContext;
+    load(readText(misplaced), misplaced, packages, null, context);
+    errors = context.collector.errors.array;
+    errors.map!(e => e.code).array.should.equal([DiagnosticCode.ModuleDeclarationMismatch]);
+    errors[0].message.should.endWith(hint);
+
+    context = new SourceContext;
+    load("import geo.lines", "main.ag", packages, null, context);
+    context.collector.errors.front.message.should.not.contain("root module");
 }

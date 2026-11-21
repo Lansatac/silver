@@ -1,0 +1,10 @@
+// A package's package.ag is its root module, imported by the package's own name. This one forwards
+// what the package offers, so its names are reached unqualified and as `cards.name`.
+import cards
+
+def main(): Unit {
+    val c = Card(12, "hearts")
+    printl(describe(c))
+    printl(cards.describe(cards.Card(1, "spades")))
+    printl(deckSize())
+}

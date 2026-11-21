@@ -1,0 +1,5 @@
+module cards.deck
+
+def deckSize(): Int => suits() * 13
+
+def suits(): Int => 4

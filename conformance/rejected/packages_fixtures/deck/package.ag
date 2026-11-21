@@ -1,0 +1,4 @@
+// The root module is named as its package, so this line should be `module deck`.
+module deck.package
+
+def size(): Int => 52

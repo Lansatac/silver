@@ -1,0 +1,6 @@
+// deck/package.ag is the root module of deck, and its module line names it deck.package.
+import deck
+
+def main(): Unit {
+    printl(size())
+}

@@ -1,0 +1,2 @@
+--package cards=packages_fixtures/cards
+--uses cards

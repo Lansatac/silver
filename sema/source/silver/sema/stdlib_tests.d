@@ -117,18 +117,21 @@ private string[] hiddenByFacades(string fixtures, string[] modules)
 @("no module of the standard library or lang replaces a function it forwards blanket")
 unittest
 {
-    import std.algorithm : filter, map;
+    import std.algorithm : canFind, filter, map;
     import std.array : array, join;
     import std.file : dirEntries, SpanMode;
     import std.format : format;
     import std.path : pathSplitter, relativePath, stripExtension;
+    import silver.ast : langPackage;
     import silver.loader : isCompanionFile, standardLibraryPath;
 
     auto root = standardLibraryPath();
     auto modules = dirEntries(root, "*.ag", SpanMode.depth)
         .filter!(e => !isCompanionFile(e.name))
-        .map!(e => relativePath(e.name, root).stripExtension.pathSplitter.join("."))
+        .map!(e => relativePath(e.name, root).stripExtension.pathSplitter.array)
+        .map!(segments => (segments[$ - 1] == "package" ? segments[0 .. $ - 1] : segments).join("."))
         .array;
+    assert(modules.canFind(langPackage), "lang's root module wasn't found");
     assert(modules.length > 10, "The standard library wasn't found");
     auto hidden = hiddenByFacades(null, modules);
     assert(hidden.length == 0, format("Facades replacing what they forward: %s", hidden));

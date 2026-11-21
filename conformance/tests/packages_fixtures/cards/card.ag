@@ -1,0 +1,5 @@
+module cards.card
+
+type Card(rank: Int, suit: String)
+
+def describe(c: Card): String => "{c.rank} of {c.suit}"

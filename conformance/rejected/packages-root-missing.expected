@@ -1,0 +1,2 @@
+L0001: Module 'shapes' not found: 'shapes' is a package, at packages_fixtures/shapes, and there's no packages_fixtures/shapes/package.ag, its root module
+Add packages_fixtures/shapes/package.ag to give the package a module of its own, or import a module of the package, as 'shapes.name' for packages_fixtures/shapes/name.ag

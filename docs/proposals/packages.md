@@ -1,6 +1,6 @@
 # Proposal: packages
 
-**Status: decided, and built except the `silver` front end, its package file, a package's root module, and what parts share.** The rules are described in [Modules](../language/modules.md#packages), and the front end and its file in [The `silver` tool](../silver.md). This document keeps the reasoning and what was rejected. Packages are given on the command line until the front end is built, and a program is still compiled whole. `lang` is in place: only it may declare intrinsics, and the compiler names no other package. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
+**Status: decided, and built except the `silver` front end, its package file, and what parts share.** The rules are described in [Modules](../language/modules.md#packages), and the front end and its file in [The `silver` tool](../silver.md). This document keeps the reasoning and what was rejected. Packages are given on the command line until the front end is built, and a program is still compiled whole. `lang` is in place: only it may declare intrinsics, and the compiler names no other package. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
 
 ## Summary
 

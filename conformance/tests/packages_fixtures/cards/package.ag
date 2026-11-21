@@ -1,0 +1,5 @@
+// The root module of the package cards, imported as `cards`: a facade of what the package offers.
+module cards
+
+forward import cards.card
+forward import cards.deck : deckSize

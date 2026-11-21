@@ -1,0 +1,2 @@
+--package deck=packages_fixtures/deck
+--uses deck
