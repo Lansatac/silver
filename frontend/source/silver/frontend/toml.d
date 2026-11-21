@@ -1167,20 +1167,20 @@ unittest
 @("table headers, implied tables and arrays of tables")
 unittest
 {
-    auto t = read("top = 1\n[paths]\ngeometry = \"../geometry\"\n\"silver.core\" = \"../silver/core\"\n"
-        ~ "[a.b]\nx = 1\n[a]\ny = 2\n[[part]]\nname = \"one\"\n[[part]]\nname = \"two\"\n[part.extra]\nz = 3\n"
+    auto t = read("top = 1\n[places]\ngeometry = \"../geometry\"\n\"silver.core\" = \"../silver/core\"\n"
+        ~ "[a.b]\nx = 1\n[a]\ny = 2\n[[package]]\nname = \"one\"\n[[package]]\nname = \"two\"\n[package.extra]\nz = 3\n"
         ~ "[x]\nd.e = 1\n[x.d.f]\ng = 2\n");
     assert(at(t, "top").integer == 1);
-    auto paths = at(t, "paths").table;
-    assert(at(paths, "geometry").text == "../geometry" && at(paths, "silver.core").text == "../silver/core");
+    auto places = at(t, "places").table;
+    assert(at(places, "geometry").text == "../geometry" && at(places, "silver.core").text == "../silver/core");
     auto a = at(t, "a").table;
     assert(at(a, "y").integer == 2 && at(at(a, "b").table, "x").integer == 1);
-    auto part = at(t, "part");
-    assert(part.kind == ValueKind.array && part.ofTables && part.items.length == 2);
-    assert(at(part.items[0].table, "name").text == "one");
-    assert(at(part.items[1].table, "name").text == "two");
-    assert(at(at(part.items[1].table, "extra").table, "z").integer == 3);
-    assert(part.items[0].table.get("extra") is null);
+    auto packages = at(t, "package");
+    assert(packages.kind == ValueKind.array && packages.ofTables && packages.items.length == 2);
+    assert(at(packages.items[0].table, "name").text == "one");
+    assert(at(packages.items[1].table, "name").text == "two");
+    assert(at(at(packages.items[1].table, "extra").table, "z").integer == 3);
+    assert(packages.items[0].table.get("extra") is null);
     auto d = at(at(t, "x").table, "d").table;
     assert(at(d, "e").integer == 1 && at(at(d, "f").table, "g").integer == 2);
     assert(read("[ spaced . key ]\na = 1").get("spaced").table.get("key").table.get("a").integer == 1);
@@ -1189,8 +1189,8 @@ unittest
 @("every key and value has its span")
 unittest
 {
-    immutable text = "name = \"geometry\"\nuses = [\"a\", 'b']\n\n[paths]\n\"silver.core\" = \"../silver/core\"\n"
-        ~ "n = 42\nflag = true\ninline = { k = 1 }\n[[part]]\n";
+    immutable text = "name = \"geometry\"\nuses = [\"a\", 'b']\n\n[places]\n\"silver.core\" = \"../silver/core\"\n"
+        ~ "n = 42\nflag = true\ninline = { k = 1 }\n[[package]]\n";
     auto t = read(text);
     auto name = t.entry("name");
     assert(name.keySpan == Span(0, 4, 1, 1));
@@ -1199,22 +1199,21 @@ unittest
     assert(uses.keySpan.line == 2 && uses.keySpan.column == 1);
     assert(slice(text, uses.value.span) == "[\"a\", 'b']" && uses.value.span.column == 8);
     assert(slice(text, uses.value.items[1].span) == "'b'" && uses.value.items[1].span.column == 14);
-    auto paths = t.entry("paths");
-    assert(slice(text, paths.keySpan) == "paths" && paths.keySpan.line == 4 && paths.keySpan.column == 2);
-    assert(slice(text, paths.value.span) == "[paths]");
-    auto core = paths.value.table.entry("silver.core");
+    auto places = t.entry("places");
+    assert(slice(text, places.keySpan) == "places" && places.keySpan.line == 4 && places.keySpan.column == 2);
+    assert(slice(text, places.value.span) == "[places]");
+    auto core = places.value.table.entry("silver.core");
     assert(slice(text, core.keySpan) == "\"silver.core\"" && core.keySpan.line == 5 && core.keySpan.column == 1);
     assert(slice(text, core.value.span) == "\"../silver/core\"" && core.value.span.line == 5 && core.value.span.column == 17);
-    auto n = paths.value.table.entry("n");
+    auto n = places.value.table.entry("n");
     assert(slice(text, n.value.span) == "42" && n.value.span.line == 6 && n.value.span.column == 5);
-    assert(slice(text, paths.value.table.entry("flag").value.span) == "true");
-    auto inline = paths.value.table.entry("inline");
+    assert(slice(text, places.value.table.entry("flag").value.span) == "true");
+    auto inline = places.value.table.entry("inline");
     assert(slice(text, inline.value.span) == "{ k = 1 }");
     assert(slice(text, inline.value.table.entry("k").keySpan) == "k");
-    auto part = paths.value.table.get("part");
-    assert(part is null);
-    auto parts = t.entry("part");
-    assert(slice(text, parts.keySpan) == "part" && slice(text, parts.value.items[0].span) == "[[part]]");
+    assert(places.value.table.get("package") is null);
+    auto packages = t.entry("package");
+    assert(slice(text, packages.keySpan) == "package" && slice(text, packages.value.items[0].span) == "[[package]]");
     auto dotted = read("a.b = 1").entry("a");
     assert(dotted.keySpan == Span(0, 1, 1, 1) && dotted.value.table.entry("b").keySpan == Span(2, 3, 1, 3));
 }
@@ -1353,16 +1352,16 @@ version (unittest)
 {
     immutable geometryFile = "# geometry/silver.toml\nname = \"geometry\"\n";
 
-    immutable cardsFile = "# cards/silver.toml\nname = \"cards\"\nuses = [\"geometry\"]\n\n[paths]\n"
-        ~ "geometry = \"../geometry\"\n";
+    immutable cardsFile = "# cards/silver.toml\nname = \"cards\"\nuses = [\"geometry\"]\n\n[[package]]\n"
+        ~ "path = \"../geometry\"\n";
 
     immutable compilerFile = "# silver.toml\nname = \"silver\"\n\n"
-        ~ "[[part]]\nname = \"silver.ast\"\npath = \"ast\"\n\n"
-        ~ "[[part]]\nname = \"silver.syntax\"\npath = \"syntax\"\nuses = [\"silver.ast\"]\n\n"
-        ~ "[[part]]\nname = \"silver.sema\"\npath = \"sema\"\nuses = [\"silver.ast\", \"silver.loader\"]\n\n"
-        ~ "[[part]]\nname = \"silver.compiler\"\npath = \"compiler\"\n"
+        ~ "[[package]]\nname = \"silver.ast\"\npath = \"ast\"\n\n"
+        ~ "[[package]]\nname = \"silver.syntax\"\npath = \"syntax\"\nuses = [\"silver.ast\"]\n\n"
+        ~ "[[package]]\nname = \"silver.sema\"\npath = \"sema\"\nuses = [\"silver.ast\", \"silver.loader\"]\n\n"
+        ~ "[[package]]\nname = \"silver.compiler\"\npath = \"compiler\"\n"
         ~ "uses = [\"silver.sema\", \"silver.core\", \"silver.interpreter\", \"silver.codegen\"]\n\n"
-        ~ "[[part]]\nname = \"silver.frontend\"\npath = \"frontend\"\n";
+        ~ "[[package]]\nname = \"silver.frontend\"\npath = \"frontend\"\n";
 
     string[] strings(const Value v)
     {
@@ -1387,27 +1386,27 @@ unittest
     assert(cards.entries.length == 3);
     assert(at(cards, "name").text == "cards");
     assert(strings(at(cards, "uses")) == ["geometry"]);
-    auto paths = at(cards, "paths").table;
-    assert(paths.entries.length == 1 && at(paths, "geometry").text == "../geometry");
-    assert(slice(cardsFile, paths.entry("geometry").value.span) == "\"../geometry\"");
-    assert(paths.entry("geometry").value.span.line == 6);
+    auto listed = at(cards, "package");
+    assert(listed.ofTables && listed.items.length == 1 && at(listed.items[0].table, "path").text == "../geometry");
+    assert(slice(cardsFile, listed.items[0].table.entry("path").value.span) == "\"../geometry\"");
+    assert(listed.items[0].table.entry("path").value.span.line == 6);
 
     auto compiler = read(compilerFile);
     assert(compiler.entries.length == 2 && at(compiler, "name").text == "silver");
-    auto parts = at(compiler, "part");
-    assert(parts.ofTables && parts.items.length == 5);
+    auto described = at(compiler, "package");
+    assert(described.ofTables && described.items.length == 5);
     string[] names, directories;
-    foreach (part; parts.items)
+    foreach (entry; described.items)
     {
-        names ~= at(part.table, "name").text;
-        directories ~= at(part.table, "path").text;
+        names ~= at(entry.table, "name").text;
+        directories ~= at(entry.table, "path").text;
     }
     assert(names == ["silver.ast", "silver.syntax", "silver.sema", "silver.compiler", "silver.frontend"]);
     assert(directories == ["ast", "syntax", "sema", "compiler", "frontend"]);
-    assert(parts.items[0].table.get("uses") is null);
-    assert(strings(at(parts.items[2].table, "uses")) == ["silver.ast", "silver.loader"]);
-    assert(strings(at(parts.items[3].table, "uses")).length == 4);
-    assert(parts.items[4].span.line == 23 && slice(compilerFile, parts.items[4].span) == "[[part]]");
+    assert(described.items[0].table.get("uses") is null);
+    assert(strings(at(described.items[2].table, "uses")) == ["silver.ast", "silver.loader"]);
+    assert(strings(at(described.items[3].table, "uses")).length == 4);
+    assert(described.items[4].span.line == 23 && slice(compilerFile, described.items[4].span) == "[[package]]");
 }
 
 @("any text, cut short or with a byte changed, is read or is one mistake")

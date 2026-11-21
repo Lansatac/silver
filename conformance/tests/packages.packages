@@ -1,5 +1,5 @@
 --package shapes=packages_fixtures/shapes
 --package shapes.render=packages_fixtures/render
---parts shapes=shapes.render
+--project shapes=shapes.render
 --uses shapes.render=shapes
 --uses shapes,shapes.render

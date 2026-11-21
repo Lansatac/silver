@@ -1,6 +1,6 @@
-# A root that only holds its parts.
+# A root that only describes another package.
 name = "group"
 
-[[part]]
+[[package]]
 name = "group.lib"
 path = "lib"

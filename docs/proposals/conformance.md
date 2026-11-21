@@ -83,7 +83,7 @@ In the first version any module may declare one, and the check for two is made a
 - **A library** declares a conformance only when it owns the type or the interface.
 - **The program**, the package with the `main`, may also declare one for a type and an interface it owns neither of.
 - **Built-in types** belong to `lang`, the one package the compiler knows. So a library can conform an array or a tuple to an interface of its own, and not to anyone else's.
-- **Parts of one package** count as one for ownership.
+- **The packages of one [project](../language/modules.md#projects)** count as one for ownership.
 
 So two libraries can never give a third's type two conformances to a fourth's interface, and a duplicate between the program and a library is in code the program's author can change.
 

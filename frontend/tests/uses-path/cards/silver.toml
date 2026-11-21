@@ -1,5 +1,5 @@
 name = "cards"
 uses = ["geometry"]
 
-[paths]
-geometry = "../geometry"
+[[package]]
+path = "../geometry"

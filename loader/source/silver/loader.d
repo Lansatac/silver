@@ -300,8 +300,9 @@ private struct Layout
     string scriptHome;
     string homeMain;
     Span homeMainAt;
-    /// The package that only holds its parts whose directory holds the script, when that's the deepest.
-    string partsHome;
+    /// The package with no modules of its own, which only describes others, whose directory holds the
+    /// script, when that's the deepest.
+    string describerHome;
     const(ScriptHome)[] homes;
     bool fromPackageFiles;
     bool bySilver;
@@ -361,10 +362,10 @@ private struct Layout
         else if (found.package_.directory.length == 0)
         {
             found.problem = length == chain.length
-                ? format("'%s' is a package that only holds its parts, so it has no module of its own",
+                ? format("'%s' is a package that only describes others, so it has no module of its own",
                     found.package_.name)
-                : format("the package '%s' only holds its parts, so it has no modules of its own, and no part "
-                    ~ "of it is named by a start of '%s'", found.package_.name, chain.join("."));
+                : format("the package '%s' only describes others, so it has no modules of its own, and no package "
+                    ~ "it describes is named by a start of '%s'", found.package_.name, chain.join("."));
         }
         else if (length == chain.length)
         {
@@ -468,7 +469,7 @@ private struct Layout
         if (deepest is null || named(deepest.package_) is null) return;
         if (named(deepest.package_).directory.length == 0)
         {
-            partsHome = deepest.package_;
+            describerHome = deepest.package_;
             return;
         }
         scriptHome = deepest.package_;
@@ -489,13 +490,14 @@ private struct Layout
     {
         if (!fromPackageFiles)
             return format("%sTo use '%s', put a `silver.toml` at or above it that names a package of its own, with "
-                ~ "'%s' in its `uses` and the directory of '%s', whose own `silver.toml` names it, under `[paths]`", scriptUses.length == 0
+                ~ "'%s' in its `uses` and a `[[package]]` entry whose `path` is the directory of '%s', whose own "
+                ~ "`silver.toml` names it", scriptUses.length == 0
                     ? "A file in no project uses only the standard library. " : "", name, name, name);
-        if (auto parts = named(partsHome))
-            return format("A file with no `module` line under the directory of '%s', a package that only holds its "
-                ~ "parts, uses only the standard library, so one that needs '%s' belongs under the directory of one of "
-                ~ "its parts, %s, or of a package that uses it", partsHome, name,
-                parts.parts.map!(part => "'" ~ part ~ "'").join(", "));
+        if (auto describer = named(describerHome))
+            return format("A file with no `module` line under the directory of '%s', a package that only describes "
+                ~ "others, uses only the standard library, so one that needs '%s' belongs under the directory of one of "
+                ~ "the packages it describes, %s, or of a package that uses it", describerHome, name,
+                describer.describes.map!(d => "'" ~ d ~ "'").join(", "));
         return format("A file with no `module` line that's under no package's directory uses only the standard "
             ~ "library, so one that needs '%s' belongs under the directory of that package or of one that uses it", name);
     }
@@ -543,7 +545,7 @@ private struct Layout
             ok = false;
         }
         bool[string] seen;
-        string[string] parentOf;
+        string[string] describerOf;
         foreach (i, ref p; declared)
         {
             if (p.name.length > 0 && !isPackageName(p.name))
@@ -559,8 +561,8 @@ private struct Layout
             if (p.name in seen)
                 problem(DiagnosticCode.InvalidPackages, format("There are two packages named '%s'", p.name));
             seen[p.name] = true;
-            // A package can exist only to hold its parts together, and then has nowhere for modules.
-            if (p.directory.length == 0 && p.name.length > 0 && p.parts.length > 0) continue;
+            // A package can exist only to describe others, and then has nowhere for modules.
+            if (p.directory.length == 0 && p.name.length > 0 && p.describes.length > 0) continue;
             if (!exists(p.directory) || !isDir(p.directory))
             {
                 problem(DiagnosticCode.InvalidPackages, format("The package '%s' is at %s, which isn't a directory",
@@ -598,19 +600,19 @@ private struct Layout
         foreach (ref p; declared)
         {
             checkList(p.name, format("The package '%s'", p.name), p.uses, "uses");
-            checkList(p.name, format("The package '%s'", p.name), p.parts, "has as parts");
-            foreach (part; p.parts)
+            checkList(p.name, format("The package '%s'", p.name), p.describes, "describes");
+            foreach (other; p.describes)
             {
-                auto found = named(part);
-                if (part == p.name)
-                    problem(DiagnosticCode.InvalidPackages, format("The package '%s' lists itself as a part", part));
-                else if (auto other = part in parentOf)
-                    problem(DiagnosticCode.InvalidPackages, format("'%s' is listed as a part of both '%s' and '%s', "
-                        ~ "and a package is a part of one parent", part, *other, p.name));
-                else if (found !is null && found.parts.length > 0)
-                    problem(DiagnosticCode.InvalidPackages, format("'%s' is a part of '%s' and lists parts of its "
-                        ~ "own, and a part can't have parts", part, p.name));
-                parentOf[part] = p.name;
+                auto found = named(other);
+                if (other == p.name)
+                    problem(DiagnosticCode.InvalidPackages, format("The package '%s' describes itself", other));
+                else if (auto first = other in describerOf)
+                    problem(DiagnosticCode.InvalidPackages, format("'%s' is described by both '%s' and '%s', and a "
+                        ~ "package is described by one", other, *first, p.name));
+                else if (found !is null && found.describes.length > 0)
+                    problem(DiagnosticCode.InvalidPackages, format("'%s' is described by '%s' and describes packages "
+                        ~ "of its own, and a package another describes can't describe others", other, p.name));
+                describerOf[other] = p.name;
             }
         }
         if (script !is null) checkList(script, format("'%s', the file with no `module` line,", scriptModule), scriptUses, "uses");
@@ -922,12 +924,13 @@ private string rootFileProblem(const string[] chain, size_t length, string direc
 
 /// Reads packages as the command line gives them. Each of `declared` is `name=directory`, each of
 /// `uses` is `name=package,package` for what the package `name` uses, or `package,package` for what
-/// a file with no `module` line uses, and each of `parts` is `name=part,part`, which declares `name`
-/// as a package with no directory when none of `declared` does. A relative directory
+/// a file with no `module` line uses, and each of `projects` is `name=package,package`, the packages
+/// `name` describes, which with it are one project; it declares `name` as a package with no directory
+/// when none of `declared` does. A relative directory
 /// is taken from `base`. The standard library is added unless one of `declared` is named as it is.
 /// Returns what's wrong with how one is written, or null; what's wrong with what they say is for
 /// `load` to report.
-string describePackages(const string[] declared, const string[] uses, const string[] parts, string base,
+string describePackages(const string[] declared, const string[] uses, const string[] projects, string base,
     out Packages packages)
 {
     import std.string : indexOf, strip;
@@ -954,9 +957,9 @@ string describePackages(const string[] declared, const string[] uses, const stri
         }
         return null;
     }
-    foreach (i, list; [uses, parts])
+    foreach (i, list; [uses, projects])
     {
-        immutable flag = i == 0 ? "--uses" : "--parts";
+        immutable flag = i == 0 ? "--uses" : "--project";
         foreach (option; list)
         {
             auto at = option.indexOf('=');
@@ -969,9 +972,10 @@ string describePackages(const string[] declared, const string[] uses, const stri
                 return i == 0
                     ? format("--uses takes a package and what it uses, as `--uses app=geometry`, or for a file "
                         ~ "with no `module` line only what it uses, as `--uses geometry`, not `%s`", option)
-                    : format("--parts takes a package and its parts, as `--parts silver=silver.core`, not `%s`", option);
+                    : format("--project takes a package and the packages it describes, as "
+                        ~ "`--project silver=silver.core`, not `%s`", option);
             auto owner = find(option[0 .. at]);
-            // A package that only holds its parts has no directory, so `--parts` alone declares it.
+            // A package that only describes others has no directory, so `--project` alone declares it.
             if (owner is null && i == 1)
             {
                 packages.declared ~= Package(option[0 .. at]);
@@ -980,7 +984,7 @@ string describePackages(const string[] declared, const string[] uses, const stri
             if (owner is null)
                 return undeclared(flag, option[0 .. at], "--package");
             if (i == 0) owner.uses ~= listOf(option[at + 1 .. $]);
-            else owner.parts ~= listOf(option[at + 1 .. $]);
+            else owner.describes ~= listOf(option[at + 1 .. $]);
         }
     }
     packages.declared = withStandardLibrary(packages.declared);
@@ -992,7 +996,7 @@ string describePackages(const string[] declared, const string[] uses, const stri
 
 /// Why the option `option` can't name `name`, which none of `declarers` declares: that it can't be a
 /// package's name at all, when it can't.
-string undeclared(string option, string name, string declarers = "--package or --parts")
+string undeclared(string option, string name, string declarers = "--package or --project")
 {
     return isPackageName(name) ? format("%s names '%s', which no %s declares", option, name, declarers)
         : format("%s names '%s', which isn't a package name: %s", option, name, packageNameRule);
@@ -1006,15 +1010,15 @@ void describeSilver(ref Packages packages)
     packages.bySilver = true;
     packages.usesHint = (user, used) => user is null ? null
         : format("'%s' is described in no `silver.toml`, and what a package uses is listed in its `silver.toml`, as "
-            ~ "`uses`, with the directory of each package it uses under `[paths]`", user);
+            ~ "`uses`, with a `[[package]]` entry for each package it uses", user);
     packages.packageHint = (user, name) => user is null
         ? format("A file in no project is in no package: a package is a directory with a `silver.toml` that names it, "
             ~ "as `name = \"%s\"`, and a file with no `module` line is a program of its own", name)
         : format("'%s' is described in no `silver.toml`, and a package it uses is listed in its `silver.toml`, as "
-            ~ "`uses`, with its directory under `[paths]`", user);
+            ~ "`uses`, with a `[[package]]` entry whose `path` is its directory", user);
 }
 
-/// Reads `--package-file name=file`, which says that what the package `name` is, uses and has as parts
+/// Reads `--package-file name=file`, which says that what the package `name` is, uses and describes
 /// was read from the package file `file`, so that the messages about it name that file and its
 /// fields instead of options that weren't given. Packages it doesn't name keep the options' hints.
 /// Returns what's wrong with how one is written, or null.
@@ -1036,14 +1040,14 @@ string describePackageFiles(const string[] files, ref Packages packages)
             return undeclared("--package-file", name);
         fileOf[name] = option[at + 1 .. $];
     }
-    string[string] parentOf;
+    string[string] describerOf;
     foreach (ref p; packages.declared)
     {
-        foreach (part; p.parts) parentOf[part] = p.name;
+        foreach (other; p.describes) describerOf[other] = p.name;
     }
     string listIn(string user, string file)
     {
-        return user in parentOf ? format("the `uses` of the part '%s' in %s", user, file) : "`uses` in " ~ file;
+        return user in describerOf ? format("the `uses` of the package '%s' in %s", user, file) : "`uses` in " ~ file;
     }
     auto optionUses = packages.usesHint;
     packages.usesHint = (user, used) {
@@ -1052,14 +1056,15 @@ string describePackageFiles(const string[] files, ref Packages packages)
         auto list = "That list is " ~ listIn(user, *file);
         auto usedFile = used in fileOf;
         if (usedFile !is null && *usedFile == *file) return list;
-        return list ~ format(", with the directory of '%s' under `[paths]` there if it has none", used);
+        return list ~ format(", with a `[[package]]` entry for '%s' there if it has none", used);
     };
     auto optionPackage = packages.packageHint;
     packages.packageHint = (user, name) {
         auto file = user is null ? null : user in fileOf;
         if (file is null)
             return user is null || optionPackage is null ? null : optionPackage(user, name);
-        return format("List it in %s, with its directory under `[paths]` there", listIn(user, *file));
+        return format("List it in %s, with a `[[package]]` entry whose `path` is its directory there",
+            listIn(user, *file));
     };
     return null;
 }
@@ -1103,7 +1108,7 @@ string describeScriptHomes(const string[] options, string base, ref Packages pac
 /// The file the program of the package `name` starts from, for the command `command` (`run` or
 /// `build`), and in `chosen` the package whose program it is; or null after reporting to `context`
 /// why there's none to choose. The programs are the package itself when a module of it declares
-/// `main`, and each of its parts that has one. A file with no `module` line is never one. The
+/// `main`, and each package it describes that has one. A file with no `module` line is never one. The
 /// package has to be declared.
 string programStart(string name, string command, const Packages packages, SourceContext context, out string chosen)
 {
@@ -1112,7 +1117,8 @@ string programStart(string name, string command, const Packages packages, Source
     assert(package_ !is null, "--program names an undeclared package");
     immutable why = format("It was read to find which module of '%s' declares `main`", name);
     immutable verb = command == "build" ? "build" : "run";
-    // A part is shown at the directory it's known by, which `--scripts-in` gives when its modules are below it.
+    // A described package is shown at the directory it's known by, which `--scripts-in` gives when its
+    // modules are below it.
     string directoryOf(string package_)
     {
         foreach (ref home; packages.scriptHomes)
@@ -1125,7 +1131,7 @@ string programStart(string name, string command, const Packages packages, Source
     immutable tool = packages.fromPackageFiles ? "silver" : "silverc";
     string[] names;
     Tuple!(string, Span)[] mains;
-    foreach (candidate; [name] ~ package_.parts)
+    foreach (candidate; [name] ~ package_.describes)
     {
         if (layout.named(candidate) is null) continue;
         auto found = layout.mainsOf(candidate, context, why, true);
@@ -1152,11 +1158,12 @@ string programStart(string name, string command, const Packages packages, Source
         ~ "`%s %s demo.ag`", tool, verb);
     if (names.length == 0)
     {
-        context.collector.reportError(DiagnosticCode.NoProgram, Span(), package_.parts.length == 0
+        context.collector.reportError(DiagnosticCode.NoProgram, Span(), package_.describes.length == 0
             ? format("The package '%s' is a library: none of its modules declares `main`, so it has no program to "
                 ~ "%s\n%s\n%s", name, verb, tests, scripts)
-            : format("The package '%s' %s, and none of its parts is a program: no module of %s declares `main`, so "
-                ~ "there's no program to %s\n%s\n%s", name, package_.directory.length == 0 ? "only holds its parts"
+            : format("The package '%s' %s, and none of the packages it describes is a program: no module of %s "
+                ~ "declares `main`, so there's no program to %s\n%s\n%s", name, package_.directory.length == 0
+                    ? "only describes others"
                     : "is a library", package_.directory.length == 0 ? "theirs" : "it or of them", verb, tests, scripts));
         return null;
     }
@@ -1170,8 +1177,8 @@ string programStart(string name, string command, const Packages packages, Source
     }
     auto first = names[0] == name ? names[1] : names[0];
     string choose = packages.fromPackageFiles
-        ? format("Choose a part by its directory, as `silver %s %s`", verb, directoryOf(first))
-        : format("Choose a part with `--program`, as `--program %s`", first);
+        ? format("Choose one by its directory, as `silver %s %s`", verb, directoryOf(first))
+        : format("Choose one with `--program`, as `--program %s`", first);
     if (names[0] == name)
         choose ~= format(", or the program of '%s' itself by its file, as `%s %s %s`", name, tool, verb,
             mains[0][1].file);
@@ -2167,15 +2174,15 @@ unittest
     auto langRoot = buildPath(standardLibraryPath(), "lang", "package.ag");
     problems("module lang.package", langRoot)[0].should.contain("L0003: Module 'lang.package' can't be in `lang`");
 
-    // A package that only holds its parts has no directory, and so no root module either.
+    // A package that only describes others has no directory, and so no root module either.
     auto kit = Packages([Package("kit", null, [], ["kit.words"]), Package("kit.words", buildPath(directory, "geometry"))],
         ["kit"]);
     auto context = new SourceContext;
     load("import kit\nimport kit.package", "main.ag", kit, null, context);
     context.collector.errors.map!(e => e.message.idup).array.should.equal([
-        "Module 'kit' not found: 'kit' is a package that only holds its parts, so it has no module of its own",
-        "Module 'kit.package' not found: the package 'kit' only holds its parts, so it has no modules of its own, and "
-            ~ "no part of it is named by a start of 'kit.package'"]);
+        "Module 'kit' not found: 'kit' is a package that only describes others, so it has no module of its own",
+        "Module 'kit.package' not found: the package 'kit' only describes others, so it has no modules of its own, and "
+            ~ "no package it describes is named by a start of 'kit.package'"]);
 }
 
 @("the root module is one of the package's files when looking for a main, and a package.ag below the directory isn't")
@@ -2272,10 +2279,10 @@ unittest
     context.collector.errors.array.map!(e => e.message).array.should.equal(["The package 'a' lists itself among what it uses"]);
 }
 
-@("a package can have parts and no directory, and any number of its parts can be programs")
+@("a package can describe others and have no directory, and any number of those can be programs")
 unittest
 {
-    auto directory = makeModuleDirectory("packages-parts-only", [
+    auto directory = makeModuleDirectory("packages-project-only", [
         "words/list.ag": "module kit.words.list\n\ndef word(): Int => 1",
         "count/main.ag": "module kit.count.main\n\nimport kit.words.list\n\ndef main(): Unit {}",
         "tool/main.ag": "module kit.tool.main\n\nimport kit.words.list\n\ndef main(): Unit {}",
@@ -2288,13 +2295,13 @@ unittest
         Package("kit.count", buildPath(directory, "count"), ["kit.words"]),
         Package("kit.tool", buildPath(directory, "tool"), ["kit.words"]),
     ];
-    foreach (part; ["count", "tool"])
+    foreach (member; ["count", "tool"])
     {
         auto context = new SourceContext;
-        auto file = buildPath(directory, part, "main.ag");
+        auto file = buildPath(directory, member, "main.ag");
         auto program = load(readText(file), file, Packages(declared), null, context);
         context.collector.errors.array.map!(e => e.message).array.should.equal(cast(string[])[]);
-        program.packageOf["kit." ~ part ~ ".main"].should.equal("kit." ~ part);
+        program.packageOf["kit." ~ member ~ ".main"].should.equal("kit." ~ member);
         program.packageOf["kit.words.list"].should.equal("kit.words");
     }
 
@@ -2304,8 +2311,8 @@ unittest
         load(source, "main.ag", Packages(packages, ["kit"]), null, context);
         return context.collector.errors.map!(e => cast(string) e.code ~ ": " ~ e.message).array;
     }
-    problems("import kit", declared)[0].should.contain("L0001: Module 'kit' not found: 'kit' is a package that only holds its parts");
-    problems("import kit.missing.x", declared)[0].should.contain("no part of it is named by a start of 'kit.missing.x'");
+    problems("import kit", declared)[0].should.contain("L0001: Module 'kit' not found: 'kit' is a package that only describes others");
+    problems("import kit.missing.x", declared)[0].should.contain("no package it describes is named by a start of 'kit.missing.x'");
     problems("", [Package("kit", null)])[0].should.contain("isn't a directory");
 
     Packages described;
@@ -2346,10 +2353,10 @@ unittest
 
     auto c = Package("c", buildPath(directory, "c"));
     problems(Packages([Package("a", a.directory, [], ["b"]), Package("c", c.directory, [], ["b"]), b], ["a"]))[0]
-        .should.contain("'b' is listed as a part of both 'a' and 'c'");
+        .should.contain("'b' is described by both 'a' and 'c'");
     problems(Packages([Package("a", a.directory, [], ["b"]), Package("b", b.directory, [], ["c"]), c], ["a"]))[0]
-        .should.contain("a part can't have parts");
-    problems(Packages([Package("a", a.directory, [], ["a"])], ["a"]))[0].should.contain("lists itself as a part");
+        .should.contain("a package another describes can't describe others");
+    problems(Packages([Package("a", a.directory, [], ["a"])], ["a"]))[0].should.contain("describes itself");
     problems(Packages([Package("a", a.directory, [], ["b"]), b], ["a"])).length.should.equal(0);
 }
 
@@ -2379,7 +2386,7 @@ unittest
         problems(Packages([a, Package(name, buildPath(directory, "b"))], ["a", name]))
             .should.equal([format("L0013: '%s' isn't a package name: %s", name, rule)]);
         problems(Packages([a, Package("p", null, [], [name])], ["a"])).should.equal([format("L0013: The package 'p' "
-            ~ "lists '%s' among what it has as parts, and '%s' isn't a package name: %s", name, name, rule)]);
+            ~ "lists '%s' among what it describes, and '%s' isn't a package name: %s", name, name, rule)]);
         problems(Packages([Package("a", a.directory, [name])], ["a"])).should.equal([format("L0013: The package 'a' "
             ~ "lists '%s' among what it uses, and '%s' isn't a package name: %s", name, name, rule)]);
         problems(Packages([a], ["a", name])).should.equal([format("L0013: 'main', the file with no `module` line, "
@@ -2400,7 +2407,7 @@ unittest
     describeScriptHomes(["Geo=" ~ directory], null, packages)
         .should.equal("--scripts-in names 'Geo', which isn't a package name: " ~ rule);
     undeclared("--program", "Geo").should.equal("--program names 'Geo', which isn't a package name: " ~ rule);
-    undeclared("--program", "geo").should.equal("--program names 'geo', which no --package or --parts declares");
+    undeclared("--program", "geo").should.equal("--program names 'geo', which no --package or --project declares");
 }
 
 @("describePackages reads the command line's spelling, from a base directory, and adds the standard library")
@@ -2412,7 +2419,7 @@ unittest
     packages.declared.map!(p => p.name).array.should.equal(["geometry", "silver.core", standardPackage]);
     packages.declared[0].directory.should.equal(buildPath("base", "lib/geometry"));
     packages.declared[0].uses.should.equal(["std"]);
-    packages.declared[0].parts.should.equal(["silver.core"]);
+    packages.declared[0].describes.should.equal(["silver.core"]);
     packages.declared[2].directory.should.equal(buildPath(standardLibraryPath(), standardPackage));
     packages.scriptUses.should.equal(["std", "geometry"]);
 
@@ -2422,7 +2429,7 @@ unittest
     describePackages(["geometry"], [], [], null, packages).should.contain("--package takes a name and a directory");
     describePackages(["=lib"], [], [], null, packages).should.contain("--package takes");
     describePackages([], ["app=std"], [], null, packages).should.contain("'app', which no --package declares");
-    describePackages(["a=a"], [], ["b"], null, packages).should.contain("--parts takes a package and its parts");
+    describePackages(["a=a"], [], ["b"], null, packages).should.contain("--project takes a package and the packages it describes");
 }
 
 @("the standard library is the package std, and its modules import it and the prelude without listing anything")
@@ -2633,18 +2640,18 @@ unittest
     auto tool = buildPath(directory, "kit", "tool.ag");
     auto root = problems("module geo.shapes\nimport units.length", files, shapes);
     root.length.should.equal(1);
-    root[0].should.endWith("\nList 'units' among what 'geo' uses\nThat list is `uses` in geo/silver.toml, with the "
-        ~ "directory of 'units' under `[paths]` there if it has none");
+    root[0].should.endWith("\nList 'units' among what 'geo' uses\nThat list is `uses` in geo/silver.toml, with a "
+        ~ "`[[package]]` entry for 'units' there if it has none");
     problems("module geo.kit.tool\nimport units.length", files, tool)[0]
-        .should.endWith("\nThat list is the `uses` of the part 'geo.kit' in geo/silver.toml, with the directory of "
-            ~ "'units' under `[paths]` there if it has none");
+        .should.endWith("\nThat list is the `uses` of the package 'geo.kit' in geo/silver.toml, with a `[[package]]` "
+            ~ "entry for 'units' there if it has none");
     problems("module geo.kit.tool\nimport geo.shapes", files, tool)[0]
-        .should.endWith("\nList 'geo' among what 'geo.kit' uses\nThat list is the `uses` of the part 'geo.kit' in geo/silver.toml");
+        .should.endWith("\nList 'geo' among what 'geo.kit' uses\nThat list is the `uses` of the package 'geo.kit' in geo/silver.toml");
     problems("module geo.shapes\nimport shapes.circle", files, shapes)[0]
-        .should.endWith("\nList it in `uses` in geo/silver.toml, with its directory under `[paths]` there");
+        .should.endWith("\nList it in `uses` in geo/silver.toml, with a `[[package]]` entry whose `path` is its directory there");
     problems("module geo.kit.tool\nimport shapes.circle", files, tool)[0]
-        .should.endWith("\nList it in the `uses` of the part 'geo.kit' in geo/silver.toml, with its directory under "
-            ~ "`[paths]` there");
+        .should.endWith("\nList it in the `uses` of the package 'geo.kit' in geo/silver.toml, with a `[[package]]` "
+            ~ "entry whose `path` is its directory there");
     // A file with no module line under no package's directory has nowhere to list what it uses.
     immutable homeless = "\nA file with no `module` line that's under no package's directory uses only the standard "
         ~ "library, so one that needs '%s' belongs under the directory of that package or of one that uses it";
@@ -2666,7 +2673,7 @@ unittest
     assert(describePackages(["geo=geo"], [], [], null, packages) is null);
     describePackageFiles(["geo"], packages).should.contain("--package-file takes a package and the file");
     describePackageFiles(["geo="], packages).should.contain("--package-file takes");
-    describePackageFiles(["other=x/silver.toml"], packages).should.contain("'other', which no --package or --parts declares");
+    describePackageFiles(["other=x/silver.toml"], packages).should.contain("'other', which no --package or --project declares");
     describePackageFiles([], packages).should.equal(null);
 }
 
@@ -2746,8 +2753,8 @@ unittest
     problems("import std.math\nimport geo.x")[0].should.endWith("\nGive `--package geo=<directory>` to declare one");
     auto files = ["shop=shop/silver.toml", "units=units/silver.toml"];
     problems("import geo.x", [], files)[0].should.endWith("\nA file with no `module` line under the directory of the "
-        ~ "package 'shop' uses what 'shop' uses\nList it in `uses` in shop/silver.toml, with its directory under "
-        ~ "`[paths]` there");
+        ~ "package 'shop' uses what 'shop' uses\nList it in `uses` in shop/silver.toml, with a `[[package]]` entry "
+        ~ "whose `path` is its directory there");
     problems("import shop.main", [], files)[0].should.contain("nothing can use a program");
 }
 
@@ -2767,15 +2774,15 @@ unittest
     mistake(["geo=.", "kit.a=kit"]).should.equal(null);
     mistake(["geo"]).should.contain("--scripts-in takes a package and a directory");
     mistake(["geo="]).should.contain("--scripts-in takes");
-    mistake(["nope=geo"]).should.contain("'nope', which no --package or --parts declares");
-    // A package that only holds its parts may be given one, and a file there then uses only the standard library.
+    mistake(["nope=geo"]).should.contain("'nope', which no --package or --project declares");
+    // A package that only describes others may be given one, and a file there then uses only the standard library.
     mistake(["kit=kit"]).should.equal(null);
     mistake(["geo=kit"]).should.contain("which doesn't hold its modules");
     mistake(["geo=geo", "geo=."]).should.contain("names 'geo' twice");
     mistake(["geo=.", "kit.a=."]).should.contain("to both 'geo' and 'kit.a'");
 }
 
-@("a package's program starts from its module that declares main, or from its one part that's a program")
+@("a package's program starts from its module that declares main, or from the one package it describes that's a program")
 unittest
 {
     auto directory = makeModuleDirectory("program-start", [
@@ -2789,10 +2796,10 @@ unittest
     ]);
     scope (exit) rmdirRecurse(directory);
 
-    string start(string name, string[] declared, string[] parts, out string chosen)
+    string start(string name, string[] declared, string[] projects, out string chosen)
     {
         Packages packages;
-        assert(describePackages(declared, [], parts, directory, packages) is null);
+        assert(describePackages(declared, [], projects, directory, packages) is null);
         auto context = new SourceContext;
         auto file = programStart(name, "run", packages, context, chosen);
         assert(context.collector.errors.empty, context.collector.errors.front.message);
@@ -2805,7 +2812,7 @@ unittest
     start("kit", ["kit.a=kit/a", "kit.b=kit/b"], ["kit=kit.a,kit.b"], chosen).should.equal(buildPath(directory, "kit/b",
         "main.ag"));
     chosen.should.equal("kit.b");
-    // A part is a package of its own, so its program is its own.
+    // A described package is a package of its own, so its program is its own.
     start("kit.b", ["kit.a=kit/a", "kit.b=kit/b"], ["kit=kit.a,kit.b"], chosen).should.equal(buildPath(directory,
         "kit/b", "main.ag"));
 }
@@ -2823,11 +2830,11 @@ unittest
     ]);
     scope (exit) rmdirRecurse(directory);
 
-    string problem(string name, string[] declared, string[] parts, string[] homes = [], string[] files = [],
+    string problem(string name, string[] declared, string[] projects, string[] homes = [], string[] files = [],
         string command = "run")
     {
         Packages packages;
-        assert(describePackages(declared, [], parts, directory, packages) is null);
+        assert(describePackages(declared, [], projects, directory, packages) is null);
         assert(describePackageFiles(files, packages) is null);
         assert(describeScriptHomes(homes, directory, packages) is null);
         auto context = new SourceContext;
@@ -2845,12 +2852,13 @@ unittest
     problem("geo", ["geo=geo"], [], [], ["geo=silver.toml"], "build").should.equal("L0014: The package 'geo' is a "
         ~ "library: none of its modules declares `main`, so it has no program to build\nIts tests are run with "
         ~ "`silver test`\nA file with no `module` line is a program of its own, and is run by naming it, as `silver build demo.ag`");
-    problem("kit", ["kit.a=kit/a"], ["kit=kit.a"]).should.equal("L0014: The package 'kit' only holds its parts, and "
-        ~ "none of its parts is a program: no module of theirs declares `main`, so there's no program to run\nIts tests "
+    problem("kit", ["kit.a=kit/a"], ["kit=kit.a"]).should.equal("L0014: The package 'kit' only describes others, and "
+        ~ "none of the packages it describes is a program: no module of theirs declares `main`, so there's no program "
+        ~ "to run\nIts tests "
         ~ "are run with `silverc test`, given a directory or a file\nA file with no `module` line is a program of its own, and is run "
         ~ "by naming it, as `silverc run demo.ag`");
     problem("geo", ["geo=geo", "kit.a=kit/a"], ["geo=kit.a"]).should.startWith("L0014: The package 'geo' is a library, "
-        ~ "and none of its parts is a program: no module of it or of them declares `main`");
+        ~ "and none of the packages it describes is a program: no module of it or of them declares `main`");
 
     auto kit = ["kit.a=kit/a", "kit.b=kit/b", "kit.c=kit/c/src"];
     auto b = buildPath(directory, "kit/b");
@@ -2859,14 +2867,14 @@ unittest
         ~ "than one program, so which to run has to be said:\n"
         ~ "  'kit.b', at " ~ b ~ ", whose `main` is in " ~ buildPath(b, "main.ag") ~ "\n"
         ~ "  'kit.c', at " ~ c ~ ", whose `main` is in " ~ buildPath(directory, "kit/c/src", "main.ag") ~ "\n"
-        ~ "Choose a part with `--program`, as `--program kit.b`");
+        ~ "Choose one with `--program`, as `--program kit.b`");
     problem("kit", kit, ["kit=kit.a,kit.b,kit.c"], ["kit.b=kit/b"], ["kit.b=silver.toml"], "build")
-        .should.endWith("\nChoose a part by its directory, as `silver build " ~ b ~ "`");
+        .should.endWith("\nChoose one by its directory, as `silver build " ~ b ~ "`");
     // The package's own program is among them, and is chosen by its file.
     auto itself = problem("app", ["app=app", "kit.b=kit/b"], ["app=kit.b"]);
     itself.should.contain("\n  'app' itself, whose `main` is in " ~ buildPath(directory, "app", "main.ag") ~ ", chosen "
         ~ "by naming that file\n  'kit.b', at " ~ b ~ ",");
-    itself.should.endWith("\nChoose a part with `--program`, as `--program kit.b`, or the program of 'app' itself by its "
+    itself.should.endWith("\nChoose one with `--program`, as `--program kit.b`, or the program of 'app' itself by its "
         ~ "file, as `silverc run " ~ buildPath(directory, "app", "main.ag") ~ "`");
 }
 
@@ -3105,9 +3113,10 @@ unittest
         return messages;
     }
     immutable lone = "\nA file in no project uses only the standard library. To use '%s', put a `silver.toml` at or "
-        ~ "above it that names a package of its own, with '%s' in its `uses` and the directory of '%s', whose own `silver.toml` names it, under `[paths]`";
+        ~ "above it that names a package of its own, with '%s' in its `uses` and a `[[package]]` entry whose `path` is "
+        ~ "the directory of '%s', whose own `silver.toml` names it";
     immutable listed = "\nTo use '%s', put a `silver.toml` at or above it that names a package of its own, with '%s' "
-        ~ "in its `uses` and the directory of '%s', whose own `silver.toml` names it, under `[paths]`";
+        ~ "in its `uses` and a `[[package]]` entry whose `path` is the directory of '%s', whose own `silver.toml` names it";
     // A script in no project, importing a package nothing declares, or one declared by hand.
     problems("import geometry.area", [], []).should.equal(["Module 'geometry.area' not found: no package is named "
         ~ "'geometry', or by any longer start of 'geometry.area'" ~ format(lone, "geometry", "geometry", "geometry")]);
@@ -3122,9 +3131,9 @@ unittest
     // A module of a package declared by hand.
     problems("module geo.shapes\nimport units.length", declared, [], [], shapes)[0].should.endWith("\nList 'units' "
         ~ "among what 'geo' uses\n'geo' is described in no `silver.toml`, and what a package uses is listed in its "
-        ~ "`silver.toml`, as `uses`, with the directory of each package it uses under `[paths]`");
+        ~ "`silver.toml`, as `uses`, with a `[[package]]` entry for each package it uses");
     immutable undeclared = "\n'geo' is described in no `silver.toml`, and a package it uses is listed in its "
-        ~ "`silver.toml`, as `uses`, with its directory under `[paths]`";
+        ~ "`silver.toml`, as `uses`, with a `[[package]]` entry whose `path` is its directory";
     problems("module geo.shapes\nimport shapes.circle", declared, [], [], shapes)[0].should.endWith(undeclared);
     problems("def main(): Unit {}", declared, ["geo=nope"])[0].should.endWith(undeclared);
     // A starting file whose module line names no package, in no package's directory.
@@ -3137,7 +3146,7 @@ unittest
     // What a package file describes is named by it, as before.
     auto files = ["geo=geo/silver.toml", "units=units/silver.toml"];
     problems("module geo.shapes\nimport units.length", declared, [], files, shapes)[0].should.endWith("\nThat list is "
-        ~ "`uses` in geo/silver.toml, with the directory of 'units' under `[paths]` there if it has none");
+        ~ "`uses` in geo/silver.toml, with a `[[package]]` entry for 'units' there if it has none");
     problems("import geo.shapes", declared, [], files)[0].should.endWith("\nA file with no `module` line that's under "
         ~ "no package's directory uses only the standard library, so one that needs 'geo' belongs under the directory "
         ~ "of that package or of one that uses it");
@@ -3191,7 +3200,7 @@ Rename the %s", file, geo, what,
     }
 }
 
-@("a file whose module line names no package is told where its package's modules go, or that it's beside a package of parts")
+@("a file whose module line names no package is told where its package's modules go, or that it's beside a package that only describes others")
 unittest
 {
     auto directory = makeModuleDirectory("packages-hint-homes", [
@@ -3222,7 +3231,7 @@ unittest
     problems("import kit.a.x", "kit/s.ag", ["kit=kit", "kit.a=kit/a"]).should.equal(["'s' is a file with no `module` "
         ~ "line, so a program of its own that uses no package but `lang` and 'std', and it can't import 'kit.a.x', from "
         ~ "the package 'kit.a'
-A file with no `module` line under the directory of 'kit', a package that only holds "
-        ~ "its parts, uses only the standard library, so one that needs 'kit.a' belongs under the directory of one of "
-        ~ "its parts, 'kit.a', or of a package that uses it"]);
+A file with no `module` line under the directory of 'kit', a package that only describes "
+        ~ "others, uses only the standard library, so one that needs 'kit.a' belongs under the directory of one of "
+        ~ "the packages it describes, 'kit.a', or of a package that uses it"]);
 }

@@ -3,5 +3,5 @@ name = "shop"
 source = "src"
 uses = ["units"]
 
-[paths]
-units = "../units"
+[[package]]
+path = "../units"

@@ -62,7 +62,7 @@ void expectRan(Ran ran, string output, int status = 0)
     assert(ran.status == status && ran.output == output, "exit status " ~ text(ran.status) ~ ", output:\n" ~ ran.output);
 }
 
-@("a program uses libraries found by [paths], one of which uses the other, on both backends")
+@("a program uses libraries listed by their paths, one of which uses the other, on both backends")
 unittest
 {
     auto shop = buildPath(fixtures, "uses-path", "shop");
@@ -84,7 +84,7 @@ unittest
     expectRan(runIn([output], directory), "25\n5\n");
 }
 
-@("silver test runs a library's tests and a part's companion tests, on both backends")
+@("silver test runs a library's tests and a described package's companion tests, on both backends")
 unittest
 {
     foreach (backend; ["interpreter", "llvm"])
@@ -96,7 +96,7 @@ unittest
     }
 }
 
-@("a parent with no modules holds library parts and two parts that are programs, each run on both backends")
+@("a root with no modules describes libraries and two programs, each run on both backends")
 unittest
 {
     auto project = buildPath(fixtures, "compiler-shape");
@@ -107,11 +107,37 @@ unittest
     }
 }
 
-@("a package elsewhere uses one part of another project by the part's directory")
+@("a package elsewhere uses one package that another project describes, by its directory")
 unittest
 {
     foreach (backend; ["interpreter", "llvm"])
-        expectRan(planned(["-b", backend, "main.ag"], buildPath(fixtures, "uses-part")), "parsed node 7\n");
+        expectRan(planned(["-b", backend, "main.ag"], buildPath(fixtures, "uses-described")), "parsed node 7\n");
+    // It's given to the compiler with the rest of that project, whose project list names it, and lint is in none.
+    auto p = plan("silverc", request(["main.ag"]), buildPath(fixtures, "uses-described"));
+    assert(p.arguments.canFind("tool=tool.ast,tool.syntax,tool.compiler,tool.frontend"), p.arguments.join(" "));
+    assert(p.arguments.count("--project") == 1, p.arguments.join(" "));
+}
+
+@("a root lists a library and a program that have files of their own: each is its own project, and run from its directory")
+unittest
+{
+    auto listing = buildPath(fixtures, "listing");
+    foreach (backend; [["-b", "interpreter"], ["-b", "llvm"]])
+    {
+        expectRan(silver(["run"] ~ backend, buildPath(listing, "app")), "counted 3\n");
+        expectRan(silver(["run"] ~ backend ~ "app", listing), "counted 3\n");
+        expectRan(silver(backend ~ buildPath("app", "src", "main.ag"), listing), "counted 3\n");
+    }
+    // The library is used by the described package and by the program, each through its own entry.
+    auto p = plan("silverc", request(["run"]), listing);
+    assert(p.arguments.canFind("--project") && p.arguments.canFind("listing=listing.report"), p.arguments.join(" "));
+    assert(p.arguments.count("--project") == 1 && p.arguments.canFind("words=words"), p.arguments.join(" "));
+    assert(!p.arguments.canFind!(a => a.startsWith("app=")), p.arguments.join(" "));
+    // The only program here has a file of its own, so it isn't the program of the project here.
+    auto ran = silver(["run"], listing);
+    assert(ran.status == 1 && ran.output.startsWith("Error L0014: The package 'listing' only describes others, and none "
+        ~ "of the packages it describes is a program"), ran.output);
+    expectRan(silver(["test", "-b", "both"], buildPath(listing, "words")), "1 passed, 0 failed\n");
 }
 
 @("silver itself runs a project's program and shows the compiler's command line when asked")
@@ -144,7 +170,7 @@ unittest
 {
     auto broken = buildPath(fixtures, "broken");
     immutable message = "Error F0016: `version` isn't a field of a package file. A package file has `name`, `source`, "
-        ~ "`uses`, `[paths]` and `[[part]]`\n";
+        ~ "`uses` and `[[package]]`\n";
     expectRan(silver(["main.ag"], broken), "silver.toml(2,1): " ~ message, 1);
     expectRan(silver(["build", "broken/main.ag"], fixtures), buildPath("broken", "silver.toml") ~ "(2,1): " ~ message, 1);
     auto p = plan("silverc", request(["test", "main.ag"]), broken);
@@ -166,14 +192,14 @@ unittest
 unittest
 {
     auto directory = makeTree("frontend-hints", [
-        "silver.toml": "name = \"p\"\n\n[[part]]\nname = \"p.a\"\npath = \"a\"\n\n[[part]]\nname = \"p.b\"\npath = \"b\"\n",
+        "silver.toml": "name = \"p\"\n\n[[package]]\nname = \"p.a\"\npath = \"a\"\n\n[[package]]\nname = \"p.b\"\npath = \"b\"\n",
         "a/lib.ag": "module p.a.lib\n\ndef one(): Int => 1\n",
         "b/main.ag": "module p.b.main\n\nimport p.a.lib\n\ndef main(): Unit {\n    printl(one())\n}\n",
     ]);
     scope (exit) rmdirRecurse(directory);
     auto ran = silver([buildPath("b", "main.ag")], directory);
     assert(ran.status == 1, ran.output);
-    assert(ran.output.endsWith("\nList 'p.a' among what 'p.b' uses\nThat list is the `uses` of the part 'p.b' in "
+    assert(ran.output.endsWith("\nList 'p.a' among what 'p.b' uses\nThat list is the `uses` of the package 'p.b' in "
         ~ "silver.toml\n"), ran.output);
     assert(!ran.output.canFind("--uses"), ran.output);
 }
@@ -187,7 +213,7 @@ unittest
     assert(p.scriptHomes == ["tool.ast"]);
     assert(p.arguments[$ - 6 .. $] == ["--filter", "node", "-b", "both", "--format=json", "ast"]);
     assert(p.arguments[0 .. 5] == ["silverc", "test", "--from-silver", "--package", "tool.ast=ast"]);
-    p = plan("silverc", request(["-b", "llvm", "main.ag", "after"]), buildPath(fixtures, "uses-part"));
+    p = plan("silverc", request(["-b", "llvm", "main.ag", "after"]), buildPath(fixtures, "uses-described"));
     assert(p.arguments[$ - 4 .. $] == ["-b", "llvm", "main.ag", "after"]);
     assert(p.arguments.canFind("lint=."));
 }
@@ -248,15 +274,15 @@ unittest
     assert(plan("silverc", request(["scratch.ag"]), group).scriptHomes == ["group"]);
 
     auto directory = makeTree("frontend-script-homeless", [
-        "silver.toml": "name = \"g\"\n\n[[part]]\nname = \"g.lib\"\npath = \"lib\"\n",
+        "silver.toml": "name = \"g\"\n\n[[package]]\nname = \"g.lib\"\npath = \"lib\"\n",
         "lib/words.ag": "module g.lib.words\n\ndef word(): String => \"w\"\n",
         "scratch.ag": "import g.lib.words\n\ndef main(): Unit {}\n",
     ]);
     scope (exit) rmdirRecurse(directory);
     auto ran = silver(["scratch.ag"], directory);
     assert(ran.status == 1 && ran.output.endsWith("\nA file with no `module` line under the directory of 'g', a "
-        ~ "package that only holds its parts, uses only the standard library, so one that needs 'g.lib' belongs under "
-        ~ "the directory of one of its parts, 'g.lib', or of a package that uses it\n"), ran.output);
+        ~ "package that only describes others, uses only the standard library, so one that needs 'g.lib' belongs under "
+        ~ "the directory of one of the packages it describes, 'g.lib', or of a package that uses it\n"), ran.output);
     assert(!ran.output.canFind("--uses"), ran.output);
 }
 
@@ -273,7 +299,8 @@ unittest
     scope (exit) rmdirRecurse(directory);
     auto ran = silver(["demo.ag"], buildPath(directory, "geo"));
     assert(ran.status == 1 && ran.output.endsWith("\nA file with no `module` line under the directory of the package "
-        ~ "'geo' uses what 'geo' uses\nList it in `uses` in silver.toml, with its directory under `[paths]` there\n"),
+        ~ "'geo' uses what 'geo' uses\nList it in `uses` in silver.toml, with a `[[package]]` entry whose `path` is its "
+        ~ "directory there\n"),
         ran.output);
 }
 
@@ -284,14 +311,14 @@ unittest
     foreach (backend; ["interpreter", "llvm"])
     {
         expectRan(planned(["test", "-b", backend, "shapes"], scripts), "2 passed, 0 failed\n");
-        // The root holds only its parts: scratch.ag uses std alone and lib/try.ag uses its part.
+        // The root only describes another: scratch.ag uses std alone and lib/try.ag uses the package it's in.
         expectRan(planned(["test", "-b", backend, "group"], scripts), "2 passed, 0 failed\n");
         expectRan(planned(["test", "-b", backend, "."], buildPath(scripts, "group")), "2 passed, 0 failed\n");
     }
     assert(plan("silverc", request(["test", "group"]), scripts).scriptHomes == ["group", "group.lib"]);
 }
 
-@("with no file, silver run runs the program of the package started in, from its root, a subdirectory or a part, on both backends")
+@("with no file, silver run runs the program of the package started in, from its root, a subdirectory or a described package, on both backends")
 unittest
 {
     auto shop = buildPath(fixtures, "uses-path", "shop");
@@ -315,7 +342,7 @@ unittest
     auto tool = buildPath(fixtures, "compiler-shape");
     expectRan(silver(["run"], tool), "Error L0015: The package 'tool' holds more than one program, so which to run has to "
         ~ "be said:\n  'tool.compiler', at compiler, whose `main` is in " ~ buildPath("compiler", "source", "main.ag")
-        ~ "\n  'tool.frontend', at frontend, whose `main` is in " ~ buildPath("frontend", "main.ag") ~ "\nChoose a part by "
+        ~ "\n  'tool.frontend', at frontend, whose `main` is in " ~ buildPath("frontend", "main.ag") ~ "\nChoose one by "
         ~ "its directory, as `silver run compiler`\n", 1);
     assert(silver(["build"], tool).output.canFind("so which to build has to be said"));
     foreach (backend; [["-b", "interpreter"], ["-b", "llvm"]])
@@ -324,25 +351,25 @@ unittest
         expectRan(silver(["run"] ~ backend ~ buildPath(tool, "frontend"), tempDir), "the front end\n");
     }
     expectRan(silver(["run", "compiler/source"], tool), "Error F0034: " ~ buildPath("compiler", "source")
-        ~ " is a directory, and no package or part that silver.toml describes is there, so it has no program to run. Its packages "
+        ~ " is a directory, and no package that silver.toml describes is there, so it has no program to run. Its packages "
         ~ "are 'tool' at ., 'tool.ast' at ast, 'tool.syntax' at syntax, 'tool.compiler' at compiler, 'tool.frontend' at "
         ~ "frontend; name one of those directories, or a file\n", 1);
     expectRan(silver(["run", "compiler", "x"], tool), "`x` follows the directory compiler, and what follows it is for the "
         ~ "program, which can't be given arguments yet.\n", 1);
 }
 
-@("a package with a main of its own and a part that's a program lists its own as chosen by its file, and the part by its directory")
+@("a package with a main of its own that describes a program lists its own as chosen by its file, and the other by its directory")
 unittest
 {
-    auto directory = makeTree("frontend-root-and-part-programs", [
-        "silver.toml": "name = \"par\"\nsource = \"src\"\n\n[[part]]\nname = \"par.tool\"\npath = \"tool\"\n",
+    auto directory = makeTree("frontend-root-and-described-programs", [
+        "silver.toml": "name = \"par\"\nsource = \"src\"\n\n[[package]]\nname = \"par.tool\"\npath = \"tool\"\n",
         "src/main.ag": "module par.main\n\ndef main(): Unit {\n    printl(\"par\")\n}\n",
         "tool/main.ag": "module par.tool.main\n\ndef main(): Unit {\n    printl(\"tool\")\n}\n",
     ]);
     scope (exit) rmdirRecurse(directory);
     expectRan(silver(["run"], directory), "Error L0015: The package 'par' holds more than one program, so which to run "
         ~ "has to be said:\n  'par' itself, whose `main` is in " ~ buildPath("src", "main.ag") ~ ", chosen by naming that "
-        ~ "file\n  'par.tool', at tool, whose `main` is in " ~ buildPath("tool", "main.ag") ~ "\nChoose a part by its "
+        ~ "file\n  'par.tool', at tool, whose `main` is in " ~ buildPath("tool", "main.ag") ~ "\nChoose one by its "
         ~ "directory, as `silver run tool`, or the program of 'par' itself by its file, as `silver run "
         ~ buildPath("src", "main.ag") ~ "`\n", 1);
     expectRan(silver(["run", "tool"], directory), "tool\n");
@@ -378,18 +405,18 @@ unittest
     auto output = buildPath(directory, "front" ~ exe);
     expectRan(silver(["build", "-o", output, "frontend"], buildPath(fixtures, "compiler-shape")), "");
     expectRan(runIn([output], directory), "the front end\n");
-    // A part's executable is named after the last segment of its name, in the working directory.
+    // A described package's executable is named after the last segment of its name, in the working directory.
     expectRan(silver(["build", buildPath(fixtures, "compiler-shape", "frontend")], directory), "");
     expectRan(runIn([buildPath(directory, "frontend" ~ exe)], directory), "the front end\n");
     version (Posix)
     {
-        // The default name is the part's directory, which isn't written over.
+        // The default name is the package's directory, which isn't written over.
         expectRan(silver(["build", "frontend"], buildPath(fixtures, "compiler-shape")), "The executable would be "
             ~ "written to frontend, which is a directory: give where to write it with -o.\n", 1);
     }
 }
 
-@("with no path, silver test runs the tests of the package started in and of its parts, on both backends")
+@("with no path, silver test runs the tests of the package started in and of those it describes, on both backends")
 unittest
 {
     auto tool = buildPath(fixtures, "compiler-shape");
@@ -400,7 +427,7 @@ unittest
         expectRan(silver(["test", "-b", backend], buildPath(fixtures, "uses-path", "geometry")), "1 passed, 0 failed\n");
         expectRan(silver(["test", "-b", backend], buildPath(fixtures, "scripts", "shapes")), "2 passed, 0 failed\n");
     }
-    // From inside a part, only that part's tests.
+    // From inside a described package, only its tests.
     expectRan(silver(["test"], buildPath(tool, "compiler", "source")), "No tests found\n");
     auto p = plan("silverc", request(["test", "--filter", "node"]), buildPath(tool, "compiler", "source"));
     assert(p.arguments[$ - 3 .. $] == ["--filter", "node", buildPath(tool, "compiler")], p.arguments.join(" "));
@@ -438,8 +465,8 @@ unittest
         "outer/silver.toml": "name = \"outer\"
 source = \"src\"
 uses = [\"used\"]
-[paths]
-used = \"used\"
+[[package]]
+path = \"used\"
 ",
         "outer/src/k.ag": "module outer.k
 
@@ -523,23 +550,24 @@ unittest
     expectRan(silver(["app.ag"], directory), "app.ag(1,1): Error L0001: Module 'geometry.area' not found: no package is "
         ~ "named 'geometry', or by any longer start of 'geometry.area'\nA file in no project uses only the standard "
         ~ "library. To use 'geometry', put a `silver.toml` at or above it that names a package of its own, with "
-        ~ "'geometry' in its `uses` and the directory of 'geometry', whose own `silver.toml` names it, under `[paths]`\n", 1);
+        ~ "'geometry' in its `uses` and a `[[package]]` entry whose `path` is the directory of 'geometry', whose own "
+        ~ "`silver.toml` names it\n", 1);
     auto tested = silver(["test", "."], directory);
     assert(tested.status == 1 && tested.output.canFind("To use 'geometry'") && mentionsNoOption(tested.output),
         tested.output);
 }
 
-@("a package used from inside the directory of a package with no source is refused at the [paths] entry")
+@("a package listed from inside the directory of a package with no source is refused at its entry")
 unittest
 {
     auto directory = makeTree("frontend-nested-used", [
-        "outer/silver.toml": "name = \"outer\"\nuses = [\"inner\"]\n\n[paths]\ninner = \"inner\"\n",
+        "outer/silver.toml": "name = \"outer\"\nuses = [\"inner\"]\n\n[[package]]\npath = \"inner\"\n",
         "outer/main.ag": "def main(): Unit {}\n",
         "outer/inner/silver.toml": "name = \"inner\"\n",
     ]);
     scope (exit) rmdirRecurse(directory);
     auto outer = buildPath(directory, "outer");
-    expectRan(silver(["main.ag"], outer), "silver.toml(5,9): Error F0035: 'inner' is at " ~ buildPath(outer, "inner")
+    expectRan(silver(["main.ag"], outer), "silver.toml(5,8): Error F0035: 'inner' is at " ~ buildPath(outer, "inner")
         ~ ", inside the directory of 'outer', at " ~ outer ~ ", whose modules are that whole directory, so a file of "
         ~ "'inner' would be a module of both; giving 'outer' a `source` directory below it avoids it\n", 1);
 }
@@ -562,6 +590,6 @@ unittest
         assert(ran.status == 1 && ran.output.canFind("Error P0001") && ran.output.count("Error") == 1, ran.output);
     }
     expectRan(silver(["--uses", "kit", "s.ag"], kit), "Error F0036: --uses is given by hand, and inside a project "
-        ~ "packages are described in its package file, silver.toml: what a package uses is its `uses`, its parts are "
-        ~ "`[[part]]`s, and where a package it uses is goes under `[paths]`\n", 1);
+        ~ "packages are described in its package file, silver.toml: what a package uses is its `uses`, and each "
+        ~ "package it uses or describes is a `[[package]]` entry\n", 1);
 }

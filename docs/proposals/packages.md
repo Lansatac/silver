@@ -1,6 +1,6 @@
 # Proposal: packages
 
-**Status: decided, and built except what the parts of a package share.** The rules are described in [Modules](../language/modules.md#packages), and the front end and its file in [The `silver` tool](../silver.md). This document keeps the reasoning and what was rejected. A program is still compiled whole. `lang` is in place: only it may declare intrinsics, and the compiler names no other package. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
+**Status: decided, and built except the ownership the packages of one project share.** The rules are described in [Modules](../language/modules.md#packages), and the front end and its file in [The `silver` tool](../silver.md). This document keeps the reasoning and what was rejected. A program is still compiled whole. `lang` is in place: only it may declare intrinsics, and the compiler names no other package. The [conformance proposal](conformance.md) depends on this one for who may declare a conformance and who sees one.
 
 ## Summary
 
@@ -20,7 +20,7 @@ The lines that describe a package here, as `package silver.core at core/source`,
 ## Motivation
 
 - **The language now needs the boundary.** [Declared conformance](conformance.md) decides who may conform a type by which package declares it, and a compiler that drew the boundary differently would accept different programs.
-- **A sub-package repeats its name in folders.** With `import a.b` loading `<root>/a/b.ag`, a part of `silver` called `core` with its own root has to live at `core/source/silver/core/`.
+- **A sub-package repeats its name in folders.** With `import a.b` loading `<root>/a/b.ag`, a package of the compiler called `silver.core` with its own root has to live at `core/source/silver/core/`.
 - **The standard library shouldn't be tied to the compiler.** What the compiler depends on should be small and named, so the rest can change, or be replaced, without it.
 
 ## What belongs to the language, and what to the tool
@@ -28,7 +28,7 @@ The lines that describe a package here, as `package silver.core at core/source`,
 - **The language** says what a package is, which package a module belongs to, what a package may depend on, and which package is the program.
 - **The tool** says where a package's source comes from: a manifest, versions, fetching, a lock file and a registry. None of it changes what a program means.
 - **Two executables, with the compiler's flags as the contract between them (decided).**
-  - `silverc` is the compiler. It's given every package fact on its command line (the name, directory, uses and parts of each package) and never reads a package file or touches the network. Every rule that changes what a program means lives here.
+  - `silverc` is the compiler. It's given every package fact on its command line (the name, directory and uses of each package, and which packages are one project) and never reads a package file or touches the network. Every rule that changes what a program means lives here.
   - `silver` is the front end and package manager. It finds the project, reads its package file, works out where each dependency's source is, and calls `silverc`. `silver run`, `silver build` and `silver test` are its commands.
   - So a package file can change format, or another tool can drive `silverc`, without the language changing. Two programs can later be merged into one more easily than one can be split. A package compiled on its own, which separate compilation needs, is one `silverc` call, as a crate is one `rustc` call under Cargo.
   - Both exist. In a project, `silver` reads the package files and gives `silverc` the flags. For a file in no project it passes its command line on, adding only `--from-silver`.
@@ -59,7 +59,7 @@ The lines that describe a package here, as `package silver.core at core/source`,
 
 ### Scripts (decided inside a project, open outside one)
 
-- A script under a package's directory uses what that package uses, and the package too when it's a library. It's still a program of its own and not part of the package, so it gains none of the package's rights over its types.
+- A script under a package's directory uses what that package uses, and the package too when it's a library. It's still a program of its own and doesn't belong to the package, so it gains none of the package's rights over its types.
 - That's how several runnable files share modules: the package holds what's shared and is a library, and each runnable file is a script beside it.
 - Under a program, a script can't use the program, since nothing can. It sees what the program uses. A test harness with the programs it runs kept under it is the case.
 - A script in no project, or under none of a project's packages, uses the standard library only. How one would say it needs more is open, and a header in the script is the likely form.
@@ -80,22 +80,26 @@ These hold so that no choice is closed off:
 - It's a property of the package, and not of which one is being built. A library built on its own to run its tests is still a library, so it can't declare what only a program may.
 - A file with no `module` line, run directly, is a program of its own: one module, named after the file, that nothing can import.
 
-### Parts of one package (decided)
+### The packages of one project (decided)
 
-A package can list others as its parts, as `silver` lists `silver.ast`, `silver.core` and `silver.sema`.
+The packages one package file describes are one project: the file's own package and each it describes, as the compiler's file describes `silver.ast`, `silver.core` and `silver.sema`.
 
 ```
 package silver at source
-    parts: silver.ast, silver.core, silver.sema
+    describes: silver.ast, silver.core, silver.sema
 ```
 
-- Only the parent's list makes a package a part. A name that extends another package's, as `std.extra` extends `std`, means nothing by itself.
-- Parts are built and laid out separately, and each lists what it uses.
-- For ownership they count as one: any part may declare a conformance for a type or an interface that any part owns.
-- A part with a `main` is a program, and a parent can have several, as a compiler, its front end and its test harness. The others are libraries that share ownership with them, and other packages may depend on them.
-- A parent needn't have modules of its own. One that exists only to hold its parts together is the usual shape of a project in several packages, and a tool that wants a root package with code in it pushes the code somewhere it doesn't belong.
-- The parent's package file describes each part: its name, its path and what it uses. The parts have no file of their own. That follows from the rule above it: a package is a part only because its parent says so, so the parent is where it's written down, and the whole project's packages and what each uses read in one place.
-- A visibility between `private` and public, for what the parts share and nothing outside may use, would be defined here. It isn't designed.
+- Only being described in one file makes packages one project. A name that extends another package's, as `std.extra` extends `std`, means nothing by itself.
+- The packages of a project are built and laid out separately, and each lists what it uses.
+- For ownership they count as one: any of them may declare a conformance for a type or an interface that any of them owns.
+- A package of a project with a `main` is a program, and a project can have several, as a compiler, its front end and its test harness. The others are libraries that share ownership with them, and other packages may depend on them.
+- The package whose file describes the others needn't have modules of its own. One that exists only to describe them is the usual shape of a project in several packages, and a tool that wants a root package with code in it pushes the code somewhere it doesn't belong.
+- A described package has no file of its own: the file that describes it gives its name, its path and what it uses. That follows from the rule above it: a package is in the project only because that file says so, so the file is where it's written down, and the whole project's packages and what each uses read in one place.
+- A package file lists every package it tells `silver` about in one list, whether the file describes it or it has a file of its own, as [The `silver` tool](../silver.md#the-packages-a-file-lists) shows. A package with a file of its own is its own project whoever lists it, and shares no ownership with the lister. Otherwise any project could list `std` and gain rights over its types.
+- A described package can't describe others, since it has no file to do it in. A package with a file of its own can list packages of its own, and those are its project's, not the lister's. Ownership isn't shared any further.
+- A visibility between `private` and public, for what the packages of a project share and nothing outside may use, would be defined here. It isn't designed.
+
+This replaced an earlier form of the same rule, in which a package listed others as its *parts* in a list of their own, `[[part]]`, beside a separate table of where other packages were, `[paths]`. One list of packages, each saying where it comes from, reads more simply and takes remote sources as new keys on an entry, and sharing ownership by being described in one file needs no second word.
 
 ### The package the compiler knows (decided)
 
@@ -108,7 +112,7 @@ The compiler refers to one package by name, `lang`. Everything else, the standar
 5. A declaration belongs there only when it's an intrinsic or the compiler names it. Anything that's plain Silver belongs in `std`.
 
 - Built-in types, which no module declares, belong to `lang`: arrays, tuples, options, error unions and function types.
-- `lang` and `std` aren't parts of one package. `std` has the rights any library has, so another standard library could stand where it does.
+- `lang` and `std` aren't one project. `std` has the rights any library has, so another standard library could stand where it does.
 - The functions syntax calls by name, such as `opIndex`, `length` and `next`, are found as any function is. The compiler depends on the name being in scope and not on a package.
 - By rule 1, the intrinsics `std` held move: `std.ref`'s `Ref`, `get`, `set` and `update`, `std.c`'s aliases, and `std.time`'s runtime native. `std` forwards them. `std.string` and `std.char` used unchecked conversions privately; `lang` gives them checked ones instead (`decode`, `toChar` and a `slice` that panics unless it falls between characters), so `std` can't build a String that isn't UTF-8 any more than other code can.
 
@@ -129,21 +133,23 @@ So `xs.map(f)` needs no import, the functions behind it are plain Silver in `std
 - **YAML for the package file.** Readable and familiar, but it types values implicitly (`no` is false), its indentation is significant, and its parser is large.
 - **One executable, with the compiler as a library inside it,** as `go` and `zig` are. One install and nothing to start per package, but the contract would be an internal interface that nothing keeps clean, and one per-package compile is the unit separate compilation wants anyway.
 - **A separate package manager with its own idea of a project,** as dub is beside dmd. The compiler and the manager could disagree about which package a file is in. With `silver` calling `silverc` with the facts, only `silverc` decides.
-- **Every package stands alone for ownership.** Simpler to state. A project split into parts would meet the restriction on conformances in its own code.
-- **A part by its name, or by naming its parent.** Nothing for the parent to write. But being a part gives ownership of the parent's types, and anyone could claim it: a package named `std.extra` could conform built-in types to `std`'s interfaces.
-- **Every part of a program is the program.** Each part could conform anything, and nothing outside could depend on any of them, so a program's library parts couldn't be shared.
+- **Every package stands alone for ownership.** Simpler to state. A project split into packages would meet the restriction on conformances in its own code.
+- **Joining a project by its name, or by naming the package that describes it.** Nothing for the project's file to write. But being in a project gives ownership of its types, and anyone could claim it: a package named `std.extra` could conform built-in types to `std`'s interfaces.
+- **Ownership shared with every package a file lists.** One rule for every entry. But a project could then list `std`, or anyone's package, and gain rights over its types.
+- **A separate word and list for the packages that share ownership,** `[[part]]` beside `[paths]` for packages from elsewhere, as first built. It named the grouping, but it was two lists with two shapes for one question, where each package comes from, and sharing ownership by being described in one file needs no second concept. One list of packages, each with where it comes from, is simpler to read and takes remote sources as new keys.
+- **Every package of a program's project is the program.** Each could conform anything, and nothing outside could depend on any of them, so a program's libraries couldn't be shared.
 - **The program is whichever package is being built.** No kind to declare, but a library built alone would count as one and could declare conformances that fail once something depends on it.
 - **A package says whether it's a program.** Explicit, and one more thing to write that `main` already says.
-- **A script imports the modules beside it by their bare names,** as `import hands` for `hands.ag` in its folder, with no package file. Nothing to write, and it's what a program's directory as a root used to give. But a helper then has a name that says nothing of the project it's part of, and there'd be a second way to name a module beside the package's.
+- **A script imports the modules beside it by their bare names,** as `import hands` for `hands.ag` in its folder, with no package file. Nothing to write, and it's what a program's directory as a root used to give. But a helper then has a name that says nothing of the project it belongs to, and there'd be a second way to name a module beside the package's.
 - **A folder is a package named after itself,** with no package file. Nothing to write either, but the name comes from the path, so renaming the folder or cloning it under another name breaks every `module` line in it.
 - **Several `main`s in one package,** with the one being run as the program. It would undo a program being a property of the package, and nothing could then use the shared modules as a library.
 - **One program per folder,** with every other runnable file moved to a package of its own. Explicit, and a folder of fifty experiments would be fifty packages.
 - **A root module named after the package,** as `cards/cards.ag` for `module cards`. The file's name says what it is, but `cards.cards` could then never be a module, and which file is the root would depend on the package's name.
 - **No root module.** The smallest rule, and a library of one file would always be imported as `name.something`.
-- **A package file in every part,** each giving the path of every package it uses. Each directory then says what it is by itself, as a Cargo crate does. But a project of nine parts writes `../ast` and its like some twenty-five times, and no one file shows what uses what.
-- **A used package written as a name and a table,** as `geometry = { path = "../geometry" }`. It's what Cargo does, and keeps a name beside its source. But a part names its siblings with no path at all, so what's used is a list of names, and where a package outside the file is kept is a separate table.
-- **A workspace file beside the package files,** listing a project's packages without making them parts. It would be a second way to group packages. A parent with no modules of its own does it with the one there is, and a list of packages that share nothing can be added if it's wanted.
-- **A script belongs to the package of its directory.** It would see what that package shares among its parts, but a file tried out inside a library couldn't conform anything the library can't.
+- **A package file in every package of a project,** each giving the path of every package it uses. Each directory then says what it is by itself, as a Cargo crate does. But a project of nine packages writes `../ast` and its like some twenty-five times, and no one file shows what uses what.
+- **A used package written as a name and a table,** as `geometry = { path = "../geometry" }`. It's what Cargo does, and keeps a name beside its source. But a package the file describes is named with no path at all, so what's used is a list of names, and where each package is comes from its entry under `[[package]]`.
+- **A workspace file beside the package files,** listing packages without making them one project. It would be a second way to group packages. A file whose package has no modules of its own describes a project with the one there is, and lists packages with files of their own, which share nothing with it.
+- **A script belongs to the package of its directory.** It would see what that package shares with its project, but a file tried out inside a library couldn't conform anything the library can't.
 - **The prelude belongs to the compiler and forwards the standard library.** One fewer setting, and the compiler would then load `std` for every program.
 - **The standard library listed like any other package.** One rule with no exception, but nearly every file imports from it, so a script couldn't run without being told so, while the prelude it already sees comes from the same package.
 - **Nothing in scope but `lang`.** No prelude to choose, and every module that maps over an array imports the range functions.
@@ -151,8 +157,7 @@ So `xs.map(f)` needs no import, the functions behind it are plain Silver in `std
 
 ## Open questions
 
-1. The visibility shared by the parts of a package.
+1. The visibility shared by the packages of a project.
 2. Whether tests in a library may see more than the library does.
-3. Whether a part can list parts of its own. Today it can't.
 
-What belongs to the tool, as where a used package's source may come from besides a path and how a script outside a project says it needs a package, is listed in [The `silver` tool](../silver.md#open-questions).
+What belongs to the tool, as remote packages and how a script outside a project says it needs a package, is listed in [The `silver` tool](../silver.md#open-questions).

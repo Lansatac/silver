@@ -1,0 +1,5 @@
+module listing.report.summary
+
+import words.count
+
+def summary(): String => "{wordCount()} words"

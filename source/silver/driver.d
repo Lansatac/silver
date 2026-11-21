@@ -378,7 +378,7 @@ unittest
 /// `silver`, keeps a copy of this list to find the file among the options it passes on
 /// (`compilerOptionsWithValues` in frontend/source/silver/frontend/package.d), and a test there reads
 /// this one to check the two agree.
-immutable optionsWithValues = ["--package", "--uses", "--parts", "--package-file", "--scripts-in", "--program",
+immutable optionsWithValues = ["--package", "--uses", "--project", "--package-file", "--scripts-in", "--program",
     "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip"];
 
 /// Takes what follows the file off `args` and returns it. The file is the first word that isn't an
@@ -404,7 +404,7 @@ string[] takeAfterFile(ref string[] args)
 @("options stop at the file, which is the first word that's neither an option nor an option's value")
 unittest
 {
-    auto args = ["silverc", "--package", "a=a", "--parts", "k=a,b", "--uses", "a", "-b", "llvm", "f.ag"];
+    auto args = ["silverc", "--package", "a=a", "--project", "k=a,b", "--uses", "a", "-b", "llvm", "f.ag"];
     assert(takeAfterFile(args) == [] && args.length == 10);
     args = ["silverc", "-O", "--emit-llvm", "--output=out", "f.ag", "-O", "x"];
     assert(takeAfterFile(args) == ["-O", "x"] && args == ["silverc", "-O", "--emit-llvm", "--output=out", "f.ag"]);
@@ -463,7 +463,7 @@ unittest
     stderr.close();
     auto written = readText(buildPath(directory, "stderr.txt"));
     assert(written.canFind("nothing can use a program, not even a file beside it"), written);
-    assert(written.canFind("--scripts-in names 'nope', which no --package or --parts declares"), written);
+    assert(written.canFind("--scripts-in names 'nope', which no --package or --project declares"), written);
 }
 
 @("--from-silver makes the hints say what to write in a silver.toml, and without it they name the options")
@@ -545,7 +545,7 @@ unittest
     stderr.close();
     auto written = readText(buildPath(directory, "stderr.txt"));
     assert(written.canFind("Error L0014: The package 'geo' is a library"), written);
-    assert(written.canFind("--program names 'nope', which no --package or --parts declares"), written);
+    assert(written.canFind("--program names 'nope', which no --package or --project declares"), written);
     assert(written.canFind("--program says which package's program to run, so no file is given with it, and `"), written);
     assert(written.canFind("--program applies to `run` and `build`: `silverc test` is given"), written);
     assert(written.canFind("--program is given once, naming one package, and was given 2 times."), written);
@@ -872,7 +872,7 @@ int run(string[] args)
 
     string[] packageOptions;
     string[] usesOptions;
-    string[] partsOptions;
+    string[] projectOptions;
     string[] packageFileOptions;
     string[] scriptsInOptions;
     string[] skipped;
@@ -902,13 +902,14 @@ int run(string[] args)
     "package", "a package, as name=directory: the module name.a.b is directory/a/b.ag", &packageOptions,
     "uses", "what a package uses, as name=package,package, or for a file with no module line, package,package",
         &usesOptions,
-    "parts", "a package's parts, as name=part,part", &partsOptions,
+    "project", "the packages a package describes, which with it are one project, as name=package,package; with no"
+        ~ " --package for name, it has no modules of its own", &projectOptions,
     "package-file", "the package file a package was described in, as name=file, which messages then name instead of"
         ~ " these options; silver gives it", &packageFileOptions,
     "scripts-in", "a directory whose files with no module line are beside a package, as name=directory: such a file"
         ~ " uses what the package uses, and the package too unless it's a program; silver gives it", &scriptsInOptions,
     "program", "run, build: in place of a file, a package whose program to start from: the package's own, or the one"
-        ~ " of its parts that's a program; silver gives it when no file is named", &programs,
+        ~ " of the packages it describes that's a program; silver gives it when no file is named", &programs,
     "from-silver", "silver gives it, so that messages say what a user of silver can do rather than naming these"
         ~ " options", &fromSilver,
     "backend|b", "run, test: how to run the program: interpreter (default), llvm, or for tests, both", &backend,
@@ -947,7 +948,7 @@ int run(string[] args)
         return 1;
     }
     Packages packages;
-    auto mistake = describePackages(packageOptions, usesOptions, partsOptions, null, packages);
+    auto mistake = describePackages(packageOptions, usesOptions, projectOptions, null, packages);
     if (mistake is null && fromSilver) describeSilver(packages);
     if (mistake is null) mistake = describePackageFiles(packageFileOptions, packages);
     if (mistake is null) mistake = describeScriptHomes(scriptsInOptions, null, packages);

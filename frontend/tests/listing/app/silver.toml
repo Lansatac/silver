@@ -1,0 +1,6 @@
+name = "app"
+source = "src"
+uses = ["words"]
+
+[[package]]
+path = "../words"

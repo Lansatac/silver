@@ -163,7 +163,7 @@ version (unittest)
         }
         Packages packages;
         auto mistake = describePackages(options.get("--package", null), options.get("--uses", null),
-            options.get("--parts", null), directory, packages);
+            options.get("--project", null), directory, packages);
         if (mistake is null) mistake = describeScriptHomes(options.get("--scripts-in", null), directory, packages);
         assert(mistake is null, described ~ ": " ~ mistake);
         return packages;

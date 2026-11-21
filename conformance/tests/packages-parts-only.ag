@@ -1,9 +1,0 @@
-// A package can have parts and no directory: `kit` has no modules, and only holds `kit.words` and
-// `kit.count` together.
-import kit.words.split
-import kit.count.tally
-
-def main(): Unit {
-    printl(words("a root with no code"))
-    printl(tally("a root with no code"))
-}

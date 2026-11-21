@@ -14,7 +14,7 @@ immutable usage = "Usage: silver <file>                           run <file>\n"
     ~ "       silver test [OPTION]... <path>          run the tests in <path>, a file or a directory\n"
     ~ "       silver run|build [OPTION]...            run or compile the program of the project here\n"
     ~ "       silver run|build [OPTION]... <directory>\n"
-    ~ "                                               the program of the package or part at <directory>\n"
+    ~ "                                               the program of the package at <directory>\n"
     ~ "       silver test [OPTION]...                 run the tests of the project here\n"
     ~ "\n"
     ~ "A word that isn't one of these commands is a file, so a file named `build` is `silver ./build`.\n"
@@ -30,24 +30,26 @@ shared static this()
 {
     immutable options = "\n\nOptions go before the file, and are the compiler's: run `silverc --help` for them, other than\n"
         ~ "--show-command, which prints the compiler's command line before running it.";
-    immutable startedIn = "The package silver is started in is the deepest package or part of the nearest silver.toml at\n"
-        ~ "or above the working directory whose directory holds it: the silver.toml's directory for a\n"
-        ~ "package, and its `path` for a part.";
+    immutable startedIn = "The package silver is started in is the deepest package that the nearest silver.toml at or\n"
+        ~ "above the working directory describes, whose directory holds it: the silver.toml's directory for\n"
+        ~ "its own package, and the `path` of a package it describes.";
     commandUsage = [
         "run": "Usage: silver run [OPTION]... <file>        run <file>\n"
             ~ "       silver run [OPTION]...               run the program of the package silver is started in\n"
-            ~ "       silver run [OPTION]... <directory>   run the program of the package or part at <directory>\n\n"
-            ~ startedIn ~ "\nA package's program is its module that declares `main`, or its one part that's a program. When\n"
-            ~ "several parts are programs, silver lists them, and one is run by its directory, as\n"
-            ~ "`silver run compiler`. A library has no program, and its tests are run with `silver test`." ~ options,
+            ~ "       silver run [OPTION]... <directory>   run the program of the package at <directory>\n\n"
+            ~ startedIn ~ "\nA package's program is its module that declares `main`, or the one package it describes\n"
+            ~ "that's a program. When several are programs, silver lists them, and one is run by its\n"
+            ~ "directory, as `silver run compiler`. A package with a silver.toml of its own is run from its\n"
+            ~ "directory. A library has no program, and its tests are run with `silver test`." ~ options,
         "build": "Usage: silver build [OPTION]... <file>        compile <file> to an executable\n"
             ~ "       silver build [OPTION]...               compile the program of the package silver is started in\n"
-            ~ "       silver build [OPTION]... <directory>   compile the program of the package or part at <directory>\n\n"
+            ~ "       silver build [OPTION]... <directory>   compile the program of the package at <directory>\n\n"
             ~ startedIn ~ "\nThe program is chosen as `silver run` chooses it. Without -o, the executable is written to the\n"
             ~ "working directory, named after the file, or for a package's program, after the last segment of\n"
             ~ "the name of the package whose program it is." ~ options,
         "test": "Usage: silver test [OPTION]... <path>   run the tests in <path>, a file or a directory\n"
-            ~ "       silver test [OPTION]...          run the tests of the package silver is started in, and of its parts\n\n"
+            ~ "       silver test [OPTION]...          run the tests of the package silver is started in, and of the\n"
+            ~ "                                        packages it describes\n\n"
             ~ startedIn ~ "\nWith no path, the tests are those under that package's directory, as `silver test <directory>`.\n"
             ~ "A directory under it with a silver.toml the project doesn't use is another project, and is left out."
             ~ options,
@@ -104,7 +106,7 @@ unittest
 /// The compiler's options whose value is the next word, so that the file can be found among the
 /// options. A copy of `optionsWithValues` in source/silver/driver.d, which this package can't import;
 /// a test reads that one to check the two agree.
-immutable compilerOptionsWithValues = ["--package", "--uses", "--parts", "--package-file", "--scripts-in", "--program",
+immutable compilerOptionsWithValues = ["--package", "--uses", "--project", "--package-file", "--scripts-in", "--program",
     "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip"];
 
 /// `silver`'s own option, which prints the compiler's command line before running it.
@@ -115,7 +117,7 @@ enum fromSilver = "--from-silver";
 
 /// The compiler's options that say what packages there are, which inside a project only the
 /// project's `silver.toml` says.
-immutable packageOptions = ["--package", "--uses", "--parts"];
+immutable packageOptions = ["--package", "--uses", "--project"];
 
 /// A command line after its command, taken apart at the file.
 struct Arguments
@@ -213,7 +215,7 @@ struct Plan
     string mistake;
     /// The project's package file, absolute, or null when there's none.
     string projectFile;
-    /// The packages and parts the compiler is told files with no `module` line may be beside.
+    /// The packages the compiler is told files with no `module` line may be beside.
     string[] scriptHomes;
     /// The package whose program `run` or `build` starts from, when no file is named, or null.
     string program;
@@ -277,8 +279,8 @@ Plan plan(string compiler, Request request, string workingDirectory)
             {
                 result.mistake = formatMistake(Mistake(null, ProjectCode.PackageOptionGiven, Span(), given ~ " is "
                     ~ "given by hand, and inside a project packages are described in its package file, "
-                    ~ shown(result.projectFile) ~ ": what a package uses is its `uses`, its parts are `[[part]]`s, "
-                    ~ "and where a package it uses is goes under `[paths]`"));
+                    ~ shown(result.projectFile) ~ ": what a package uses is its `uses`, and each package it uses or "
+                    ~ "describes is a `[[package]]` entry"));
                 return result;
             }
             Project project;
@@ -294,7 +296,7 @@ Plan plan(string compiler, Request request, string workingDirectory)
                 if (at is null)
                 {
                     result.mistake = formatMistake(Mistake(null, ProjectCode.NotAPackageDirectory, Span(),
-                        shown(named) ~ " is a directory, and no package or part that " ~ shown(result.projectFile)
+                        shown(named) ~ " is a directory, and no package that " ~ shown(result.projectFile)
                         ~ " describes is there, so it has no program to " ~ request.command ~ ". Its packages are "
                         ~ homesOf(project, shown) ~ "; name one of those directories, or a file"));
                     return result;
@@ -371,14 +373,14 @@ unittest
     scope (exit) rmdirRecurse(directory);
     auto project = buildPath(directory, "project");
 
-    immutable names = ["--package", "--uses", "--parts", "--uses"];
-    foreach (i, option; [["--package", "x=y"], ["--uses", "x"], ["--parts=p=p.a"], ["--uses=x"]])
+    immutable names = ["--package", "--uses", "--project", "--uses"];
+    foreach (i, option; [["--package", "x=y"], ["--uses", "x"], ["--project=p=p.a"], ["--uses=x"]])
     {
         auto p = plan("silverc", request(option ~ "main.ag"), project);
         immutable given = names[i];
         assert(p.arguments is null && p.mistake == "Error F0036: " ~ given ~ " is given by hand, and inside a project "
-            ~ "packages are described in its package file, silver.toml: what a package uses is its `uses`, its parts are "
-            ~ "`[[part]]`s, and where a package it uses is goes under `[paths]`", p.mistake);
+            ~ "packages are described in its package file, silver.toml: what a package uses is its `uses`, and each "
+            ~ "package it uses or describes is a `[[package]]` entry", p.mistake);
         assert(plan("silverc", request(["test"] ~ option), project).mistake !is null);
         auto alone = plan("silverc", request(option ~ "main.ag"), buildPath(directory, "alone"));
         assert(alone.mistake is null && alone.arguments == ["silverc", "run", "--from-silver"] ~ option ~ "main.ag",
@@ -533,7 +535,7 @@ unittest
     auto project = buildPath(directory, "project");
 
     foreach (words; [["build", "-o", "--uses", "main.ag"], ["test", "--filter", "--package", "main.ag"],
-        ["build", "--output", "--parts=x", "main.ag"]])
+        ["build", "--output", "--project=x", "main.ag"]])
     {
         auto p = plan("silverc", request(words), project);
         assert(p.mistake is null, p.mistake);

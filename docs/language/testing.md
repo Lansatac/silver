@@ -104,7 +104,7 @@ powers.ag(2,5): Expectation failed: panics(() => powInt(2, 3)) == "Integer overf
 
 ## Running tests
 
-`silver test <path>` runs the tests under that path, and not those of imported modules. With no path, `silver test` runs the tests of the [package it's started in](../silver.md#commands) and of its parts. `main` is neither required nor run, so a library tests the same way as a program. `silver build` type-checks inline tests without including them.
+`silver test <path>` runs the tests under that path, and not those of imported modules. With no path, `silver test` runs the tests of the [package it's started in](../silver.md#commands) and of the packages it describes. `main` is neither required nor run, so a library tests the same way as a program. `silver build` type-checks inline tests without including them.
 
 Each test is isolated, so a panic ends only that test. A crash that can't be caught is reported as one. `read()` returns `Ok(None)` in a test.
 

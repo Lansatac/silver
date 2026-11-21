@@ -1,0 +1,5 @@
+module words.count
+
+def wordCount(): Int => 3
+
+test "the count" => expect(wordCount() == 3)

@@ -23,41 +23,44 @@ enum ProjectCode : string
     WrongType = "F0017",
     MissingField = "F0018",
     BadName = "F0019",
-    /// A `source` or a part's `path` that isn't under the directory it's taken from.
+    /// A `source` or a described package's `path` that isn't under the directory it's taken from.
     OutsideDirectory = "F0020",
     NotADirectory = "F0021",
     /// Two packages of one file with one name, or a name listed twice.
     DuplicateName = "F0022",
-    /// Two parts at one path.
+    /// Two `[[package]]` entries at one path.
     SamePath = "F0023",
-    /// A part's directory, or a `source`, in or under a directory with a package file of its own
+    /// A described package's directory, or a `source`, under a directory with a package file of its own
     /// below the file that names it, so that the other file's package would hold its files.
     UnderPackageFile = "F0024",
-    /// A name in `uses` that's neither a part, nor under `[paths]`, nor the standard library.
+    /// A name in `uses` that no `[[package]]` entry gives, and isn't the file's own package or the
+    /// standard library.
     UnknownPackage = "F0025",
-    /// A directory under `[paths]` that no package file describes.
+    /// An entry with only a `path`, whose directory has no package file and is described by none above it.
     NoPackageThere = "F0026",
-    /// A directory under `[paths]` whose package file describes a package of another name there.
-    WrongPackageThere = "F0027",
     /// One package name reached at two directories.
     TwoDirectories = "F0028",
-    /// The standard library in `uses` or under `[paths]`.
+    /// The standard library in `uses`.
     StandardLibraryListed = "F0029",
-    /// A name under `[paths]` that's the file's own package or one of its parts.
-    PathForOwnPackage = "F0030",
-    /// `uses` on a package that has parts and no `source`, so no modules to use anything.
+    /// An entry with only a `path` that leads to a package this file describes itself.
+    ListsOwnPackage = "F0030",
+    /// `uses` on a package that describes others and has no `source`, so no modules to use anything.
     UsesWithoutModules = "F0031",
     /// An empty string where a directory goes.
     EmptyDirectory = "F0032",
     /// No file named, and no package file at or above the working directory.
     NoProject = "F0033",
-    /// A directory given to `run` or `build` that's no package's or part's directory.
+    /// A directory given to `run` or `build` that's no described package's directory.
     NotAPackageDirectory = "F0034",
-    /// A package reached through `[paths]` whose directory is inside, or holds, the directory of a
-    /// package whose modules are its whole directory.
+    /// A package with a file of its own whose directory is inside, or holds, the directory of a package
+    /// whose modules are its whole directory.
     InsidePackage = "F0035",
-    /// `--package`, `--uses` or `--parts` given by hand inside a project.
+    /// `--package`, `--uses` or `--project` given by hand inside a project.
     PackageOptionGiven = "F0036",
+    /// An entry with a `name`, `source` or `uses` whose directory has a package file of its own.
+    DescribesItself = "F0037",
+    /// A key of a remote package, which isn't built.
+    RemotePackage = "F0038",
 }
 
 /// One mistake in a package file, or in reading one.
@@ -86,28 +89,27 @@ struct Named
     Span span;
 }
 
-/// A `[[part]]` of a package file.
-struct Part
+/// A `[[package]]` entry that describes a package here, with its `name` and `path`.
+struct Described
 {
     Named name;
-    /// The part's directory, absolute.
+    /// The package's directory, absolute.
     string directory;
     Span pathSpan;
     /// Where its modules are, absolute: `directory`, or its `source` under it.
     string modules;
     Named[] uses;
-    /// The `[[part]]` header, or the inline table.
+    /// The `[[package]]` header, or the inline table.
     Span span;
 }
 
-/// An entry under `[paths]`.
-struct PathEntry
+/// A `[[package]]` entry with only a `path`: a package with a package file of its own there, or one
+/// that the nearest package file above it describes.
+struct Listed
 {
-    Named name;
     /// The directory, absolute.
     string directory;
-    /// The value as written.
-    Span span;
+    Span pathSpan;
 }
 
 /// What a package file says, checked.
@@ -117,29 +119,31 @@ struct PackageFile
     string file;
     string directory;
     Named name;
-    /// Where the package's own modules are, absolute, or null when it only holds its parts.
+    /// Where the package's own modules are, absolute, or null when it only describes others.
     string modules;
     Named[] uses;
-    PathEntry[] paths;
-    Part[] parts;
+    Described[] described;
+    Listed[] listed;
 }
 
 /// The facts the compiler is given about one package.
 struct Facts
 {
     string name;
-    /// Where its modules are, absolute, or null when it only holds its parts.
+    /// Where its modules are, absolute, or null when it only describes others.
     string directory;
     string[] uses;
-    string[] parts;
+    /// The packages it describes, which with it are one project.
+    string[] describes;
     /// The package file that describes it.
     string file;
-    /// The directory `[paths]` names it by: its file's for a package, and its `path` for a part.
+    /// The directory a `[[package]]` entry names it by: its file's for a package, and its `path` for
+    /// one a file describes.
     string home;
 }
 
-/// Every package reachable from a project's package file: the file's own package and parts first,
-/// then the packages they use, each with the packages of its file, in the order they were reached.
+/// Every package reachable from a project's package file: the file's own package and those it describes
+/// first, then the packages they use, each with the packages of its file, in the order they were reached.
 struct Project
 {
     string file;
@@ -212,7 +216,7 @@ bool readProject(string file, out Project project, out Mistake mistake)
     return true;
 }
 
-/// The packages and parts whose files with no `module` line `path` may hold: the one
+/// The packages whose files with no `module` line `path` may hold: the one
 /// whose home holds `path`, the deepest when several do, and when `path` is a directory, each whose
 /// home is inside it. A script is beside the package whose home it's under, so a script beside a
 /// `silver.toml` whose package keeps its modules in `source` is beside that package.
@@ -237,7 +241,7 @@ const(Facts)[] scriptHomes(const Project project, string path)
     return deepest is null ? inside : *deepest ~ inside;
 }
 
-/// The package or part of the project's own file whose home holds `directory`, the deepest, or the
+/// The package of the project's own file whose home holds `directory`, the deepest, or the
 /// file's package when none does: the package `silver` is started in there.
 const(Facts)* startedIn(const Project project, string directory)
 {
@@ -253,7 +257,7 @@ const(Facts)* startedIn(const Project project, string directory)
     return deepest is null ? &project.packages[0] : deepest;
 }
 
-/// The package or part of the project's own file whose home is `directory`, or null.
+/// The package of the project's own file whose home is `directory`, or null.
 const(Facts)* homedAt(const Project project, string directory)
 {
     foreach (ref p; project.packages)
@@ -263,7 +267,7 @@ const(Facts)* homedAt(const Project project, string directory)
     return null;
 }
 
-/// The packages and parts of the project's own file, each with its home as `shown` gives it, as a
+/// The packages of the project's own file, each with its home as `shown` gives it, as a
 /// list for a message.
 string homesOf(const Project project, string delegate(string) shown)
 {
@@ -277,17 +281,17 @@ string homesOf(const Project project, string delegate(string) shown)
     return listed.join(", ");
 }
 
-/// `package_` and its parts, those with modules, whose homes the compiler is told so that what it
-/// says about their programs names the directories they're chosen by.
+/// `package_` and the packages it describes, those with modules, whose homes the compiler is told so
+/// that what it says about their programs names the directories they're chosen by.
 const(Facts)[] programHomes(const Project project, const Facts package_)
 {
     const(Facts)[] homes;
     foreach (ref p; project.packages)
     {
         if (p.directory is null) continue;
-        bool part;
-        foreach (name; package_.parts) part = part || name == p.name;
-        if (part || p.name == package_.name) homes ~= p;
+        bool described;
+        foreach (name; package_.describes) described = described || name == p.name;
+        if (described || p.name == package_.name) homes ~= p;
     }
     return homes;
 }
@@ -328,7 +332,7 @@ string[] otherProjects(const Project project, string directory)
     return found;
 }
 
-/// The compiler's options for `project`: each package's directory, uses, parts and file, and the
+/// The compiler's options for `project`: each package's directory, uses, project and file, and the
 /// home of each of `homes` as a directory of files beside it, with paths as `shown` gives them.
 string[] compilerOptions(const Project project, string delegate(string) shown, const Facts[] homes = null)
 {
@@ -345,7 +349,7 @@ string[] compilerOptions(const Project project, string delegate(string) shown, c
     }
     foreach (ref p; project.packages)
     {
-        if (p.parts.length > 0) options ~= ["--parts", p.name ~ "=" ~ p.parts.join(",")];
+        if (p.describes.length > 0) options ~= ["--project", p.name ~ "=" ~ p.describes.join(",")];
     }
     foreach (ref p; project.packages)
     {
@@ -478,7 +482,6 @@ struct Checker
         result.file = file;
         result.directory = dirName(file);
         const(Value)* source;
-        Span sourceKey;
         foreach (ref entry; root.entries)
         {
             switch (entry.key)
@@ -488,19 +491,22 @@ struct Checker
                     break;
                 case "source":
                     source = &entry.value;
-                    sourceKey = entry.keySpan;
                     break;
                 case "uses":
                     if (!uses(entry.value, result.uses)) return false;
                     break;
+                case "package":
+                    if (!entries(entry.value)) return false;
+                    break;
                 case "paths":
-                    if (!paths(entry.value)) return false;
-                    break;
+                    return fail(ProjectCode.UnknownField, entry.keySpan, "`[paths]` is replaced by `[[package]]`: a "
+                        ~ "package elsewhere is an entry whose `path` is its directory, as [[package]] path = "
+                        ~ "\"../geometry\", and its name is read from the silver.toml there");
                 case "part":
-                    if (!parts(entry.value)) return false;
-                    break;
+                    return fail(ProjectCode.UnknownField, entry.keySpan, "`[[part]]` is replaced by `[[package]]`, an "
+                        ~ "entry with the same `name`, `path`, `source` and `uses`");
                 default:
-                    return unknown(entry, "A package file has `name`, `source`, `uses`, `[paths]` and `[[part]]`");
+                    return unknown(entry, "A package file has `name`, `source`, `uses` and `[[package]]`");
             }
         }
         if (result.name.name is null)
@@ -513,15 +519,16 @@ struct Checker
             if (!directory(*source, "`source`", result.directory, "the package file's directory", true, result.modules))
                 return false;
         }
-        else if (result.parts.length == 0)
+        else if (result.described.length == 0)
         {
             result.modules = result.directory;
         }
         if (result.modules is null && result.uses.length > 0)
         {
             return fail(ProjectCode.UsesWithoutModules, root.entry("uses").keySpan, "The package "
-                ~ quoted(result.name.name) ~ " has parts and no `source`, so it has no modules of its own to use "
-                ~ "anything; list what each part uses in its `uses`, or give the package a `source`");
+                ~ quoted(result.name.name) ~ " describes others and has no `source`, so it has no modules of its own to "
+                ~ "use anything; list what each package it describes uses in that package's `uses`, or give it a "
+                ~ "`source`");
         }
         return names();
     }
@@ -583,52 +590,16 @@ struct Checker
         return true;
     }
 
-    bool paths(const ref Value value)
-    {
-        if (value.kind != ValueKind.table)
-        {
-            return fail(ProjectCode.WrongType, value.span, "`paths` is a table of package names and directories, "
-                ~ "written [paths]");
-        }
-        foreach (ref entry; value.table.entries)
-        {
-            if (entry.value.kind == ValueKind.table)
-            {
-                return fail(ProjectCode.WrongType, entry.keySpan, "`" ~ entry.key ~ "` holds a table, not a "
-                    ~ "directory: a name of more than one segment is quoted under [paths], as \"" ~ entry.key
-                    ~ ".name\" = \"../" ~ entry.key ~ "/name\"");
-            }
-            if (!str(entry.value, "A directory under [paths]")) return false;
-            if (entry.value.text.length == 0)
-            {
-                return fail(ProjectCode.EmptyDirectory, entry.value.span, "The directory of " ~ quoted(entry.key)
-                    ~ " under [paths] is \"\", which names none; give where it is, as \"../" ~ entry.key ~ "\"");
-            }
-            if (!validName(entry.key))
-            {
-                return fail(ProjectCode.BadName, entry.keySpan, "\"" ~ entry.key ~ "\" isn't a package name: "
-                    ~ nameRule);
-            }
-            if (entry.key == standardPackage)
-            {
-                return fail(ProjectCode.StandardLibraryListed, entry.keySpan, "The standard library, `std`, ships with "
-                    ~ "the compiler and needs no path");
-            }
-            result.paths ~= PathEntry(Named(entry.key, entry.keySpan), directoryFrom(result.directory,
-                entry.value.text), entry.value.span);
-        }
-        return true;
-    }
-
-    bool parts(const ref Value value)
+    bool entries(const ref Value value)
     {
         if (value.kind != ValueKind.array || !(value.ofTables || allTables(value)))
         {
-            return fail(ProjectCode.WrongType, value.span, "`part` is a list of parts, each written under [[part]]");
+            return fail(ProjectCode.WrongType, value.span, "`package` is a list of packages, each written under "
+                ~ "[[package]]");
         }
         foreach (ref item; value.items)
         {
-            if (!part(item)) return false;
+            if (!entry(item)) return false;
         }
         return true;
     }
@@ -642,49 +613,94 @@ struct Checker
         return true;
     }
 
-    bool part(const ref Value value)
+    /// Checks one `[[package]]` entry: one this file describes, with a `name`, or one with only a `path`.
+    bool entry(const ref Value value)
     {
-        Part p;
-        p.span = value.span;
+        import std.path : buildPath;
+
+        Described d;
+        d.span = value.span;
         const(Value)* path;
         const(Value)* source;
-        foreach (ref entry; value.table.entries)
+        // The first of `name`, `source` and `uses`, which only a package described here has.
+        const(Entry)* describing;
+        foreach (ref field; value.table.entries)
         {
-            switch (entry.key)
+            switch (field.key)
             {
                 case "name":
-                    if (!name(entry.value, p.name)) return false;
+                    if (!name(field.value, d.name)) return false;
                     break;
                 case "path":
-                    if (!str(entry.value, "A part's `path`")) return false;
-                    path = &entry.value;
+                    if (!str(field.value, "A package's `path`")) return false;
+                    path = &field.value;
                     break;
                 case "source":
-                    source = &entry.value;
+                    source = &field.value;
                     break;
                 case "uses":
-                    if (!uses(entry.value, p.uses)) return false;
+                    if (!uses(field.value, d.uses)) return false;
                     break;
+                case "test":
+                    if (field.value.kind != ValueKind.boolean)
+                        return fail(ProjectCode.WrongType, field.value.span, "`test` is true or false");
+                    break;
+                case "version":
+                case "git":
+                case "branch":
+                case "rev":
+                case "tag":
+                    return fail(ProjectCode.RemotePackage, field.keySpan, "`" ~ field.key ~ "` says where a remote "
+                        ~ "package comes from, and remote packages aren't supported yet: a package is described here, "
+                        ~ "with its `name` and `path`, or is listed by its `path` alone when it has a silver.toml of its "
+                        ~ "own");
                 default:
-                    return unknown(entry, "A part has `name`, `path`, `source` and `uses`");
+                    return unknown(field, "A `[[package]]` entry has `path`, and `name`, `source` and `uses` when it "
+                        ~ "describes the package, and `test`");
             }
-        }
-        if (p.name.name is null)
-        {
-            return fail(ProjectCode.MissingField, value.span, "A part has to give its `name`, as name = \"silver.core\"");
+            if (describing is null && (field.key == "name" || field.key == "source" || field.key == "uses"))
+                describing = &field;
         }
         if (path is null)
         {
-            return fail(ProjectCode.MissingField, value.span, "The part " ~ quoted(p.name.name) ~ " has to give its "
-                ~ "`path`, the directory it's in, as path = \"core\"");
+            return fail(ProjectCode.MissingField, value.span, (d.name.name is null ? "A `[[package]]` entry"
+                : "The package " ~ quoted(d.name.name)) ~ " has to give its `path`, the directory it's in, as path = "
+                ~ "\"core\"");
         }
-        p.pathSpan = path.span;
-        if (!directory(*path, "A part's `path`", result.directory, "the package file's directory", false, p.directory))
+        d.pathSpan = path.span;
+        if (path.text.length == 0)
+        {
+            return fail(ProjectCode.EmptyDirectory, path.span, "A package's `path` names a directory, and \"\" names "
+                ~ "none, as \"core\"");
+        }
+        auto at = directoryFrom(result.directory, path.text);
+        if (!isDirectory(at))
+        {
+            return fail(ProjectCode.NotADirectory, path.span, "A package's `path` is " ~ at ~ ", which isn't a "
+                ~ "directory");
+        }
+        if (describing is null)
+        {
+            result.listed ~= Listed(at, path.span);
+            return true;
+        }
+        if (isFile(buildPath(at, packageFileName)))
+        {
+            return fail(ProjectCode.DescribesItself, describing.keySpan, "`" ~ describing.key ~ "` is given for the "
+                ~ "package at " ~ at ~ ", which has a silver.toml of its own that describes it, so here it's listed "
+                ~ "by its `path` alone");
+        }
+        if (d.name.name is null)
+        {
+            return fail(ProjectCode.MissingField, value.span, "A package described here has to give its `name`, as "
+                ~ "name = \"silver.core\"; one with a silver.toml of its own is listed by its `path` alone");
+        }
+        if (!directory(*path, "A package's `path`", result.directory, "the package file's directory", false, d.directory))
             return false;
-        if (source is null) p.modules = p.directory;
-        else if (!directory(*source, "A part's `source`", p.directory, "the part's directory", true, p.modules))
+        if (source is null) d.modules = d.directory;
+        else if (!directory(*source, "A package's `source`", d.directory, "the package's directory", true, d.modules))
             return false;
-        result.parts ~= p;
+        result.described ~= d;
         return true;
     }
 
@@ -702,7 +718,9 @@ struct Checker
         if (!within(at, base) || (!self && samePath(at, base)))
         {
             return fail(ProjectCode.OutsideDirectory, value.span, what ~ " is a directory " ~ (self ? "in" : "under")
-                ~ " " ~ baseName ~ ", " ~ base ~ ", and " ~ at ~ " isn't");
+                ~ " " ~ baseName ~ ", " ~ base ~ ", and " ~ at ~ " isn't" ~ (self || within(at, base) ? ""
+                : "; a package outside this file's directory has a silver.toml of its own there, and is listed by its "
+                ~ "`path` alone"));
         }
         if (!isDirectory(at))
         {
@@ -714,65 +732,86 @@ struct Checker
 
             return fail(ProjectCode.UnderPackageFile, value.span, what ~ " is " ~ at ~ ", and " ~ other ~ " would make "
                 ~ (samePath(dirName(other), at) ? "it" : "a directory above it") ~ " a package of its own, holding "
-                ~ "its files; a part is described only in its parent's file, and a directory with a package file is "
-                ~ "used through [paths]");
+                ~ "its files; a package described in this file can't be in the directory of another silver.toml, so "
+                ~ (self ? "move it out from under that file" : "list the package there by its `path` alone if that "
+                ~ "file describes it, or move this one out from under that file"));
         }
         found = at;
         return true;
     }
 
-    /// Checks that the file's package and parts have different names and paths, and that `[paths]`
-    /// names none of them.
+    /// Checks that the file's own package and those it describes have different names and paths, and
+    /// that no entry with only a `path` leads to one of them.
     bool names()
     {
-        foreach (k, ref p; result.parts)
+        foreach (k, ref d; result.described)
         {
-            if (p.name.name == result.name.name)
+            if (d.name.name == result.name.name)
             {
-                return fail(ProjectCode.DuplicateName, p.name.span, "A part can't have its package's own name, "
-                    ~ quoted(p.name.name));
+                return fail(ProjectCode.DuplicateName, d.name.span, "A package described here can't have this file's "
+                    ~ "own name, " ~ quoted(d.name.name));
             }
-            foreach (ref earlier; result.parts[0 .. k])
+            foreach (ref earlier; result.described[0 .. k])
             {
-                if (earlier.name.name == p.name.name)
+                if (earlier.name.name == d.name.name)
                 {
-                    return fail(ProjectCode.DuplicateName, p.name.span, "There's already a part named "
-                        ~ quoted(p.name.name) ~ ", at line " ~ decimal(earlier.name.span.line));
+                    return fail(ProjectCode.DuplicateName, d.name.span, "There's already a package named "
+                        ~ quoted(d.name.name) ~ " here, at line " ~ decimal(earlier.name.span.line));
                 }
-                if (samePath(earlier.directory, p.directory))
+                if (samePath(earlier.directory, d.directory))
                 {
-                    return fail(ProjectCode.SamePath, p.pathSpan, "The parts " ~ quoted(earlier.name.name) ~ " and "
-                        ~ quoted(p.name.name) ~ " are both at " ~ p.directory);
+                    return fail(ProjectCode.SamePath, d.pathSpan, "The packages " ~ quoted(earlier.name.name) ~ " and "
+                        ~ quoted(d.name.name) ~ " are both at " ~ d.directory);
                 }
             }
         }
-        foreach (ref entry; result.paths)
+        foreach (k, ref l; result.listed)
         {
-            if (entry.name.name == result.name.name || ownPart(entry.name.name) !is null)
+            if (samePath(l.directory, result.directory))
             {
-                return fail(ProjectCode.PathForOwnPackage, entry.name.span, quoted(entry.name.name) ~ " is "
-                    ~ (entry.name.name == result.name.name ? "this file's own package" : "a part in this file")
-                    ~ ", so it needs no path");
+                return fail(ProjectCode.ListsOwnPackage, l.pathSpan, l.directory ~ " is this file's own directory, so "
+                    ~ "the package there is this file's own, " ~ quoted(result.name.name) ~ ", and needs no entry");
+            }
+            foreach (ref d; result.described)
+            {
+                if (samePath(l.directory, d.directory))
+                {
+                    return fail(ProjectCode.ListsOwnPackage, l.pathSpan, l.directory ~ " is the directory of "
+                        ~ quoted(d.name.name) ~ ", which this file describes already, so this entry isn't needed");
+                }
+            }
+            foreach (ref earlier; result.listed[0 .. k])
+            {
+                if (samePath(earlier.directory, l.directory))
+                {
+                    return fail(ProjectCode.SamePath, l.pathSpan, "Another `[[package]]` entry is at " ~ l.directory
+                        ~ ", at line " ~ decimal(earlier.pathSpan.line));
+                }
             }
         }
         return true;
     }
+}
 
-    const(Part)* ownPart(string name) const
-    {
-        foreach (ref p; result.parts)
-        {
-            if (p.name.name == name) return &p;
-        }
-        return null;
-    }
+/// What a `[[package]]` entry with only a `path` leads to.
+struct Reached
+{
+    /// The package's name, as the file that describes it gives it.
+    string name;
+    /// That file, absolute.
+    string file;
+    /// The entry's directory, which is the package's home.
+    string home;
+    /// Where its modules are, absolute, or null when it only describes others.
+    string modules;
+    Span pathSpan;
 }
 
 /// Follows the packages of files, file by file, reading each file once.
 struct ProjectReader
 {
     Facts[] packages;
-    PackageFile[] files;
+    PackageFile[] read;
 
     const(Facts)* named(string name) const
     {
@@ -783,13 +822,20 @@ struct ProjectReader
         return null;
     }
 
-    PackageFile* alreadyRead(string file)
+    /// The package file `file`, read and checked once.
+    bool fileAt(string file, out PackageFile found, out Mistake mistake)
     {
-        foreach (ref f; files)
+        foreach (ref f; read)
         {
-            if (samePath(f.file, file)) return &f;
+            if (samePath(f.file, file))
+            {
+                found = f;
+                return true;
+            }
         }
-        return null;
+        if (!readPackageFile(file, found, mistake)) return false;
+        read ~= found;
+        return true;
     }
 
     /// Adds the packages of `file`, then follows what each uses.
@@ -798,8 +844,7 @@ struct ProjectReader
         import std.algorithm : map;
         import std.array : array;
 
-        files ~= file;
-        bool declare(Named name, string home, string modules, Named[] uses, string[] parts)
+        bool declare(Named name, string home, string modules, Named[] uses, string[] describes)
         {
             if (auto other = named(name.name))
             {
@@ -807,41 +852,143 @@ struct ProjectReader
                     ~ quoted(name.name) ~ ", at " ~ other.home ~ ", described in " ~ other.file);
                 return false;
             }
-            packages ~= Facts(name.name, modules, uses.map!(u => u.name).array, parts, file.file, home);
+            packages ~= Facts(name.name, modules, uses.map!(u => u.name).array, describes, file.file, home);
             return true;
         }
-        if (!declare(file.name, file.directory, file.modules, file.uses, file.parts.map!(p => p.name.name).array))
+        if (!declare(file.name, file.directory, file.modules, file.uses, file.described.map!(d => d.name.name).array))
             return false;
-        foreach (ref p; file.parts)
+        foreach (ref d; file.described)
         {
-            if (!declare(p.name, p.directory, p.modules, p.uses, null)) return false;
+            if (!declare(d.name, d.directory, d.modules, d.uses, null)) return false;
         }
-        if (!follow(file, file.uses, mistake)) return false;
-        foreach (ref p; file.parts)
+        Reached[] listed;
+        if (!resolve(file, listed, mistake)) return false;
+        if (!follow(file, file.uses, listed, mistake)) return false;
+        foreach (ref d; file.described)
         {
-            if (!follow(file, p.uses, mistake)) return false;
+            if (!follow(file, d.uses, listed, mistake)) return false;
         }
         return true;
     }
 
-    /// Finds each of `uses`, listed in `file`.
-    bool follow(const ref PackageFile file, const Named[] uses, out Mistake mistake)
+    /// Reads the file behind each of `file.listed`: the package file in its directory, or else the nearest
+    /// above it, which has to describe a package there.
+    bool resolve(const ref PackageFile file, out Reached[] reached, out Mistake mistake)
+    {
+        import std.path : buildPath, dirName;
+
+        foreach (ref entry; file.listed)
+        {
+            bool fail(string code, string message)
+            {
+                mistake = Mistake(file.file, code, entry.pathSpan, message);
+                return false;
+            }
+            auto describing = buildPath(entry.directory, packageFileName);
+            immutable own = isFile(describing);
+            if (!own)
+            {
+                auto above = dirName(entry.directory);
+                describing = above == entry.directory ? null : findPackageFile(above);
+            }
+            // What to write instead: a package with no file of its own can only be described here when it's
+            // under this file's directory.
+            immutable noName = within(entry.directory, file.directory)
+                ? "; a package with no silver.toml of its own is described here, with its `name` as well as its `path`"
+                : "; a package outside this file's directory has a silver.toml of its own, so give that directory one, "
+                    ~ "or give the `path` of a package another file describes";
+            if (describing is null)
+            {
+                return fail(ProjectCode.NoPackageThere, entry.directory ~ " has no " ~ packageFileName ~ ", and no "
+                    ~ "directory above it has one" ~ noName);
+            }
+            PackageFile there;
+            if (!fileAt(describing, there, mistake))
+            {
+                if (mistake.file !is null && samePath(mistake.file, describing))
+                    mistake.message ~= "\nIt was read because " ~ file.file ~ " lists it, at line "
+                        ~ decimal(entry.pathSpan.line);
+                return false;
+            }
+            Reached r = Reached(null, there.file, entry.directory, null, entry.pathSpan);
+            if (own)
+            {
+                r.name = there.name.name;
+                r.modules = there.modules;
+            }
+            else
+            {
+                foreach (ref d; there.described)
+                {
+                    if (samePath(d.directory, entry.directory))
+                    {
+                        r.name = d.name.name;
+                        r.modules = d.modules;
+                    }
+                }
+                if (r.name is null)
+                {
+                    // A directory of modules below a package's own: that package is what's meant.
+                    string holder;
+                    foreach (p; placedOf(there))
+                    {
+                        if (within(entry.directory, p.modules)) holder = p.home;
+                    }
+                    return fail(ProjectCode.NoPackageThere, entry.directory ~ " has no " ~ packageFileName ~ ", and "
+                        ~ describing ~ ", the nearest above it, describes no package there" ~ (holder is null ? noName
+                        : "; it holds modules of the package at " ~ holder ~ ", which is listed as `path = \""
+                        ~ written(holder, file.directory) ~ "\"`"));
+                }
+            }
+            string clash;
+            if (r.name == file.name.name) clash = file.directory;
+            foreach (ref d; file.described)
+            {
+                if (d.name.name == r.name) clash = d.directory;
+            }
+            foreach (ref earlier; reached)
+            {
+                if (earlier.name == r.name) clash = earlier.home;
+            }
+            if (clash !is null)
+            {
+                return fail(ProjectCode.TwoDirectories, quoted(r.name) ~ " is at " ~ entry.directory ~ ", described in "
+                    ~ there.file ~ ", and this file already has a package of that name, at " ~ clash);
+            }
+            if (auto inside = nested(own ? placedOf(there) : [Placed(r.name, r.modules, r.home)], placedOf(file)))
+                return fail(ProjectCode.InsidePackage, inside);
+            reached ~= r;
+        }
+        return true;
+    }
+
+    /// Finds each of `uses`, listed in `file`, whose entries with only a `path` lead to `listed`.
+    bool follow(const ref PackageFile file, const Named[] uses, const Reached[] listed, out Mistake mistake)
     {
         foreach (used; uses)
         {
             bool own = used.name == file.name.name;
-            foreach (ref p; file.parts) own = own || p.name.name == used.name;
+            foreach (ref d; file.described) own = own || d.name.name == used.name;
             if (own) continue;
-            const(PathEntry)* entry;
-            foreach (ref e; file.paths)
+            const(Reached)* entry;
+            foreach (ref r; listed)
             {
-                if (e.name.name == used.name) entry = &e;
+                if (r.name == used.name) entry = &r;
             }
             if (entry is null)
             {
-                mistake = Mistake(file.file, ProjectCode.UnknownPackage, used.span, quoted(used.name) ~ " is neither "
-                    ~ "a part in this file nor under [paths]; say where it is there, as \"" ~ used.name
-                    ~ "\" = \"../" ~ used.name ~ "\"");
+                import std.array : join;
+
+                // The names the entries do give, so that a name written differently shows.
+                string[] given;
+                foreach (ref d; file.described) given ~= quoted(d.name.name) ~ " at line " ~ decimal(d.name.span.line);
+                foreach (ref r; listed)
+                    given ~= quoted(r.name) ~ " at line " ~ decimal(r.pathSpan.line) ~ ", as its silver.toml names it";
+                mistake = Mistake(file.file, ProjectCode.UnknownPackage, used.span, "No `[[package]]` entry here "
+                    ~ "gives " ~ quoted(used.name) ~ (given.length > 0 ? ": the entries give " ~ given.join("; ")
+                        ~ ", and a name in `uses` is the name a package's own file gives it"
+                    : ": a package described here is an entry with its `name` and `path`, and one with a silver.toml "
+                        ~ "of its own an entry with its `path` alone, as [[package]] path = \"../" ~ used.name ~ "\""));
                 return false;
             }
             if (!reach(file, *entry, mistake)) return false;
@@ -849,105 +996,83 @@ struct ProjectReader
         return true;
     }
 
-    /// Finds the package `entry` names at its directory, and reads its file unless it has been.
-    bool reach(const ref PackageFile from, const ref PathEntry entry, out Mistake mistake)
+    /// Adds the packages of the file that `entry` leads to, unless they have been.
+    bool reach(const ref PackageFile from, const ref Reached entry, out Mistake mistake)
     {
-        import std.path : buildPath, dirName;
-
         bool fail(string code, string message)
         {
-            mistake = Mistake(from.file, code, entry.span, message);
+            mistake = Mistake(from.file, code, entry.pathSpan, message);
             return false;
         }
-        immutable name = entry.name.name;
-        immutable directory = entry.directory;
-        if (!isDirectory(directory))
+        if (auto known = named(entry.name))
         {
-            return fail(ProjectCode.NotADirectory, quoted(name) ~ " is at " ~ directory ~ ", which isn't a directory");
+            if (samePath(known.home, entry.home)) return true;
+            return fail(ProjectCode.TwoDirectories, quoted(entry.name) ~ " is at " ~ entry.home ~ " here, and already "
+                ~ "at " ~ known.home ~ ", described in " ~ known.file);
         }
-        // The directory's own file, or else the nearest above it, which has to have it as a part.
-        auto file = buildPath(directory, packageFileName);
-        immutable asPart = !isFile(file);
-        if (asPart)
-        {
-            auto above = dirName(directory);
-            file = above == directory ? null : findPackageFile(above);
-            if (file is null)
-            {
-                return fail(ProjectCode.NoPackageThere, directory ~ " has no " ~ packageFileName ~ ", and no directory "
-                    ~ "above it has one to describe it as a part");
-            }
-        }
-        PackageFile read;
-        auto found = alreadyRead(file);
-        if (found is null)
-        {
-            if (!readPackageFile(file, read, mistake)) return false;
-            found = &read;
-        }
-        string there;
-        if (!asPart)
-        {
-            there = found.name.name;
-        }
-        else
-        {
-            foreach (ref p; found.parts)
-            {
-                if (samePath(p.directory, directory)) there = p.name.name;
-            }
-            if (there is null)
-            {
-                return fail(ProjectCode.NoPackageThere, directory ~ " has no " ~ packageFileName ~ ", and " ~ file
-                    ~ ", the nearest above it, has no part there");
-            }
-        }
-        if (there != name)
-        {
-            return fail(ProjectCode.WrongPackageThere, file ~ " describes " ~ (asPart ? "the part " : "the package ")
-                ~ quoted(there) ~ " there, not " ~ quoted(name));
-        }
-        if (auto known = named(name))
-        {
-            if (samePath(known.home, directory)) return true;
-            return fail(ProjectCode.TwoDirectories, quoted(name) ~ " is at " ~ directory ~ " here, and already at "
-                ~ known.home ~ ", described in " ~ known.file);
-        }
-        if (auto inside = nested(*found)) return fail(ProjectCode.InsidePackage, inside);
-        return add(*found, mistake);
-    }
-
-    /// Why a package or part of `file`, not yet followed, and one already reached would have one
-    /// directory of modules inside the other because the outer one has no `source`, or null. The
-    /// compiler refuses any such pair; only this one comes from how a `silver.toml` maps to directories.
-    string nested(const ref PackageFile file)
-    {
-        struct Placed { string name; string modules; string home; }
-        Placed[] added;
-        if (file.modules !is null) added ~= Placed(file.name.name, file.modules, file.directory);
-        foreach (ref p; file.parts)
-        {
-            if (p.modules !is null) added ~= Placed(p.name.name, p.modules, p.directory);
-        }
-        string message(Placed inner, Placed outer)
-        {
-            return quoted(inner.name) ~ " is at " ~ inner.home ~ ", inside the directory of " ~ quoted(outer.name)
-                ~ ", at " ~ outer.home ~ ", whose modules are that whole directory, so a file of " ~ quoted(inner.name)
-                ~ " would be a module of both; giving " ~ quoted(outer.name) ~ " a `source` directory below it "
-                ~ "avoids it";
-        }
+        PackageFile found;
+        if (!fileAt(entry.file, found, mistake)) return false;
+        Placed[] known;
         foreach (ref p; packages)
         {
-            if (p.directory is null) continue;
-            auto known = Placed(p.name, p.directory, p.home);
-            foreach (a; added)
-            {
-                if (samePath(known.modules, known.home) && within(a.modules, known.modules)) return message(a, known);
-                if (samePath(a.modules, a.home) && within(known.modules, a.modules)) return message(known, a);
-            }
+            if (p.directory !is null) known ~= Placed(p.name, p.directory, p.home);
         }
-        return null;
+        if (auto inside = nested(placedOf(found), known)) return fail(ProjectCode.InsidePackage, inside);
+        return add(found, mistake);
     }
+}
+
+/// A package with modules: its name, where they are, and its home.
+struct Placed
+{
+    string name;
+    string modules;
+    string home;
+}
+
+/// The packages of `file` that have modules.
+Placed[] placedOf(const ref PackageFile file)
+{
+    Placed[] placed;
+    if (file.modules !is null) placed ~= Placed(file.name.name, file.modules, file.directory);
+    foreach (ref d; file.described)
+    {
+        if (d.modules !is null) placed ~= Placed(d.name.name, d.modules, d.directory);
+    }
+    return placed;
+}
+
+/// Why one of `added` and one of `known` would have one directory of modules inside the other because
+/// the outer one's modules are its whole directory, or null. The compiler refuses any such pair; only
+/// this one comes from how a `silver.toml` maps to directories.
+string nested(const Placed[] added, const Placed[] known)
+{
+    string message(Placed inner, Placed outer)
+    {
+        return quoted(inner.name) ~ " is at " ~ inner.home ~ ", inside the directory of " ~ quoted(outer.name)
+            ~ ", at " ~ outer.home ~ ", whose modules are that whole directory, so a file of " ~ quoted(inner.name)
+            ~ " would be a module of both; giving " ~ quoted(outer.name) ~ " a `source` directory below it "
+            ~ "avoids it";
+    }
+    foreach (k; known)
+    {
+        foreach (a; added)
+        {
+            if (a.modules is null || k.modules is null) continue;
+            if (samePath(k.modules, k.home) && within(a.modules, k.modules)) return message(a, k);
+            if (samePath(a.modules, a.home) && within(k.modules, a.modules)) return message(k, a);
+        }
+    }
+    return null;
+}
+
+/// `directory` as a `path` in a package file in `base` would write it, with `/`.
+string written(string directory, string base)
+{
+    import std.array : replace;
+    import std.path : relativePath;
+
+    return relativePath(directory, base).replace("\\", "/");
 }
 
 string decimal(ulong n)
@@ -1015,14 +1140,14 @@ version (unittest)
         assert(false, "no package " ~ name);
     }
 
-    /// The compiler's own shape, from docs/silver.md: a parent with no modules, library parts, and
-    /// two parts that are programs.
+    /// The compiler's own shape, from docs/silver.md: a root with no modules that describes library
+    /// packages and two that are programs.
     enum compilerShape = [
-        "tool/silver.toml": "name = \"tool\"\n\n[[part]]\nname = \"tool.ast\"\npath = \"ast\"\n\n"
-            ~ "[[part]]\nname = \"tool.syntax\"\npath = \"syntax\"\nuses = [\"tool.ast\"]\n\n"
-            ~ "[[part]]\nname = \"tool.compiler\"\npath = \"compiler\"\nsource = \"source\"\n"
+        "tool/silver.toml": "name = \"tool\"\n\n[[package]]\nname = \"tool.ast\"\npath = \"ast\"\n\n"
+            ~ "[[package]]\nname = \"tool.syntax\"\npath = \"syntax\"\nuses = [\"tool.ast\"]\n\n"
+            ~ "[[package]]\nname = \"tool.compiler\"\npath = \"compiler\"\nsource = \"source\"\n"
             ~ "uses = [\"tool.syntax\", \"tool.ast\"]\n\n"
-            ~ "[[part]]\nname = \"tool.frontend\"\npath = \"frontend\"\n",
+            ~ "[[package]]\nname = \"tool.frontend\"\npath = \"frontend\"\n",
         "tool/ast/": "",
         "tool/syntax/": "",
         "tool/compiler/source/": "",
@@ -1043,29 +1168,32 @@ unittest
     assert(findPackageFile(buildPath(directory, "a", "b")) == buildPath(directory, "a", "silver.toml"));
 }
 
-@("a package file's fields, with the defaults for where modules are")
+@("a package file's fields, with the defaults for where modules are, and its two kinds of [[package]] entry")
 unittest
 {
-    auto directory = makeTree("project-fields", ["source/": "", "core/src/": "", "lib/": ""]);
+    auto directory = makeTree("project-fields", ["source/": "", "core/src/": "", "lib/": "", "vendor/geo/": "", "x/": ""]);
     scope (exit) rmdirRecurse(directory);
 
     auto plain = checked(directory, "name = \"geometry\"");
-    assert(plain.name.name == "geometry" && plain.modules == directory && plain.parts.length == 0);
+    assert(plain.name.name == "geometry" && plain.modules == directory && plain.described.length == 0);
     assert(checked(directory, "name = \"g\"\nsource = \"source\"").modules == buildPath(directory, "source"));
     assert(checked(directory, "name = \"g\"\nsource = \".\"").modules == directory);
 
     auto full = checked(directory, "# a project\nname = \"silver\"\nsource = \"source\"\nuses = [\"geometry\", \"x.y\"]\n"
-        ~ "[paths]\ngeometry = \"../geometry\"\n\"x.y\" = 'lib'\n"
-        ~ "[[part]]\nname = \"silver.core\"\npath = \"core\"\nsource = \"src\"\nuses = [\"geometry\"]\n"
-        ~ "[[part]]\nname = \"silver.lib\"\npath = \"lib\"\n");
+        ~ "[[package]]\npath = \"vendor/geo\"\ntest = false\n[[package]]\npath = 'x'\n"
+        ~ "[[package]]\nname = \"silver.core\"\npath = \"core\"\nsource = \"src\"\nuses = [\"geometry\"]\ntest = true\n"
+        ~ "[[package]]\nname = \"silver.lib\"\npath = \"lib\"\n");
     assert(full.uses.length == 2 && full.uses[1].name == "x.y" && full.uses[1].span.line == 4);
-    assert(full.paths.length == 2 && full.paths[1].directory == buildPath(directory, "lib"));
-    assert(full.parts.length == 2 && full.parts[0].modules == buildPath(directory, "core", "src"));
-    assert(full.parts[1].modules == buildPath(directory, "lib") && full.parts[1].span.line == 13);
+    assert(full.listed.length == 2 && full.listed[1].directory == buildPath(directory, "x"));
+    assert(full.listed[0].pathSpan.line == 6 && full.listed[0].pathSpan.column == 8);
+    assert(full.described.length == 2 && full.described[0].modules == buildPath(directory, "core", "src"));
+    assert(full.described[1].modules == buildPath(directory, "lib") && full.described[1].span.line == 16);
 
-    assert(checked(directory, "name = \"g\"\n[[part]]\nname = \"g.lib\"\npath = \"lib\"").modules is null);
-    assert(checked(directory, "name = \"g\"\npart = [{ name = \"g.lib\", path = \"lib\" }]").parts.length == 1);
-    assert(checked(directory, "name = \"g\"\npaths = { \"a.b\" = \"x\" }").paths[0].name.name == "a.b");
+    // Listing packages with files of their own leaves the file's package its modules; describing one doesn't.
+    assert(checked(directory, "name = \"g\"\n[[package]]\npath = \"x\"").modules == directory);
+    assert(checked(directory, "name = \"g\"\n[[package]]\nname = \"g.lib\"\npath = \"lib\"").modules is null);
+    assert(checked(directory, "name = \"g\"\npackage = [{ name = \"g.lib\", path = \"lib\" }]").described.length == 1);
+    assert(checked(directory, "name = \"g\"\npackage = [{ path = \"lib\" }]").listed.length == 1);
 }
 
 @("each mistake in a package file has its code and position")
@@ -1077,49 +1205,72 @@ unittest
     alias m = (text, code, line, column) => mistakeIn(directory, text, code, line, column);
 
     m("name = \"g\"\nversion = \"1\"", ProjectCode.UnknownField, 2, 1);
-    m("name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"lib\"\nmain = true", ProjectCode.UnknownField, 5, 1);
+    m("name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \"lib\"\nmain = true", ProjectCode.UnknownField, 5, 1);
     m("name = \"g\"\n[dependencies]\nx = \"y\"", ProjectCode.UnknownField, 2, 2);
     m("name = 1", ProjectCode.WrongType, 1, 8);
     m("name = \"g\"\nsource = [\"a\"]", ProjectCode.WrongType, 2, 10);
     m("name = \"g\"\nuses = \"geometry\"", ProjectCode.WrongType, 2, 8);
     m("name = \"g\"\nuses = [\"a\", 2]", ProjectCode.WrongType, 2, 14);
-    m("name = \"g\"\npaths = \"x\"", ProjectCode.WrongType, 2, 9);
-    m("name = \"g\"\n[paths]\ngeometry = 1", ProjectCode.WrongType, 3, 12);
-    m("name = \"g\"\n[part]\nname = \"x\"", ProjectCode.WrongType, 2, 1);
-    m("name = \"g\"\npart = [1]", ProjectCode.WrongType, 2, 8);
-    m("name = \"g\"\n[[part]]\nname = \"g.x\"\npath = 1", ProjectCode.WrongType, 4, 8);
-    auto dotted = m("name = \"g\"\n[paths]\nsilver.core = \"../core\"", ProjectCode.WrongType, 3, 1);
-    assert(dotted.message == "`silver` holds a table, not a directory: a name of more than one segment is quoted under "
-        ~ "[paths], as \"silver.name\" = \"../silver/name\"", dotted.message);
+    m("name = \"g\"\npackage = \"x\"", ProjectCode.WrongType, 2, 11);
+    m("name = \"g\"\n[package]\nname = \"x\"", ProjectCode.WrongType, 2, 1);
+    m("name = \"g\"\npackage = [1]", ProjectCode.WrongType, 2, 11);
+    m("name = \"g\"\n[[package]]\nname = \"g.x\"\npath = 1", ProjectCode.WrongType, 4, 8);
+    auto test = m("name = \"g\"\n[[package]]\npath = \"lib\"\ntest = \"yes\"", ProjectCode.WrongType, 4, 8);
+    assert(test.message == "`test` is true or false", test.message);
     m("uses = [\"a\"]", ProjectCode.MissingField, 1, 1);
     m("", ProjectCode.MissingField, 1, 1);
-    m("name = \"g\"\n\n[[part]]\npath = \"lib\"", ProjectCode.MissingField, 3, 1);
-    m("name = \"g\"\n\n[[part]]\nname = \"g.lib\"", ProjectCode.MissingField, 3, 1);
+    m("name = \"g\"\n\n[[package]]\nuses = [\"a\"]", ProjectCode.MissingField, 3, 1);
+    m("name = \"g\"\n\n[[package]]\nname = \"g.lib\"", ProjectCode.MissingField, 3, 1);
+    auto unnamed = m("name = \"g\"\n\n[[package]]\nsource = \"src\"\npath = \"lib\"", ProjectCode.MissingField, 3, 1);
+    assert(unnamed.message == "A package described here has to give its `name`, as name = \"silver.core\"; one with a "
+        ~ "silver.toml of its own is listed by its `path` alone", unnamed.message);
     m("name = \"geo metry\"", ProjectCode.BadName, 1, 8);
     m("name = \"g.\"", ProjectCode.BadName, 1, 8);
     m("name = \"1g\"", ProjectCode.BadName, 1, 8);
     m("name = \"g\"\nuses = [\"a-b\"]", ProjectCode.BadName, 2, 9);
-    m("name = \"g\"\n[paths]\n\"a b\" = \"x\"", ProjectCode.BadName, 3, 1);
     m("name = \"g\"\nsource = \"..\"", ProjectCode.OutsideDirectory, 2, 10);
-    m("name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"../elsewhere\"", ProjectCode.OutsideDirectory, 4, 8);
-    m("name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \".\"", ProjectCode.OutsideDirectory, 4, 8);
-    m("name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"lib\"\nsource = \"../core\"", ProjectCode.OutsideDirectory, 5, 10);
+    m("name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \"..\"", ProjectCode.OutsideDirectory, 4, 8);
+    m("name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \".\"", ProjectCode.OutsideDirectory, 4, 8);
+    m("name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \"lib\"\nsource = \"../core\"", ProjectCode.OutsideDirectory, 5, 10);
     m("name = \"g\"\nsource = \"missing\"", ProjectCode.NotADirectory, 2, 10);
     m("name = \"g\"\nsource = \"file.txt\"", ProjectCode.NotADirectory, 2, 10);
-    m("name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"missing\"", ProjectCode.NotADirectory, 4, 8);
+    m("name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \"missing\"", ProjectCode.NotADirectory, 4, 8);
+    m("name = \"g\"\n[[package]]\npath = \"../missing\"", ProjectCode.NotADirectory, 3, 8);
     m("name = \"g\"\nuses = [\"a\", \"b\", \"a\"]", ProjectCode.DuplicateName, 2, 19);
-    m("name = \"g\"\n[[part]]\nname = \"g\"\npath = \"lib\"", ProjectCode.DuplicateName, 3, 8);
-    m("name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"lib\"\n[[part]]\nname = \"g.x\"\npath = \"core\"",
+    m("name = \"g\"\n[[package]]\nname = \"g\"\npath = \"lib\"", ProjectCode.DuplicateName, 3, 8);
+    m("name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \"lib\"\n[[package]]\nname = \"g.x\"\npath = \"core\"",
         ProjectCode.DuplicateName, 6, 8);
-    m("name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"lib\"\n[[part]]\nname = \"g.y\"\npath = \"./lib/\"",
+    m("name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \"lib\"\n[[package]]\nname = \"g.y\"\npath = \"./lib/\"",
         ProjectCode.SamePath, 7, 8);
-    m("name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"has-file\"", ProjectCode.UnderPackageFile, 4, 8);
+    m("name = \"g\"\n[[package]]\npath = \"core\"\n[[package]]\npath = \"./core\"", ProjectCode.SamePath, 5, 8);
+    auto itself = m("name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \"has-file\"", ProjectCode.DescribesItself, 3, 1);
+    assert(itself.message == "`name` is given for the package at " ~ buildPath(directory, "has-file") ~ ", which has a "
+        ~ "silver.toml of its own that describes it, so here it's listed by its `path` alone", itself.message);
+    m("name = \"g\"\n[[package]]\npath = \"has-file\"\nuses = [\"a\"]", ProjectCode.DescribesItself, 4, 1);
     m("name = \"g\"\nuses = [\"std\"]", ProjectCode.StandardLibraryListed, 2, 9);
-    m("name = \"g\"\n[paths]\nstd = \"x\"", ProjectCode.StandardLibraryListed, 3, 1);
-    m("name = \"g\"\n[paths]\ng = \"x\"", ProjectCode.PathForOwnPackage, 3, 1);
-    m("name = \"g\"\n[paths]\n\"g.x\" = \"x\"\n[[part]]\nname = \"g.x\"\npath = \"lib\"", ProjectCode.PathForOwnPackage, 3, 1);
-    m("name = \"g\"\nuses = [\"a\"]\n[[part]]\nname = \"g.x\"\npath = \"lib\"", ProjectCode.UsesWithoutModules, 2, 1);
+    m("name = \"g\"\n[[package]]\npath = \".\"", ProjectCode.ListsOwnPackage, 3, 8);
+    m("name = \"g\"\n[[package]]\npath = \"lib\"\n[[package]]\nname = \"g.x\"\npath = \"lib\"", ProjectCode.ListsOwnPackage,
+        3, 8);
+    m("name = \"g\"\nuses = [\"a\"]\n[[package]]\nname = \"g.x\"\npath = \"lib\"", ProjectCode.UsesWithoutModules, 2, 1);
     m("name = \"g\"\nuses = [geometry]", TomlCode.BadValue, 2, 9);
+    auto remote = m("name = \"g\"\n[[package]]\nname = \"geo\"\nversion = \"1.2\"", ProjectCode.RemotePackage, 4, 1);
+    assert(remote.message == "`version` says where a remote package comes from, and remote packages aren't supported "
+        ~ "yet: a package is described here, with its `name` and `path`, or is listed by its `path` alone when it has a "
+        ~ "silver.toml of its own", remote.message);
+    m("name = \"g\"\n[[package]]\ngit = \"https://example.com/geo\"\nbranch = \"main\"", ProjectCode.RemotePackage, 3, 1);
+    m("name = \"g\"\n[[package]]\npath = \"lib\"\nrev = \"abc\"", ProjectCode.RemotePackage, 4, 1);
+    m("name = \"g\"\n[[package]]\ngit = \"https://example.com/geo\"\ntag = \"v1\"", ProjectCode.RemotePackage, 3, 1);
+    auto ownEntry = m("name = \"g\"\n[[package]]\npath = \".\"", ProjectCode.ListsOwnPackage, 3, 8);
+    assert(ownEntry.message == directory ~ " is this file's own directory, so the package there is this file's own, "
+        ~ "'g', and needs no entry", ownEntry.message);
+
+    // What replaced the old fields.
+    auto paths = m("name = \"g\"\n[paths]\ngeometry = \"../geometry\"", ProjectCode.UnknownField, 2, 2);
+    assert(paths.message == "`[paths]` is replaced by `[[package]]`: a package elsewhere is an entry whose `path` is its "
+        ~ "directory, as [[package]] path = \"../geometry\", and its name is read from the silver.toml there", paths.message);
+    auto part = m("name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"lib\"", ProjectCode.UnknownField, 2, 3);
+    assert(part.message == "`[[part]]` is replaced by `[[package]]`, an entry with the same `name`, `path`, `source` and "
+        ~ "`uses`", part.message);
 }
 
 @("a package's name has the segments a module's name has, wherever a silver.toml writes one")
@@ -1135,10 +1286,9 @@ unittest
         assert(named.message == "\"" ~ bad ~ "\" isn't a package name: it's one or more segments joined by `.`, as "
             ~ "\"silver.core\", each a lowercase letter or `_` followed by letters, digits and `_`, as in a module's "
             ~ "name", named.message);
-        m("name = \"g\"\nuses = [\"a\", \"" ~ bad ~ "\"]\n[paths]\na = \"x\"", 2, 14);
-        m("name = \"g\"\n[paths]\n\"" ~ bad ~ "\" = \"x\"", 3, 1);
-        m("name = \"g\"\n[[part]]\nname = \"" ~ bad ~ "\"\npath = \"lib\"", 3, 8);
-        m("name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"lib\"\nuses = [\"" ~ bad ~ "\"]", 5, 9);
+        m("name = \"g\"\nuses = [\"a\", \"" ~ bad ~ "\"]", 2, 14);
+        m("name = \"g\"\n[[package]]\nname = \"" ~ bad ~ "\"\npath = \"lib\"", 3, 8);
+        m("name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \"lib\"\nuses = [\"" ~ bad ~ "\"]", 5, 9);
     }
     foreach (good; ["geo", "geoShapes", "geo_x", "_", "_geo", "geo2", "val", "if", "match", "silver.core"])
         assert(validName(good), good);
@@ -1154,8 +1304,8 @@ unittest
     Mistake mistake;
     assert(!readPackageFile(file, read, mistake));
     assert(formatMistake(mistake, (string path) => shownFrom(directory, path)) == "silver.toml(2,1): Error F0016: "
-        ~ "`other` isn't a field of a package file. A package file has `name`, `source`, `uses`, `[paths]` and "
-        ~ "`[[part]]`", formatMistake(mistake));
+        ~ "`other` isn't a field of a package file. A package file has `name`, `source`, `uses` and `[[package]]`",
+        formatMistake(mistake));
     assert(!readPackageFile(buildPath(directory, "missing", "silver.toml"), read, mistake));
     assert(mistake.code == ProjectCode.Unreadable && mistake.span.line == 0);
     auto shown = formatMistake(mistake, (string path) => shownFrom(directory, path));
@@ -1164,67 +1314,100 @@ unittest
         ~ mistake.message["The package file can't be read: ".length .. $], shown);
 }
 
-@("a project's parts are packages of their own, and a parent without source has no modules")
+@("the packages a file describes are packages of their own and one project, and a root without source has no modules")
 unittest
 {
-    auto directory = makeTree("project-parts", compilerShape.dup);
+    auto directory = makeTree("project-described", compilerShape.dup);
     scope (exit) rmdirRecurse(directory);
     auto p = project(buildPath(directory, "tool", "silver.toml"));
     assert(namesOf(p) == ["tool", "tool.ast", "tool.syntax", "tool.compiler", "tool.frontend"]);
     auto tool = factsOf(p, "tool");
-    assert(tool.directory is null && tool.parts == ["tool.ast", "tool.syntax", "tool.compiler", "tool.frontend"]);
+    assert(tool.directory is null && tool.describes == ["tool.ast", "tool.syntax", "tool.compiler", "tool.frontend"]);
     assert(tool.uses.length == 0 && tool.home == buildPath(directory, "tool"));
     auto compiler = factsOf(p, "tool.compiler");
     assert(compiler.directory == buildPath(directory, "tool", "compiler", "source"));
     assert(compiler.home == buildPath(directory, "tool", "compiler"));
-    assert(compiler.uses == ["tool.syntax", "tool.ast"] && compiler.parts.length == 0);
+    assert(compiler.uses == ["tool.syntax", "tool.ast"] && compiler.describes.length == 0);
     assert(compiler.file == buildPath(directory, "tool", "silver.toml"));
 }
 
-@("a package used through [paths] is read from its own file, and what it uses is followed in turn")
+@("a package listed by its path is read from its own file, and what it uses is followed in turn")
 unittest
 {
-    auto directory = makeTree("project-paths", [
-        "app/silver.toml": "name = \"app\"\nuses = [\"cards\", \"geometry\"]\n[paths]\ncards = \"../cards\"\n"
-            ~ "geometry = \"../geometry\"\nunused = \"../nowhere\"",
-        "cards/silver.toml": "name = \"cards\"\nsource = \"src\"\nuses = [\"geometry\"]\n[paths]\ngeometry = \"../geometry\"",
+    auto directory = makeTree("project-listed", [
+        "app/silver.toml": "name = \"app\"\nuses = [\"cards\", \"geometry\"]\n[[package]]\npath = \"../cards\"\n"
+            ~ "[[package]]\npath = \"../geometry\"\n[[package]]\npath = \"../spare\"",
+        "cards/silver.toml": "name = \"cards\"\nsource = \"src\"\nuses = [\"geometry\"]\n[[package]]\npath = \"../geometry\"",
         "cards/src/": "",
-        "geometry/silver.toml": "name = \"geometry\"\nuses = [\"units\"]\n[paths]\nunits = \"../units\"",
+        "geometry/silver.toml": "name = \"geometry\"\nuses = [\"units\"]\n[[package]]\npath = \"../units\"",
         "units/silver.toml": "name = \"units\"",
+        // Listed and not used: read for its name, and not followed.
+        "spare/silver.toml": "name = \"spare\"\nuses = [\"nowhere\"]",
     ]);
     scope (exit) rmdirRecurse(directory);
     auto p = project(buildPath(directory, "app", "silver.toml"));
     assert(namesOf(p) == ["app", "cards", "geometry", "units"]);
-    assert(factsOf(p, "app").uses == ["cards", "geometry"]);
+    assert(factsOf(p, "app").uses == ["cards", "geometry"] && factsOf(p, "app").describes.length == 0);
     assert(factsOf(p, "cards").directory == buildPath(directory, "cards", "src"));
     assert(factsOf(p, "cards").uses == ["geometry"]);
     assert(factsOf(p, "geometry").directory == buildPath(directory, "geometry"));
     assert(factsOf(p, "units").file == buildPath(directory, "units", "silver.toml"));
 }
 
-@("a package elsewhere uses a part by its directory, found in the nearest package file above it")
+@("a package with a file of its own may be inside the file's directory or elsewhere, and is its own project")
+unittest
+{
+    import std.algorithm : canFind, count;
+    import std.array : join;
+
+    auto directory = makeTree("project-own-files", [
+        "root/silver.toml": "name = \"root\"\nsource = \"src\"\nuses = [\"lib\", \"far\"]\n[[package]]\npath = \"lib\"\n"
+            ~ "[[package]]\npath = \"../far\"\n[[package]]\nname = \"root.tool\"\npath = \"tool\"\nuses = [\"lib\", \"far.x\"]"
+            ~ "\n[[package]]\npath = \"../far/x\"",
+        "root/src/": "",
+        "root/tool/": "",
+        "root/lib/silver.toml": "name = \"lib\"\nuses = [\"units\"]\n[[package]]\npath = \"../../units\"",
+        "far/silver.toml": "name = \"far\"\nsource = \"src\"\n[[package]]\nname = \"far.x\"\npath = \"x\"",
+        "far/src/": "",
+        "far/x/": "",
+        "units/silver.toml": "name = \"units\"",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto p = project(buildPath(directory, "root", "silver.toml"));
+    assert(namesOf(p) == ["root", "root.tool", "lib", "units", "far", "far.x"], namesOf(p).join(", "));
+    assert(factsOf(p, "root").describes == ["root.tool"]);
+    assert(factsOf(p, "lib").describes.length == 0 && factsOf(p, "lib").home == buildPath(directory, "root", "lib"));
+    assert(factsOf(p, "lib").file == buildPath(directory, "root", "lib", "silver.toml"));
+    assert(factsOf(p, "far").describes == ["far.x"] && factsOf(p, "far.x").file == buildPath(directory, "far", "silver.toml"));
+    auto options = compilerOptions(p, (string path) => path);
+    assert(options.count("--project") == 2, options.join(" "));
+    assert(options.canFind("root=root.tool") && options.canFind("far=far.x"), options.join(" "));
+}
+
+@("a package elsewhere uses one package another project describes by its directory, found in the nearest package file above it")
 unittest
 {
     auto files = compilerShape.dup;
-    files["lint/silver.toml"] = "name = \"lint\"\nuses = [\"tool.syntax\"]\n[paths]\n\"tool.syntax\" = \"../tool/syntax\"";
-    auto directory = makeTree("project-uses-part", files);
+    files["lint/silver.toml"] = "name = \"lint\"\nuses = [\"tool.syntax\"]\n[[package]]\npath = \"../tool/syntax\"";
+    auto directory = makeTree("project-uses-described", files);
     scope (exit) rmdirRecurse(directory);
     auto p = project(buildPath(directory, "lint", "silver.toml"));
     assert(namesOf(p) == ["lint", "tool", "tool.ast", "tool.syntax", "tool.compiler", "tool.frontend"]);
     assert(factsOf(p, "tool.syntax").uses == ["tool.ast"]);
-    assert(factsOf(p, "tool").parts.length == 4);
+    assert(factsOf(p, "tool").describes.length == 4 && factsOf(p, "lint").describes.length == 0);
 }
 
-@("a library used by two packages, and by a package and a part, is read once")
+@("a library used by two packages, and by a package and one it describes, is read once")
 unittest
 {
     auto directory = makeTree("project-shared", [
-        "app/silver.toml": "name = \"app\"\nsource = \"src\"\nuses = [\"a\", \"b\", \"geo\"]\n[paths]\na = \"../a\"\n"
-            ~ "b = \"../b\"\ngeo = \"../geo\"\n[[part]]\nname = \"app.x\"\npath = \"x\"\nuses = [\"geo\"]",
+        "app/silver.toml": "name = \"app\"\nsource = \"src\"\nuses = [\"a\", \"b\", \"geo\"]\n[[package]]\npath = \"../a\"\n"
+            ~ "[[package]]\npath = \"../b\"\n[[package]]\npath = \"../geo\"\n"
+            ~ "[[package]]\nname = \"app.x\"\npath = \"x\"\nuses = [\"geo\"]",
         "app/x/": "",
         "app/src/": "",
-        "a/silver.toml": "name = \"a\"\nuses = [\"geo\"]\n[paths]\ngeo = \"../geo\"",
-        "b/silver.toml": "name = \"b\"\nuses = [\"geo\"]\n[paths]\ngeo = \"../geo/\"",
+        "a/silver.toml": "name = \"a\"\nuses = [\"geo\"]\n[[package]]\npath = \"../geo\"",
+        "b/silver.toml": "name = \"b\"\nuses = [\"geo\"]\n[[package]]\npath = \"../geo/\"",
         "geo/silver.toml": "name = \"geo\"",
     ]);
     scope (exit) rmdirRecurse(directory);
@@ -1235,56 +1418,80 @@ unittest
 @("what can only be seen by reading files is a mistake located in the file that leads there")
 unittest
 {
+    import std.algorithm : endsWith;
+
     auto files = compilerShape.dup;
-    files["app/silver.toml"] = "name = \"app\"\nuses = [\"geo\"]\n[paths]\ngeo = \"../geo\"";
+    files["app/silver.toml"] = "name = \"app\"\nuses = [\"geo\"]\n[[package]]\npath = \"../geo\"";
     files["geo/silver.toml"] = "name = \"geometry\"";
-    files["missing/silver.toml"] = "name = \"m\"\nuses = [\"gone\"]\n[paths]\ngone = \"../gone\"";
-    files["file/silver.toml"] = "name = \"f\"\nuses = [\"x\"]\n[paths]\nx = \"silver.toml\"";
     files["unlisted/silver.toml"] = "name = \"u\"\nuses = [\"nowhere\"]";
-    files["plain/silver.toml"] = "name = \"p\"\nuses = [\"x\"]\n[paths]\nx = \"../bare\"";
+    files["plain/silver.toml"] = "name = \"p\"\n[[package]]\npath = \"../bare\"";
     files["bare/"] = "";
-    files["wrongpart/silver.toml"] = "name = \"w\"\nuses = [\"tool.other\"]\n[paths]\n\"tool.other\" = \"../tool/ast\"";
-    files["notpart/silver.toml"] = "name = \"n\"\nuses = [\"tool.x\"]\n[paths]\n\"tool.x\" = \"../tool/compiler/source\"";
-    files["twice/silver.toml"] = "name = \"t\"\nuses = [\"geometry\", \"b\"]\n[paths]\ngeometry = \"../geo\"\nb = \"../b\"";
-    files["b/silver.toml"] = "name = \"b\"\nuses = [\"geometry\"]\n[paths]\ngeometry = \"../geo2\"";
+    files["notdescribed/silver.toml"] = "name = \"n\"\n[[package]]\npath = \"../tool/compiler/source\"";
+    files["inside/silver.toml"] = "name = \"i\"\nsource = \"src\"\n[[package]]\npath = \"loose\"";
+    files["inside/src/"] = "";
+    files["inside/loose/"] = "";
+    files["twice/silver.toml"] = "name = \"t\"\nuses = [\"geometry\", \"b\"]\n[[package]]\npath = \"../geo\"\n"
+        ~ "[[package]]\npath = \"../b\"";
+    files["b/silver.toml"] = "name = \"b\"\nuses = [\"geometry\"]\n[[package]]\npath = \"../geo2\"";
     files["geo2/silver.toml"] = "name = \"geometry\"";
-    files["clash/silver.toml"] = "name = \"c\"\n[paths]\n\"tool.ast\" = \"../tool/ast\"\n"
-        ~ "[[part]]\nname = \"tool.frontend\"\npath = \"part\"\nuses = [\"tool.ast\"]";
-    files["clash/part/"] = "";
-    files["badlib/silver.toml"] = "name = \"bl\"\nuses = [\"broken\"]\n[paths]\nbroken = \"../broken\"";
+    files["same/silver.toml"] = "name = \"s\"\n[[package]]\npath = \"../geo\"\n[[package]]\npath = \"../geo2\"";
+    files["own/silver.toml"] = "name = \"geometry\"\n[[package]]\npath = \"../geo\"";
+    files["clash/silver.toml"] = "name = \"c\"\n[[package]]\npath = \"../tool/ast\"\n"
+        ~ "[[package]]\nname = \"tool.frontend\"\npath = \"front\"\nuses = [\"tool.ast\"]";
+    files["clash/front/"] = "";
+    files["badlib/silver.toml"] = "name = \"bl\"\n[[package]]\npath = \"../broken\"";
     files["broken/silver.toml"] = "name = \"broken\"\nnope = 1";
+    files["insource/silver.toml"] = "name = \"is\"\n[[package]]\npath = \"../geo3/src\"";
+    files["geo3/silver.toml"] = "name = \"geo3\"\nsource = \"src\"";
+    files["geo3/src/"] = "";
     auto directory = makeTree("project-reading", files);
     scope (exit) rmdirRecurse(directory);
     Mistake of(string project, string code) => projectMistake(buildPath(directory, project, "silver.toml"), code);
 
-    auto wrong = of("app", ProjectCode.WrongPackageThere);
-    assert(wrong.file == buildPath(directory, "app", "silver.toml") && wrong.span.line == 4 && wrong.span.column == 7);
-    assert(wrong.message == buildPath(directory, "geo", "silver.toml") ~ " describes the package 'geometry' there, "
-        ~ "not 'geo'", wrong.message);
-    auto gone = of("missing", ProjectCode.NotADirectory);
-    assert(gone.span.line == 4 && gone.span.column == 8);
-    of("file", ProjectCode.NotADirectory);
+    // A name is found among the entries by the name each one's file gives.
+    auto wrong = of("app", ProjectCode.UnknownPackage);
+    assert(wrong.file == buildPath(directory, "app", "silver.toml") && wrong.span.line == 2 && wrong.span.column == 9);
+    assert(wrong.message == "No `[[package]]` entry here gives 'geo': the entries give 'geometry' at line 4, as its "
+        ~ "silver.toml names it, and a name in `uses` is the name a package's own file gives it", wrong.message);
     auto unlisted = of("unlisted", ProjectCode.UnknownPackage);
     assert(unlisted.span.line == 2 && unlisted.span.column == 9);
     auto bare = of("plain", ProjectCode.NoPackageThere);
-    assert(bare.span.line == 4 && bare.span.column == 5);
-    auto wrongPart = of("wrongpart", ProjectCode.WrongPackageThere);
-    assert(wrongPart.message == buildPath(directory, "tool", "silver.toml") ~ " describes the part 'tool.ast' there, "
-        ~ "not 'tool.other'", wrongPart.message);
-    auto notPart = of("notpart", ProjectCode.NoPackageThere);
-    assert(notPart.message == buildPath(directory, "tool", "compiler", "source") ~ " has no silver.toml, and "
-        ~ buildPath(directory, "tool", "silver.toml") ~ ", the nearest above it, has no part there", notPart.message);
+    assert(bare.span.line == 3 && bare.span.column == 8, formatMistake(bare));
+    auto notDescribed = of("notdescribed", ProjectCode.NoPackageThere);
+    assert(notDescribed.message == buildPath(directory, "tool", "compiler", "source") ~ " has no silver.toml, and "
+        ~ buildPath(directory, "tool", "silver.toml") ~ ", the nearest above it, describes no package there; it holds "
+        ~ "modules of the package at " ~ buildPath(directory, "tool", "compiler") ~ ", which is listed as `path = "
+        ~ "\"../tool/compiler\"`", notDescribed.message);
+    // Outside the file's directory, a package with no file of its own can't be described here.
+    assert(bare.message == buildPath(directory, "bare") ~ " has no silver.toml, and no directory above it has one; a "
+        ~ "package outside this file's directory has a silver.toml of its own, so give that directory one, or give the "
+        ~ "`path` of a package another file describes", bare.message);
+    // The nearest file above is the lister's own, which describes nothing there.
+    auto loose = of("inside", ProjectCode.NoPackageThere);
+    assert(loose.span.line == 4, formatMistake(loose));
     auto twice = of("twice", ProjectCode.TwoDirectories);
     assert(twice.file == buildPath(directory, "b", "silver.toml") && twice.span.line == 4, formatMistake(twice));
     assert(twice.message == "'geometry' is at " ~ buildPath(directory, "geo2") ~ " here, and already at "
         ~ buildPath(directory, "geo") ~ ", described in " ~ buildPath(directory, "geo", "silver.toml"), twice.message);
+    // Two entries of one file, or an entry and the file's own package, giving one name.
+    auto same = of("same", ProjectCode.TwoDirectories);
+    assert(same.span.line == 5 && same.message == "'geometry' is at " ~ buildPath(directory, "geo2") ~ ", described in "
+        ~ buildPath(directory, "geo2", "silver.toml") ~ ", and this file already has a package of that name, at "
+        ~ buildPath(directory, "geo"), formatMistake(same));
+    assert(of("own", ProjectCode.TwoDirectories).span.line == 3);
     auto clash = of("clash", ProjectCode.TwoDirectories);
     assert(clash.file == buildPath(directory, "tool", "silver.toml") && clash.span.line == 19, formatMistake(clash));
     auto broken = of("badlib", ProjectCode.UnknownField);
     assert(broken.file == buildPath(directory, "broken", "silver.toml") && broken.span.line == 2);
+    // A directory of a package's modules is listed by the package's own directory.
+    assert(of("insource", ProjectCode.NoPackageThere).message.endsWith("; it holds modules of the package at "
+        ~ buildPath(directory, "geo3") ~ ", which is listed as `path = \"../geo3\"`"));
+    // Reached only because it's listed, the mistake says which entry listed it.
+    assert(broken.message.endsWith("\nIt was read because " ~ buildPath(directory, "badlib", "silver.toml") ~ " lists "
+        ~ "it, at line 3"), broken.message);
 }
 
-@("a script is beside the package or part whose home holds it, the deepest, and a directory holds those inside it")
+@("a script is beside the package whose home holds it, the deepest, and a directory holds those inside it")
 unittest
 {
     import std.algorithm : map;
@@ -1293,8 +1500,8 @@ unittest
     auto files = compilerShape.dup;
     files["geo/silver.toml"] = "name = \"geo\"";
     files["geo/shapes/"] = "";
-    files["app/silver.toml"] = "name = \"app\"\nsource = \"src\"\nuses = [\"geo\"]\n[paths]\ngeo = \"../geo\"\n"
-        ~ "[[part]]\nname = \"app.tools\"\npath = \"tools\"";
+    files["app/silver.toml"] = "name = \"app\"\nsource = \"src\"\nuses = [\"geo\"]\n[[package]]\npath = \"../geo\"\n"
+        ~ "[[package]]\nname = \"app.tools\"\npath = \"tools\"";
     files["app/src/"] = "";
     files["app/tools/"] = "";
     auto directory = makeTree("project-script-homes", files);
@@ -1304,9 +1511,9 @@ unittest
     auto tool = project(buildPath(directory, "tool", "silver.toml"));
     assert(of(tool, "tool", "ast", "node.ag") == ["tool.ast"]);
     assert(of(tool, "tool", "compiler", "source", "main.ag") == ["tool.compiler"]);
-    // Beside the part's own files, outside its source.
+    // Beside the described package's own files, outside its source.
     assert(of(tool, "tool", "compiler", "build.ag") == ["tool.compiler"]);
-    // The parent only holds its parts, and a file beside them is told so.
+    // The root only describes others, and a file beside them is told so.
     assert(of(tool, "tool", "scratch.ag") == ["tool"]);
     assert(of(tool, "tool", "ast") == ["tool.ast"]);
     assert(of(tool, "tool") == ["tool", "tool.ast", "tool.syntax", "tool.compiler", "tool.frontend"]);
@@ -1326,7 +1533,7 @@ unittest
     files["tool/ast/deep/"] = "";
     files["tool/notes/"] = "";
     files["geo/silver.toml"] = "name = \"geo\"";
-    files["app/silver.toml"] = "name = \"app\"\nsource = \"src\"\nuses = [\"geo\"]\n[paths]\ngeo = \"../geo\"";
+    files["app/silver.toml"] = "name = \"app\"\nsource = \"src\"\nuses = [\"geo\"]\n[[package]]\npath = \"../geo\"";
     files["app/src/inner/"] = "";
     auto directory = makeTree("project-started-in", files);
     scope (exit) rmdirRecurse(directory);
@@ -1361,19 +1568,20 @@ unittest
     assert(names(programHomes(app, factsOf(app, "app"))) == ["app"]);
 }
 
-@("the compiler is given every package's directory, uses, parts and file, relative where that's inside")
+@("the compiler is given every package's directory, uses, project and file, relative where that's inside")
 unittest
 {
     import std.conv : to;
 
     auto files = compilerShape.dup;
-    files["lint/silver.toml"] = "name = \"lint\"\nuses = [\"tool.syntax\"]\n[paths]\n\"tool.syntax\" = \"../tool/syntax\"";
+    files["lint/silver.toml"] = "name = \"lint\"\nuses = [\"tool.syntax\"]\n[[package]]\npath = \"../tool/syntax\"";
     auto directory = makeTree("project-options", files);
     scope (exit) rmdirRecurse(directory);
     auto p = project(buildPath(directory, "lint", "silver.toml"));
     auto lint = buildPath(directory, "lint");
     auto options = compilerOptions(p, (string path) => shownFrom(lint, path));
     auto tool = (string rest) => buildPath(directory, "tool", rest);
+    // lint lists tool.syntax and isn't in its project, which is the one tool's file describes.
     assert(options == [
         "--package", "lint=.",
         "--package", "tool.ast=" ~ tool("ast"),
@@ -1383,7 +1591,7 @@ unittest
         "--uses", "lint=tool.syntax",
         "--uses", "tool.syntax=tool.ast",
         "--uses", "tool.compiler=tool.syntax,tool.ast",
-        "--parts", "tool=tool.ast,tool.syntax,tool.compiler,tool.frontend",
+        "--project", "tool=tool.ast,tool.syntax,tool.compiler,tool.frontend",
         "--package-file", "lint=silver.toml",
         "--package-file", "tool=" ~ tool("silver.toml"),
         "--package-file", "tool.ast=" ~ tool("silver.toml"),
@@ -1397,24 +1605,29 @@ unittest
     assert(shownFrom(buildPath(directory, "tool"), buildPath(directory, "lint")) == buildPath(directory, "lint"));
 }
 
-@("a part or a source inside the directory of another package file is refused, since that file would claim its files")
+@("a described package or a source inside the directory of another package file is refused, since that file would claim its files")
 unittest
 {
-    auto directory = makeTree("project-nested-part", ["vendor/x/silver.toml": "name = \"x\"", "vendor/x/sub/src/": "",
-        "lib/": ""]);
+    auto directory = makeTree("project-nested-described", ["vendor/x/silver.toml": "name = \"x\"",
+        "vendor/x/sub/src/": "", "lib/": ""]);
     scope (exit) rmdirRecurse(directory);
-    auto m = mistakeIn(directory, "name = \"g\"\n[[part]]\nname = \"g.sub\"\npath = \"vendor/x/sub\"",
+    auto m = mistakeIn(directory, "name = \"g\"\n[[package]]\nname = \"g.sub\"\npath = \"vendor/x/sub\"",
         ProjectCode.UnderPackageFile, 4, 8);
-    assert(m.message == "A part's `path` is " ~ buildPath(directory, "vendor", "x", "sub") ~ ", and "
+    assert(m.message == "A package's `path` is " ~ buildPath(directory, "vendor", "x", "sub") ~ ", and "
         ~ buildPath(directory, "vendor", "x", "silver.toml") ~ " would make a directory above it a package of its own, "
-        ~ "holding its files; a part is described only in its parent's file, and a directory with a package file is "
-        ~ "used through [paths]", m.message);
+        ~ "holding its files; a package described in this file can't be in the directory of another silver.toml, so "
+        ~ "list the package there by its `path` alone if that file describes it, or move this one out from under that "
+        ~ "file", m.message);
     mistakeIn(directory, "name = \"g\"\nsource = \"vendor/x/sub/src\"", ProjectCode.UnderPackageFile, 2, 10);
     mistakeIn(directory, "name = \"g\"\nsource = \"vendor/x\"", ProjectCode.UnderPackageFile, 2, 10);
-    mistakeIn(directory, "name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"lib\"\nsource = \"../vendor/x/sub\"",
+    mistakeIn(directory, "name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \"lib\"\nsource = \"../vendor/x/sub\"",
         ProjectCode.OutsideDirectory, 5, 10);
-    mistakeIn(directory, "name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"vendor/x/sub/src\"",
+    mistakeIn(directory, "name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \"vendor/x/sub/src\"",
         ProjectCode.UnderPackageFile, 4, 8);
+    // At that file's own directory, the package there describes itself.
+    mistakeIn(directory, "name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \"vendor/x\"", ProjectCode.DescribesItself, 3, 1);
+    // Listed by its path alone, it's that file's package.
+    checked(directory, "name = \"g\"\n[[package]]\npath = \"vendor/x\"");
 }
 
 @("an empty directory in a package file gets a message that names a directory")
@@ -1427,35 +1640,34 @@ unittest
     auto source = mistakeIn(directory, "name = \"g\"\nsource = \"\"", ProjectCode.EmptyDirectory, 2, 10);
     assert(source.message == "`source` names a directory, and \"\" names none; leave it out to mean the package file's "
         ~ "directory", source.message);
-    auto path = mistakeIn(directory, "name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"\"", ProjectCode.EmptyDirectory, 4, 8);
-    assert(path.message == "A part's `path` names a directory, and \"\" names none, as \"core\"", path.message);
-    mistakeIn(directory, "name = \"g\"\n[[part]]\nname = \"g.x\"\npath = \"lib\"\nsource = ''", ProjectCode.EmptyDirectory,
+    auto path = mistakeIn(directory, "name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \"\"", ProjectCode.EmptyDirectory, 4, 8);
+    assert(path.message == "A package's `path` names a directory, and \"\" names none, as \"core\"", path.message);
+    mistakeIn(directory, "name = \"g\"\n[[package]]\nname = \"g.x\"\npath = \"lib\"\nsource = ''", ProjectCode.EmptyDirectory,
         5, 10);
-    auto paths = mistakeIn(directory, "name = \"g\"\n[paths]\ngeo = \"\"", ProjectCode.EmptyDirectory, 3, 7);
-    assert(paths.message == "The directory of 'geo' under [paths] is \"\", which names none; give where it is, as "
-        ~ "\"../geo\"", paths.message);
-    foreach (m; [source, path, paths]) assert(!m.message.canFind(" , ") && !m.message.canFind("and  isn't"), m.message);
+    auto listed = mistakeIn(directory, "name = \"g\"\n[[package]]\npath = \"\"", ProjectCode.EmptyDirectory, 3, 8);
+    foreach (m; [source, path, listed]) assert(!m.message.canFind(" , ") && !m.message.canFind("and  isn't"), m.message);
 }
 
-
-@("a used package inside the directory of a package with no source, or holding one, is refused at the [paths] entry")
+@("a package with a file of its own inside the directory of a package with no source, or holding one, is refused at its entry")
 unittest
 {
     auto directory = makeTree("project-nested", [
-        "outer/silver.toml": "name = \"outer\"\nuses = [\"inner\"]\n\n[paths]\ninner = \"inner\"",
+        "outer/silver.toml": "name = \"outer\"\nuses = [\"inner\"]\n\n[[package]]\npath = \"inner\"",
         "outer/inner/silver.toml": "name = \"inner\"",
-        "sourced/silver.toml": "name = \"sourced\"\nsource = \"src\"\nuses = [\"inner\"]\n\n[paths]\ninner = \"inner\"",
-        "dot/silver.toml": "name = \"dot\"\nsource = \".\"\nuses = [\"inner\"]\n\n[paths]\ninner = \"inner\"",
+        "unused/silver.toml": "name = \"unused\"\n\n[[package]]\npath = \"inner\"",
+        "unused/inner/silver.toml": "name = \"inner\"",
+        "sourced/silver.toml": "name = \"sourced\"\nsource = \"src\"\nuses = [\"inner\"]\n\n[[package]]\npath = \"inner\"",
+        "dot/silver.toml": "name = \"dot\"\nsource = \".\"\nuses = [\"inner\"]\n\n[[package]]\npath = \"inner\"",
         "dot/inner/silver.toml": "name = \"inner\"",
         "sourced/src/": "",
         "sourced/inner/silver.toml": "name = \"inner\"",
-        "app/silver.toml": "name = \"app\"\nuses = [\"a\", \"b\"]\n\n[paths]\na = \"../a\"\nb = \"../a/b\"",
-        "around/silver.toml": "name = \"around\"\nuses = [\"b\", \"a\"]\n\n[paths]\nb = \"../a/b\"\na = \"../a\"",
+        "app/silver.toml": "name = \"app\"\nuses = [\"a\", \"b\"]\n\n[[package]]\npath = \"../a\"\n[[package]]\npath = \"../a/b\"",
+        "around/silver.toml": "name = \"around\"\nuses = [\"b\", \"a\"]\n\n[[package]]\npath = \"../a/b\"\n[[package]]\npath = \"../a\"",
         "a/silver.toml": "name = \"a\"",
         "a/b/silver.toml": "name = \"b\"\nsource = \"src\"",
         "a/b/src/": "",
-        "tools/silver.toml": "name = \"tools\"\nuses = [\"kit.core\"]\n\n[paths]\n\"kit.core\" = \"kit/core\"",
-        "tools/kit/silver.toml": "name = \"kit\"\n\n[[part]]\nname = \"kit.core\"\npath = \"core\"",
+        "tools/silver.toml": "name = \"tools\"\nuses = [\"kit.core\"]\n\n[[package]]\npath = \"kit/core\"",
+        "tools/kit/silver.toml": "name = \"kit\"\n\n[[package]]\nname = \"kit.core\"\npath = \"core\"",
         "tools/kit/core/": "",
     ]);
     scope (exit) rmdirRecurse(directory);
@@ -1470,21 +1682,61 @@ unittest
     }
 
     auto outer = of("outer");
-    assert(outer.file == buildPath(directory, "outer", "silver.toml") && outer.span.line == 5 && outer.span.column == 9,
+    assert(outer.file == buildPath(directory, "outer", "silver.toml") && outer.span.line == 5 && outer.span.column == 8,
         formatMistake(outer));
     assert(outer.message == message("inner", "outer/inner", "outer", "outer"), outer.message);
+    // Listed and not used, it's refused all the same.
+    assert(of("unused").message == message("inner", "unused/inner", "unused", "unused"), of("unused").message);
     // Reached in either order, the package with no source is the outer one.
     auto app = of("app");
-    assert(app.span.line == 6 && app.message == message("b", "a/b", "a", "a"), formatMistake(app));
+    assert(app.span.line == 7 && app.message == message("b", "a/b", "a", "a"), formatMistake(app));
     auto around = of("around");
-    assert(around.span.line == 6 && around.message == message("b", "a/b", "a", "a"), formatMistake(around));
-    // A part of another file is refused in the same way.
-    auto part = of("tools");
-    assert(part.message == message("kit.core", "tools/kit/core", "tools", "tools"), part.message);
+    assert(around.span.line == 7 && around.message == message("b", "a/b", "a", "a"), formatMistake(around));
+    // A package another file describes is refused in the same way.
+    auto described = of("tools");
+    assert(described.message == message("kit.core", "tools/kit/core", "tools", "tools"), described.message);
     // `source = "."` is the whole directory too.
     assert(of("dot").message == message("inner", "dot/inner", "dot", "dot"), of("dot").message);
     // With source, the used package's directory holds none of the other's modules.
     Project project;
     Mistake mistake;
     assert(readProject(buildPath(directory, "sourced", "silver.toml"), project, mistake), formatMistake(mistake));
+}
+
+@("a mistake about a listed or described package outside the file's directory says what to write instead")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.array : join;
+
+    auto directory = makeTree("project-review", [
+        "app/silver.toml": "name = \"app\"\nuses = [\"geo\"]\n[[package]]\npath = \"../geo\"",
+        "geo/silver.toml": "name = \"geometry\"",
+        "plain/silver.toml": "name = \"p\"\n[[package]]\npath = \"../bare\"",
+        "bare/": "",
+        "outside/silver.toml": "name = \"o\"\n[[package]]\nname = \"o.x\"\npath = \"../bare\"",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    Mistake of(string project, string code) => projectMistake(buildPath(directory, project, "silver.toml"), code);
+    string[] failures;
+
+    // The entry at ../geo is there; its file names it 'geometry'. Suggesting `path = "../geo"` repeats
+    // what's written. The message has to say which name the entries give.
+    auto renamed = of("app", ProjectCode.UnknownPackage);
+    if (!renamed.message.canFind("'geometry'"))
+        failures ~= "F0025 doesn't name what the entry gives: " ~ renamed.message;
+
+    // ../bare is outside plain/, so describing it here, as F0026 suggests, is refused (F0020).
+    auto bare = of("plain", ProjectCode.NoPackageThere);
+    if (bare.message.canFind("is described here, with its `name`"))
+        failures ~= "F0026 suggests describing a package outside the file's directory: " ~ bare.message;
+
+    // A described package outside the file's directory: what to write is a silver.toml there, listed by path.
+    auto outside = mistakeIn(buildPath(directory, "outside"), "name = \"o\"\n[[package]]\nname = \"o.x\"\npath = "
+        ~ "\"../bare\"", ProjectCode.OutsideDirectory, 4, 8);
+    if (!outside.message.canFind("`path` alone"))
+        failures ~= "F0020 doesn't say a package elsewhere has its own silver.toml and is listed by `path` alone: "
+            ~ outside.message;
+
+    assert(failures.length == 0, failures.join("\n"));
 }

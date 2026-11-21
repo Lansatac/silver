@@ -1,0 +1,7 @@
+module app.main
+
+import words.count
+
+def main(): Unit {
+    printl("counted {wordCount()}")
+}

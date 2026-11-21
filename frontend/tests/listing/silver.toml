@@ -1,0 +1,14 @@
+# A project that describes one library and lists a library and a program, each with a silver.toml
+# of its own, so each its own project.
+name = "listing"
+
+[[package]]
+name = "listing.report"
+path = "report"
+uses = ["words"]
+
+[[package]]
+path = "words"
+
+[[package]]
+path = "app"

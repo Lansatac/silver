@@ -1,0 +1,9 @@
+// A package can describe others and have no directory: `kit` has no modules, and only describes
+// `kit.words` and `kit.count`, which with it are one project.
+import kit.words.split
+import kit.count.tally
+
+def main(): Unit {
+    printl(words("a root with no code"))
+    printl(tally("a root with no code"))
+}

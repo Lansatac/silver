@@ -3,6 +3,8 @@ name = "shop"
 source = "src"
 uses = ["cards", "geometry"]
 
-[paths]
-cards = "../cards"
-geometry = "../geometry"
+[[package]]
+path = "../cards"
+
+[[package]]
+path = "../geometry"

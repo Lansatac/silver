@@ -31,9 +31,9 @@ enum DiagnosticCode : string
     PackageCycle = "L0012",
     /// A description of the packages that can't be followed, as a list naming an unknown package.
     InvalidPackages = "L0013",
-    /// A package asked for its program that has none: no module of it or of its parts declares `main`.
+    /// A package asked for its program that has none: no module of it or of the packages it describes declares `main`.
     NoProgram = "L0014",
-    /// A package asked for its program that holds more than one, between itself and its parts.
+    /// A package asked for its program that holds more than one, between itself and the packages it describes.
     SeveralPrograms = "L0015",
     /// A package asked for its program that has more than one module declaring `main`.
     SeveralMains = "L0016",
