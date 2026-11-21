@@ -379,6 +379,8 @@ package struct ModuleAccess
     const(string)[] names;
     /// Whether one of them is a `forward import`.
     bool forwards;
+    /// Whether it's the prelude, imported without being named, which is farther than any import.
+    bool prelude;
 
     bool provides(string member) const
     {
@@ -460,12 +462,13 @@ package final class Scope
     }
 
     /// The imported modules a bare `name` can come from, nearest first: those whose imports list
-    /// it, then those whose imports bring every name.
+    /// it, then those whose imports bring every name, then the prelude.
     const(string)[][] modulesProvidingByLevel(string name) const
     {
         auto listing = _imports.filter!(i => i.names.canFind(name)).map!(i => i.name).array;
-        auto blanket = _imports.filter!(i => i.everyName && !i.names.canFind(name)).map!(i => i.name).array;
-        return [listing, blanket];
+        auto blanket = _imports.filter!(i => i.everyName && !i.prelude && !i.names.canFind(name)).map!(i => i.name).array;
+        auto prelude = _imports.filter!(i => i.everyName && i.prelude && !i.names.canFind(name)).map!(i => i.name).array;
+        return [listing, blanket, prelude];
     }
 
     /// The modules this one forward imports that a bare `name` can come from.
@@ -1112,7 +1115,10 @@ private final class NameResolver
         if (name != langPackage && langPackage in program.modules) imports ~= ModuleAccess(langPackage, true);
         auto prelude = program.prelude;
         if (prelude !is null && name != prelude && !isInLang(name) && prelude in program.modules)
+        {
             imports ~= ModuleAccess(prelude, true);
+            imports[$ - 1].prelude = true;
+        }
         return imports;
     }
 
@@ -1139,6 +1145,7 @@ private final class NameResolver
                         index = imports.length - 1;
                     }
                     auto access = &imports[index];
+                    access.prelude = false;
                     if (importStmt.forward) access.forwards = true;
                     if (importStmt.names.length > 0)
                     {
@@ -2333,8 +2340,8 @@ private final class NameResolver
         resolveExpr(body, functionScope);
     }
 
-    /// Declares a param or local, reporting it if it clashes with anything visible from `current`
-    /// except imported names and modules, which locals may hide.
+    /// Declares a param or local, reporting it if it clashes with a local of an enclosing scope.
+    /// Module-level and imported names, and modules, may be hidden.
     private void declareLocal(string name, Span span, SymbolId symbol, Scope current,
         DiagnosticCode duplicateCode, string duplicateMessage)
     {
@@ -2346,13 +2353,16 @@ private final class NameResolver
         if (auto outer = current.resolve(name))
         {
             // A nested def is a local, so a function found here is a module-level one.
-            auto what = (*outer).match!(
-                (const Id!FunctionDecl _) => "a function in this module",
-                (const Id!ConstDecl _) => "a constant in this module",
-                _ => "a declaration in an enclosing scope",
+            auto hidesLocal = (*outer).match!(
+                (const Id!FunctionDecl _) => false,
+                (const Id!ConstDecl _) => false,
+                _ => true,
             );
-            _collector.reportError(DiagnosticCode.ShadowedDeclaration, span,
-                "'%s' has the same name as %s".format(name, what));
+            if (hidesLocal)
+            {
+                _collector.reportError(DiagnosticCode.ShadowedDeclaration, span,
+                    "'%s' has the same name as a declaration in an enclosing scope".format(name));
+            }
         }
         // Declared even after a clash, so later uses resolve to what the user meant here.
         current.declare(name, symbol);

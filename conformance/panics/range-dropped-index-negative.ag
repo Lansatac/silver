@@ -1,0 +1,5 @@
+def main(): () {
+    val later = [1, 2, 3, 4, 5].drop(2)
+    printl(later[0])
+    printl(later[-1])
+}

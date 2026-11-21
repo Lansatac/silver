@@ -1,0 +1,30 @@
+5
+<5>Some(50)
+false
+5
+<2><1>2
+Some(1)
+Some(3)
+None
+Some(o)
+true
+true
+false
+true
+<1><2><3>true
+<1><2>false
+<1><2><3>Some(30)
+None
+false
+true
+true
+false
+true
+true
+true
+([1, 2], [3, 4, 5])
+([], [1, 2, 3, 4, 5])
+([1, 2, 3, 4, 5], [])
+[5, 4]
+[3, 2, 1]
+([a], bc)

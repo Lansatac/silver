@@ -1,0 +1,5 @@
+def main(): () {
+    val firstThree = [1, 2, 3, 4, 5].take(3)
+    printl(firstThree[2])
+    printl(firstThree[3])
+}

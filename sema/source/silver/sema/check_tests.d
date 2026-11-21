@@ -2289,8 +2289,8 @@ unittest
 @("a method call written after a..b is on its end, and an error in it says to parenthesize the range")
 unittest
 {
-    analyzedMain(`val r = 0..10.contains(3)`).onlyMessage(DiagnosticCode.NoMatchingOverload)
-        .should.endWith("\n`a..b.contains(...)` calls `contains` on `b`, so to call it on the range, write `(a..b).contains(...)`");
+    analyzedMain(`val r = 0..10.contains(3)`).onlyMessage(DiagnosticCode.UnsatisfiedBound)
+        .should.endWith("; `a..b.contains(...)` calls `contains` on `b`, so to call it on the range, write `(a..b).contains(...)`");
     analyzedMain(`for i in 0..10.missing() { }`).onlyMessage(DiagnosticCode.UnknownMember)
         .should.endWith("; `a..b.missing(...)` calls `missing` on `b`, so to call it on the range, write `(a..b).missing(...)`");
     analyzedMain(`val r = (0..10).contains(3)`).shouldHaveNoDiagnostics();
@@ -2611,7 +2611,7 @@ def main(): Unit => ()`).shouldReport(DiagnosticCode.InvalidConstantType, At("(I
 
 private enum stepper = `type Rng(state: Int)
 type Game(rng: Rng, score: Int)
-def step(mutable rng: Rng): Int {
+def advance(mutable rng: Rng): Int {
     rng.state += 1
     rng.state
 }
@@ -2633,24 +2633,24 @@ unittest
     analyzed(stepper ~ `def main(): Unit {
     mutable val r = Rng(1)
     mutable val g = Game(r, 1)
-    _ = step(mutable r)
-    _ = step(mutable g.rng)
+    _ = advance(mutable r)
+    _ = advance(mutable g.rng)
 }`).shouldHaveNoDiagnostics();
-    analyzed(stepper ~ "def pass(mutable r: Rng): Int => step(mutable r)\ndef main(): Unit { }").shouldHaveNoDiagnostics();
-    analyzed(stepper ~ "def main(): Unit {\n    val r = Rng(1)\n    _ = step(mutable r)\n}")
+    analyzed(stepper ~ "def pass(mutable r: Rng): Int => advance(mutable r)\ndef main(): Unit { }").shouldHaveNoDiagnostics();
+    analyzed(stepper ~ "def main(): Unit {\n    val r = Rng(1)\n    _ = advance(mutable r)\n}")
         .shouldReport(DiagnosticCode.AssignToImmutable, At("r", 2));
-    analyzed(stepper ~ "def pass(r: Rng): Int => step(mutable r)\ndef main(): Unit { }")
+    analyzed(stepper ~ "def pass(r: Rng): Int => advance(mutable r)\ndef main(): Unit { }")
         .shouldReport(DiagnosticCode.AssignToImmutable, At("r", 2));
-    analyzed(stepper ~ "def main(): Unit {\n    _ = step(mutable Rng(1))\n}")
+    analyzed(stepper ~ "def main(): Unit {\n    _ = advance(mutable Rng(1))\n}")
         .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("Rng(1)", 1));
-    analyzed(stepper ~ "def main(): Unit {\n    mutable val rs = [Rng(1)]\n    _ = step(mutable rs[0])\n}")
+    analyzed(stepper ~ "def main(): Unit {\n    mutable val rs = [Rng(1)]\n    _ = advance(mutable rs[0])\n}")
         .shouldReport(DiagnosticCode.InvalidAssignmentTarget, At("rs[0]", 1));
 }
 
 @("a call says which arguments are mutable, as the function does")
 unittest
 {
-    analyzed(stepper ~ "def main(): Unit {\n    mutable val r = Rng(1)\n    _ = step(r)\n}")
+    analyzed(stepper ~ "def main(): Unit {\n    mutable val r = Rng(1)\n    _ = advance(r)\n}")
         .shouldReport(DiagnosticCode.MutabilityMismatch, At("r", 2));
     analyzed("def f(x: Int): Int => x\ndef main(): Unit {\n    mutable val r = 1\n    _ = f(mutable r)\n}")
         .shouldReport(DiagnosticCode.MutabilityMismatch, At("r", 2));
@@ -2693,12 +2693,12 @@ def main(): Unit {
 unittest
 {
     analyzed(stepper ~ `def main(): Unit {
-    val f: (mutable Rng) -> Int = step
+    val f: (mutable Rng) -> Int = advance
     mutable val r = Rng(1)
     _ = f(mutable r)
 }`).shouldHaveNoDiagnostics();
-    analyzed(stepper ~ "def main(): Unit {\n    val f: (Rng) -> Int = step\n}")
-        .shouldReport(DiagnosticCode.TypeMismatch, At("step", 2));
+    analyzed(stepper ~ "def main(): Unit {\n    val f: (Rng) -> Int = advance\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("advance", 2));
 }
 
 @("a native or an intrinsic can't take a mutable parameter")

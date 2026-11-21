@@ -1,0 +1,4 @@
+def main(): () {
+    printl([1, 2].step(1).array())
+    printl([1, 2].step(0).array())
+}

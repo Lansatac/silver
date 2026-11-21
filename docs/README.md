@@ -31,7 +31,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
 | [Errors](language/errors.md) | `T ! E`, `?` and `!` on errors, what panics, `main` | Implemented |
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, `a..b` as an `Interval` | Implemented, except that element assignment always copies |
-| [Ranges](language/ranges.md) | `Range`, sources of your own, `std.range` adapters and consumers | Partial: `map`, `filter`, `first`, `rest`, `array`, `fold` and `count` |
+| [Ranges](language/ranges.md) | `Range`, sources of your own, `std.range` adapters and consumers | Partial: adapters, sources, consumers, ordering, `Sized`, `Indexed` and `Seq`; `sum` and `reversed` aren't built |
 | [Maps](language/maps.md) | `[K: V]`, lookup and update, insertion order, keys | Designed; only the structural hash is implemented |
 | [Strings](language/strings.md) | Text, interpolation, characters, cutting, `std.string` | Partial: no raw or multi-line strings |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |

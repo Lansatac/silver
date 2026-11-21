@@ -616,7 +616,7 @@ private final class TypeChecker
     }
 
     /// A function a module reaches, at how near it is: 0 for its own, 1 through an import or
-    /// forward that lists its name, 2 through one that brings every name.
+    /// forward that lists its name, 2 through one that brings every name, 3 through the prelude.
     private static struct Leveled
     {
         Id!FunctionDecl func;
@@ -674,7 +674,7 @@ private final class TypeChecker
         auto entries = _resolutions.moduleScopes[m].functionsNamed(name).map!(f => Leveled(f, 0)).array;
         foreach (access; _resolutions.moduleScopes[m].imports)
         {
-            auto level = access.names.canFind(name) ? 1 : access.everyName ? 2 : 0;
+            auto level = access.names.canFind(name) ? 1 : !access.everyName ? 0 : access.prelude ? 3 : 2;
             if (level == 0) continue;
             foreach (f; exportedFunctions(access.name, name)) entries ~= Leveled(f, level);
         }

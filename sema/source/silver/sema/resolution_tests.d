@@ -674,19 +674,22 @@ def main(): Unit {
 }").shouldHaveNoDiagnostics();
 }
 
-@("name resolution reports a local or parameter with the same name as a function in its module")
+@("name resolution lets a local or parameter hide a function in its module, and a method call still finds the function")
 unittest
 {
     auto local = analyzed("def count(): Int => 1
 def main(): Unit {
     val count = 2
+    printl(count)
 }");
-    local.shouldReport(DiagnosticCode.ShadowedDeclaration, At("count", 2));
+    local.shouldHaveNoDiagnostics();
+    local.shouldResolve("count", 3, 2);
 
-    auto param = analyzed("def count(): Int => 1
-def f(count: Int): Int => count
+    auto param = analyzed("def count(xs: [Int]): Int => 1
+def f(count: Int): Int => [count].count()
 def main(): Unit => ()");
-    param.shouldReport(DiagnosticCode.ShadowedDeclaration, At("count", 2));
+    param.shouldHaveNoDiagnostics();
+    param.shouldResolve("count", 3, 2);
 }
 
 @("name resolution lets a local hide an imported name")
@@ -766,13 +769,17 @@ unittest
     qualified.shouldHaveNoDiagnostics();
 }
 
-@("name resolution treats the prelude like any other import when names clash")
+@("name resolution ranks the prelude after every import, so an import's name hides the prelude's")
 unittest
 {
     auto files = greetingPrelude.dup;
-    files["lib.ag"] = "module lib\ndef greet(times: Int): Int => 0";
+    files["lib.ag"] = "module lib\ndef greet(times: Int): Int => 0\ntype Greeting(n: Int)";
     auto bare = withGreeting("import lib\ndef main(): Unit {\n    val n = greet(1)\n}", files);
-    bare.shouldReport(DiagnosticCode.AmbiguousName, At("greet", 1));
+    bare.shouldResolve(At("greet", 1), At("greet", 1, "lib"));
+    bare.shouldHaveNoDiagnostics();
+
+    files["kit/greeting.ag"] ~= "\ntype Greeting(text: String)";
+    withGreeting("import lib\ndef main(): Unit {\n    val g: Greeting = Greeting(1)\n}", files).shouldHaveNoDiagnostics();
 
     auto qualified = withGreeting("import lib\ndef main(): Unit {\n    val n = kit.greeting.greet(1)\n}", files);
     qualified.shouldResolve(At("greet", 1), At("greet", 1, "kit.greeting"));
@@ -1360,13 +1367,15 @@ unittest
     assert(codesWith(&constant, &type) == [DiagnosticCode.DuplicateDeclaration]);
 }
 
-@("name resolution reports a local or parameter with the same name as a constant in its module")
+@("name resolution lets a local or parameter hide a constant in its module")
 unittest
 {
-    analyzed("val x: Int = 1\ndef main(): Unit {\n    val x = 2\n}")
-        .shouldReport(DiagnosticCode.ShadowedDeclaration, At("x", 2));
-    analyzed("val x: Int = 1\ndef f(x: Int): Int => x\ndef main(): Unit => ()")
-        .shouldReport(DiagnosticCode.ShadowedDeclaration, At("x", 2));
+    auto local = analyzed("val x: Int = 1\ndef main(): Unit {\n    val x = 2\n    printl(x)\n}");
+    local.shouldHaveNoDiagnostics();
+    local.shouldResolve("x", 3, 2);
+    auto param = analyzed("val x: Int = 1\ndef f(x: Int): Int => x\ndef main(): Unit => ()");
+    param.shouldHaveNoDiagnostics();
+    param.shouldResolve("x", 3, 2);
 }
 
 @("name resolution lets a local hide an imported constant")

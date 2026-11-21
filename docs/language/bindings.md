@@ -49,7 +49,7 @@ Silver largely forbids shadowing, so an ambiguity needs a different name or a qu
 1. Two declarations of a name in one scope are an error.
 2. A local or parameter can't shadow another local or parameter of the same function.
 3. The same name in sibling blocks is fine.
-4. A local can't be named like a function or constant in its own module.
+4. A local can be named like a function or constant of its own module, and the local wins in its scope, as with an imported name. A [method call](functions.md) still finds the function: with a local `count`, `xs.count()` is the module's `count`.
 5. A local can be named like an imported name, and the local wins.
 6. A local can be named like the root of an imported module path, and the local wins there. A function or constant can't, so qualified access works everywhere outside such a local's scope.
 
@@ -75,7 +75,6 @@ Type `[Card]` has no member named `handSize`
 
 ## Open questions
 
-- Whether rule 4 should be relaxed now that method-call syntax exists.
 - Constants of richer types, which depends on compile-time evaluation.
 
 ## Current implementation

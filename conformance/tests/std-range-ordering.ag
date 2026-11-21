@@ -1,0 +1,52 @@
+// min, max, sorted and sortedBy over Ord items, and Descending for the other way round.
+
+type Person(name: String, age: Int)
+
+type Countdown(from: Int)
+def next(c: Countdown): (Int, Countdown)? => if c.from == 0 => None else (c.from, Countdown(c.from - 1))
+conform Countdown: Range<Int>
+
+def noisyKey(x: Int): Int {
+    print("<{x}>")
+    0 - x
+}
+
+def inOrder(xs: [Int]): Bool => xs.zip(xs.drop(1)).all(p => { val (a, b) = p; a <= b })
+
+def main(): Unit {
+    val xs = [5, 3, 9, 1, 3, 7]
+    val none: [Int] = []
+
+    printl(xs.min())
+    printl(xs.max())
+    printl(none.min())
+    printl(none.max())
+    printl("hello".max())
+    printl(Countdown(4).filter(x => x != 1).min())
+    printl([(2, "b"), (1, "z"), (2, "a")].max())
+
+    printl(xs.sorted())
+    printl(none.sorted())
+    printl([4].sorted())
+    printl(Countdown(5).sorted())
+    printl(["pear", "apple", "fig"].sorted())
+    printl([2.5, -1.0, 0.0].sorted())
+    printl(xs.map(x => x % 4).sorted())
+    val shuffled = (0..200).map(i => (i * 37) % 211).array()
+    printl(inOrder(shuffled.sorted()))
+    printl(shuffled.sorted().count())
+
+    // Stable: equal keys keep the order they had.
+    val people = [Person("Ann", 30), Person("Bob", 25), Person("Cy", 30), Person("Di", 25)]
+    printl(people.sortedBy(p => p.age).map(p => p.name).array())
+    printl(people.sortedBy(p => (Descending(p.age), p.name)).map(p => p.name).array())
+    printl(people.sortedBy(p => p.name.count()).map(p => p.name).array())
+    printl(xs.sortedBy(x => Descending(x)))
+
+    // The key runs once for each item.
+    printl(xs.sortedBy(noisyKey))
+
+    printl(compare(Descending(1), Descending(2)))
+    printl(Descending("a") < Descending("b"))
+    printl([Descending(1), Descending(3)].max())
+}

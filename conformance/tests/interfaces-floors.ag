@@ -2,6 +2,7 @@
 // value's, checked to satisfy the interface, and it keeps everything it can do.
 
 import interfaces_support.floors
+import std.range : Filtered
 
 type Box<T>(value: T)
 type Deck(cards: [Int])

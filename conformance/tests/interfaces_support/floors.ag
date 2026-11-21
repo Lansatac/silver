@@ -2,15 +2,6 @@ module interfaces_support.floors
 
 import interfaces_support.named
 
-interface Indexed<T> {
-    def length(value: Self): Int
-    def opIndex(value: Self, index: Int): T
-}
-
-// std.range's `Mapped`, made indexed here when its source is.
-def length<R: Indexed<T>, T, U>(m: Mapped<R, T, U>): Int => length(m.source)
-def opIndex<R: Indexed<T>, T, U>(m: Mapped<R, T, U>, index: Int): U => m.transform(m.source[index])
-
 type Countdown(from: Int)
 def next(c: Countdown): (Int, Countdown)? => if c.from == 0 => None else (c.from, Countdown(c.from - 1))
 
@@ -21,6 +12,4 @@ def odds(xs: [Int]): Range<Int> => xs.filter(x => x % 2 == 1)
 
 def labelled(n: Int): String => name(numbered(n)) ~ ", doubled {numbered(n) * 2}"
 
-conform [T]: Indexed<T>
-conform Mapped<R, T, U>: Indexed<U> when R: Indexed<T>
 conform Countdown: Range<Int>

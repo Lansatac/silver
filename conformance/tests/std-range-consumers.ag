@@ -1,0 +1,55 @@
+// std.range's consumers, including the ones that take a length or indexing instead of stepping.
+
+type Countdown(from: Int)
+def next(c: Countdown): (Int, Countdown)? => if c.from == 0 => None else (c.from, Countdown(c.from - 1))
+conform Countdown: Range<Int>
+
+def noisy(x: Int): Int {
+    print("<{x}>")
+    x * 10
+}
+
+// Through a generic function, the real type decides.
+def busy<R: Range<Int>>(r: R): Int => r.map(noisy).count()
+
+def main(): () {
+    val xs = [1, 2, 3, 4, 5]
+    val none: [Int] = []
+
+    // count, last and isEmpty don't step a sized or indexed range, so `noisy` runs once at most.
+    printl(xs.map(noisy).count())
+    printl(xs.map(noisy).last())
+    printl(xs.map(noisy).isEmpty())
+    printl(busy(xs))
+    printl(busy(Countdown(2)))
+    printl(Countdown(3).last())
+    printl(xs.filter(x => x < 4).last())
+    printl(none.last())
+    printl("héllo".last())
+    printl(none.isEmpty())
+    printl(Countdown(0).isEmpty())
+    printl(Countdown(1).isEmpty())
+    printl("".isEmpty())
+
+    // any, all, find and contains stop at the first item that decides.
+    printl(xs.map(noisy).any(x => x > 20))
+    printl(xs.map(noisy).all(x => x < 20))
+    printl(xs.map(noisy).find(x => x > 20))
+    printl(xs.find(x => x > 9))
+    printl(none.any(x => true))
+    printl(none.all(x => false))
+    printl(xs.contains(3))
+    printl(xs.contains(9))
+    printl("héllo".contains('é'))
+    printl(["a", "b"].contains("b"))
+    printl(Countdown(4).contains(1))
+
+    // splitAt gives the items taken and the range after them.
+    printl(xs.splitAt(2))
+    printl(xs.splitAt(0))
+    printl(xs.splitAt(9))
+    val (front, after) = Countdown(5).splitAt(2)
+    printl(front)
+    printl(after.array())
+    printl("abc".splitAt(1))
+}

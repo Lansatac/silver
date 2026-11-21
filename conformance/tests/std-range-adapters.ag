@@ -1,0 +1,118 @@
+// std.range's adapters, each asked for the length and indexing it keeps, and the sources.
+
+type Countdown(from: Int)
+def next(c: Countdown): (Int, Countdown)? => if c.from == 0 => None else (c.from, Countdown(c.from - 1))
+conform Countdown: Range<Int>
+
+type Row(cells: [Int])
+def length(r: Row): Int => length(r.cells)
+def opIndex(r: Row, i: Int): Int => r.cells[i]
+conform Row: Sized & Indexed<Int>
+
+def lengthOf<R: Sized>(r: R): Int => length(r)
+def at<R: Indexed<T>, T>(r: R, i: Int): T => r[i]
+
+def noisy(x: Int): Int {
+    print("<{x}>")
+    x * 10
+}
+
+def main(): () {
+    val xs = [1, 2, 3, 4, 5]
+
+    // map keeps length and indexing, and indexing runs the function for that item only.
+    printl(lengthOf(xs.map(noisy)))
+    printl(at(xs.map(noisy), 3))
+    printl((0..4).map(x => x * x)[3])
+
+    // take and drop, from arrays, intervals, and ranges that only step.
+    printl(xs.take(3).array())
+    printl(xs.take(0).array())
+    printl(xs.take(-2).array())
+    printl(lengthOf(xs.take(3)))
+    printl(lengthOf(xs.take(9)))
+    printl(at(xs.take(3), 2))
+    printl(xs.drop(2).array())
+    printl(xs.drop(9).array())
+    printl(lengthOf(xs.drop(2)))
+    printl(lengthOf(xs.drop(9)))
+    printl(at(xs.drop(2), 0))
+    printl(Countdown(5).drop(1).take(2).array())
+    printl("héllo".take(2).array())
+    printl("héllo".drop(3).array())
+    printl(lengthOf((10..20).drop(3).take(4)))
+
+    // zip stops at the shorter side, and is sized and indexed when both sides are.
+    printl(xs.zip("abc").array())
+    printl(Countdown(2).zip(xs).array())
+    printl(lengthOf(xs.zip(10..13)))
+    printl(at(xs.zip(10..13), 1))
+    for (n, c) in xs.zip("ab") { print("{n}{c} ") }
+    printl("")
+
+    // enumerate counts from 0, and keeps the count through drop.
+    printl(xs.enumerate().array())
+    printl("ab".enumerate().array())
+    printl(lengthOf(xs.enumerate()))
+    printl(at(xs.enumerate(), 4))
+    printl(at(xs.enumerate().drop(2), 0))
+    for (i, x) in Countdown(3).enumerate() { print("{i}:{x} ") }
+    printl("")
+
+    // step takes every nth item, starting with the first.
+    printl((0..10).step(3).array())
+    printl(lengthOf((0..10).step(3)))
+    printl(lengthOf((0..9).step(3)))
+    printl(lengthOf((0..0).step(3)))
+    printl(at((0..10).step(3), 3))
+    printl(xs.step(1).array())
+    printl(Countdown(7).step(2).array())
+
+    // Capabilities through a chain.
+    val chain = xs.map(noisy).drop(1).take(3).enumerate().zip(100..200).step(2)
+    printl(lengthOf(chain))
+    printl(at(chain, 1))
+
+    // Adapters that only step.
+    printl(xs.takeWhile(x => x < 3).array())
+    printl(xs.takeWhile(x => x > 9).array())
+    printl(Countdown(5).takeWhile(x => x > 2).array())
+    printl(xs.dropWhile(x => x < 3).array())
+    printl(xs.dropWhile(x => x < 9).array())
+    printl([1, 5, 1].dropWhile(x => x < 3).array())
+    printl(xs.flatMap(x => 0..x).array())
+    printl([[1], [], [2, 3], []].flatMap(x => x).array())
+    printl(Countdown(3).flatMap(n => Countdown(n)).array())
+    printl(xs.take(0).flatMap(x => [x, x]).array())
+    printl(xs.append(Countdown(2)).array())
+    printl(Countdown(0).append(xs.take(1)).array())
+    printl("ab".append("cd").array())
+
+    // Sources: iterate for a type with a length and an opIndex, unfold and repeat.
+    val row = Row([7, 8, 9])
+    printl(row.iterate().map(x => x + 1).array())
+    printl(lengthOf(row.iterate()))
+    printl(at(row.iterate(), 2))
+    printl(lengthOf(row.iterate().rest()))
+    printl(at(row.iterate().rest(), 0))
+    for cell in row.iterate() { print("{cell} ") }
+    printl("")
+    printl(unfold(1, n => if n > 100 => None else (n, n * 2)).array())
+    printl(unfold((0, 1), p => { val (a, b) = p; (a, (b, a + b)) }).take(8).array())
+    printl(repeat("a").take(3).array())
+    printl(repeat(0).zip(xs).take(2).array())
+
+    // Seq, the erased form: one type for different chains, in a field, and built up in a loop.
+    val picked = if xs.length() > 2 => xs.filter(x => x > 2).seq() else xs.map(x => x * 2).seq()
+    printl(picked.array())
+    printl(picked.array())
+    mutable val built = Countdown(0).seq()
+    for i in 1..4 { built = built.append([i]).seq() }
+    printl(built.array())
+    printl(Countdown(3).seq().map(x => x * 10).array())
+    val game = Game(Countdown(2).seq())
+    printl(game.deck.first())
+    printl(game.deck.rest().array())
+}
+
+type Game(deck: Seq<Int>)

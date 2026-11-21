@@ -1,5 +1,36 @@
 module std.range
 
+// A range that knows how many items it has without stepping.
+interface Sized {
+    def length(value: Self): Int
+}
+
+// A range whose items can be reached by position, from 0 up to its length.
+interface Indexed<T>: Sized {
+    def opIndex(value: Self, index: Int): T
+}
+
+conform [T]: Sized & Indexed<T>
+conform Interval<Int>: Sized & Indexed<Int>
+conform Interval<Int8>: Sized & Indexed<Int8>
+conform Interval<Int16>: Sized & Indexed<Int16>
+conform Interval<Int32>: Sized & Indexed<Int32>
+conform Interval<UInt>: Sized & Indexed<UInt>
+conform Interval<UInt8>: Sized & Indexed<UInt8>
+conform Interval<UInt16>: Sized & Indexed<UInt16>
+conform Interval<UInt32>: Sized & Indexed<UInt32>
+
+private def smaller(a: Int, b: Int): Int => if a < b => a else b
+
+private def checked(index: Int, size: Int): Int {
+    if index < 0 || index >= size {
+        panic("Index is out of range")
+    }
+    index
+}
+
+// Adapters with length and indexing when their source has them.
+
 // A range whose items are its source's, each passed through `transform`. Nothing runs until it's stepped.
 type Mapped<R, T, U>(source: R, transform: (T) -> U)
 
@@ -10,7 +41,130 @@ def next<R: Range<T>, T, U>(m: Mapped<R, T, U>): (U, Mapped<R, T, U>)? {
     (m.transform(item), Mapped(after, m.transform))
 }
 
+def length<R: Sized, T, U>(m: Mapped<R, T, U>): Int => length(m.source)
+def opIndex<R: Indexed<T>, T, U>(m: Mapped<R, T, U>, index: Int): U => m.transform(m.source[index])
+
 conform Mapped<R, T, U>: Range<U> when R: Range<T>
+conform Mapped<R, T, U>: Sized when R: Sized
+conform Mapped<R, T, U>: Indexed<U> when R: Indexed<T>
+
+// The first `left` items of its source, or all of them when it has fewer.
+type Taken<R>(source: R, left: Int)
+
+def take<R: Range<T>, T>(source: R, n: Int): Taken<R> => Taken(source, if n < 0 => 0 else n)
+
+def next<R: Range<T>, T>(t: Taken<R>): (T, Taken<R>)? {
+    if t.left == 0 { return None }
+    val (item, after) = next(t.source)?
+    (item, Taken(after, t.left - 1))
+}
+
+def length<R: Sized>(t: Taken<R>): Int => smaller(t.left, length(t.source))
+def opIndex<R: Indexed<T>, T>(t: Taken<R>, index: Int): T => t.source[checked(index, length(t))]
+
+conform Taken<R>: Range<T> when R: Range<T>
+conform Taken<R>: Sized when R: Sized
+conform Taken<R>: Indexed<T> when R: Indexed<T>
+
+// Its source without the first `skip` items. They're stepped past when it's first stepped.
+type Dropped<R>(source: R, skip: Int)
+
+def drop<R: Range<T>, T>(source: R, n: Int): Dropped<R> => Dropped(source, if n < 0 => 0 else n)
+
+def next<R: Range<T>, T>(d: Dropped<R>): (T, Dropped<R>)? {
+    mutable val remaining = d.source
+    mutable val skip = d.skip
+    while skip > 0 {
+        val (_, after) = next(remaining)?
+        remaining = after
+        skip -= 1
+    }
+    val (item, after) = next(remaining)?
+    (item, Dropped(after, 0))
+}
+
+def length<R: Sized>(d: Dropped<R>): Int {
+    val total = length(d.source)
+    if total > d.skip => total - d.skip else 0
+}
+def opIndex<R: Indexed<T>, T>(d: Dropped<R>, index: Int): T => d.source[checked(index, length(d)) + d.skip]
+
+conform Dropped<R>: Range<T> when R: Range<T>
+conform Dropped<R>: Sized when R: Sized
+conform Dropped<R>: Indexed<T> when R: Indexed<T>
+
+// Pairs of an item from each source, until either ends.
+type Zipped<A, B>(left: A, right: B)
+
+def zip<A: Range<T>, T, B: Range<U>, U>(left: A, right: B): Zipped<A, B> => Zipped(left, right)
+
+def next<A: Range<T>, T, B: Range<U>, U>(z: Zipped<A, B>): ((T, U), Zipped<A, B>)? {
+    val (x, afterLeft) = next(z.left)?
+    val (y, afterRight) = next(z.right)?
+    ((x, y), Zipped(afterLeft, afterRight))
+}
+
+def length<A: Sized, B: Sized>(z: Zipped<A, B>): Int => smaller(length(z.left), length(z.right))
+def opIndex<A: Indexed<T>, T, B: Indexed<U>, U>(z: Zipped<A, B>, index: Int): (T, U) {
+    val at = checked(index, length(z))
+    (z.left[at], z.right[at])
+}
+
+conform Zipped<A, B>: Range<(T, U)> when A: Range<T>, B: Range<U>
+conform Zipped<A, B>: Sized when A: Sized, B: Sized
+conform Zipped<A, B>: Indexed<(T, U)> when A: Indexed<T>, B: Indexed<U>
+
+// Each item of its source with its position, counting from 0.
+type Enumerated<R>(source: R, position: Int)
+
+def enumerate<R: Range<T>, T>(source: R): Enumerated<R> => Enumerated(source, 0)
+
+def next<R: Range<T>, T>(e: Enumerated<R>): ((Int, T), Enumerated<R>)? {
+    val (item, after) = next(e.source)?
+    ((e.position, item), Enumerated(after, e.position + 1))
+}
+
+def length<R: Sized>(e: Enumerated<R>): Int => length(e.source)
+def opIndex<R: Indexed<T>, T>(e: Enumerated<R>, index: Int): (Int, T) => (e.position + index, e.source[index])
+
+conform Enumerated<R>: Range<(Int, T)> when R: Range<T>
+conform Enumerated<R>: Sized when R: Sized
+conform Enumerated<R>: Indexed<(Int, T)> when R: Indexed<T>
+
+// Every `by`th item of its source, starting with the first.
+type Stepped<R>(source: R, by: Int)
+
+def step<R: Range<T>, T>(source: R, by: Int): Stepped<R> {
+    if by < 1 {
+        panic("A step has to be at least 1")
+    }
+    Stepped(source, by)
+}
+
+def next<R: Range<T>, T>(s: Stepped<R>): (T, Stepped<R>)? {
+    val (item, after) = next(s.source)?
+    mutable val remaining = after
+    mutable val skip = s.by - 1
+    while skip > 0 {
+        if val pair = next(remaining) {
+            val (_, later) = pair
+            remaining = later
+            skip -= 1
+        } else {
+            skip = 0
+        }
+    }
+    (item, Stepped(remaining, s.by))
+}
+
+def length<R: Sized>(s: Stepped<R>): Int => (length(s.source) + s.by - 1) / s.by
+def opIndex<R: Indexed<T>, T>(s: Stepped<R>, index: Int): T => s.source[checked(index, length(s)) * s.by]
+
+conform Stepped<R>: Range<T> when R: Range<T>
+conform Stepped<R>: Sized when R: Sized
+conform Stepped<R>: Indexed<T> when R: Indexed<T>
+
+// Adapters that only step.
 
 // A range of its source's items for which `keep` is true.
 type Filtered<R, T>(source: R, keep: (T) -> Bool)
@@ -19,8 +173,8 @@ def filter<R: Range<T>, T>(source: R, keep: (T) -> Bool): Filtered<R, T> => Filt
 
 def next<R: Range<T>, T>(f: Filtered<R, T>): (T, Filtered<R, T>)? {
     mutable val remaining = f.source
-    while val step = next(remaining) {
-        val (item, after) = step
+    while val pair = next(remaining) {
+        val (item, after) = pair
         if f.keep(item) { return (item, Filtered(after, f.keep)) }
         remaining = after
     }
@@ -29,6 +183,137 @@ def next<R: Range<T>, T>(f: Filtered<R, T>): (T, Filtered<R, T>)? {
 
 conform Filtered<R, T>: Range<T> when R: Range<T>
 
+// Its source's items up to the first for which `keep` is false.
+type TakenWhile<R, T>(source: R, keep: (T) -> Bool)
+
+def takeWhile<R: Range<T>, T>(source: R, keep: (T) -> Bool): TakenWhile<R, T> => TakenWhile(source, keep)
+
+def next<R: Range<T>, T>(t: TakenWhile<R, T>): (T, TakenWhile<R, T>)? {
+    val (item, after) = next(t.source)?
+    if !t.keep(item) { return None }
+    (item, TakenWhile(after, t.keep))
+}
+
+conform TakenWhile<R, T>: Range<T> when R: Range<T>
+
+// Its source from the first item for which `skip` is false. The items before it are stepped past when
+// it's first stepped.
+type DroppedWhile<R, T>(source: R, skip: (T) -> Bool)
+
+def dropWhile<R: Range<T>, T>(source: R, skip: (T) -> Bool): DroppedWhile<R, T> => DroppedWhile(source, skip)
+
+def next<R: Range<T>, T>(d: DroppedWhile<R, T>): (T, DroppedWhile<R, T>)? {
+    mutable val remaining = d.source
+    while val pair = next(remaining) {
+        val (item, after) = pair
+        if !d.skip(item) { return (item, DroppedWhile(after, (_: T) => false)) }
+        remaining = after
+    }
+    None
+}
+
+conform DroppedWhile<R, T>: Range<T> when R: Range<T>
+
+// The items of each range `transform` gives for its source's items, one range after another.
+type FlatMapped<R, T, S>(source: R, transform: (T) -> S, current: S?)
+
+def flatMap<R: Range<T>, T, S: Range<U>, U>(source: R, transform: (T) -> S): FlatMapped<R, T, S> =>
+    FlatMapped(source, transform, None)
+
+def next<R: Range<T>, T, S: Range<U>, U>(f: FlatMapped<R, T, S>): (U, FlatMapped<R, T, S>)? {
+    if val inner = f.current {
+        if val pair = next(inner) {
+            val (item, after) = pair
+            return (item, FlatMapped(f.source, f.transform, Some(after)))
+        }
+    }
+    mutable val remaining = f.source
+    while val outer = next(remaining) {
+        val (item, after) = outer
+        if val pair = next(f.transform(item)) {
+            val (head, tail) = pair
+            return (head, FlatMapped(after, f.transform, Some(tail)))
+        }
+        remaining = after
+    }
+    None
+}
+
+conform FlatMapped<R, T, S>: Range<U> when R: Range<T>, S: Range<U>
+
+// The items of `front`, then those of `back`.
+type Appended<A, B>(front: A, back: B, frontDone: Bool)
+
+def append<A: Range<T>, T, B: Range<T>>(front: A, back: B): Appended<A, B> => Appended(front, back, false)
+
+def next<A: Range<T>, T, B: Range<T>>(a: Appended<A, B>): (T, Appended<A, B>)? {
+    if !a.frontDone {
+        if val pair = next(a.front) {
+            val (item, after) = pair
+            return (item, Appended(after, a.back, false))
+        }
+    }
+    val (item, after) = next(a.back)?
+    (item, Appended(a.front, after, true))
+}
+
+conform Appended<A, B>: Range<T> when A: Range<T>, B: Range<T>
+
+// Sources.
+
+// A range over anything with a length and an opIndex, from `position` on.
+type Iterator<R>(range: R, position: Int)
+
+def iterate<R: Indexed<T>, T>(range: R): Iterator<R> => Iterator(range, 0)
+
+def next<R: Indexed<T>, T>(it: Iterator<R>): (T, Iterator<R>)? =>
+    if it.position >= length(it.range) => None
+    else (it.range[it.position], Iterator(it.range, it.position + 1))
+
+def length<R: Sized>(it: Iterator<R>): Int {
+    val total = length(it.range)
+    if total > it.position => total - it.position else 0
+}
+def opIndex<R: Indexed<T>, T>(it: Iterator<R>, index: Int): T => it.range[checked(index, length(it)) + it.position]
+
+conform Iterator<R>: Range<T> & Sized & Indexed<T> when R: Indexed<T>
+
+// The items `produce` gives, starting from `state`, until it gives `None`. It may never end.
+type Unfolded<S, T>(state: S, produce: (S) -> (T, S)?)
+
+def unfold<S, T>(state: S, produce: (S) -> (T, S)?): Unfolded<S, T> => Unfolded(state, produce)
+
+def next<S, T>(u: Unfolded<S, T>): (T, Unfolded<S, T>)? {
+    val (item, state) = u.produce(u.state)?
+    (item, Unfolded(state, u.produce))
+}
+
+conform Unfolded<S, T>: Range<T>
+
+// `value`, again and again. It never ends, so it's used with something that stops, such as `take`.
+type Repeated<T>(value: T)
+
+def repeat<T>(value: T): Repeated<T> => Repeated(value)
+
+def next<T>(r: Repeated<T>): (T, Repeated<T>)? => (r.value, r)
+
+conform Repeated<T>: Range<T>
+
+// The erased form: a range whose type says only what its items are, for a field, an element, or
+// branches that build different chains. Each step is a call through a closure.
+type Seq<T>(step: () -> (T, Seq<T>)?)
+
+def seq<R: Range<T>, T>(range: R): Seq<T> => Seq(() => {
+    val (item, after) = next(range)?
+    (item, seq(after))
+})
+
+def next<T>(s: Seq<T>): (T, Seq<T>)? => s.step()
+
+conform Seq<T>: Range<T>
+
+// Consumers.
+
 def first<R: Range<T>, T>(range: R): T? {
     val (item, _) = next(range)?
     item
@@ -36,11 +321,21 @@ def first<R: Range<T>, T>(range: R): T? {
 
 // The range after its first item, or the range itself when it's empty.
 def rest<R: Range<T>, T>(range: R): R {
-    if val step = next(range) {
-        val (_, after) = step
+    if val pair = next(range) {
+        val (_, after) = pair
         return after
     }
     range
+}
+
+def last<R: Range<T>, T>(range: R): T? {
+    if type R: Indexed<T> {
+        val n = length(range)
+        return if n == 0 => None else range[n - 1]
+    }
+    mutable val result: T? = None
+    for item in range { result = item }
+    result
 }
 
 def array<R: Range<T>, T>(range: R): [T] {
@@ -56,7 +351,145 @@ def fold<R: Range<T>, T, A>(range: R, initial: A, combine: (A, T) -> A): A {
 }
 
 def count<R: Range<T>, T>(range: R): Int {
+    if type R: Sized { return length(range) }
     mutable val n = 0
     for _ in range { n = n + 1 }
     n
+}
+
+def isEmpty<R: Range<T>, T>(range: R): Bool {
+    if type R: Sized { return length(range) == 0 }
+    if val _ = next(range) { return false }
+    true
+}
+
+def any<R: Range<T>, T>(range: R, test: (T) -> Bool): Bool {
+    for item in range {
+        if test(item) { return true }
+    }
+    false
+}
+
+def all<R: Range<T>, T>(range: R, test: (T) -> Bool): Bool {
+    for item in range {
+        if !test(item) { return false }
+    }
+    true
+}
+
+def find<R: Range<T>, T>(range: R, test: (T) -> Bool): T? {
+    for item in range {
+        if test(item) { return item }
+    }
+    None
+}
+
+def contains<R: Range<T>, T>(range: R, value: T): Bool {
+    for item in range {
+        if item == value { return true }
+    }
+    false
+}
+
+// Its first `count` items, as an array, and the range after them.
+def splitAt<R: Range<T>, T>(range: R, n: Int): ([T], R) {
+    mutable val taken: [T] = []
+    mutable val remaining = range
+    while length(taken) < n {
+        if val pair = next(remaining) {
+            val (item, after) = pair
+            taken ~= [item]
+            remaining = after
+        } else {
+            return (taken, remaining)
+        }
+    }
+    (taken, remaining)
+}
+
+// Ordering.
+
+// Its smallest item, the first of them when several are equal, or `None` when it's empty.
+def min<R: Range<T>, T: Ord>(range: R): T? {
+    val (head, after) = next(range)?
+    mutable val best = head
+    for item in after {
+        if item < best { best = item }
+    }
+    best
+}
+
+// Its largest item, the first of them when several are equal, or `None` when it's empty.
+def max<R: Range<T>, T: Ord>(range: R): T? {
+    val (head, after) = next(range)?
+    mutable val best = head
+    for item in after {
+        if item > best { best = item }
+    }
+    best
+}
+
+// Its items in order, as an array. Equal items keep the order they had.
+def sorted<R: Range<T>, T: Ord>(range: R): [T] => mergeSorted(array(range), (a: T, b: T) => a < b)
+
+// Its items in the order of what `key` gives for each, as an array. `key` runs once for each item,
+// and items with equal keys keep the order they had.
+def sortedBy<R: Range<T>, T, K: Ord>(range: R, key: (T) -> K): [T] {
+    mutable val keyed: [(K, T)] = []
+    for item in range { keyed ~= [(key(item), item)] }
+    mutable val result: [T] = []
+    for (_, item) in mergeSorted(keyed, (a: (K, T), b: (K, T)) => {
+        val (x, _) = a
+        val (y, _) = b
+        x < y
+    }) {
+        result ~= [item]
+    }
+    result
+}
+
+// A value ordered the other way round, for sorting from largest to smallest:
+// `xs.sortedBy(x => Descending(x))`, or `people.sortedBy(p => (Descending(p.age), p.name))`.
+type Descending<T>(value: T)
+
+def compare<T: Ord>(a: Descending<T>, b: Descending<T>): Ordering => compare(b.value, a.value)
+
+conform Descending<T>: Ord when T: Ord
+
+// A stable merge sort, bottom up: runs of `width` items are merged in pairs, from one array into the next.
+private def mergeSorted<A>(items: [A], before: (A, A) -> Bool): [A] {
+    val n = length(items)
+    mutable val from = items
+    mutable val width = 1
+    while width < n {
+        mutable val into: [A] = []
+        mutable val start = 0
+        while start < n {
+            val middle = smaller(start + width, n)
+            val end = smaller(start + 2 * width, n)
+            mutable val i = start
+            mutable val j = middle
+            while i < middle && j < end {
+                if before(from[j], from[i]) {
+                    into ~= [from[j]]
+                    j += 1
+                } else {
+                    into ~= [from[i]]
+                    i += 1
+                }
+            }
+            while i < middle {
+                into ~= [from[i]]
+                i += 1
+            }
+            while j < end {
+                into ~= [from[j]]
+                j += 1
+            }
+            start = end
+        }
+        from = into
+        width *= 2
+    }
+    from
 }

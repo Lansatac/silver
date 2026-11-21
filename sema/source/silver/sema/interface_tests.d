@@ -938,8 +938,8 @@ unittest
     analyzedModule("interface Add<Rhs> { def add(a: Self, b: Rhs): Self }\ntype Vec(x: Float)\n"
         ~ "def add(a: Vec, b: Vec): Vec => a\ndef add(a: Vec, b: Float): Vec => a\nconform Vec: Add<Vec> & Add<Float>")
         .shouldHaveNoDiagnostics();
-    auto files = ["lib.ag": "module lib\ninterface Sized { def size(value: Self): Int }\ntype Grid(n: Int)\n"
-        ~ "def size(g: Grid): Int => g.n\nconform Grid: Sized"];
-    analyzed("import lib\nconform Grid: Sized\ndef main(): Unit => ()", files).onlyMessage(DiagnosticCode.OverlappingConformance)
-        .should.equal("`Grid` already conforms to `Sized` in `lib`; a type has one conformance to an interface");
+    auto files = ["lib.ag": "module lib\ninterface Measured { def size(value: Self): Int }\ntype Grid(n: Int)\n"
+        ~ "def size(g: Grid): Int => g.n\nconform Grid: Measured"];
+    analyzed("import lib\nconform Grid: Measured\ndef main(): Unit => ()", files).onlyMessage(DiagnosticCode.OverlappingConformance)
+        .should.equal("`Grid` already conforms to `Measured` in `lib`; a type has one conformance to an interface");
 }

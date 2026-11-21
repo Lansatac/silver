@@ -26,7 +26,7 @@ def computeQualified(): Float => some.library.helper(1.0)
 
 Module-level declarations can appear in any order.
 
-Two modules are imported into every module without being named. `lang`, the [package the compiler knows](#the-package-the-compiler-knows), provides names like `print`, `read` and `length`, whatever the prelude is, and the prelude provides the rest of what every module sees, as `map`. Both are ordinary implicit blanket imports with no special priority. A conflict with another blanket import is ambiguous, and qualifying settles it, as `lang.print`; an import that lists the name beats it.
+Two modules are imported into every module without being named. `lang`, the [package the compiler knows](#the-package-the-compiler-knows), provides names like `print`, `read` and `length`, whatever the prelude is, and the prelude provides the rest of what every module sees, as `map`. `lang` is an ordinary implicit blanket import: a conflict with another blanket import is ambiguous, and qualifying settles it, as `lang.print`, while an import that lists the name beats it. The prelude is farther than any import, so a module's own imports hide what it brings by the same name: importing a library that declares its own `Seq` gives that library's.
 
 The prelude declares nothing itself. It's a list of `forward import`s of `std` modules, so everything it provides has a module of its own that can be imported by name. It belongs to the standard library, and the build says which module it is: `std.prelude` unless another is named.
 
@@ -125,12 +125,13 @@ Imports can also be renamed, which is part of the design and has no syntax yet.
 
 ## Which declaration a name means
 
-A name can reach a module from its own declarations, from imports that list it, and from imports that bring every name. The first two are explicit: the module wrote the name. Nearer beats farther, in this order:
+A name can reach a module from its own declarations, from imports that list it, from imports that bring every name, and from the prelude. The first two are explicit: the module wrote the name. Nearer beats farther, in this order:
 
 1. the module's own declarations, and selective imports and forwards that list the name,
-2. blanket imports and forwards, including the prelude.
+2. blanket imports and forwards, including `lang`,
+3. the prelude.
 
-For constants, types, aliases, interfaces and sum members, an explicit one hides what blanket imports bring by the name:
+For constants, types, aliases, interfaces and sum members, a nearer one hides what farther ones bring by the name:
 
 ```silver
 import geometry               // declares `val origin`
@@ -156,7 +157,7 @@ origin                        // error: both imports bring an `origin`
 geometry.origin               // fine
 ```
 
-Functions are never hidden by name. All the functions of one name that a module reaches are overloads of each other, so a module's own `first` doesn't hide an imported `first` that takes something else, and an import can list `first` beside the module's own. The same-level rules apply to functions that take the same parameters: two explicit ones are a duplicate, reported where the second is written, an explicit one hides a blanket one, and two blanket ones are ambiguous where a call fits both.
+Functions are never hidden by name. All the functions of one name that a module reaches are overloads of each other, so a module's own `first` doesn't hide an imported `first` that takes something else, and an import can list `first` beside the module's own. The same-level rules apply to functions that take the same parameters: two explicit ones are a duplicate, reported where the second is written, an explicit one hides a blanket one, either hides the prelude's, and two blanket ones are ambiguous where a call fits both.
 
 ```silver
 import graphics : scale       // declares `scale(x: Float)` and `scale(x: Int)`
@@ -252,7 +253,7 @@ Inside the forwarding module, its own functions come first, and what it forwards
 - Projects are checked as above and mean nothing else yet: the ownership the packages of a project share isn't enforced.
 - `lang` is the module `lang` and the modules under it, read only from the compiler's own directory. What every module sees without an import, whatever the prelude, is what the module `lang` forwards: `lang.array`, `lang.interval`, `lang.io`, `lang.ord`, `lang.panic`, `lang.range`, `lang.testing`, and `bytes` and `next` from `lang.string`. `lang`'s other modules are reached by importing them, or through the `std` modules that forward them, as `std.ref` does `lang.ref`.
 - A module named as part of `lang`, by its `module` line or, without one, by its file name, is an error (`L0004`) unless it is the compiler's own file, so a program can't add to `lang` or replace it. An import in a module of `lang` of anything outside `lang` is an error too (`L0005`).
-- The build can't name another prelude yet: `silver` always uses `std.prelude`, which forwards `std.of` (for `Of`) and `std.range`, and declares nothing itself. The other `std` modules are reached by importing them. A prelude that isn't found is an error.
+- The build can't name another prelude yet: `silver` always uses `std.prelude`, which forwards `std.of` (for `Of`) and, from `std.range`, its functions and the types `Sized`, `Indexed`, `Seq` and `Descending`, and declares nothing itself. The adapter types, such as `Mapped`, come with `import std.range`. The other `std` modules are reached by importing them. A prelude that isn't found is an error.
 - No module of `std`, and not `lang`, declares a public function with the same parameters as one it forwards blanket, so importing a module beside one that forwards it, the prelude included, never makes a call ambiguous. A test of the standard library checks this.
 - Two functions of the same parameters aren't a duplicate when one's bounds ask for everything the other's do and more, and a type satisfies an interface through the functions a module can see, so those have to be imported or forwarded: see [Interfaces](interfaces.md#current-implementation).
 - An explicit duplicate of functions is reported where it's written, and a call that fits both is then reported as ambiguous too.

@@ -1,0 +1,26 @@
+// The prelude is farther than any import: what a blanket import brings by a name hides the prelude's
+// type or interface of that name, and its function of the same parameters. A local can be named
+// like a function of its own module, and hides it there, while a method call still finds the function.
+import levels_support.collections
+import std.range : seq
+
+def total(xs: [Int]): Int => xs.fold(0, (a, b) => a + b)
+
+def lengthOf<S: Sized>(s: S): Int => size(s)
+
+def main(): Unit {
+    val s = Seq([4, 1, 7])
+    printl(s)
+    printl(lengthOf(s))
+    printl(biggest(s))
+    printl([1, 2, 3].count())
+    printl([1, 2, 3].map(x => x * 2).array())
+    printl(std.range.count([1, 2, 3]))
+    val erased: std.range.Seq<Int> = [5, 6].seq()
+    printl(erased.array())
+
+    val total = [1, 2, 3].total()
+    printl(total)
+    val first = [8, 9].first()
+    printl(first)
+}
