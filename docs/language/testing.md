@@ -104,7 +104,16 @@ powers.ag(2,5): Expectation failed: panics(() => powInt(2, 3)) == "Integer overf
 
 ## Running tests
 
-`silver test <path>` runs the tests under that path, and not those of imported modules. With no path, `silver test` runs the tests of the [package it's started in](../silver.md#commands) and of the packages it describes. `main` is neither required nor run, so a library tests the same way as a program. `silver build` type-checks inline tests without including them.
+`silver test <path>` runs the tests under that path, and not those of imported modules. With no path, `silver test` runs the tests of the [package it's started in](../silver.md#commands) and of what its `silver.toml` names. `main` is neither required nor run, so a library tests the same way as a program. `silver build` type-checks inline tests without including them.
+
+In a project, a directory is tested with what its `silver.toml` names, and nothing it doesn't:
+
+- The packages the file describes, and those it lists with a `silver.toml` of their own in folders under it, are tested unless their entry says `test = false`.
+- A package it lists outside its directory is tested only when its entry says `test = true`, and then without what that package's own file lists.
+- A folder under it with a `silver.toml` the file doesn't name is another project, and is left out. So is every project under a directory that's in none.
+- Naming a directory tests it, whatever an entry says about it.
+
+All of it is one run, with one report and one summary, or one JSON document. [The `silver` tool](../silver.md#commands) has the details.
 
 Each test is isolated, so a panic ends only that test. A crash that can't be caught is reported as one. `read()` returns `Ok(None)` in a test.
 
@@ -221,7 +230,7 @@ Matchers, fixtures, property testing, snapshots and reporters belong in librarie
 ## Current implementation
 
 - `assert`, `test`, `expect` and `silver test` are available on both backends. `silver test -b llvm` compiles the tests, and `-b both` runs them both ways and fails a test the two backends disagree on. `-O` with either optimizes the compiled tests.
-- A directory's tests are those of every `.ag` file under it, each loaded as a program of its own. In a project, a file with a `module` line is loaded as a module of its package, and one without uses what the package it's under uses, and that package too when it's a library, as a [script](../silver.md#scripts) run on its own does. Every file uses `std`, the prelude's package. A directory under the one tested with a `silver.toml` that the project doesn't use is another project, and is left out.
+- A directory's tests are those of every `.ag` file under it, each loaded as a program of its own. In a project, a file with a `module` line is loaded as a module of its package, and one without uses what the package it's under uses, and that package too when it's a library, as a [script](../silver.md#scripts) run on its own does. Every file uses `std`, the prelude's package. What a project's `silver.toml` names, tested in one run, is in [Current implementation](../silver.md#current-implementation) of the `silver` tool.
 - `panics` is available on both backends. Its work can't be a function that returns `Never`, such as `() => panic("x")`, because a type parameter doesn't take `Never` yet; `(): Unit => panic("x")` works.
 - Companion files are available on both backends. `silver test` loads only the companion of the file it runs, beside it, and its tests run after the file's own. A directory's companions run with their modules, and naming a companion runs its module.
 - A companion can't have a `module` line, a `native library` (it has its module's), a `forward import`, a `def main` or a `conform` declaration (`L0007`), and a module in the program only because a companion imports it can't declare a conformance (`L0008`). A companion's function named like one of its module's is `S0033`. Running or building a companion, or testing one with no module beside it, is `L0006`, and a companion that can't be read as text is `L0009`.

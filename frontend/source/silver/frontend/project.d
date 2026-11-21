@@ -101,6 +101,8 @@ struct Described
     Named[] uses;
     /// The `[[package]]` header, or the inline table.
     Span span;
+    /// Whether `silver test` from the file tests it: its `test`, true unless given.
+    bool test = true;
 }
 
 /// A `[[package]]` entry with only a `path`: a package with a package file of its own there, or one
@@ -110,6 +112,10 @@ struct Listed
     /// The directory, absolute.
     string directory;
     Span pathSpan;
+    /// Its `test`, when it's given: whether `silver test` from the file tests it, which unless given
+    /// depends on whether `directory` is under the file's.
+    bool testGiven;
+    bool test;
 }
 
 /// What a package file says, checked.
@@ -296,11 +302,11 @@ const(Facts)[] programHomes(const Project project, const Facts package_)
     return homes;
 }
 
-/// The directories under `directory` with a package file that `project` didn't read, each another
-/// project, the outermost only: a directory with one isn't looked into.
-string[] otherProjects(const Project project, string directory)
+/// The directories under `directory` with a package file, the outermost only: a directory with one
+/// isn't looked into.
+string[] projectsUnder(string directory)
 {
-    import std.algorithm : any, sort;
+    import std.algorithm : sort;
     import std.file : dirEntries, SpanMode;
     import std.path : absolutePath, buildNormalizedPath, buildPath;
 
@@ -321,15 +327,132 @@ string[] otherProjects(const Project project, string directory)
         }
         foreach (sub; inner.sort)
         {
-            auto file = buildPath(sub, packageFileName);
-            if (isFile(file) && !project.packages.any!(p => samePath(p.file, file)) && !samePath(project.file, file))
-                found ~= sub;
-            else
-                walk(sub);
+            if (isFile(buildPath(sub, packageFileName))) found ~= sub;
+            else walk(sub);
         }
     }
     walk(buildNormalizedPath(absolutePath(directory)));
     return found;
+}
+
+/// A package a package file names that `silver test` leaves out: its directory, and whether that's
+/// because it's outside the file's directory and not opted in, rather than opted out.
+struct LeftOut
+{
+    string directory;
+    bool outside;
+}
+
+/// What `silver test` over a directory in a project runs: every package that's declared for it, the
+/// directories whose files are tested, the first the one asked for, the directories under them left
+/// out, and what the package files name that's left out.
+struct TestRun
+{
+    Project project;
+    string[] tested;
+    string[] skipped;
+    LeftOut[] leftOut;
+}
+
+/// What `silver test` over `directory` runs, from `file`, the package file at or above it. Testing a
+/// directory tests what's under it that the file names, and nothing it doesn't: the packages the file
+/// describes, unless their `test` is false; each package with a file of its own that the file lists
+/// under it, unless its `test` is false, as `silver test` would test it from there; and when
+/// `directory` is the file's own, each listed package outside it whose `test` is true, alone. A
+/// directory under it with a package file that isn't named this way is another project, left out.
+bool readTestRun(string file, string directory, out TestRun run, out Mistake mistake)
+{
+    import std.algorithm : any, canFind, filter;
+    import std.array : array;
+    import std.path : absolutePath, buildNormalizedPath;
+
+    PackageFile root;
+    if (!readPackageFile(file, root, mistake)) return false;
+    auto reader = ProjectReader();
+    if (!reader.add(root, mistake)) return false;
+    directory = buildNormalizedPath(absolutePath(directory));
+
+    // A directory tested, and the directories under it that aren't tested with it.
+    struct Covered
+    {
+        string directory;
+        string[] excluded;
+    }
+    Covered[] covered;
+    // What the starting file's own entries say isn't tested, which a wider directory tested doesn't override.
+    string[] optedOut;
+    void optOut(string at, bool outside)
+    {
+        run.leftOut ~= LeftOut(at, outside);
+        if (!within(directory, at)) optedOut ~= at;
+    }
+    // `top` is the directory asked for, whose file's outside entries opted in are tested; `alone` is one
+    // of those, tested without what its file lists.
+    bool cover(const PackageFile from, string at, bool top, bool alone)
+    {
+        if (covered.any!(c => samePath(c.directory, at))) return true;
+        auto c = Covered(at, projectsUnder(at));
+        foreach (ref d; from.described)
+        {
+            if (d.test || !within(d.directory, at) || samePath(d.directory, at)) continue;
+            c.excluded ~= d.directory;
+            if (top) optOut(d.directory, false);
+        }
+        immutable index = covered.length;
+        covered ~= c;
+        if (alone) return true;
+        foreach (ref l; from.listed)
+        {
+            immutable inside = within(l.directory, from.directory);
+            bool alsoAlone;
+            if (inside)
+            {
+                if (!within(l.directory, at) || samePath(l.directory, at)) continue;
+                if (l.testGiven && !l.test)
+                {
+                    covered[index].excluded ~= l.directory;
+                    if (top) optOut(l.directory, false);
+                    continue;
+                }
+            }
+            else
+            {
+                if (!top || !samePath(at, from.directory)) continue;
+                if (!(l.testGiven && l.test))
+                {
+                    optOut(l.directory, !l.testGiven);
+                    continue;
+                }
+                alsoAlone = true;
+            }
+            PackageFile there;
+            if (!reader.include(from, l.directory, there, mistake)) return false;
+            if (!cover(there, l.directory, false, alsoAlone)) return false;
+        }
+        return true;
+    }
+    if (!cover(root, directory, true, false)) return false;
+    covered = covered[0 .. 1] ~ covered[1 .. $].filter!(c => !optedOut.any!(o => within(c.directory, o))).array;
+    foreach (ref c; covered) c.excluded ~= optedOut;
+
+    bool isCovered(string at) => covered.any!(c => samePath(c.directory, at));
+    foreach (ref c; covered)
+    {
+        foreach (x; c.excluded)
+        {
+            if (!isCovered(x) && !run.skipped.any!(s => samePath(s, x))) run.skipped ~= x;
+        }
+    }
+    // A directory is walked from one tested above it unless a directory skipped is between them.
+    foreach (ref c; covered)
+    {
+        immutable reached = run.tested.any!(t => within(c.directory, t) && !run.skipped.any!(s => within(c.directory, s)
+            && within(s, t) && !samePath(s, t)));
+        if (!reached) run.tested ~= c.directory;
+    }
+    run.skipped = run.skipped.filter!(s => run.tested.any!(t => within(s, t) && !samePath(s, t))).array;
+    run.project = Project(root.file, reader.packages);
+    return true;
 }
 
 /// The compiler's options for `project`: each package's directory, uses, project and file, and the
@@ -624,6 +747,7 @@ struct Checker
         const(Value)* source;
         // The first of `name`, `source` and `uses`, which only a package described here has.
         const(Entry)* describing;
+        const(Value)* test;
         foreach (ref field; value.table.entries)
         {
             switch (field.key)
@@ -644,6 +768,7 @@ struct Checker
                 case "test":
                     if (field.value.kind != ValueKind.boolean)
                         return fail(ProjectCode.WrongType, field.value.span, "`test` is true or false");
+                    test = &field.value;
                     break;
                 case "version":
                 case "git":
@@ -681,7 +806,7 @@ struct Checker
         }
         if (describing is null)
         {
-            result.listed ~= Listed(at, path.span);
+            result.listed ~= Listed(at, path.span, test !is null, test !is null && test.boolean);
             return true;
         }
         if (isFile(buildPath(at, packageFileName)))
@@ -697,6 +822,7 @@ struct Checker
         }
         if (!directory(*path, "A package's `path`", result.directory, "the package file's directory", false, d.directory))
             return false;
+        if (test !is null) d.test = test.boolean;
         if (source is null) d.modules = d.directory;
         else if (!directory(*source, "A package's `source`", d.directory, "the package's directory", true, d.modules))
             return false;
@@ -994,6 +1120,21 @@ struct ProjectReader
             if (!reach(file, *entry, mistake)) return false;
         }
         return true;
+    }
+
+    /// Adds the packages of the file that the entry of `from` at `directory` leads to, as when it's used,
+    /// and gives that file.
+    bool include(const ref PackageFile from, string directory, out PackageFile found, out Mistake mistake)
+    {
+        Reached[] listed;
+        if (!resolve(from, listed, mistake)) return false;
+        foreach (ref r; listed)
+        {
+            if (!samePath(r.home, directory)) continue;
+            if (!reach(from, r, mistake)) return false;
+            return fileAt(r.file, found, mistake);
+        }
+        assert(false, "no entry at " ~ directory);
     }
 
     /// Adds the packages of the file that `entry` leads to, unless they have been.

@@ -242,28 +242,40 @@ enum TestFormat
     json,
 }
 
-/// Runs the tests in the file or directory at `path` that `filters` selects, reports them on
-/// stdout as `format` says, and returns 0 if they all passed.
-int test(string path, const Packages packages, Backend backend, Optimization optimization,
+/// Runs the tests in the files or directories at `paths` that `filters` selects, reports them on
+/// stdout as `format` says, in one report, and returns 0 if they all passed.
+int test(const string[] paths, const Packages packages, Backend backend, Optimization optimization,
     const string[] filters = null, TestFormat format = TestFormat.text, const string[] skipped = null)
 {
     string report;
-    auto status = testReport(path, packages, backend, optimization, filters, format, report, skipped);
+    auto status = testReport(paths, packages, backend, optimization, filters, format, report, skipped);
     write(report);
     return status;
 }
 
 /// What `test` does, with the report in `text` rather than on stdout. No file under a directory of
-/// `skipped` is run.
-int testReport(string path, const Packages packages, Backend backend, Optimization optimization,
+/// `skipped` is run, and a file under more than one of `paths` is run once.
+int testReport(const string[] paths, const Packages packages, Backend backend, Optimization optimization,
     const string[] filters, TestFormat format, out string text, const string[] skipped = null)
 {
-    import std.algorithm : map;
+    import std.algorithm : canFind, map;
     import silver.testing : jsonReport, report, runFile, succeeded, TestBackend, testFiles;
 
     auto testBackend = backend == Backend.both ? TestBackend.both
         : backend == Backend.llvm ? TestBackend.llvm : TestBackend.interpreter;
-    auto runs = testFiles(path, skipped).map!(file => runFile(file, packages, testBackend, tempDir, optimization, filters)).array;
+    string[] files;
+    string[] seen;
+    foreach (path; paths)
+    {
+        foreach (file; testFiles(path, skipped))
+        {
+            auto key = buildNormalizedPath(absolutePath(file));
+            if (seen.canFind!(s => filenameCmp(s, key) == 0)) continue;
+            seen ~= key;
+            files ~= file;
+        }
+    }
+    auto runs = files.map!(file => runFile(file, packages, testBackend, tempDir, optimization, filters)).array;
     auto filtered = filters.length > 0;
     text = format == TestFormat.json ? jsonReport(runs, testBackend, filtered) : report(runs, filtered);
     return succeeded(runs, filtered) ? 0 : 1;
@@ -379,7 +391,7 @@ unittest
 /// (`compilerOptionsWithValues` in frontend/source/silver/frontend/package.d), and a test there reads
 /// this one to check the two agree.
 immutable optionsWithValues = ["--package", "--uses", "--project", "--package-file", "--scripts-in", "--program",
-    "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip"];
+    "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip", "--also"];
 
 /// Takes what follows the file off `args` and returns it. The file is the first word that isn't an
 /// option or an option's value, and options stop there: what follows is for the program. getopt's own
@@ -557,7 +569,7 @@ unittest
 /// gave, or null without them. `bySilver` says whether `silver` is driving.
 string commandLineMistake(string command, const string[] files, string outputPath, bool optimize,
     Backend backend, const string[] filters = null, string format = null, const string[] skipped = null,
-    string program = null, bool bySilver = false)
+    string program = null, bool bySilver = false, const string[] also = null)
 {
     immutable building = command == "build";
     immutable testing = command == "test";
@@ -604,6 +616,10 @@ string commandLineMistake(string command, const string[] files, string outputPat
     {
         return "--skip applies to `silver test`, which is what runs the files of a directory.";
     }
+    if (also.length > 0 && !testing)
+    {
+        return "--also applies to `silver test`, which is what runs the tests of several paths.";
+    }
     if (format !is null && !testing)
     {
         return "--format applies to `silver test`, which is what writes a report.";
@@ -615,24 +631,38 @@ string commandLineMistake(string command, const string[] files, string outputPat
     return null;
 }
 
-/// What's wrong with skipping each of `skipped` when testing `path`, or null: each has to be a
-/// directory strictly inside `path`.
-string skipMistake(string path, const string[] skipped)
+/// What's wrong with skipping each of `skipped` when testing `paths`, or null: each has to be a
+/// directory strictly inside one of them, and can't be or hold any of them.
+string skipMistake(const string[] paths, const string[] skipped)
 {
-    import std.algorithm : equal;
+    import std.algorithm : any, equal, filter;
+    import std.array : join;
     import std.path : filenameCmp, pathSplitter;
 
+    bool inside(string directory, string path)
+    {
+        auto inner = pathSplitter(buildNormalizedPath(absolutePath(directory))).array;
+        auto outer = pathSplitter(buildNormalizedPath(absolutePath(path))).array;
+        return inner.length > outer.length && inner[0 .. outer.length].equal!((a, b) => filenameCmp(a, b) == 0)(outer);
+    }
+    auto directories = paths.filter!(p => p.isDir).array;
     foreach (directory; skipped)
     {
         if (!directory.exists || !directory.isDir)
             return "--skip names " ~ directory ~ ", which isn't a directory.";
-        if (!path.isDir)
-            return "--skip applies when a directory is tested, and " ~ path ~ " is a file.";
-        auto inner = pathSplitter(buildNormalizedPath(absolutePath(directory))).array;
-        auto outer = pathSplitter(buildNormalizedPath(absolutePath(path))).array;
-        if (inner.length <= outer.length
-            || !inner[0 .. outer.length].equal!((a, b) => filenameCmp(a, b) == 0)(outer))
-            return "--skip names " ~ directory ~ ", which isn't inside " ~ path ~ ", the directory tested.";
+        if (directories.length == 0)
+            return "--skip applies when a directory is tested, and " ~ paths[0] ~ " is a file.";
+        if (!directories.any!(path => inside(directory, path)))
+            return "--skip names " ~ directory ~ ", which isn't inside " ~ (directories.length == 1 ? directories[0]
+                ~ ", the directory tested." : "any of the directories tested, " ~ directories.join(", ") ~ ".");
+        foreach (path; paths)
+        {
+            immutable same = filenameCmp(buildNormalizedPath(absolutePath(path)),
+                buildNormalizedPath(absolutePath(directory))) == 0;
+            if (same || inside(path, directory))
+                return "--skip names " ~ directory ~ ", which " ~ (same ? "is " : "holds ") ~ path ~ ", given to be "
+                    ~ "tested, so the two disagree.";
+        }
     }
     return null;
 }
@@ -650,11 +680,11 @@ unittest
     ]);
     scope (exit) rmdirRecurse(directory);
     auto inner = buildPath(directory, "inner");
-    assert(skipMistake(directory, [inner]) is null);
-    assert(skipMistake(directory, [buildPath(directory, "gone")]).canFind("isn't a directory"));
-    assert(skipMistake(directory, [directory]).canFind("isn't inside"));
-    assert(skipMistake(inner, [buildPath(directory, "other")]).canFind("isn't inside"));
-    assert(skipMistake(buildPath(directory, "a.ag"), [inner]) == "--skip applies when a directory is tested, and "
+    assert(skipMistake([directory], [inner]) is null);
+    assert(skipMistake([directory], [buildPath(directory, "gone")]).canFind("isn't a directory"));
+    assert(skipMistake([directory], [directory]).canFind("isn't inside"));
+    assert(skipMistake([inner], [buildPath(directory, "other")]).canFind("isn't inside"));
+    assert(skipMistake([buildPath(directory, "a.ag")], [inner]) == "--skip applies when a directory is tested, and "
         ~ buildPath(directory, "a.ag") ~ " is a file.");
     assert(commandLineMistake("run", ["a.ag"], "", false, Backend.interpreter, null, null, [inner])
         .canFind("--skip applies to `silver test`"));
@@ -662,10 +692,89 @@ unittest
     Packages packages;
     assert(describePackages(null, null, null, null, packages) is null);
     string report;
-    assert(testReport(directory, packages, Backend.interpreter, Optimization.none, null, TestFormat.text, report,
+    assert(testReport([directory], packages, Backend.interpreter, Optimization.none, null, TestFormat.text, report,
         [inner]) == 0);
     assert(report == "2 passed, 0 failed\n", report);
-    assert(testReport(directory, packages, Backend.interpreter, Optimization.none, null, TestFormat.text, report) == 1);
+    assert(testReport([directory], packages, Backend.interpreter, Optimization.none, null, TestFormat.text, report) == 1);
+}
+
+@("--also tests more paths in the same run: one report and one summary, with --filter and --skip across all")
+unittest
+{
+    import std.algorithm : canFind, count, endsWith;
+    import std.array : replace;
+    import std.json : parseJSON;
+
+    auto directory = testDirectory("also", [
+        "a/one.ag": "test \"one\" => expect(true)\ntest \"one fails\" => expect(false)",
+        "a/inner/two.ag": "test \"two\" => expect(true)",
+        "b/three.ag": "test \"three\" => expect(true)",
+        "b/left/four.ag": "test \"four\" => expect(false)",
+        "c.ag": "test \"five\" => expect(true)",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto a = buildPath(directory, "a");
+    auto b = buildPath(directory, "b");
+    auto c = buildPath(directory, "c.ag");
+    // What a run writes to stdout, with its status, and what it writes to stderr.
+    string written(string[] args, out int status, out string errors)
+    {
+        auto savedOut = stdout;
+        auto savedErr = stderr;
+        auto outPath = buildPath(directory, "stdout.txt");
+        auto errPath = buildPath(directory, "stderr.txt");
+        stdout = File(outPath, "w");
+        stderr = File(errPath, "w");
+        status = run(args);
+        stdout.close();
+        stderr.close();
+        stdout = savedOut;
+        stderr = savedErr;
+        errors = readText(errPath);
+        return readText(outPath).replace("\r\n", "\n");
+    }
+
+    int status;
+    string errors;
+    auto text = written(["silverc", "test", "--also", b, "--also", c, a], status, errors);
+    assert(status == 1 && text.count("passed") == 1, text);
+    assert(text.canFind("FAIL \"one fails\"") && text.canFind("FAIL \"four\"") && text.endsWith("4 passed, 2 failed\n"),
+        text);
+    text = written(["silverc", "test", "--also", b, "--skip", buildPath(b, "left"), a], status, errors);
+    assert(status == 1 && text.endsWith("3 passed, 1 failed\n"), text);
+    text = written(["silverc", "test", "--also", b, "--skip", buildPath(b, "left"), "--filter", "t", a], status, errors);
+    assert(status == 0 && text == "2 passed, 0 failed, 2 filtered out\n", text);
+    // A path given twice, or one inside another, runs its files once.
+    text = written(["silverc", "test", "--also", buildPath(a, "inner"), "--also", a, a], status, errors);
+    assert(text.endsWith("2 passed, 1 failed\n"), text);
+
+    Toolchain toolchain;
+    immutable compiles = findToolchain(toolchain) is null;
+    foreach (backend; compiles ? ["interpreter", "llvm", "both"] : ["interpreter"])
+    {
+        text = written(["silverc", "test", "-b", backend, "--format", "json", "--also", b, "--skip", buildPath(b, "left"),
+            "--also", c, a], status, errors);
+        auto json = parseJSON(text);
+        assert(status == 1 && json["summary"]["passed"].integer == 4 && json["summary"]["failed"].integer == 1, text);
+        string[] files;
+        foreach (file; json["files"].array) files ~= file["file"].str;
+        assert(files == [buildPath(a, "inner", "two.ag"), buildPath(a, "one.ag"), buildPath(b, "three.ag"), c], text);
+    }
+
+    assert(written(["silverc", "test", "--also", buildPath(directory, "gone"), a], status, errors) == "" && status == 1);
+    assert(errors.canFind("doesn't exist"), errors);
+    written(["silverc", "test", "--also", b, "--skip", buildPath(b, "left"), c], status, errors);
+    assert(status == 0, errors);
+    written(["silverc", "test", "--also", c, "--skip", buildPath(directory), a], status, errors);
+    assert(status == 1 && errors.canFind("isn't inside " ~ a ~ ", the directory tested."), errors);
+    written(["silverc", "test", "--also", buildPath(a, "inner"), "--skip", buildPath(a, "inner"), a], status, errors);
+    assert(status == 1 && errors.canFind("--skip names " ~ buildPath(a, "inner") ~ ", which is " ~ buildPath(a, "inner")
+        ~ ", given to be tested, so the two disagree."), errors);
+    written(["silverc", "test", "--also", buildPath(a, "inner"), "--skip", buildPath(directory, "a"), directory], status,
+        errors);
+    assert(status == 1 && errors.canFind("which holds " ~ a), errors);
+    written(["silverc", "run", "--also", b, c], status, errors);
+    assert(status == 1 && errors.canFind("--also applies to `silver test`"), errors);
 }
 
 @("a command with no file left is missing its file, whatever options it was given")
@@ -737,7 +846,7 @@ version (unittest)
         if (backend != Backend.interpreter && findToolchain(toolchain) !is null) return false;
         Packages packages;
         assert(describePackages(null, null, null, null, packages) is null);
-        status = testReport(path, packages, backend, Optimization.none, filters, format, report);
+        status = testReport([path], packages, backend, Optimization.none, filters, format, report);
         auto prefix = (path.isDir ? path : path.dirName) ~ dirSeparator;
         report = report.replace(format == TestFormat.json ? prefix.replace(`\`, `\\`) : prefix, "");
         return true;
@@ -876,6 +985,7 @@ int run(string[] args)
     string[] packageFileOptions;
     string[] scriptsInOptions;
     string[] skipped;
+    string[] also;
     string[] programs;
     bool fromSilver;
     string outputPath;
@@ -921,8 +1031,11 @@ int run(string[] args)
     "filter", "test: run only the tests whose name contains this, case-sensitively; given more than once,"
         ~ " those matching any of them", &filters,
     "format", "test: how to report: text (default), or json, one JSON document on stdout", &format,
-    "skip", "test: a directory inside the one tested whose files aren't run, given once for each; silver gives it"
-        ~ " for a project of its own inside a project's directory", &skipped,
+    "skip", "test: a directory inside one tested whose files aren't run, given once for each; silver gives it"
+        ~ " for another project there, and for a package a silver.toml names but doesn't test", &skipped,
+    "also", "test: another file or directory whose tests are run and reported with the path's, in one report, given"
+        ~ " once for each; silver gives it for a project outside the directory tested that a silver.toml opts in",
+        &also,
     );
     }
     catch (Exception e)
@@ -942,7 +1055,7 @@ int run(string[] args)
     }
     immutable program = programs.length == 0 ? null : programs[0];
     if (auto mistake = commandLineMistake(command, args[1 .. $] ~ afterFile, outputPath, optimize, backend, filters, format,
-        skipped, program, packageFileOptions.length > 0 || fromSilver))
+        skipped, program, packageFileOptions.length > 0 || fromSilver, also))
     {
         stderr.writeln(mistake);
         return 1;
@@ -977,17 +1090,21 @@ int run(string[] args)
     else programFile = args[$ - 1];
     if (testing)
     {
-        if (!programFile.exists)
+        auto paths = programFile ~ also;
+        foreach (path; paths)
         {
-            stderr.writefln("'%s' doesn't exist!", programFile);
-            return 1;
+            if (!path.exists)
+            {
+                stderr.writefln("'%s' doesn't exist!", path);
+                return 1;
+            }
         }
-        if (auto refused = skipMistake(programFile, skipped))
+        if (auto refused = skipMistake(paths, skipped))
         {
             stderr.writeln(refused);
             return 1;
         }
-        return test(programFile, packages, backend, optimization, filters,
+        return test(paths, packages, backend, optimization, filters,
             format == "json" ? TestFormat.json : TestFormat.text, skipped);
     }
 	if(!programFile.exists || !programFile.isFile)

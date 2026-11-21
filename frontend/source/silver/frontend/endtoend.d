@@ -114,7 +114,7 @@ unittest
         expectRan(planned(["-b", backend, "main.ag"], buildPath(fixtures, "uses-described")), "parsed node 7\n");
     // It's given to the compiler with the rest of that project, whose project list names it, and lint is in none.
     auto p = plan("silverc", request(["main.ag"]), buildPath(fixtures, "uses-described"));
-    assert(p.arguments.canFind("tool=tool.ast,tool.syntax,tool.compiler,tool.frontend"), p.arguments.join(" "));
+    assert(p.arguments.canFind("tool=tool.ast,tool.syntax,tool.compiler,tool.frontend,tool.docs"), p.arguments.join(" "));
     assert(p.arguments.count("--project") == 1, p.arguments.join(" "));
 }
 
@@ -353,7 +353,7 @@ unittest
     expectRan(silver(["run", "compiler/source"], tool), "Error F0034: " ~ buildPath("compiler", "source")
         ~ " is a directory, and no package that silver.toml describes is there, so it has no program to run. Its packages "
         ~ "are 'tool' at ., 'tool.ast' at ast, 'tool.syntax' at syntax, 'tool.compiler' at compiler, 'tool.frontend' at "
-        ~ "frontend; name one of those directories, or a file\n", 1);
+        ~ "frontend, 'tool.docs' at docs; name one of those directories, or a file\n", 1);
     expectRan(silver(["run", "compiler", "x"], tool), "`x` follows the directory compiler, and what follows it is for the "
         ~ "program, which can't be given arguments yet.\n", 1);
 }
@@ -422,7 +422,8 @@ unittest
     auto tool = buildPath(fixtures, "compiler-shape");
     foreach (backend; ["interpreter", "llvm", "both"])
     {
-        expectRan(silver(["test", "-b", backend], tool), "2 passed, 0 failed\n");
+        // tool.ast's two, and geometry's, which the root opts in; not tool.docs's, which it opts out.
+        expectRan(silver(["test", "-b", backend], tool), "3 passed, 0 failed\n");
         expectRan(silver(["test", "-b", backend], buildPath(tool, "ast")), "2 passed, 0 failed\n");
         expectRan(silver(["test", "-b", backend], buildPath(fixtures, "uses-path", "geometry")), "1 passed, 0 failed\n");
         expectRan(silver(["test", "-b", backend], buildPath(fixtures, "scripts", "shapes")), "2 passed, 0 failed\n");
@@ -443,7 +444,73 @@ unittest
     auto ran = silver(["test", "--format", "json", "-b", "both"], buildPath(fixtures, "compiler-shape"));
     assert(ran.status == 0, ran.output);
     auto report = parseJSON(ran.output);
-    assert(report["summary"]["passed"].integer == 2, ran.output);
+    assert(report["summary"]["passed"].integer == 3, ran.output);
+    // The tests come from the root's directory and from the package outside it that it opts in.
+    string[] files;
+    foreach (file; report["files"].array) files ~= file["file"].str;
+    assert(files.canFind(buildPath(".", "ast", "node.ag")) && files.canFind(buildPath(fixtures, "uses-path", "geometry",
+        "area.ag")) && !files.canFind(buildPath(".", "docs", "example.ag")), files.join(", "));
+}
+
+@("silver test leaves out what the file opts out, tests it when it's named, and tests the packages listed under the root")
+unittest
+{
+    auto tool = buildPath(fixtures, "compiler-shape");
+    foreach (backend; ["interpreter", "llvm"])
+    {
+        auto docs = silver(["test", "-b", backend, "docs"], tool);
+        assert(docs.status == 1 && docs.output.startsWith("FAIL \"an example that is out of date\"")
+            && docs.output.endsWith("0 passed, 1 failed\n"), docs.output);
+        // The program and the library the root lists under it, each with a file of its own.
+        expectRan(silver(["test", "-b", backend], buildPath(fixtures, "listing")), "2 passed, 0 failed\n");
+    }
+    auto shown = silver(["test", "--show-command"], tool);
+    assert(shown.status == 0 && shown.output.canFind("--also " ~ buildPath(fixtures, "uses-path", "geometry"))
+        && shown.output.canFind("\nNot tested, though a silver.toml names them: docs, with `test = false`\n"),
+        shown.output);
+    assert(!silver(["test"], tool).output.canFind("Not tested"));
+}
+
+@("a test that fails in a project opted in fails the run, in the one report")
+unittest
+{
+    import std.json : parseJSON;
+
+    auto directory = makeTree("frontend-test-opted-in", [
+        "root/silver.toml": "name = \"root\"\n\n[[package]]\npath = \"../dep\"\ntest = true\n",
+        "root/r.ag": "module root.r\n\ntest \"root\" => expect(true)\n",
+        "dep/silver.toml": "name = \"dep\"\n",
+        "dep/d.ag": "module dep.d\n\ntest \"dep\" => expect(1 == 2)\n",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto root = buildPath(directory, "root");
+    foreach (backend; ["interpreter", "llvm", "both"])
+    {
+        auto ran = silver(["test", "-b", backend], root);
+        assert(ran.status == 1 && ran.output.count("passed") == 1 && ran.output.canFind("FAIL \"dep\"")
+            && ran.output.endsWith("1 passed, 1 failed\n"), ran.output);
+    }
+    auto json = silver(["test", "--format", "json"], root);
+    assert(json.status == 1 && parseJSON(json.output)["summary"]["failed"].integer == 1, json.output);
+}
+
+@("silver test over a directory in no project runs its loose scripts and leaves out the projects under it")
+unittest
+{
+    auto directory = makeTree("frontend-test-no-project", [
+        "loose.ag": "test \"loose\" => expect(true)\n",
+        "folder/more.ag": "test \"more\" => expect(true)\n",
+        "one/silver.toml": "name = \"one\"\n",
+        "one/a.ag": "module one.a\n\ntest \"a\" => expect(true)\n",
+        "folder/two/silver.toml": "name = \"two\"\n",
+        "folder/two/b.ag": "module two.b\n\ntest \"b\" => expect(true)\n",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    foreach (backend; ["interpreter", "llvm"])
+        expectRan(silver(["test", "-b", backend, "."], directory), "2 passed, 0 failed\n");
+    expectRan(silver(["test", "folder"], directory), "1 passed, 0 failed\n");
+    // Each project is tested from its own directory.
+    expectRan(silver(["test"], buildPath(directory, "one")), "1 passed, 0 failed\n");
 }
 
 @("with no file and no project, silver says there's nothing here and runs nothing")

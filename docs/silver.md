@@ -18,8 +18,10 @@ silver test                run the tests of the project here
 - What follows the file is for the program, not for `silver`.
 - A file can start with `#!/usr/bin/env silver` and be run as `./hello.ag`.
 - With no file, `run` and `build` take the program of the package `silver` was started in. A library is reported as one. When several of the packages a file describes are programs, `silver` lists them, and one is chosen by its directory, as `silver run compiler`. A package with a `silver.toml` of its own is run from its own directory, or by naming it, as `silver run tools/lint`.
-- With no path, `test` runs the tests of the package `silver` was started in, and of the packages it describes.
-- `test` over a directory leaves out any directory under it with a `silver.toml` that the project doesn't use: that's another project, tested from its own directory. One the project uses is tested with it.
+- With no path, `test` runs the tests of the package `silver` was started in, as `test` over its directory. From the directory of a `silver.toml`, that's what the file names, as [What `silver test` tests](#what-silver-test-tests) describes; from the directory of a package it describes, that package.
+- `test` over a directory tests what the nearest `silver.toml` at or above it names under it, and nothing it doesn't. A directory under it with a `silver.toml` that the file doesn't name is another project, tested from its own directory, and is left out. A directory with no `silver.toml` at or above it names nothing: its scripts are tested, and every project under it is left out. To test a folder of projects together, give it a `silver.toml` that lists them; today that file also needs a `source`, for the reason the last of the open questions gives.
+- Naming a directory tests it, whatever an entry says: `test` on an entry decides what a wider run includes, not whether a package can be tested.
+- However many places a run covers, it's one report with one summary, and `--format json` is one document.
 - `--show-command`, given before the file like any option, prints the command line `silver` runs the compiler with, then runs it. It's for when `silver` and `silverc` seem to disagree.
 
 ## Projects
@@ -75,6 +77,8 @@ name = "json"
 version = "1.2"
 ```
 
+Any entry can say `test = true` or `test = false`, which decides whether `silver test` from this file tests it. An entry under the file's directory is tested unless it says `test = false`. One outside it is tested only when it says `test = true`, as a remote one will be. Where `test` gives what the entry's place gives anyway, it changes nothing.
+
 A directory with a `path` alone needn't have a `silver.toml` of its own when the nearest one above it describes a package there. So a package elsewhere uses one package of another project by its directory, as `path = "../silver/core"`, and `silver` finds the file that describes it above.
 
 ### A project of several packages
@@ -124,6 +128,51 @@ compiler/main.ag              module silver.compiler.main
 - Any number of the packages a file describes can be programs. Each with a `main` is one.
 - A described package can't describe packages: it has no file to do it in. A package with a file of its own can list packages of its own, and those are in its project, not in the lister's.
 
+### What `silver test` tests
+
+`silver test` tests the packages its file names, and nothing it doesn't name.
+
+- The file's own package, every package it describes, and every package it lists with a `silver.toml` of its own in a directory under its own are tested, unless the entry says `test = false`. Testing a listed package under the directory tests what `silver test` would test from that package's directory, by this same rule, so the run stays inside the one directory tree. Only the file `silver test` starts from opts in what's outside: a listed package's own `test = true` entries count when `silver test` starts from that package's directory, and not when it's reached from above.
+- A package listed outside the file's directory is tested only when its entry says `test = true`. That tests its own project alone: its own package and the packages its file describes, not what its file lists, whatever those entries say. Its dependencies are found as for a package that's used, and aren't tested.
+- A directory under one tested that holds a `silver.toml` the file doesn't name is another project, and is left out. Scripts under a tested package's directory, and in plain folders under the file's, are tested.
+
+Here is the compiler with its standard library under it, its documentation's examples left out, and a library elsewhere that it opts in:
+
+```toml
+# silver.toml
+name = "silver"
+
+[[package]]
+name = "silver.syntax"
+path = "syntax"
+
+[[package]]
+name = "silver.compiler"
+path = "compiler"
+uses = ["silver.syntax", "geometry"]
+
+[[package]]
+name = "silver.docs"
+path = "docs"
+test = false
+
+[[package]]
+path = "std"                  # the standard library, with a silver.toml of its own
+
+[[package]]
+path = "../geometry"          # outside, a silver.toml of its own
+test = true
+```
+
+```
+silver test                   syntax, compiler, std, and ../geometry, in one report
+silver test docs              docs, which is named
+cd compiler && silver test    compiler alone
+cd std && silver test         std, by its own silver.toml
+```
+
+A folder under the root with a `silver.toml` of its own that the root doesn't list, as a test fixture that's a project, is left out of all of these.
+
 ### Finding the project
 
 - When a file is named, `silver` looks for `silver.toml` in the file's directory and then in each directory above it, and takes the first it finds. Where `silver` was started from doesn't matter, so a script run by its path behaves the same from anywhere.
@@ -161,6 +210,7 @@ And a program can keep scripts under it that never import it, as a test harness 
 ## Open questions
 
 - Remote packages: how a `version` is found, in a registry, how a `git` source is fetched, and a lock file. The shape of the entry is fixed, so that adding them is only new keys.
+- A remote package's tests: opted in with `test = true`, as one outside the directory is, once remote packages exist. Where its sources are kept, and whether its tests are compiled against what the lock file chose, is part of that.
 - A script that needs a package and sits in no project, or in a project but under none of its packages. A header in the script could say so.
 - What an executable built from a described package is called when its name isn't wanted, as `silverc` for `silver.compiler`. The default name is the last segment of the package's name, which is usually also its directory, so where executables have no extension `silver build compiler` can't write its default output and asks for `-o`, even when that command is the one a message just suggested.
 - Whether a package may have more than one module that declares `main`.
@@ -180,10 +230,10 @@ Reading the project:
 
 - `silver` finds the project of the file or directory named, or of the working directory when none is, and reads its `silver.toml` and the files of the packages it lists, as above. A directory named `silver.toml` isn't a package file, and the search carries on above it. `-` as the file is passed on with no search for a project.
 - A package file is read whole and checked before anything is run, and a mistake in it is one message located in the file, with a code from `F0001`: a field `silver` doesn't know or of the wrong type, a missing `name`, an entry with no `path`, or with a `source` or `uses` and no `name`, a name that isn't a package's, an empty directory, a directory that isn't one, a name in `uses` that no entry gives (`F0025`, which lists the names the entries do give, each with its line, so a name written differently from the one its file gives shows), a directory with a `path` alone that has no `silver.toml` and that no file above describes (`F0026`, which says what to write instead: inside the file's directory, to describe it here with a `name`; outside it, to give that directory a `silver.toml` of its own or to give the `path` of a package another file describes; and for a directory of another package's modules, that package's own directory), an entry with a `name`, `source` or `uses` at a directory with a `silver.toml` of its own (`F0037`, saying that file describes it, so here it's listed by `path` alone), or one package name at two directories (`F0028`). A described package outside the file's directory (`F0020`) is told that a package elsewhere has a `silver.toml` of its own and is listed by `path` alone, and one under another `silver.toml` (`F0024`) that it's listed by `path` alone if that file describes it, or moves out from under it. A mistake in the `silver.toml` of a package that's read only because another file lists it has a second line naming that file and the entry's line. A package with a file of its own whose directory is inside the directory of a package whose modules are its whole directory (no `source`, or `source = "."`), or holds it, is `F0035`, located at the entry that reaches it; the message says that giving that package a `source` directory below it avoids it.
-- `version`, `git`, `branch`, `rev` and `tag` on an entry are `F0038`: remote packages aren't built. `test` on an entry has to be `true` or `false`, and does nothing yet.
+- `version`, `git`, `branch`, `rev` and `tag` on an entry are `F0038`: remote packages aren't built. `test` on an entry has to be `true` or `false`. `test` at the top of a file isn't a field, since the file's own package is always tested from there.
 - A file that still has `[paths]` or `[[part]]` is told, at that key, that `[[package]]` replaced it.
 - With no `silver.toml` at or above the file, the command line is passed on as it is, with `--from-silver` added, so `silverc`'s package options, described in [Modules](language/modules.md#current-implementation), still reach the compiler when given there. What the compiler says then names no option: a file in no project that imports a package is told it uses only the standard library, and that a `silver.toml` at or above it naming a package of its own, with the package in `uses` and a `[[package]]` entry whose `path` is the package's directory, whose own `silver.toml` names it, gives it one; a file whose `module` line names no package is told a package is a directory with a `silver.toml` that names it.
-- Inside a project, packages are described in `silver.toml`, and `--package`, `--uses` or `--project` given before the file is `F0036`, which says where each belongs in the package file.
+- Inside a project, packages are described in `silver.toml`, and `--package`, `--uses` or `--project` given before the file is `F0036`, which says where each belongs in the package file. So are `--also` and `--skip`, since what's tested is decided by the `test` field of the `[[package]]` entries and by the path given, and the message says so. Outside a project all five are passed on.
 
 What `silverc` is given:
 
@@ -191,13 +241,16 @@ What `silverc` is given:
 - `--from-silver`, on every run, so that what `silverc` says about a package no package file describes names what to write in a `silver.toml` rather than an option. Run by hand, without it, `silverc`'s messages name its options.
 - For a file or directory in a project, which packages' directories hold it, with `--scripts-in`: the deepest package whose directory holds the file, and for a directory, also each one whose directory is inside it. A package that only describes others is given too, so that a script there is told it uses only the standard library and belongs under the directory of a package it describes.
 - With no file, the package started in, as `--program`, for `run` and `build`.
-- For `test` over a directory, each directory under it with a `silver.toml` that no package `silver` read for the run is described in, as `--skip`. `silver` doesn't look inside such a directory for more, and a project left out this way isn't mentioned in the report. A package listed with a file of its own that nothing uses isn't read for the run in this sense, so its directory is left out like any other project's.
+- For `test` over a directory, what [What `silver test` tests](#what-silver-test-tests) leaves out under it, as `--skip`: each directory with a `silver.toml` that isn't tested, the outermost only, and each described package whose entry says `test = false`. Each other place tested that walking the directory doesn't reach, as `--also`: a package outside opted in, or a package the file lists by its directory inside a project it doesn't otherwise name. The run is one call of `silverc`, so one report and one JSON document. A package tested is read and followed, with its dependencies, whether or not anything uses it, so a listed package nothing uses is given to `silverc` when it's tested. `--scripts-in` is given for every place tested.
+- An entry of the starting file that says a package isn't tested, by `test = false` or by being outside and not opted in, leaves out that package's directory even when a wider place tested holds it, such as a package outside that's opted in, or a package listed with a file of its own that describes it: the more specific entry wins. A `--skip` that is, or holds, a path given to be tested is refused by `silverc`, as the two disagree.
+- A project left out isn't mentioned in the report. With `--show-command`, one more line on stderr after the command line names the directories that a `silver.toml` names and the run leaves out, and why.
 
 Commands with no file, and `run` or `build` with a directory:
 
 - `run` and `build` start from the program of the package started in: the module that declares `main`, the root module included, or the one package it describes that's a program. A package listed with a file of its own is never among them. A library, or a package none of whose described packages is a program, is `L0014`, which says its tests are run with `silver test` and that a file with no `module` line is run by naming it. It says nothing about the packages the file lists, so a root whose only programs have files of their own gets no pointer to them. Several programs are `L0015`, which lists each with the file its `main` is in, and each described package with its directory: its `path` when `silver` gives the packages, and its directory of modules when `silverc` is run by hand. A package with a `main` of its own that describes programs lists itself too, as chosen by naming its file. A package, or a described package among the candidates, with more than one module that declares `main` is `L0016`, which lists the files and says to name the one to run; starting from a named file is unchanged.
 - `silver run <directory>` and `silver build <directory>` take the package whose directory, its `silver.toml`'s or its `path`, is that directory; a `source` directory isn't one. A directory with a `silver.toml` of its own is its own project's, so this runs a package listed with a file of its own too. Another directory in a project is `F0034`, with no position, which lists the project's packages and their directories, and anything after the directory is an error. A directory in no project is passed on as it is.
-- `test` with no path is `test` over the directory of the package started in: its `silver.toml`'s directory, or a described package's `path`. So from a described package's directory only that package is tested, and from anywhere else the whole file's packages, since described packages are under the file's directory.
+- `test` with no path is `test` over the directory of the package started in: its `silver.toml`'s directory, or a described package's `path`. So from a described package's directory only that package is tested, and from anywhere else in the file's directory what the file names. `test` over a directory tests that directory: what the file names under it is tested by the rule, and outside entries opted in only when it's the file's own directory.
+- `test` over a directory in no project gives `--skip` for each directory under it with a `silver.toml`, the outermost only, so only the scripts outside them run.
 - With no file and no `silver.toml` at or above the working directory, `run`, `build` and `test` are `F0033`.
 - `silver build` with no `-o` writes the executable to the working directory, named after the file, or for a package's program after the last segment of the name of the package whose program it is, as `frontend` for `silver.frontend`, with `.exe` on Windows.
 
@@ -213,14 +266,19 @@ Where the design leaves it open, `silver` takes the narrower reading:
 - When any package of a file is reached, every package that file describes is read and followed and given to `silverc`, and every entry it lists with a `path` alone is read, to learn the name its file gives it, though only those something uses are followed. So a mistake in any entry, such as a directory that isn't there, stops every run that reaches the file, including one from a package elsewhere that uses a different package of it.
 - A package with a file of its own inside the directory of the listing file's package, when that package's modules are its whole directory, is refused (`F0035`) whether or not anything uses it.
 - Only the packages the nearest `silver.toml` describes can be started in, not the packages it lists with files of their own.
-- A package the project uses that sits under the directory of one of its packages is tested with it, as above, only when that package's modules are elsewhere, under `source`. Without `source`, one package's directory would be inside the other's, which `silver` refuses (`F0035`).
+- A package listed under the directory of one of the file's packages is tested with it, as above, only when that package's modules are elsewhere, under `source`. Without `source`, one package's directory would be inside the other's, which `silver` refuses (`F0035`).
+- A listed package's own `test = true` entries count only when `silver test` starts from that package's directory, not when it's reached from a file above it, so a run never leaves the starting file's directory tree except for that file's own opt-ins.
+- An entry outside the directory opted in that's a package another file describes, by its directory, tests that package alone, not the rest of the project its file describes.
+- Opting in a package outside tests its own project alone, but honours `test = false` on the packages its file describes.
+- What a run leaves out that a `silver.toml` names is said only with `--show-command`, on stderr.
+- With no path, `silver test` tests the package started in, while `silver test .` tests that one directory, so in a plain folder inside a package the two differ: the first tests the whole package, the second only that folder.
+- Naming a package's `source` directory tests its modules, but not the scripts beside its `silver.toml`, which are outside that directory.
 - A script under a package's directory has every module of that package read, to tell a library from a program, so a syntax error in any of them stops every script there, including one that imports nothing from the package. The error is reported once.
 - When a directory has the name `silver build` would give the executable, as a described package's own directory can, it's refused and `-o` is asked for.
 
 Not built:
 
 - Remote packages: `version` and `git` are refused.
-- What `test` on an entry decides.
 - A script in no project, or under none of a project's packages, can't say it needs a package.
 - A program can't read arguments, so anything after the file is an error.
 - A package can't be used only by tests, and the build can't name another prelude.

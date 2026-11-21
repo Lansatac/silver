@@ -7,6 +7,7 @@ import std.file : exists, isFile, thisExePath;
 import std.path : buildPath, dirName;
 import std.process : environment, ProcessException, spawnProcess, wait;
 import std.stdio : stderr, stdout;
+import silver.frontend.project : TestRun;
 
 immutable usage = "Usage: silver <file>                           run <file>\n"
     ~ "       silver run [OPTION]... <file>           the same\n"
@@ -49,10 +50,14 @@ shared static this()
             ~ "the name of the package whose program it is." ~ options,
         "test": "Usage: silver test [OPTION]... <path>   run the tests in <path>, a file or a directory\n"
             ~ "       silver test [OPTION]...          run the tests of the package silver is started in, and of the\n"
-            ~ "                                        packages it describes\n\n"
+            ~ "                                        packages its silver.toml names\n\n"
             ~ startedIn ~ "\nWith no path, the tests are those under that package's directory, as `silver test <directory>`.\n"
-            ~ "A directory under it with a silver.toml the project doesn't use is another project, and is left out."
-            ~ options,
+            ~ "A directory is tested with what its silver.toml names under it: the packages it describes, and those\n"
+            ~ "it lists that have a silver.toml of their own, tested as from their own directory, unless an entry\n"
+            ~ "says `test = false`. From the silver.toml's own directory, a package it lists outside that directory\n"
+            ~ "is tested too when its entry says `test = true`. A directory under it with a silver.toml that it\n"
+            ~ "doesn't name is another project, and is left out, as is any project under a directory in none.\n"
+            ~ "Naming a directory tests it, whatever an entry says." ~ options,
     ];
 }
 
@@ -107,7 +112,7 @@ unittest
 /// options. A copy of `optionsWithValues` in source/silver/driver.d, which this package can't import;
 /// a test reads that one to check the two agree.
 immutable compilerOptionsWithValues = ["--package", "--uses", "--project", "--package-file", "--scripts-in", "--program",
-    "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip"];
+    "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip", "--also"];
 
 /// `silver`'s own option, which prints the compiler's command line before running it.
 enum showCommand = "--show-command";
@@ -118,6 +123,10 @@ enum fromSilver = "--from-silver";
 /// The compiler's options that say what packages there are, which inside a project only the
 /// project's `silver.toml` says.
 immutable packageOptions = ["--package", "--uses", "--project"];
+
+/// The compiler's options that say what `test` runs, which inside a project the project's `silver.toml`
+/// and the path given say.
+immutable testedOptions = ["--also", "--skip"];
 
 /// A command line after its command, taken apart at the file.
 struct Arguments
@@ -219,6 +228,9 @@ struct Plan
     string[] scriptHomes;
     /// The package whose program `run` or `build` starts from, when no file is named, or null.
     string program;
+    /// What `--show-command` adds on stderr after the command line, or null: for `test`, what the package
+    /// files name that the run leaves out.
+    string note;
 }
 
 /// Where to look for a project's package file for `file`, the file or directory named: the working
@@ -241,10 +253,11 @@ string searchStart(string file, string workingDirectory)
 /// directory; given a directory, `run` and `build` take the program of the package whose directory it is.
 Plan plan(string compiler, Request request, string workingDirectory)
 {
-    import silver.frontend.project : compilerOptions, findPackageFile, formatMistake, homedAt, homesOf, Mistake,
-        otherProjects, programHomes, Project, ProjectCode, readProject, scriptHomes, shownFrom, startedIn;
+    import silver.frontend.project : compilerOptions, Facts, findPackageFile, formatMistake, homedAt, homesOf, Mistake,
+        programHomes, Project, ProjectCode, projectsUnder, readProject, readTestRun, scriptHomes, shownFrom, startedIn,
+        TestRun;
     import silver.frontend.toml : Span;
-    import std.algorithm : map;
+    import std.algorithm : canFind, map;
     import std.array : array;
     import std.path : absolutePath, buildNormalizedPath;
 
@@ -278,9 +291,11 @@ Plan plan(string compiler, Request request, string workingDirectory)
             if (auto given = handGiven(arguments.options))
             {
                 result.mistake = formatMistake(Mistake(null, ProjectCode.PackageOptionGiven, Span(), given ~ " is "
-                    ~ "given by hand, and inside a project packages are described in its package file, "
-                    ~ shown(result.projectFile) ~ ": what a package uses is its `uses`, and each package it uses or "
-                    ~ "describes is a `[[package]]` entry"));
+                    ~ "given by hand, and inside a project " ~ (testedOptions.canFind(given) ? "what's tested is decided by "
+                    ~ "its package file, " ~ shown(result.projectFile) ~ ", and the path given: the `test` field of a "
+                    ~ "`[[package]]` entry says whether a wider run tests that package, and naming a directory tests it"
+                    : "packages are described in its package file, " ~ shown(result.projectFile) ~ ": what a package "
+                    ~ "uses is its `uses`, and each package it uses or describes is a `[[package]]` entry")));
                 return result;
             }
             Project project;
@@ -317,13 +332,38 @@ Plan plan(string compiler, Request request, string workingDirectory)
                 named = at.home;
                 arguments.file = shown(at.home);
             }
-            auto homes = scriptHomes(project, named);
-            facts = compilerOptions(project, shown, homes);
+            const(Facts)[] homes;
             if (testing && isDirectory(named))
             {
-                foreach (other; otherProjects(project, named)) facts ~= ["--skip", shown(other)];
+                TestRun run;
+                if (!readTestRun(result.projectFile, named, run, mistake))
+                {
+                    result.mistake = formatMistake(mistake, shown);
+                    return result;
+                }
+                foreach (tested; run.tested)
+                {
+                    foreach (h; scriptHomes(run.project, tested))
+                    {
+                        if (!homes.canFind!(k => k.name == h.name)) homes ~= h;
+                    }
+                }
+                facts = compilerOptions(run.project, shown, homes);
+                foreach (skipped; run.skipped) facts ~= ["--skip", shown(skipped)];
+                foreach (tested; run.tested[1 .. $]) facts ~= ["--also", shown(tested)];
+                result.note = leftOutNote(run, shown);
+            }
+            else
+            {
+                homes = scriptHomes(project, named);
+                facts = compilerOptions(project, shown, homes);
             }
             result.scriptHomes = homes.map!(h => h.name.idup).array;
+        }
+        else if (testing && named !is null && isDirectory(named))
+        {
+            // A directory in no project names no package, so a project under it is left out.
+            foreach (other; projectsUnder(named)) facts ~= ["--skip", shown(other)];
         }
     }
     result.arguments = [compiler, request.command, fromSilver] ~ facts ~ arguments.options
@@ -331,7 +371,22 @@ Plan plan(string compiler, Request request, string workingDirectory)
     return result;
 }
 
-/// The first of `packageOptions` among `options`, as it's written there, or null. A word that's
+/// What the package files name that `run` leaves out, as `--show-command` says it, or null.
+string leftOutNote(const TestRun run, string delegate(string) shown)
+{
+    import std.array : join;
+
+    if (run.leftOut.length == 0) return null;
+    string[] each;
+    foreach (l; run.leftOut)
+    {
+        each ~= shown(l.directory) ~ (l.outside ? ", outside the directory tested, with no `test = true`"
+            : ", with `test = false`");
+    }
+    return "Not tested, though a silver.toml names them: " ~ each.join("; ");
+}
+
+/// The first of `packageOptions` and `testedOptions` among `options`, as it's written there, or null. A word that's
 /// another option's value isn't one.
 string handGiven(const string[] options)
 {
@@ -339,7 +394,7 @@ string handGiven(const string[] options)
 
     for (size_t i = 0; i < options.length; i++)
     {
-        foreach (name; packageOptions)
+        foreach (name; packageOptions ~ testedOptions)
         {
             if (options[i] == name || options[i].startsWith(name ~ "=")) return name;
         }
@@ -388,6 +443,18 @@ unittest
     }
     // After the file, it's the program's.
     assert(plan("silverc", request(["main.ag", "--uses", "x"]), project).mistake is null);
+
+    foreach (option; [["--also", "../alone"], ["--skip", "sub"], ["--skip=sub"]])
+    {
+        auto p = plan("silverc", request(["test"] ~ option), project);
+        immutable given = option[0][0 .. 6];
+        assert(p.arguments is null && p.mistake == "Error F0036: " ~ given ~ " is given by hand, and inside a project "
+            ~ "what's tested is decided by its package file, silver.toml, and the path given: the `test` field of a "
+            ~ "`[[package]]` entry says whether a wider run tests that package, and naming a directory tests it", p.mistake);
+        auto alone = plan("silverc", request(["test"] ~ option ~ "."), buildPath(directory, "alone"));
+        assert(alone.mistake is null && alone.arguments == ["silverc", "test", "--from-silver"] ~ option ~ ".",
+            alone.arguments.commandLine);
+    }
 }
 
 @("with no file and no package file at or above the working directory there's nothing to run, build or test")
@@ -472,7 +539,11 @@ int run(string[] args)
             ~ "It's looked for beside silver, or where the environment variable SILVERC says.", compiler);
         return 1;
     }
-    if (planned.show) stderr.writeln(commandLine(planned.arguments));
+    if (planned.show)
+    {
+        stderr.writeln(commandLine(planned.arguments));
+        if (planned.note !is null) stderr.writeln(planned.note);
+    }
     try
     {
         // The compiler has this program's input and output, so a program it runs does too.
@@ -540,4 +611,225 @@ unittest
         auto p = plan("silverc", request(words), project);
         assert(p.mistake is null, p.mistake);
     }
+}
+
+version (unittest)
+{
+    /// A root shaped like the compiler's: libraries and programs it describes, one described package
+    /// opted out, packages with files of their own under it (one opted out, one listing packages of its
+    /// own), a project under it that it doesn't name, a folder of scripts, and packages outside it.
+    string[string] testRunTree(bool optIn)
+    {
+        auto tool = "name = \"tool\"\n\n"
+            ~ "[[package]]\nname = \"tool.ast\"\npath = \"ast\"\n\n"
+            ~ "[[package]]\nname = \"tool.syntax\"\npath = \"syntax\"\nuses = [\"tool.ast\"]\n\n"
+            ~ "[[package]]\nname = \"tool.compiler\"\npath = \"compiler\"\nsource = \"source\"\nuses = [\"tool.syntax\"]\n\n"
+            ~ "[[package]]\nname = \"tool.frontend\"\npath = \"frontend\"\n\n"
+            ~ "[[package]]\nname = \"tool.docs\"\npath = \"docs\"\ntest = false\n\n"
+            ~ "[[package]]\npath = \"stdlib\"\n\n"
+            ~ "[[package]]\npath = \"vendor\"\ntest = false\n\n"
+            ~ "[[package]]\npath = \"lib\"\ntest = true\n\n"
+            ~ "[[package]]\npath = \"../geometry\"\n" ~ (optIn ? "test = true\n\n" : "\n")
+            ~ "[[package]]\npath = \"../loose\"\ntest = false\n\n"
+            ~ "[[package]]\npath = \"vendorlib/core\"\n";
+        return [
+            "tool/silver.toml": tool,
+            "tool/ast/": "", "tool/syntax/": "", "tool/compiler/source/": "", "tool/frontend/": "", "tool/docs/": "",
+            "tool/scripts/try.ag": "",
+            "tool/stdlib/silver.toml": "name = \"stdlib\"",
+            "tool/vendor/silver.toml": "name = \"vendor\"",
+            "tool/lib/silver.toml": "name = \"lib\"\nsource = \"src\"\n[[package]]\npath = \"inner\"\n"
+                ~ "[[package]]\npath = \"../../outside\"\ntest = true",
+            "tool/lib/src/": "",
+            "tool/lib/inner/silver.toml": "name = \"inner\"",
+            "tool/fixtures/proj/silver.toml": "name = \"proj\"",
+            "tool/vendorlib/silver.toml": "name = \"vlib\"\n[[package]]\nname = \"vlib.core\"\npath = \"core\"\n"
+                ~ "[[package]]\nname = \"vlib.extra\"\npath = \"extra\"",
+            "tool/vendorlib/core/": "", "tool/vendorlib/extra/": "",
+            "outside/silver.toml": "name = \"outside\"",
+            "geometry/silver.toml": "name = \"geometry\"\nsource = \"src\"\nuses = [\"units\"]\n"
+                ~ "[[package]]\npath = \"../units\"\n[[package]]\npath = \"extras\"\n"
+                ~ "[[package]]\nname = \"geometry.shapes\"\npath = \"shapes\"\n"
+                ~ "[[package]]\nname = \"geometry.old\"\npath = \"old\"\ntest = false",
+            "geometry/src/": "", "geometry/shapes/": "", "geometry/old/": "",
+            "geometry/extras/silver.toml": "name = \"extras\"",
+            "units/silver.toml": "name = \"units\"",
+            "loose/silver.toml": "name = \"loose\"",
+        ];
+    }
+
+    /// What a plan tests, skips, gives `--scripts-in` for and declares, with directories relative to
+    /// `base` and written with `/`.
+    struct Tested
+    {
+        string path;
+        string[] also;
+        string[] skipped;
+        string[] scripts;
+        string[] declared;
+    }
+
+    Tested testedBy(Plan p, string base, string workingDirectory)
+    {
+        import std.algorithm : canFind, sort;
+        import std.array : replace;
+        import std.path : absolutePath, buildNormalizedPath, relativePath;
+        import std.string : indexOf;
+
+        assert(p.mistake is null, p.mistake);
+        auto shown = (string path) => relativePath(buildNormalizedPath(absolutePath(path, workingDirectory)), base)
+            .replace("\\", "/");
+        Tested t;
+        auto words = p.arguments;
+        for (size_t i = 3; i < words.length; i++)
+        {
+            if (words[i] == "--also") t.also ~= shown(words[++i]);
+            else if (words[i] == "--skip") t.skipped ~= shown(words[++i]);
+            else if (words[i] == "--package-file")
+            {
+                i++;
+                t.declared ~= words[i][0 .. words[i].indexOf('=')];
+            }
+            else if (compilerOptionsWithValues.canFind(words[i])) i++;
+            else t.path = shown(words[i]);
+        }
+        t.skipped.sort;
+        t.declared.sort;
+        t.scripts = p.scriptHomes.dup.sort.release;
+        return t;
+    }
+}
+
+@("silver test tests what its file names under the directory, what it opts in outside it, and nothing else")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.array : join;
+
+    auto base = makeTree("frontend-test-run", testRunTree(true));
+    scope (exit) rmdirRecurse(base);
+    auto tool = buildPath(base, "tool");
+    Tested from(string[] words, string[] at...) => testedBy(plan("silverc", request(["test"] ~ words),
+        buildPath(base ~ at)), base, buildPath(base ~ at));
+
+    // From the root: every package it describes but docs, stdlib, and lib with what lib's file names under
+    // it, and geometry outside, alone; not vendor, loose, or lib's own opt-in, which is outside. The one
+    // package of vendorlib's project it lists is tested, and the rest of that project isn't.
+    auto root = from([], "tool");
+    assert(root.path == "tool" && root.also == ["geometry", "tool/vendorlib/core"], root.also.join(","));
+    assert(root.skipped == ["geometry/extras", "geometry/old", "tool/docs", "tool/fixtures/proj", "tool/vendor",
+        "tool/vendorlib"], root.skipped.join(","));
+    // geometry's dependency is declared, and lib's opt-in, which nothing uses, isn't read for the run.
+    assert(root.declared.canFind("units") && !root.declared.canFind("outside") && !root.declared.canFind("loose")
+        && root.declared.canFind("inner") && root.declared.canFind("stdlib"), root.declared.join(","));
+    assert(root.scripts.canFind("geometry.shapes") && root.scripts.canFind("tool.ast") && root.scripts.canFind("inner")
+        && !root.scripts.canFind("units"), root.scripts.join(","));
+    assert(from([], "tool", "scripts") == root);
+    assert(from(["."], "tool") == root);
+    assert(from(["tool"]) == root);
+    auto p = plan("silverc", request(["test"]), tool);
+    assert(p.note == "Not tested, though a silver.toml names them: docs, with `test = false`; vendor, with `test = "
+        ~ "false`; " ~ buildPath(base, "loose") ~ ", with `test = false`", p.note);
+
+    // From inside one described package, that package; from its source, the same.
+    auto ast = from([], "tool", "ast");
+    assert(ast.path == "tool/ast" && ast.also == [] && ast.skipped == [] && ast.scripts == ["tool.ast"], ast.path);
+    assert(from([], "tool", "compiler", "source").path == "tool/compiler");
+    // Naming a directory the file opts out tests it.
+    auto docs = from(["docs"], "tool");
+    assert(docs.path == "tool/docs" && docs.also == [] && docs.skipped == [], docs.skipped.join(","));
+    auto vendor = from(["vendor"], "tool");
+    assert(vendor.path == "tool/vendor" && vendor.declared == ["vendor"], vendor.declared.join(","));
+    // A nested file's own opt-in counts when silver test starts from it.
+    auto lib = from([], "tool", "lib");
+    assert(lib.path == "tool/lib" && lib.also == ["outside"] && lib.skipped == [], lib.also.join(","));
+    // An opted-in project tested from its own directory follows its own file.
+    auto geometry = from([], "geometry");
+    assert(geometry.path == "geometry" && geometry.skipped == ["geometry/old"] && geometry.also == [],
+        geometry.skipped.join(","));
+    // A plain folder under the root is tested with what the root names under it, and nothing outside.
+    auto fixtures = from(["fixtures"], "tool");
+    assert(fixtures.path == "tool/fixtures" && fixtures.skipped == ["tool/fixtures/proj"] && fixtures.also == []);
+}
+
+@("an entry outside the directory is tested only when it opts in, and a directory in no project leaves out the projects under it")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.array : join;
+
+    auto base = makeTree("frontend-test-run-out", testRunTree(false));
+    scope (exit) rmdirRecurse(base);
+    auto root = testedBy(plan("silverc", request(["test"]), buildPath(base, "tool")), base, buildPath(base, "tool"));
+    assert(root.also == ["tool/vendorlib/core"] && root.skipped == ["tool/docs", "tool/fixtures/proj", "tool/vendor",
+        "tool/vendorlib"], root.skipped.join(","));
+    assert(!root.declared.canFind("geometry") && !root.declared.canFind("units"), root.declared.join(","));
+
+    auto none = plan("silverc", request(["test", "."]), base);
+    assert(none.mistake is null && none.projectFile is null);
+    auto lone = testedBy(none, base, base);
+    assert(lone.path == "." && lone.skipped == ["geometry", "loose", "outside", "tool", "units"], lone.skipped.join(","));
+    assert(none.arguments[0 .. 3] == ["silverc", "test", "--from-silver"]);
+}
+
+
+@("an entry's test = false is honoured when its directory is inside another package the file tests")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.array : join;
+
+    auto base = makeTree("frontend-review-opt-out-inside", [
+        "root/silver.toml": "name = \"app\"\nsource = \"src\"\n\n[[package]]\npath = \"vl\"\n\n"
+            ~ "[[package]]\npath = \"vl/extra\"\ntest = false\n",
+        "root/src/": "",
+        "root/vl/silver.toml": "name = \"vl\"\nsource = \"src\"\n[[package]]\nname = \"vl.extra\"\npath = \"extra\"\n",
+        "root/vl/src/": "", "root/vl/extra/": "",
+    ]);
+    scope (exit) rmdirRecurse(base);
+    auto root = buildPath(base, "root");
+    auto p = plan("silverc", request(["test"]), root);
+    auto t = testedBy(p, base, root);
+    // The note says vl/extra isn't tested, so the run has to leave it out.
+    assert(p.note !is null && p.note.canFind("extra"), p.note);
+    assert(t.skipped.canFind("root/vl/extra"), "vl/extra is tested though its entry says test = false: skipped "
+        ~ t.skipped.join(","));
+
+    // The same inside a package outside opted in: an entry not opted in, or opted out, leaves its package out.
+    auto outer = makeTree("frontend-review-opt-out-outside", [
+        "root/silver.toml": "name = \"app\"
+
+[[package]]
+path = \"../ext\"
+test = true
+
+"
+            ~ "[[package]]
+path = \"../ext/shapes\"
+
+[[package]]
+path = \"../ext/other\"
+test = false
+",
+        "ext/silver.toml": "name = \"ext\"
+source = \"src\"
+[[package]]
+name = \"ext.shapes\"
+path = \"shapes\"
+"
+            ~ "[[package]]
+name = \"ext.other\"
+path = \"other\"
+[[package]]
+name = \"ext.kept\"
+path = \"kept\"
+",
+        "ext/src/": "", "ext/shapes/": "", "ext/other/": "", "ext/kept/": "",
+    ]);
+    scope (exit) rmdirRecurse(outer);
+    root = buildPath(outer, "root");
+    p = plan("silverc", request(["test"]), root);
+    t = testedBy(p, outer, root);
+    assert(t.also == ["ext"] && t.skipped == ["ext/other", "ext/shapes"], t.skipped.join(","));
+    assert(p.note.canFind("shapes, outside the directory tested") && p.note.canFind("other, with `test = false`"), p.note);
 }

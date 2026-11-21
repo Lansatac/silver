@@ -224,7 +224,8 @@ Inside the forwarding module, its own functions come first, and what it forwards
   - `--package-file name=file` names the file that describes a package, so that a message about the package names that file and its `uses` instead of an option.
   - `--scripts-in name=directory` says a file with no `module` line under `directory` is beside the package `name`: it uses what `name` uses, and `name` too unless it's a program. The deepest such directory holding the file counts, and the package has to be declared, with its modules under that directory unless it only describes others, when a file there uses only the standard library.
   - `--program name`, for `run` and `build` in place of a file, starts from the program of the package `name`: its module that declares `main`, or the one package it describes that's a program. A package with none is `L0014`, one with more than one, between itself and those it describes, is `L0015`, which lists them with their directories, and one with more than one module that declares `main` is `L0016`. `--program` is given once. A file with no `module` line is never a package's program.
-  - `--skip directory`, for `test` only, leaves out the files under a directory inside the one tested, which `silver` gives for a project of its own there.
+  - `--skip directory`, for `test` only, leaves out the files under a directory inside one tested, which `silver` gives for a project of its own there and for a package its `silver.toml` opts out. A directory that is, or holds, a path given to be tested is refused.
+  - `--also path`, for `test` only, tests another file or directory in the same run, so that the tests of several places are one report, or one JSON document. A file under more than one of them runs once. `silver` gives it for a package outside the directory tested that a `silver.toml` opts in.
   - `--from-silver`, which takes no value, says `silver` is running the compiler, so a message about a package no package file describes says what to write in a `silver.toml` rather than naming an option. `silver` gives it on every run.
   - Each can be repeated, and a list given twice adds up. The standard library is the package `std` in the compiler's directory, unless `--package std=...` puts another in its place.
 
@@ -237,6 +238,7 @@ Inside the forwarding module, its own functions come first, and what it forwards
   silverc run --package kit.words=words --package kit.count=count --project kit=kit.words,kit.count
       --uses kit.count=kit.words --program kit
   silverc test --package geometry=lib/geometry lib/geometry
+  silverc test --package app=. --package geometry=../geometry --uses app=geometry --also ../geometry .
   ```
 
 - `std` is used without being listed, as the package of `std.prelude`, so a file `hello.ag` that imports `std.math` runs as `silver hello.ag`, and `silver test`, `silver build` and a companion test file see it the same way. Giving `silverc` `--uses std` as well is allowed and changes nothing, but a `silver.toml` that lists `std` in `uses` is refused (`F0029`).

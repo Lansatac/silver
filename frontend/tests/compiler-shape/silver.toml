@@ -1,5 +1,6 @@
-# The compiler's own shape: a root with no modules that describes library packages and two that are
-# programs, and lists a package with a silver.toml of its own.
+# The compiler's own shape: a root with no modules that describes library packages, two that are
+# programs and one whose tests silver test leaves out, and lists a package with a silver.toml of its
+# own outside it, whose tests it opts in.
 name = "tool"
 
 [[package]]
@@ -22,4 +23,10 @@ name = "tool.frontend"
 path = "frontend"
 
 [[package]]
+name = "tool.docs"
+path = "docs"
+test = false
+
+[[package]]
 path = "../uses-path/geometry"
+test = true

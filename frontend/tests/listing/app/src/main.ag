@@ -5,3 +5,5 @@ import words.count
 def main(): Unit {
     printl("counted {wordCount()}")
 }
+
+test "three words" => expect(wordCount() == 3)

@@ -1,0 +1,3 @@
+def main(): Unit {}
+
+test "an example that is out of date" => expect(1 + 1 == 3)
