@@ -9,6 +9,7 @@
 		{ "name": "library" },
 		{
 			"name": "unittest",
+			"targetPath": "..",
 			"dependencies": {
 				"silly": "~>1.2.0-dev.2",
 				"fluent-asserts": "~>2.1"

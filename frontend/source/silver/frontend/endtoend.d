@@ -153,6 +153,55 @@ unittest
         shown.output);
 }
 
+/// Copies the directory `from` and everything under it to `to`.
+void copyTree(string from, string to)
+{
+    import std.file : copy, dirEntries, mkdirRecurse, SpanMode;
+    import std.path : relativePath;
+
+    mkdirRecurse(to);
+    foreach (entry; dirEntries(from, SpanMode.breadth))
+    {
+        auto target = buildPath(to, relativePath(entry.name, from));
+        if (entry.isDir) mkdirRecurse(target);
+        else copy(entry.name, target);
+    }
+}
+
+@("silver and silverc copied to a directory use the standard library and the runtime copied beside them, and say so when one isn't there")
+unittest
+{
+    import std.file : copy, write;
+
+    auto install = makeTree("frontend-install", null);
+    scope (exit) rmdirRecurse(install);
+    foreach (name; ["silver", "silverc"]) copy(built(name), buildPath(install, name ~ exe));
+    auto work = makeTree("frontend-install-work", ["hello.ag": "import std.shipped\n\ndef main(): Unit {\n"
+        ~ "    printl(shipped())\n}\n"]);
+    scope (exit) rmdirRecurse(work);
+    auto copied = buildPath(install, "silver" ~ exe);
+    Ran run(string[] words) => runIn([copied] ~ words, work);
+
+    expectRan(run(["hello.ag"]), "The standard library wasn't found. It's the directory `stdlib` beside the compiler, "
+        ~ "which would be " ~ buildPath(install, "stdlib") ~ ".\n", 1);
+
+    copyTree(buildPath(root, "stdlib"), buildPath(install, "stdlib"));
+    // Only the copy has this module, so a program that imports it found the copy.
+    write(buildPath(install, "stdlib", "std", "shipped.ag"), "module std.shipped\n\ndef shipped(): String => \"the copy\"\n");
+    expectRan(run(["hello.ag"]), "the copy\n");
+    assert(silver(["hello.ag"], work).status != 0, "the repository's standard library has no std.shipped");
+
+    auto output = buildPath(work, "hello" ~ exe);
+    expectRan(run(["build", "-o", output, "hello.ag"]), "Linking failed:\nThe runtime wasn't found. It's the directory "
+        ~ "`runtime` beside the compiler, which would be " ~ buildPath(install, "runtime") ~ ".\n", 1);
+
+    copyTree(buildPath(root, "runtime", "source"), buildPath(install, "runtime", "source"));
+    expectRan(run(["build", "-o", output, "hello.ag"]), "");
+    expectRan(runIn([output], work), "the copy\n");
+    assert(exists(buildPath(install, "runtime", "build")), "the runtime wasn't built in the copy");
+    assert(!exists(buildPath(install, "runtime", "build-optimized")));
+}
+
 @("a file with no silver.toml at or above it runs as before")
 unittest
 {

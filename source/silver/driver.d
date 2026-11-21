@@ -10,7 +10,7 @@ import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, 
 import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, optimizeIr, Toolchain;
 import silver.core : lowerProgram, printCore = print;
 import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed, RuntimeError;
-import silver.loader : describePackageFiles, describePackages, describeScriptHomes, describeSilver, load, Packages,
+import silver.loader : describePackageFiles, describePackages, describeScriptHomes, describeSilver, load, missingStandardLibrary, Packages,
     programStart, standardPrelude, undeclared;
 import silver.sema : analyze, Analysis, Target;
 
@@ -1070,6 +1070,11 @@ int run(string[] args)
     if (mistake !is null)
     {
         stderr.writeln(mistake, "\nRun `silverc --help` for the options.");
+        return 1;
+    }
+    if (auto missing = missingStandardLibrary())
+    {
+        stderr.writeln(missing);
         return 1;
     }
     immutable building = command == "build";

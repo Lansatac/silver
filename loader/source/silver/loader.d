@@ -1230,12 +1230,22 @@ private void refuseConformances(const Module mod, string tested, SourceContext c
     }
 }
 
-/// Directory holding `lang` and the standard library that ships with the compiler.
-/// For now it's the repo's stdlib/, found relative to this source file; this is the
-/// place to add an environment variable or install-relative lookup later.
+/// Directory holding `lang` and the standard library that ships with the compiler: `stdlib`
+/// beside the executable. Test executables are built at the repository's root for this.
 string standardLibraryPath()
 {
-    return buildNormalizedPath(dirName(__FILE_FULL_PATH__), "..", "..", "..", "stdlib");
+    import std.file : thisExePath;
+
+    return buildPath(thisExePath.dirName, "stdlib");
+}
+
+/// What to tell the user when the standard library isn't at `standardLibraryPath()`, or null when it is.
+string missingStandardLibrary()
+{
+    auto path = standardLibraryPath();
+    if (exists(buildPath(path, langPackage, rootModuleFile))) return null;
+    return "The standard library wasn't found. It's the directory `stdlib` beside the compiler, which would be " ~ path
+        ~ ".";
 }
 
 /// The prelude a build names when it's told of no other: the standard library's. The compiler

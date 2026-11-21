@@ -7,11 +7,14 @@ import std.file : dirEntries, exists, mkdirRecurse, remove, rename, SpanMode, ti
 import std.path : buildNormalizedPath, buildPath, dirName, setExtension;
 import std.process : environment, execute, ProcessException, thisProcessID;
 
-/// The D runtime linked into every compiled program. Like `standardLibraryPath()`, it's
-/// stubbed to the repository until there's an install layout.
+/// The D runtime linked into every compiled program, which is built from its sources where it
+/// is: `runtime` beside the executable. Test executables are built at the repository's root
+/// for this.
 string runtimePath()
 {
-    return buildNormalizedPath(dirName(__FILE_FULL_PATH__), "..", "..", "..", "..", "runtime");
+    import std.file : thisExePath;
+
+    return buildPath(thisExePath.dirName, "runtime");
 }
 
 /// The external tools that turn IR into an executable: clang compiles the IR to an object
@@ -179,6 +182,11 @@ string buildRuntime(const Toolchain toolchain, out BuiltRuntime runtime, Optimiz
     import std.algorithm : filter;
 
     auto sourceDirectory = buildPath(runtimePath, "source");
+    if (!exists(buildPath(sourceDirectory, "silver", "runtime", "entry.d")))
+    {
+        return "The runtime wasn't found. It's the directory `runtime` beside the compiler, which would be "
+            ~ runtimePath ~ ".";
+    }
     auto sources = dirEntries(sourceDirectory, "*.d", SpanMode.depth).map!(e => e.name).array.sort.release;
     auto entrySource = buildPath(sourceDirectory, "silver", "runtime", "entry.d");
     auto librarySources = sources.filter!(s => buildNormalizedPath(s) != buildNormalizedPath(entrySource)).array;
