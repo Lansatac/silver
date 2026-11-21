@@ -50,6 +50,8 @@ package struct Typing
     SideTable!(Id!Expr, bool) intervalLoops;
     /// For each indexing of something other than an array, the functions it calls, by the indexing.
     SideTable!(Id!Expr, IndexFunctions) indexing;
+    /// For each dictionary literal, `lang`'s functions that build it, by the literal.
+    SideTable!(Id!Expr, DictionaryFunctions) dictionaryLiterals;
     /// For each overloaded name, the function chosen, by the name's expression.
     SideTable!(Id!Expr, SymbolId) chosenSymbols;
     /// For each call of an overloaded name, the function chosen, by the call.
@@ -167,6 +169,14 @@ struct IndexFunctions
     FunctionUse read;
     FunctionUse write;
     FunctionUse length;
+}
+
+/// How a dictionary literal is built: from `empty()`, with `write`, which is `opIndexAssign`, for
+/// each entry in turn.
+struct DictionaryFunctions
+{
+    FunctionUse empty;
+    FunctionUse write;
 }
 
 /// One bound of a type parameter of a generic function, and where the functions it supplies are

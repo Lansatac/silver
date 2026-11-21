@@ -77,6 +77,13 @@ struct ArrayType
     TypeExpr* element;
 }
 
+/// `[K: V]`.
+struct DictionaryType
+{
+    TypeExpr* key;
+    TypeExpr* value;
+}
+
 /// `Int`, `math.Vector`, `List<Int>`; `path` is the dotted name split into parts.
 struct NamedType
 {
@@ -120,7 +127,7 @@ struct JoinedType
     TypeExpr[] parts;
 }
 
-alias TypeExprKind = SumType!(OptionType, ArrayType, NamedType, FunctionType, UnitType, TupleType, ErrorUnionType, JoinedType);
+alias TypeExprKind = SumType!(OptionType, ArrayType, DictionaryType, NamedType, FunctionType, UnitType, TupleType, ErrorUnionType, JoinedType);
 
 /// Prints a type the way it's written in source.
 string printTypeExpr(const TypeExpr t)
@@ -131,6 +138,7 @@ string printTypeExpr(const TypeExpr t)
     return t.kind.match!(
         (const OptionType o) => printOptionInner(*o.inner) ~ "?",
         (const ArrayType a) => "[" ~ printTypeExpr(*a.element) ~ "]",
+        (const DictionaryType d) => "[" ~ printTypeExpr(*d.key) ~ ": " ~ printTypeExpr(*d.value) ~ "]",
         (const NamedType n) => n.path.join(".")
             ~ (n.args.length > 0 ? "<" ~ n.args.map!printTypeExpr.join(", ") ~ ">" : ""),
         (const FunctionType f) => "(" ~ f.params.length.iota.map!(i => (f.isMutable(i) ? "mutable " : "") ~ printTypeExpr(f.params[i])).join(", ") ~ ") -> "
@@ -392,7 +400,7 @@ struct TupleLiteral
     Expr[] elements;
 }
 
-/// `[k: v]`, whose entries are `keys[i]: values[i]`. Sema rejects it until generics.
+/// `[k: v]`, whose entries are `keys[i]: values[i]`, or `[:]` with none.
 struct MapLiteral
 {
     Expr[] keys;

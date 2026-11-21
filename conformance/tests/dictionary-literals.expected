@@ -1,0 +1,25 @@
+[ana: 31, bo: 27]
+[ana: 31, bo: 27, cy: 40]
+[:]
+[:]
+0
+true
+false
+[a: 1]
+Some(end)
+[1: Some(2), 3: None]
+[1: Some(a), 2: None]
+[1: [1.5], 2: []]
+Some([k: 1])
+[b: 2, a: 1]
+[1: uno, 2: two]
+<p><q><r><s>[p: q, r: s]
+3
+[p: 1]
+[a: [b: 1], c: [d: 2, e: 3]]
+Some(z)
+None
+true
+true
+x1 y2 
+true

@@ -1,0 +1,68 @@
+// `[k: v]`, `[:]` and the type `[K: V]`.
+type Game(scores: [String: Int], round: Int)
+
+def total(scores: [String: Int]): Int => values(scores).fold(0, (a, b) => a + b)
+def fresh(): [String: Int] => [:]
+def named(name: String): String {
+    print("<{name}>")
+    name
+}
+def first<K, V>(d: [K: V]): K? => keys(d).first()
+
+def main(): Unit {
+    val ages = ["ana": 31, "bo": 27]
+    mutable val older = ages
+    older["cy"] = 40
+    printl(ages)
+    printl(older)
+
+    // The empty one takes its type from where it's written.
+    val empty: [String: Int] = [:]
+    printl(empty)
+    printl(fresh())
+    printl(total([:]))
+    printl(empty == [:])
+    printl(ages == [:])
+    mutable val counts: [String: Int] = [:]
+    counts["a"] = (counts["a"] ?? 0) + 1
+    printl(counts)
+
+    // Keys and values are joined as an array's elements are, and adapt to what's expected.
+    val grid = [(0, 0): "start", (3, 4): "end"]
+    printl(grid[(3, 4)])
+    val bytes: [UInt8: Int?] = [1: 2, 3: None]
+    printl(bytes)
+    printl([1: Some("a"), 2: None])
+    printl([1: [1.5], 2: []])
+    val maybe: [String: Int]? = ["k": 1]
+    printl(maybe)
+
+    // A literal keeps its order, and a key that comes again takes the later value in the earlier place.
+    printl(["b": 2, "a": 1])
+    val x = 1
+    printl([x: "one", 2: "two", x: "uno"])
+
+    // Each key and value is evaluated once, in the order written.
+    printl([named("p"): named("q"), named("r"): named("s")])
+
+    // As an argument, a field, inside another, and in a generic function.
+    printl(total(["a": 1, "b": 2]))
+    val game = Game(["p": 1], 1)
+    printl(game.scores)
+    mutable val graph: [String: [String: Int]] = [:]
+    mutable val inner = graph["a"] ?? [:]
+    inner["b"] = 1
+    graph["a"] = inner
+    graph["c"] = ["d": 2, "e": 3]
+    printl(graph)
+    printl(first(["z": 1, "y": 2]))
+    printl(first(empty))
+
+    printl(["a": 1, "b": 2] == ["b": 2, "a": 1])
+    printl(ages == ["bo": 27, "ana": 31])
+    for (key, value) in ["x": 1, "y": 2] {
+        print("{key}{value} ")
+    }
+    printl("")
+    printl(dictionary([("a", 1)]) == ["a": 1])
+}

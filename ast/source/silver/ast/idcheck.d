@@ -313,6 +313,10 @@ private final class IdCheck
                 foreach (error; u.errors) visit(error);
             },
             (const ArrayType a) => visit(*a.element),
+            (const DictionaryType d) {
+                visit(*d.key);
+                visit(*d.value);
+            },
             (const NamedType n) {
                 foreach (arg; n.args)
                 {

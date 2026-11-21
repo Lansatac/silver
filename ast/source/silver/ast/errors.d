@@ -165,6 +165,8 @@ enum DiagnosticCode : string
     /// An `opEquals`, `opHash` or `opString` that isn't its type's module's, hasn't the shape, or is
     /// an `opEquals` without an `opHash` or the reverse.
     InvalidTypeFunction = "T0054",
+    /// A dictionary literal with the same constant written as two of its keys.
+    RepeatedKey = "T0055",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

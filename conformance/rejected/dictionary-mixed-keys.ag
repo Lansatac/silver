@@ -1,0 +1,4 @@
+// Every key of a literal has one type.
+def main(): Unit {
+    printl([1: "x", "y": "z"])
+}

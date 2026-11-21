@@ -185,6 +185,14 @@ final class TypeTable
         return registerTypeData(TypeData(NominalData(decl, args.idup)));
     }
 
+    private Id!TypeDecl _dictionary;
+
+    /// Has `describe` write an instance of the type `decl` declares as `[K: V]` from now on.
+    void writeAsDictionary(const(Id!TypeDecl) decl)
+    {
+        _dictionary = decl;
+    }
+
     /// Has `describe` call the type `decl` declares `name` from now on, as in `prelude.Interval`
     /// where a module declares an `Interval` of its own.
     void rename(const(Id!TypeDecl) decl, string name)
@@ -399,8 +407,9 @@ final class TypeTable
             (const FunctionData f) => "(" ~ f.params.length.iota.map!(i => (f.isMutable(i) ? "mutable " : "") ~ describe(f.params[i])).join(", ")
                 ~ ") -> " ~ describe(f.ret),
             (const TupleData t) => "(" ~ t.elements.map!(e => describe(e)).join(", ") ~ ")",
-            (const NominalData nd) => _nominalNames[nd.decl]
-                ~ (nd.args.length == 0 ? "" : "<" ~ nd.args.map!(a => describe(a)).join(", ") ~ ">"),
+            (const NominalData nd) => nd.decl == _dictionary && nd.args.length == 2
+                ? "[" ~ describe(nd.args[0]) ~ ": " ~ describe(nd.args[1]) ~ "]"
+                : _nominalNames[nd.decl] ~ (nd.args.length == 0 ? "" : "<" ~ nd.args.map!(a => describe(a)).join(", ") ~ ">"),
             (const TypeParamData p) => _parameterNames[p.param],
             (const ErrorType e) => "Error",
         );

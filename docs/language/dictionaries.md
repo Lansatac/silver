@@ -20,7 +20,7 @@ val empty: [String: Int] = [:]
 val grid = [(0, 0): "start", (3, 4): "end"]
 ```
 
-`[K: V]` is the type of a dictionary from `K` to `V`, and another spelling of `Dictionary<K, V>`. `Dictionary` and its functions are available everywhere, as arrays' are.
+`[K: V]` is the type of a dictionary from `K` to `V`, and another spelling of `Dictionary<K, V>`. An error names the type as `[K: V]`. `Dictionary` and its functions are available everywhere, as arrays' are.
 
 - All keys have one type and all values another, with the same promotion as an array's elements.
 - When a key appears twice, the later value wins, in the earlier key's place. Two keys written as the same constant are an error, since one of them can only be a mistake.
@@ -125,16 +125,11 @@ Looking up, adding, replacing and removing a key take time that grows with the l
 
 ## Current implementation
 
-- `Dictionary<K, V>` and everything under Reading, Writing, Functions, Order, Looping, Keys, Equality and printing, and Cost is built, in plain Silver in `stdlib/lang/dictionary.ag`.
-- The literal, `[:]` and the type `[K: V]` aren't: a literal parses and is rejected. Until then a dictionary is made with `dictionary` from an array of pairs, an empty one from an empty array with its type written, and its type is written `Dictionary<K, V>`:
-
-  ```silver
-  val ages = dictionary([("ana", 31), ("bo", 27)])
-  val none: [(String, Int)] = []
-  mutable val counts = dictionary(none)
-  ```
-
+- Everything above is built. `Dictionary<K, V>` and its functions are plain Silver in `stdlib/lang/dictionary.ag`, and a literal is an empty dictionary with each entry written into it in turn.
+- `[:]` takes its type from an annotation, a parameter or a field it's given to, a result type, the other side of `??` or `==`, or the option or error union it's promoted into. It has no type of its own as `[]` has, so `[:]` passed where a type parameter decides the type, as in `first([:])`, is an error that asks for an annotation.
+- The same constant as two keys is caught when both are literals written the same way, with a sign or as tuples of literals: `["a": 1, "a": 2]` and `[(1, 2): 0, (1, 2): 1]`. Two names for one constant, or `1` beside `0x1`, aren't caught, and the later value wins as for any repeated key.
 - `keys`, `values` and `iterate` give the types `Keys<K, V>`, `Values<K, V>` and `Entries<K, V>`, which a `val` infers. Writing one of those names needs `import lang.dictionary`.
 - A dictionary's fields can be read and it can be built with its constructor by a module that imports `lang.dictionary`, which nothing checks.
 - The panic for a key that isn't equal to itself is reported at the line in `lang.dictionary` that panics, not at the caller's.
 - `hash` is in `lang.hash`, which `lang` doesn't forward, so a module that writes an `opHash` imports it.
+- It's slow on the interpreter, where a lookup is tens of microseconds, since it's Silver run by a tree walker. Compiled, 200,000 keys are added, read and stepped through in under a second.

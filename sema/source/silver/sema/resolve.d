@@ -1402,6 +1402,7 @@ private final class NameResolver
             (const OptionType option) => reaches(*option.inner, target, seen),
             (const ErrorUnionType u) => reaches(*u.success, target, seen) || through(u.errors),
             (const ArrayType array) => reaches(*array.element, target, seen),
+            (const DictionaryType d) => reaches(*d.key, target, seen) || reaches(*d.value, target, seen),
             (const FunctionType func) => through(func.params) || reaches(*func.returnType, target, seen),
             (const UnitType _) => false,
             (const TupleType tuple) => through(tuple.elements),
@@ -1592,6 +1593,10 @@ private final class NameResolver
                 },
                 (const OptionType option) => collect(*option.inner),
                 (const ArrayType array) => collect(*array.element),
+                (const DictionaryType d) {
+                    collect(*d.key);
+                    collect(*d.value);
+                },
                 (const TupleType tuple) {
                     foreach (element; tuple.elements) collect(element);
                 },
@@ -1975,6 +1980,10 @@ private final class NameResolver
                 foreach (error; u.errors) reportPrivateType(error, where);
             },
             (const ArrayType array) => reportPrivateType(*array.element, where),
+            (const DictionaryType d) {
+                reportPrivateType(*d.key, where);
+                reportPrivateType(*d.value, where);
+            },
             (const FunctionType func) {
                 foreach (param; func.params) reportPrivateType(param, where);
                 reportPrivateType(*func.returnType, where);
@@ -2127,6 +2136,10 @@ private final class NameResolver
                 foreach (error; u.errors) resolveTypeExpr(error, current, part);
             },
             (const ArrayType array) => resolveTypeExpr(*array.element, current, inside),
+            (const DictionaryType d) {
+                resolveTypeExpr(*d.key, current, inside);
+                resolveTypeExpr(*d.value, current, inside);
+            },
             (const FunctionType func) {
                 auto part = isFloor(inside) ? InterfaceUse.floorInFunction : inside;
                 foreach (param; func.params)
@@ -2229,6 +2242,10 @@ private final class NameResolver
                 },
                 (const OptionType option) => visit(*option.inner),
                 (const ArrayType array) => visit(*array.element),
+                (const DictionaryType d) {
+                    visit(*d.key);
+                    visit(*d.value);
+                },
                 (const TupleType tuple) {
                     foreach (element; tuple.elements) visit(element);
                 },

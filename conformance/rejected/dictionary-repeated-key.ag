@@ -1,0 +1,4 @@
+// The same constant written as two keys can only be a mistake.
+def main(): Unit {
+    printl(["a": 1, "b": 2, "a": 3])
+}

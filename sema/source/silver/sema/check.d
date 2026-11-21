@@ -198,6 +198,7 @@ private final class TypeChecker
             }
         }
         qualifyShadowedLibraryTypes(program.prelude);
+        _types.writeAsDictionary(_declarer.dictionaryDecl());
 
         // Before anything that can name one, and even if nothing does, so a bad target is reported.
         foreach (mod; programModules)
@@ -2085,7 +2086,7 @@ private final class TypeChecker
             },
             (const SafeMemberAccess access) => synthesizeSafeMember(expr, access, ctx),
             (const ArrayLiteral literal) => synthesizeArrayLiteral(literal, ctx),
-            (const MapLiteral literal) => synthesizeMapLiteral(literal, expr.span, ctx),
+            (const MapLiteral literal) => synthesizeDictionaryLiteral(expr, literal, ctx),
             (const IndexExpr index) => synthesizeIndex(expr, index, ctx),
             (const RangeExpr range) => synthesizeBareRange(expr, range, ctx),
             (const TupleLiteral literal) => _declarer.tupleOf(literal.elements.map!(e => _declarer.requireTyped(synthesize(e, ctx), e.span)).array),
@@ -2116,15 +2117,103 @@ private final class TypeChecker
         return _declarer.arrayOf(joined, literal.elements[0].span);
     }
 
-    private Type synthesizeMapLiteral(const MapLiteral literal, Span span, BodyContext ctx)
+    /// `[k: v]` with nothing saying what it's a dictionary of: its keys are joined as an array's
+    /// elements are, and so are its values.
+    private Type synthesizeDictionaryLiteral(const Expr expr, const MapLiteral literal, BodyContext ctx)
     {
-        foreach (i, key; literal.keys)
+        if (literal.keys.length == 0)
         {
-            synthesize(key, ctx);
-            synthesize(literal.values[i], ctx);
+            _collector.reportError(DiagnosticCode.UntypedEmptyArray, expr.span,
+                "This `[:]` has no type to take here; annotate one, as in `val x: [String: Int] = [:]`");
+            return _types.error;
         }
-        _collector.reportError(DiagnosticCode.NotSupportedYet, span, "Maps aren't supported yet");
-        return _types.error;
+        Type joined(const(Expr)[] parts, string what)
+        {
+            auto types = parts.map!(e => synthesize(e, ctx)).array;
+            auto whole = types[0];
+            foreach (i, type; types[1 .. $]) whole = join(whole, type, parts[i + 1].span, what);
+            whole = _declarer.requireTyped(whole, parts[0].span);
+            if (whole == _types.error) return whole;
+            foreach (i, part; parts) coerce(part, types[i], whole);
+            return whole;
+        }
+        auto key = joined(literal.keys, "Dictionary keys");
+        auto value = joined(literal.values, "Dictionary values");
+        return builtDictionary(expr, literal, _declarer.dictionaryOf(key, value, expr.span), ctx);
+    }
+
+    /// Whether `type` is a `[K: V]`.
+    private bool isDictionary(Type type)
+    {
+        auto decl = _declarer.dictionaryDecl();
+        return decl.isValid && _types[type].match!((const NominalData nominal) => nominal.decl == decl, _ => false);
+    }
+
+    private bool isDictionaryLiteral(const Expr expr)
+    {
+        return expr.kind.match!((const MapLiteral _) => true, _ => false);
+    }
+
+    /// `lang.dictionary`'s function `name`, which a literal is built with.
+    private Id!FunctionDecl dictionaryFunction(string name)
+    {
+        auto home = "lang.dictionary" in _resolutions.moduleScopes;
+        auto symbol = home is null ? null : (*home).resolveLocal(name);
+        if (symbol is null) return Id!FunctionDecl.init;
+        return (*symbol).match!((const Id!FunctionDecl decl) => decl, _ => Id!FunctionDecl.init);
+    }
+
+    /// Records how the dictionary literal `expr`, typed as `type`, is built, and reports a constant
+    /// written as two of its keys.
+    private Type builtDictionary(const Expr expr, const MapLiteral literal, Type type, BodyContext ctx)
+    {
+        if (type == _types.error) return type;
+        rejectRepeatedKeys(literal);
+        auto empty = dictionaryFunction("empty");
+        auto write = dictionaryFunction("opIndexAssign");
+        if (!empty.isValid || !write.isValid)
+        {
+            _collector.reportError(DiagnosticCode.InternalError, expr.span,
+                "`lang.dictionary` has no `empty` or no `opIndexAssign` to build a dictionary with");
+            return _types.error;
+        }
+        auto args = _types.nominalArgs(type);
+        _typing.dictionaryLiterals[expr.id] = DictionaryFunctions(FunctionUse(empty, args.dup, null),
+            FunctionUse(write, args.dup, null));
+        noteUse(ctx.site, expr.span, empty, args, null);
+        noteUse(ctx.site, expr.span, write, args, null);
+        return type;
+    }
+
+    /// A key that's written out and can't vary: a literal, one with a sign, or a tuple of those.
+    private static bool isConstantKey(const Expr key)
+    {
+        return key.kind.match!(
+            (const IntLiteral _) => true,
+            (const FloatLiteral _) => true,
+            (const StringLiteral _) => true,
+            (const CharLiteral _) => true,
+            (const BoolLiteral _) => true,
+            (const UnaryExpr unary) => isConstantKey(*unary.operand),
+            (const TupleLiteral tuple) => tuple.elements.all!(e => isConstantKey(e)),
+            _ => false,
+        );
+    }
+
+    private void rejectRepeatedKeys(const MapLiteral literal)
+    {
+        string[] seen;
+        foreach (key; literal.keys)
+        {
+            if (!isConstantKey(key)) continue;
+            auto written = printExpr(key);
+            if (seen.canFind(written))
+            {
+                _collector.reportError(DiagnosticCode.RepeatedKey, key.span,
+                    "This key is written twice in the dictionary, and one of the two can only be a mistake");
+            }
+            else seen ~= written;
+        }
     }
 
     /// `x[i]`, or `x[a..b]`. An array's are built in, with the range of a slice part of it rather
@@ -3096,7 +3185,7 @@ private final class TypeChecker
             check(*binary.right, optionType, ctx);
             return optionType;
         }
-        if (isArraySyntax(*binary.right) || isTupleLiteral(*binary.right))
+        if (isArraySyntax(*binary.right) || isTupleLiteral(*binary.right) || isDictionaryLiteral(*binary.right))
         {
             check(*binary.right, inner, ctx);
             return inner;
@@ -3122,7 +3211,7 @@ private final class TypeChecker
     private void synthesizeCompared(const BinaryExpr binary, out Type leftType, out Type rightType, BodyContext ctx)
     {
         bool takesType(const Expr expr) => isOptionSyntax(expr) || isErrorUnionSyntax(expr) || isArraySyntax(expr)
-            || isTupleLiteral(expr) || asRange(&expr) !is null || genericUse(expr).found;
+            || isTupleLiteral(expr) || isDictionaryLiteral(expr) || asRange(&expr) !is null || genericUse(expr).found;
         bool givesType(Type type) => _types.isOption(type) || _types.isErrorUnion(type) || _types.isArray(type) || _types.isTuple(type)
             || declOf(type).isValid;
 
@@ -6889,7 +6978,7 @@ private final class TypeChecker
                 return expected;
             }
             // Written out as what the success side takes its type from, then promoted.
-            if (isOptionSyntax(expr) || isArraySyntax(expr) || isTupleLiteral(expr) || isLambda(expr))
+            if (isOptionSyntax(expr) || isArraySyntax(expr) || isTupleLiteral(expr) || isLambda(expr) || isDictionaryLiteral(expr))
             {
                 check(expr, _types.successOf(expected), ctx);
                 _typing.promotions[expr.id] = expected;
@@ -6903,20 +6992,22 @@ private final class TypeChecker
         auto isArray = _types.isArray(expected);
         auto isTuple = _types.isTuple(expected);
         // An array or tuple written out against an option is checked against what it holds, then promoted.
-        if (isOption && (isArraySyntax(expr) || isTupleLiteral(expr) || isLambda(expr)))
+        if (isOption && (isArraySyntax(expr) || isTupleLiteral(expr) || isLambda(expr) || isDictionaryLiteral(expr)))
         {
             check(expr, _types.optionInner(expected), ctx);
             _typing.promotions[expr.id] = expected;
             return expected;
         }
+        auto asDictionary = isDictionary(expected) && isDictionaryLiteral(expr);
         if (isNumeric(expected) || isOption || isArray || isTuple || _declarer.isSum(expected) || _declarer.isOwnedMember(expected)
-            || _types.isFunction(expected) || _types.isErrorUnion(expected))
+            || _types.isFunction(expected) || _types.isErrorUnion(expected) || asDictionary)
         {
             auto passedDown = expr.kind.match!(
                 (const IfExpr if_) => if_.falseBody !is null,
                 (const BlockExpr _) => true,
                 (const SomeExpr _) => isOption,
                 (const ArrayLiteral _) => isArray,
+                (const MapLiteral _) => asDictionary,
                 (const BinaryExpr _) => isArray && isArraySyntax(expr),
                 (const TupleLiteral literal) => isTuple && literal.elements.length == _types.tupleElements(expected).length,
                 (const MatchExpr match_) => match_.origin != MatchOrigin.IfVal,
@@ -6937,6 +7028,15 @@ private final class TypeChecker
                             check(element, _types.arrayElement(expected), ctx);
                         }
                         return expected;
+                    },
+                    (const MapLiteral literal) {
+                        auto entry = _types.nominalArgs(expected);
+                        foreach (i, key; literal.keys)
+                        {
+                            check(key, entry[0], ctx);
+                            check(literal.values[i], entry[1], ctx);
+                        }
+                        return builtDictionary(expr, literal, expected, ctx);
                     },
                     (const BinaryExpr binary) {
                         recordConcat(expr, binary);

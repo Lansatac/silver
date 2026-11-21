@@ -1,0 +1,5 @@
+// `[:]` alone says nothing about its keys or values.
+def main(): Unit {
+    val nothing = [:]
+    printl(nothing)
+}

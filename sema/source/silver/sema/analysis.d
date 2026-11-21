@@ -191,6 +191,12 @@ final class Analysis
         return for_ in _typing.loops;
     }
 
+    /// The functions that build the dictionary literal `literal`.
+    const(DictionaryFunctions)* dictionaryOf(Id!Expr literal) const
+    {
+        return literal in _typing.dictionaryLiterals;
+    }
+
     /// The functions `index` calls, or null if it indexes an array.
     const(IndexFunctions)* indexingOf(Id!Expr index) const
     {

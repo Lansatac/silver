@@ -30,7 +30,7 @@ The reserved words are `alias`, `break`, `continue`, `def`, `else`, `false`, `fo
 
 ## Punctuation
 
-`:` means "has type": `name: Type`, for parameters, fields, bindings and return types. Map entries are its one other use. `->` appears only in function types, and `=>` introduces a single expression. `{}` is always a block, except for a hole inside a string.
+`:` means "has type": `name: Type`, for parameters, fields, bindings and return types. Dictionary entries, and a dictionary type `[K: V]`, are its other uses. `->` appears only in function types, and `=>` introduces a single expression. `{}` is always a block, except for a hole inside a string.
 
 ## Statements and newlines
 

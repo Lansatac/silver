@@ -46,6 +46,7 @@ package final class Declarer
             (const OptionType option) => optionOf(resolveType(*option.inner), type.span),
             (const ErrorUnionType u) => errorUnionOf(resolveType(*u.success), u.errors),
             (const ArrayType array) => arrayOf(resolveType(*array.element), type.span),
+            (const DictionaryType d) => dictionaryOf(resolveType(*d.key), resolveType(*d.value), type.span),
             (const FunctionType func) => _types.function_(
                 func.params.map!(p => resolveType(p)).array, resolveType(*func.returnType), func.mutableParams),
             (const UnitType _) => _types.unit,
@@ -116,6 +117,30 @@ package final class Declarer
             failed = true;
         }
         return failed ? _types.error : _types.errorUnion(success, _types.errorList(errors));
+    }
+
+    /// `lang`'s `Dictionary`, which `[K: V]` names and `[k: v]` builds, or an invalid ID when `lang`
+    /// isn't loaded.
+    package Id!TypeDecl dictionaryDecl()
+    {
+        auto home = "lang.dictionary" in _resolutions.moduleScopes;
+        auto symbol = home is null ? null : (*home).resolveLocalType("Dictionary");
+        if (symbol is null) return Id!TypeDecl.init;
+        return (*symbol).match!((const Id!TypeDecl decl) => decl, _ => Id!TypeDecl.init);
+    }
+
+    /// `[key: value]`, or `error` if either is, or there's no `lang`.
+    package Type dictionaryOf(Type key, Type value, Span span)
+    {
+        if (key == _types.error || value == _types.error) return _types.error;
+        auto decl = dictionaryDecl();
+        if (!decl.isValid)
+        {
+            _collector.reportError(DiagnosticCode.UnknownType, span,
+                "`[K: V]` is a `Dictionary`, which `lang` declares, and `lang` isn't loaded");
+            return _types.error;
+        }
+        return _types.nominal(decl, "Dictionary", [key, value]);
     }
 
     /// The array of `element`, or `error` (reported at `span`) if there can't be one.

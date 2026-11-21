@@ -1156,6 +1156,12 @@ private final class Parser
         if (accept(TokenKind.leftBracket))
         {
             auto element = parseType();
+            if (accept(TokenKind.colon))
+            {
+                auto value = parseType();
+                expect(TokenKind.rightBracket, "`]`");
+                return TypeExpr(ids.next!TypeExpr, spanFrom(start), TypeExprKind(DictionaryType(boxed(element), boxed(value))));
+            }
             expect(TokenKind.rightBracket, "`]`");
             return TypeExpr(ids.next!TypeExpr, spanFrom(start), TypeExprKind(ArrayType(boxed(element))));
         }
@@ -2237,6 +2243,10 @@ private TypeParam[] mentioned(TypeParam[] params, const(Field)[] fields)
                 foreach (e; u.errors) visit(e);
             },
             (const ArrayType a) => visit(*a.element),
+            (const DictionaryType d) {
+                visit(*d.key);
+                visit(*d.value);
+            },
             (const FunctionType f) {
                 foreach (p; f.params) visit(p);
                 visit(*f.returnType);

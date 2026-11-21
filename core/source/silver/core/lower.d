@@ -10,7 +10,7 @@ import std.typecons : Rebindable, rebindable;
 import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
 import silver.core.nodes;
-import silver.sema : Analysis, DerivedOrder, DerivedPart, FunctionUse, IndexFunctions, LoopFunctions, ConstChar, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
+import silver.sema : Analysis, DerivedOrder, DerivedPart, DictionaryFunctions, FunctionUse, IndexFunctions, LoopFunctions, ConstChar, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
     Bound, Substitution, SymbolId, Type, TypeTable, Witness;
 
 /// A parameter's local name. Discarded ones get a name no Silver identifier can have, so several
@@ -167,6 +167,15 @@ private struct Instance
         auto instance = new FunctionUse;
         *instance = concrete(*use);
         return instance;
+    }
+
+    /// The functions that build the dictionary literal `literal`, with their type arguments for
+    /// this instance.
+    DictionaryFunctions dictionaryOf(Id!(ast.Expr) literal) const
+    {
+        auto functions = analysis.dictionaryOf(literal);
+        assert(functions !is null, "sema records how every dictionary literal is built");
+        return DictionaryFunctions(concrete(functions.empty), concrete(functions.write));
     }
 
     /// The functions `index` calls, with their type arguments for this instance, or null if it
@@ -722,10 +731,27 @@ private final class Lowering
             (const ast.WithExpr with_) => lowerWith(e, with_, type),
             (const ast.MatchExpr match_) => lowerMatch(match_, type, span),
             (const ast.Lambda lambda) => lowerLambda(e, lambda, type),
-            (const ast.MapLiteral _) => notLowered!Expr("a map"),
+            (const ast.MapLiteral literal) => lowerDictionary(e, literal, span),
             // Outside a slice or a `for`, `a..b` builds an `Interval`.
             (const ast.RangeExpr range) => construct(type, [lowerExpr(*range.start), lowerExpr(*range.end)], span),
         );
+    }
+
+    /// `[k: v]` is an empty dictionary with each entry written into it in turn, so a key written
+    /// again takes the later value in the earlier place.
+    private Expr lowerDictionary(const ast.Expr e, const ast.MapLiteral literal, Span span)
+    {
+        auto functions = _analysis.dictionaryOf(e.id);
+        auto made = callUse(functions.empty, [], span);
+        if (literal.keys.length == 0) return made;
+        auto held = temp("dictionary", made.type, true);
+        Stmt[] statements = [let(held, made)];
+        foreach (i, key; literal.keys)
+        {
+            auto entry = [use(held, span), lowerExpr(key), lowerExpr(literal.values[i])];
+            statements ~= assign(held, callUse(functions.write, entry, span));
+        }
+        return Expr(made.type, span, ExprKind(Block(statements, boxed(use(held, span)))));
     }
 
     private SymbolId resolved(const ast.Expr use)
