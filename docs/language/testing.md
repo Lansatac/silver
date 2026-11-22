@@ -132,7 +132,7 @@ FAIL "first element" at lookup.ag(12,6)
 
 Each failed test lists its failures in the order they happened, so a panic, or `?` finding `None` or an error, comes last. The exit status is 0 only when every test ran and passed.
 
-The interpreter is the default: `-b llvm` compiles the tests, and `-b both` runs them both ways and fails a test the two backends disagree on.
+The interpreter is the default: `-b llvm` compiles the tests, and `-b both` runs them both ways and fails a test the two backends disagree on. Output is compared as text, so a test that prints a [native type](native.md#native-types)'s handle, or fails an `expect` with one on either side, is reported as a disagreement, since the address differs between the two; an `opString` for the type gives it a printed form that doesn't.
 
 ### Choosing tests
 

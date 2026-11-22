@@ -120,6 +120,20 @@ unittest
     assert(error !is null);
     error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
     error.diagnostic.message.should.contain("cbrt");
+
+    error = collectException!RuntimeError(run("native def sqrt(x: Int64): Int64\ndef main(): Unit {\n    printl(sqrt(4))\n}"));
+    assert(error !is null);
+    error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
+    error.diagnostic.message.should.contain("as it's declared");
+}
+
+@("a built-in native serves any declaration C passes the same way, a pointer as a 64-bit integer included")
+unittest
+{
+    run("import std.c\nnative def malloc(size: UInt32): UInt64\nnative def free(address: UInt64): Unit\n"
+        ~ "native def strcmp(a: CString, b: CString): UInt8\ndef main(): Unit {\n    val address = malloc(8)\n"
+        ~ "    printl(address != 0)\n    free(address)\n    printl(strcmp(toCString(\"a\"), toCString(\"b\")))\n}")
+        .should.equal("true\n255\n");
 }
 
 @("an instance of a generic function prints with its type arguments")

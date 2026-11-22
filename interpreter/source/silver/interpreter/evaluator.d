@@ -12,7 +12,7 @@ import silver.sema;
 import silver.core;
 import silver.interpreter.errors;
 import silver.interpreter.stack : checkStack, runOnLargeStack;
-import silver.interpreter.foreign : addressText, foreignFunctions, fromCString, toCString;
+import silver.interpreter.foreign : addressText, CKind, CValue, foreignFunctions, fromCString, toCString;
 import silver.interpreter.values;
 import silver.runtime.files : pathExists, readWhole, writeWhole;
 
@@ -928,21 +928,72 @@ final class Evaluator
                 "`%s` can't be called when interpreting: only the standard library's natives can be, for now"
                     .format(call.symbol)));
         }
-        Value[] args;
-        auto jump = all(call.args, frame, args);
-        if (jump.has!Jump) return jump;
-        foreach (i, ref arg; args)
+        auto types = _program.types;
+        auto fits = native.params.length == call.args.length && accepts(native.result, e.type, true);
+        foreach (i, ref arg; call.args) fits = fits && accepts(native.params[i], arg.type, false);
+        if (!fits)
         {
-            if (isNullableHandle(call.args[i].type))
-            {
-                auto option = arg.as!Record;
-                arg = option.tag == 0 ? Value(Handle(null)) : option.fields[0];
-            }
+            throw new RuntimeError(Diagnostic(DiagnosticCode.MissingNativeBinding, e.span,
+                "`%s` can't be called when interpreting as it's declared: the interpreter has it built in for C's own signature, and this declaration doesn't pass the same values"
+                    .format(call.symbol)));
         }
-        auto result = (*native)(args);
-        if (!isNullableHandle(e.type)) return result;
-        auto handle = result.as!Handle;
-        return handle.address is null ? Value(Record(0, null)) : Value(Record(1, [result]));
+
+        Value[] values;
+        auto jump = all(call.args, frame, values);
+        if (jump.has!Jump) return jump;
+        CValue[] args;
+        foreach (i, value; values)
+        {
+            auto type = call.args[i].type;
+            if (types.isInteger(type)) args ~= CValue(value.as!long, cast(void*) value.as!long);
+            else if (type == types.float_) args ~= CValue(0, null, value.as!double);
+            else if (isNullableHandle(type))
+            {
+                auto option = value.as!Record;
+                args ~= CValue(0, option.tag == 0 ? null : option.fields[0].as!Handle.address);
+            }
+            else args ~= CValue(0, value.as!Handle.address);
+        }
+
+        auto result = native.call(args);
+        if (e.type == types.unit || e.type == types.never) return Value(Unit());
+        if (e.type == types.float_) return Value(result.float_);
+        if (types.isInteger(e.type))
+        {
+            auto bits = native.result == CKind.pointer ? cast(long) result.pointer : result.integer;
+            return Value(fitted(bits, types.integerOf(e.type)));
+        }
+        if (!isNullableHandle(e.type)) return Value(Handle(result.pointer));
+        return result.pointer is null ? Value(Record(0, null)) : Value(Record(1, [Value(Handle(result.pointer))]));
+    }
+
+    /// Whether C passes a value of `type` as a `kind`: a pointer is a native type, an option of one or
+    /// a 64-bit integer, an integer any integer type, and `void` a result of `Unit` or `Never`.
+    private bool accepts(CKind kind, Type type, bool isResult)
+    {
+        auto types = _program.types;
+        final switch (kind)
+        {
+            case CKind.integer:
+                return types.isInteger(type);
+            case CKind.float_:
+                return type == types.float_;
+            case CKind.pointer:
+                return (type in _program.nativeTypes) !is null || isNullableHandle(type)
+                    || (types.isInteger(type) && types.integerOf(type).bits == 64);
+            case CKind.none:
+                return isResult && (type == types.unit || type == types.never);
+        }
+    }
+
+    /// `bits` cut to the integer type `info` and extended back, as a `Value` holds that type.
+    private static long fitted(long bits, IntegerInfo info)
+    {
+        if (info.bits == 64) return bits;
+        auto mask = (1L << info.bits) - 1;
+        auto low = bits & mask;
+        if (info.signed && (low >> (info.bits - 1)) != 0) return low | ~mask;
+        return low;
     }
 
     /// Whether `type` is an option of a native type, which crosses into C as a pointer that may be null.

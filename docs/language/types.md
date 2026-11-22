@@ -62,7 +62,7 @@ A conversion is implicit only if it works for every value, keeps the value's mea
 
 ## Equality and ordering
 
-`==` and `!=` work on any two values of one type. Options, arrays, tuples and declared types are compared structurally. Two `Ref`s are equal when they're the same cell (see [Shared references](refs.md)), and function values are compared as described below.
+`==` and `!=` work on any two values of one type. Options, arrays, tuples and declared types are compared structurally. Two `Ref`s are equal when they're the same cell (see [Shared references](refs.md)), two handles of a [native type](native.md#native-types) when they're the same address, and function values are compared as described below.
 
 A type's equality belongs to the type. Its own module can replace the structural one by writing an `opEquals`, with an `opHash` to match, and the printed form by writing an `opString` (see [operator functions](functions.md#operator-functions)). A function in another module can't change what `==` means for it, and generic code comparing a value uses the same equality as everyone else. A comparison with another meaning, such as "equal ignoring case", is an ordinary function, passed where it's needed.
 
@@ -172,6 +172,7 @@ Jack < Ace        // true
 | a product or member `Point(1, 2)` | `Point(1, 2)` |
 | a marker | its name |
 | a function value | its name: `increment`, `Point` |
+| a handle of a [native type](native.md#native-types) | its type and address: `File(0x1f4a3c02340)` |
 
 A function value prints as the function it comes from, without anything it captured, so `adder(1)` and `adder(2)` print alike:
 

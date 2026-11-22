@@ -1,0 +1,11 @@
+import std.c
+
+// A pointer declared as the integer of its width, which C's calling convention passes the same way.
+native def malloc(size: CSize): UInt64
+native def free(address: UInt64): Unit
+
+def main(): Unit {
+    val address = malloc(16)
+    printl(address != 0)
+    free(address)
+}
