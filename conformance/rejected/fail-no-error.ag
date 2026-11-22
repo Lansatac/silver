@@ -1,0 +1,10 @@
+type Negative
+
+def plain(n: Int): Int {
+    if n < 0 { fail Negative }
+    n
+}
+
+def main(): Unit {
+    printl(plain(1))
+}

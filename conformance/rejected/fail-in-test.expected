@@ -1,0 +1,1 @@
+T0012: A test can't return the error `Negative`; `panic` stops it with a message

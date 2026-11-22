@@ -1,0 +1,8 @@
+type Negative
+
+test "a test returns nothing" {
+    fail Negative
+}
+
+def main(): Unit {
+}

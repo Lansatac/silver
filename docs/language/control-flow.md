@@ -138,6 +138,8 @@ f(x ?? return, y)           // in a Unit function: returns ()
 if c => return a else b     // `else` ends the value
 ```
 
+[`fail e`](errors.md#failing-fail) is `return Error(e)` and follows the same rules, except that it always takes a value.
+
 A jump can appear anywhere an expression can, even where it's pointless, as in `f(return 1)`, which returns before `f` is called.
 
 ## Panics

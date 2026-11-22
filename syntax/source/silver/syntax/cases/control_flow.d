@@ -126,6 +126,12 @@ immutable Case[] loops = [
     parsesAs("return a.b(c) + 1", "(return (Add (call (. a b) c) 1))"),
     parsesAs("val a = -return b", "(val a (Minus (return b)))"),
     rejects("val a = return b c"),
+    parsesAs("fail a", "(return (Error a))"),
+    parsesAs("val a = b ?? fail C(d) ?? e", "(val a (Coalesce b (return (Error (Coalesce (call C d) e)))))"),
+    parsesAs("val a = if b => fail c else d", "(val a (if b (return (Error c)) d))"),
+    parsesAs("fail
+    a", "(return (Error a))"),
+    rejects("val a = b ?? fail"),
     rejects("val for = 1"),
     rejects("val break = 1"),
     rejects("val continue = 1"),

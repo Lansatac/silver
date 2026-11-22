@@ -1,4 +1,4 @@
-def fail(mutable n: Int): Int {
+def failing(mutable n: Int): Int {
     n = 1
     n / 0
 }
@@ -6,6 +6,6 @@ def fail(mutable n: Int): Int {
 def main(): Unit {
     mutable val n = 0
     printl("before")
-    _ = fail(mutable n)
+    _ = failing(mutable n)
     printl("after")
 }

@@ -29,7 +29,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading, operator functions | Partial: no tail calls |
 | [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented |
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
-| [Errors](language/errors.md) | `T ! E`, `?` and `!` on errors, what panics, `main` | Implemented |
+| [Errors](language/errors.md) | `T ! E`, `fail`, `?` and `!` on errors, what panics, `main` | Implemented |
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, `a..b` as an `Interval` | Implemented, except that element assignment always copies |
 | [Ranges](language/ranges.md) | `Range`, sources of your own, `std.range` adapters and consumers | Partial: adapters, sources, consumers, ordering, `Sized`, `Indexed` and `Seq`; `sum` and `reversed` aren't built |
 | [Dictionaries](language/dictionaries.md) | `[K: V]`, lookup and update, insertion order, keys | Implemented; `[:]` needs its type from where it's written |

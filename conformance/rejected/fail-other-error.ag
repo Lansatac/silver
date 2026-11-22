@@ -1,0 +1,10 @@
+type Negative
+
+def other(n: Int): Int ! Negative {
+    if n < 0 { fail "negative" }
+    n
+}
+
+def main(): Unit {
+    printl(other(1))
+}

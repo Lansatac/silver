@@ -69,9 +69,31 @@ val bad: Int ! ParseError = Error(BadDigit(2))
 - `T` promotes to `T ! E`, as it does to `T?`: through every layer, where a type is expected, with a literal adapting to `T` first.
 - `Ok(x)` and `Error(e)` are reserved names, like `Some` and `None`. Each needs a type from context, so `val x = Error(Empty)` is an error.
 - `Error(e)` checks `e` against the error side, so a type in a list, or a member of a sum, is accepted.
-- An error is always written with `Error`. An `E` doesn't promote into `T ! E`, so every place a function fails is visible.
+- An error is always written with `Error` or [`fail`](#failing-fail). An `E` doesn't promote into `T ! E`, so every place a function fails is visible.
 - A value that's one of the errors and could also become the success, as an `Oops` against `H2 ! Oops` with `type H2 = :Oops | :Int`, is an error rather than silently a success, since it could reach the error union by two routes (see [steps](types.md#steps)). It's written `Ok(Oops(1))` or `Error(Oops(1))`, whichever is meant.
 - An error union prints as `Ok(42)` or `Error(BadDigit(2))`, and compares structurally with `==`. When one side of `==` is an error union, the other is checked against it, so `parseInt("7") == 7` and `parseInt("x") == Error(BadDigit(0))` both work.
+
+## Failing: `fail`
+
+`fail e` leaves the enclosing function or lambda with the error `e`. It is `return Error(e)`, so `e` is checked against the errors the function returns, and like `return` it is an expression of type [`Never`](types.md#never) that can stand [wherever a value is expected](control-flow.md#jumps-are-expressions):
+
+```silver
+def half(n: Int): Int ! Negative => if n < 0 => fail Negative else n / 2
+
+def checked(n: Int): Int ! Negative | Overflow {
+    if n > 100 { fail Overflow }
+    half(n)?
+}
+
+val number = parseInt(text) ?? fail JsonError("invalid number", line, column)
+```
+
+- `fail` always takes an error, which takes the rest of the expression, as `return`'s value does: `x ?? fail a ?? b` fails with `a ?? b`.
+- The error is evaluated only when the function fails.
+- In a lambda whose return type is inferred, `fail e` makes it an error union, as `Error(e)` does: `n => if n < 0 => fail Negative else n` is an `(Int) -> Int ! Negative`.
+- A function that doesn't return an error union can't `fail`, and neither can a test, which stops with `panic`.
+
+`Error(e)` is the error as a value, for a binding, an argument or a comparison. `fail e` is for leaving with it.
 
 ## Using an error union
 
@@ -92,9 +114,11 @@ def port(path: String): Int ! IoError | ParseError {
 `?` never crosses between options and error unions, since a reason would be invented or lost. Each direction is written out with `??`:
 
 ```silver
-val raw = lookup(key) ?? { return Error(Missing(key)) }     // an option, in a function returning an error union
-val number = parseInt(raw) ?? { return None }               // an error union, in a function returning an option
+val raw = lookup(key) ?? fail Missing(key)          // an option, in a function returning an error union
+val number = parseInt(raw) ?? return None           // an error union, in a function returning an option
 ```
+
+`??` drops the error it replaces, so `parse(raw) ?? fail Invalid(raw)` is also how one error is exchanged for another.
 
 A lambda's return type is inferred from its `?`s and its value, so `line => parseInt(line)? * 2` is a `(String) -> Int ! ParseError`. Two `?`s on different error types need a written return type, since a list is never invented.
 

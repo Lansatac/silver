@@ -14,13 +14,13 @@ def describe(r: Int ! S1 | S2): String => match r {
     Error(_) => "other"
 }
 
-def fail(e: S2): Int ! S1 | S2 => Error(e)
+def failing(e: S2): Int ! S1 | S2 => Error(e)
 
 def main(): Unit {
     printl(describe(Ok(1)))
-    printl(describe(fail(Box("s"))))
+    printl(describe(failing(Box("s"))))
     val s1: S1 = Box(2)
     val r: Int ! S1 | S2 = Error(s1)
     printl(describe(r))
-    printl(describe(fail(B)))
+    printl(describe(failing(B)))
 }

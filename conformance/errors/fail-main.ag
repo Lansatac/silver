@@ -1,0 +1,6 @@
+type Missing(key: String)
+
+def main(): Unit ! Missing {
+    printl("before")
+    fail Missing("host")
+}

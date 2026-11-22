@@ -1,0 +1,1 @@
+T0012: This returns the error `Negative`, but this function returns `Int?`, which can't hold one; it could return `Int? ! Negative`

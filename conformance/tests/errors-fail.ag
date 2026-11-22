@@ -1,0 +1,73 @@
+import std.string
+
+type JsonError(message: String, line: Int, col: Int)
+type Negative
+type Overflow
+type RangeError = :Negative | :Overflow
+
+def number(text: String): Int ! JsonError {
+    val n = parseInt(text) ?? fail JsonError("invalid number", 0, 0)
+    n * 2
+}
+
+def half(n: Int): Int ! Negative => if n < 0 => fail Negative else n / 2
+
+def checked(n: Int): Int ! Negative | Overflow {
+    if n < 0 { fail Negative }
+    if n > 100 { fail Overflow }
+    half(n)?
+}
+
+// A member of a sum the function's errors name, as `Error(Negative)` is.
+def throughSum(n: Int): Int ! RangeError {
+    if n < 0 { fail Negative }
+    n
+}
+
+def firstNegative(xs: [Int]): Unit ! Int {
+    for x in xs {
+        if x < 0 { fail x }
+    }
+}
+
+def described(n: Int): String ! String => match n {
+    0 => Ok("zero")
+    _ => fail "not zero: {n}"
+}
+
+// A failure writes back a mutable argument, being a return.
+def bump(mutable count: Int): Unit ! Overflow {
+    count += 1
+    if count > 1 { fail Overflow }
+}
+
+def main(): Unit {
+    printl(number("21"))
+    printl(number("x"))
+    printl(half(-1))
+    printl(half(9))
+    printl(checked(8))
+    printl(checked(101))
+    printl(checked(-1))
+    printl(throughSum(-1))
+    printl(firstNegative([1, -2, 3]))
+    printl(firstNegative([1, 2]))
+    printl(described(0))
+    printl(described(4))
+
+    val inferred = (n: Int) => if n < 0 => fail Negative else n
+    printl(inferred(-3))
+    printl(inferred(3))
+    val written = (n: Int): Int ! Negative => {
+        if n < 0 { fail Negative }
+        n
+    }
+    printl(written(-3))
+    val replaced = (n: Int) => half(n) ?? fail Overflow
+    printl(replaced(-2))
+    printl(replaced(8))
+
+    mutable val count = 1
+    printl(bump(mutable count))
+    printl(count)
+}

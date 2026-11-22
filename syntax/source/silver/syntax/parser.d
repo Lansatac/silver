@@ -1547,7 +1547,8 @@ private final class Parser
     /// folded left so `m.f(1)` is `call (m.f) 1`.
     private Expr parsePostfix()
     {
-        if (kind == TokenKind.kwReturn || kind == TokenKind.kwBreak || kind == TokenKind.kwContinue) return parseJump();
+        if (kind == TokenKind.kwReturn || kind == TokenKind.kwFail || kind == TokenKind.kwBreak || kind == TokenKind.kwContinue)
+            return parseJump();
         auto startAt = pos;
         auto lhs = parsePrimary();
         loop: while (true)
@@ -1707,6 +1708,7 @@ private final class Parser
     }
 
     /// A jump's value takes the rest of the expression, so `x ?? return a ?? b` returns `a ?? b`.
+    /// `fail e` is `return Error(e)`.
     private Expr parseJump()
     {
         auto start = here;
@@ -1715,6 +1717,13 @@ private final class Parser
         ExprKind jump;
         if (keyword == TokenKind.kwBreak) jump = ExprKind(BreakExpr());
         else if (keyword == TokenKind.kwContinue) jump = ExprKind(ContinueExpr());
+        else if (keyword == TokenKind.kwFail)
+        {
+            if (!canBeginExpression(kind)) throw failure("an error after `fail`");
+            auto error = parseExpression();
+            auto wrapped = Expr(ids.next!Expr, spanFrom(start), ExprKind(ErrorExpr(boxed(error))));
+            jump = ExprKind(ReturnExpr(boxed(wrapped)));
+        }
         else if (canBeginExpression(kind)) jump = ExprKind(ReturnExpr(boxed(parseExpression())));
         else jump = ExprKind(ReturnExpr(boxed(Expr(ids.next!Expr, spanFrom(start), ExprKind(UnitLiteral())))));
         return Expr(ids.next!Expr, spanFrom(start), jump);
@@ -2310,7 +2319,7 @@ private bool canBeginExpression(TokenKind kind)
         TokenKind.float_, TokenKind.char_, TokenKind.stringStart, TokenKind.leftParen, TokenKind.leftBracket,
         TokenKind.leftBrace, TokenKind.minus, TokenKind.plus, TokenKind.bang, TokenKind.tilde, TokenKind.kwTrue,
         TokenKind.kwFalse, TokenKind.underscore, TokenKind.kwMatch, TokenKind.kwFor, TokenKind.kwWhile, TokenKind.kwIf,
-        TokenKind.kwReturn, TokenKind.kwBreak, TokenKind.kwContinue:
+        TokenKind.kwReturn, TokenKind.kwFail, TokenKind.kwBreak, TokenKind.kwContinue:
         return true;
     default:
         return false;

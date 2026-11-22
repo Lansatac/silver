@@ -1421,13 +1421,41 @@ private final class TypeChecker
     {
         if (ctx.inferred is null)
         {
-            check(*ret.value, ctx.returnType, ctx);
+            if (!returnsErrorToNowhere(*ret.value, ctx)) check(*ret.value, ctx.returnType, ctx);
             return _types.never;
         }
         auto type = synthesizeBeside(*ret.value, ctx.inferred.beside, ctx);
         ctx.inferred.values ~= *ret.value;
         ctx.inferred.types ~= type;
         return _types.never;
+    }
+
+    /// Reports `fail e` or `return Error(e)` where what's returned can't hold an error.
+    private bool returnsErrorToNowhere(const Expr value, BodyContext ctx)
+    {
+        auto returnType = ctx.returnType;
+        if (returnType == _types.error || _types.isErrorUnion(returnType)) return false;
+        return value.kind.match!(
+            (const ErrorExpr error) {
+                auto reason = synthesize(*error.value, ctx);
+                if (reason == _types.error) return true;
+                if (ctx.testBody)
+                {
+                    _collector.reportError(DiagnosticCode.InvalidPropagation, value.span,
+                        "A test can't return the error `%s`; `panic` stops it with a message"
+                            .format(_types.describe(reason)));
+                }
+                else
+                {
+                    _collector.reportError(DiagnosticCode.InvalidPropagation, value.span,
+                        "This returns the error `%s`, but this function returns `%s`, which can't hold one; it could return `%s ! %s`"
+                            .format(_types.describe(reason), _types.describe(returnType), _types.describe(returnType),
+                                _types.describe(reason)));
+                }
+                return true;
+            },
+            (const _) => false,
+        );
     }
 
     /// `val binding = value`, or a binding in a pattern given its part of a tuple literal.

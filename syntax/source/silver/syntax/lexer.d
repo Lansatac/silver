@@ -34,6 +34,7 @@ enum TokenKind : ubyte
     kwContinue,
     kwDef,
     kwElse,
+    kwFail,
     kwFalse,
     kwFor,
     kwIf,
@@ -144,6 +145,7 @@ TokenKind keywordKind(const(char)[] word)
     case "continue": return TokenKind.kwContinue;
     case "def": return TokenKind.kwDef;
     case "else": return TokenKind.kwElse;
+    case "fail": return TokenKind.kwFail;
     case "false": return TokenKind.kwFalse;
     case "for": return TokenKind.kwFor;
     case "if": return TokenKind.kwIf;
@@ -196,7 +198,7 @@ bool canBegin(TokenKind kind)
         TokenKind.minus, TokenKind.bang, TokenKind.tilde,
         TokenKind.kwVal, TokenKind.kwMutable, TokenKind.kwDef, TokenKind.kwType, TokenKind.kwNative,
         TokenKind.kwIntrinsic, TokenKind.kwPrivate, TokenKind.kwWhile, TokenKind.kwFor, TokenKind.kwIf,
-        TokenKind.kwReturn, TokenKind.kwBreak, TokenKind.kwContinue, TokenKind.kwTrue, TokenKind.kwFalse,
+        TokenKind.kwReturn, TokenKind.kwFail, TokenKind.kwBreak, TokenKind.kwContinue, TokenKind.kwTrue, TokenKind.kwFalse,
         TokenKind.kwImport, TokenKind.kwModule, TokenKind.kwMatch, TokenKind.kwAlias, TokenKind.kwInterface,
         TokenKind.underscore, TokenKind.error:
         return true;

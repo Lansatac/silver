@@ -1,0 +1,10 @@
+type Negative
+
+def option(n: Int): Int? {
+    if n < 0 { return Error(Negative) }
+    n
+}
+
+def main(): Unit {
+    printl(option(1))
+}
