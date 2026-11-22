@@ -5,6 +5,7 @@ version (unittest)
     import std.algorithm : canFind, filter, map, sort;
     import std.array : array, join;
     import std.conv : to;
+    import std.exception : collectException;
     import std.file : dirEntries, exists, mkdirRecurse, readBytes = read, readText, rmdirRecurse, SpanMode, tempDir, write;
     import std.parallelism : taskPool;
     import std.path : baseName, buildNormalizedPath, buildPath, dirName, dirSeparator, stripExtension;
@@ -570,7 +571,8 @@ version (unittest)
         CoreProgram lowered;
         if (prepare(c, context, program, lowered) !is null) return null;
         auto directory = newRunDirectory();
-        scope (exit) rmdirRecurse(directory);
+        // A file a case left open mustn't fail the case here.
+        scope (exit) collectException(rmdirRecurse(directory));
         try
         {
             runWithInput(c, new Evaluator(lowered, false, c.arguments, directory));
@@ -609,7 +611,8 @@ version (unittest)
         }
 
         auto directory = newRunDirectory();
-        scope (exit) rmdirRecurse(directory);
+        // A file a case left open mustn't fail the case here.
+        scope (exit) collectException(rmdirRecurse(directory));
         auto evaluator = new Evaluator(lowered, false, c.arguments, directory);
         try
         {
@@ -642,7 +645,8 @@ version (unittest)
         }
 
         auto directory = newRunDirectory();
-        scope (exit) rmdirRecurse(directory);
+        // A file a case left open mustn't fail the case here.
+        scope (exit) collectException(rmdirRecurse(directory));
         auto evaluator = new Evaluator(lowered, false, c.arguments, directory);
         try
         {
@@ -671,7 +675,8 @@ version (unittest)
         }
 
         auto directory = newRunDirectory();
-        scope (exit) rmdirRecurse(directory);
+        // A file a case left open mustn't fail the case here.
+        scope (exit) collectException(rmdirRecurse(directory));
         auto evaluator = new Evaluator(lowered, false, c.arguments, directory);
         try
         {

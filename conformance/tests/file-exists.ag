@@ -10,7 +10,11 @@ def main(): Unit ! IoError {
     printl(exists("missing"))
     printl(exists("missing/here.txt"))
     printl(exists(""))
+    // Cut short at the NUL, the path would name a file that's there.
+    writeFile("a", "")?
     printl(exists("a\u{0}b"))
+    printl(exists("here.txt/"))
+    printl(exists("./"))
     printl(isError(writeFile("missing/here.txt", "x")))
     printl(exists("missing"))
 }

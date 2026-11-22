@@ -90,7 +90,7 @@ int silver_readLine(const(char)** data, size_t* length)
 /// out slots.
 int silver_readWhole(const(char)* path, size_t pathLength, bool text, const(char)** data, size_t* length)
 {
-    import core.memory : GC;
+    import silver.runtime.buffer : silver_array_append;
     import silver.runtime.files : FileStatus, readWhole;
 
     SavedRegisters saved = void;
@@ -99,9 +99,22 @@ int silver_readWhole(const(char)* path, size_t pathLength, bool text, const(char
     *length = 0;
     try
     {
-        auto outcome = readWhole(path[0 .. pathLength], text);
-        newString(outcome.text, data, length);
-        if (outcome.status == FileStatus.done) GC.free(cast(void*) outcome.text.ptr);
+        // Read straight into a buffer of Silver's, so the file is held once.
+        auto outcome = readWhole(path[0 .. pathLength], text, (size_t size) {
+            char* room;
+            size_t made;
+            silver_array_append(null, 0, null, size, 1, false, cast(const(void)**) &room, &made);
+            return room[0 .. made];
+        });
+        if (outcome.status == FileStatus.done)
+        {
+            *data = outcome.text.ptr;
+            *length = outcome.text.length;
+        }
+        else
+        {
+            newString(outcome.text, data, length);
+        }
         return outcome.status;
     }
     catch (OutOfMemoryError)
@@ -139,7 +152,14 @@ bool silver_exists(const(char)* path, size_t length)
 {
     import silver.runtime.files : pathExists;
 
-    return pathExists(path[0 .. length]);
+    SavedRegisters saved = void;
+    silver_save_registers(&saved);
+    try return pathExists(path[0 .. length]);
+    catch (OutOfMemoryError)
+    {
+        outOfMemory();
+    }
+    return false;
 }
 
 /// `text` without the `\n` or `\r\n` that ends it.
