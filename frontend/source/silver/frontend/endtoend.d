@@ -171,11 +171,12 @@ void copyTree(string from, string to)
 @("silver and silverc copied to a directory use the standard library and the runtime copied beside them, and say so when one isn't there")
 unittest
 {
-    import std.file : copy, write;
+    import std.file : copy, PreserveAttributes, write;
 
     auto install = makeTree("frontend-install", null);
     scope (exit) rmdirRecurse(install);
-    foreach (name; ["silver", "silverc"]) copy(built(name), buildPath(install, name ~ exe));
+    // POSIX copies without the execute bit unless it's asked to keep it.
+    foreach (name; ["silver", "silverc"]) copy(built(name), buildPath(install, name ~ exe), PreserveAttributes.yes);
     auto work = makeTree("frontend-install-work", ["hello.ag": "import std.shipped\n\ndef main(): Unit {\n"
         ~ "    printl(shipped())\n}\n"]);
     scope (exit) rmdirRecurse(work);
