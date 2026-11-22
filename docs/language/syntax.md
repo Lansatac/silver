@@ -2,7 +2,7 @@
 
 ## Source files
 
-A source file has the extension `.ag`. Its top level holds declarations only: `module`, `import`, `def`, `native` and `intrinsic` declarations, `type`, `alias`, constants and tests. A program's entry module defines `def main(): Unit`, which takes no parameters.
+A source file has the extension `.ag`. Its top level holds declarations only: `module`, `import`, `def`, `native` and `intrinsic` declarations, `type`, `alias`, constants and tests. A program's entry module defines [`main`](programs.md#main).
 
 ## Comments
 

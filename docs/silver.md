@@ -15,7 +15,7 @@ silver test                run the tests of the project here
 ```
 
 - The first word is a command only when it's one of `silver`'s. Anything else is a file, so a file named `build` is run as `silver ./build`.
-- What follows the file is for the program, not for `silver`.
+- What follows the file is for the program, not for `silver`: its [arguments](language/programs.md#arguments). With no file, or with a package's directory, they follow `--`, as `silver run -- notes.txt` and `silver run compiler -- main.ag`.
 - A file can start with `#!/usr/bin/env silver` and be run as `./hello.ag`.
 - With no file, `run` and `build` take the program of the package `silver` was started in. A library is reported as one. When several of the packages a file describes are programs, `silver` lists them, and one is chosen by its directory, as `silver run compiler`. A package with a `silver.toml` of its own is run from its own directory, or by naming it, as `silver run tools/lint`.
 - With no path, `test` runs the tests of the package `silver` was started in, as `test` over its directory. From the directory of a `silver.toml`, that's what the file names, as [What `silver test` tests](#what-silver-test-tests) describes; from the directory of a package it describes, that package.
@@ -281,6 +281,6 @@ Not built:
 
 - Remote packages: `version` and `git` are refused.
 - A script in no project, or under none of a project's packages, can't say it needs a package.
-- A program can't read arguments, so anything after the file is an error.
+- A program can't read [arguments](language/programs.md#current-implementation), so anything after the file is an error, and so is `--`.
 - A package can't be used only by tests, and the build can't name another prelude.
 - A program is compiled whole, in one call of `silverc`, rather than a package at a time.

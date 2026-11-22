@@ -10,7 +10,7 @@ These documents describe the language as designed. Where the implementation does
 - A project is a directory with a `silver.toml`, which names its [package](language/modules.md#packages) and says what it uses: see [The `silver` tool](silver.md#projects). In one, `silver run` with no file runs the program of the package it's started in, and `silver run <directory>` the program of the package there. A file in a project is run by naming it, and sees what its package describes.
 - `silver build`, with a file or without, compiles the same program to an executable, which `-o` names. With `--emit-llvm` it writes the LLVM IR instead.
 - `silver test <path>` runs the tests in a file or a directory, and `silver test` with no path those of the package it's started in and of what its `silver.toml` names, inside its directory by default and outside it when an entry opts in: see [Testing](language/testing.md#running-tests).
-- Options go before the file. What follows the file is to be the program's, and since a program can't read arguments yet, anything there is an error.
+- Options go before the file. What follows the file is the program's [arguments](language/programs.md#arguments), and since a program can't read them yet, anything there is an error.
 
 `silver` is a front end. It finds the project, reads its `silver.toml` and those of the packages it uses, and calls the compiler, `silverc`, with the same command and options, adding each package as options of the compiler's own: see [Modules](language/modules.md#current-implementation). The options, such as `-b`, `-o` and `-O`, are `silverc`'s, and `silverc --help` lists them. The standard library is the package `std`, which every package and file uses without listing it, as the prelude's package.
 
@@ -41,6 +41,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
 | [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: ownership shared by the packages of one project isn't enforced yet, and there are no renamed imports; the build can't name another prelude |
 | [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: no `native type` or `CString`; the interpreter calls only the natives of `lang` and the standard library |
+| [Programs](language/programs.md) | `main`, arguments, exit status, standard error, the environment, files | Designed, not built: only `main` without parameters and the exit statuses |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, `panics`, the test runner | Partial: no library hooks |
 | [The `silver` tool](silver.md) | Its commands, `silver.toml`, finding a project, scripts | Partial: no remote packages; a script in no project can't say it needs a package; a program can't read arguments |
 
@@ -49,4 +50,4 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 These areas are expected but have no settled design, so the documents mention them only where they affect another feature:
 
 - Compile-time evaluation
-- Program arguments and exit codes
+- Files held open, and directories

@@ -220,11 +220,12 @@ The exceptions are the operations the language itself defines as panicking. An a
 `lang`'s `IoError` is what can go wrong between the program and the outside world:
 
 ```silver
-type IoError = NotUtf8 | ReadFailed(reason: String)
+type IoError = NotUtf8 | NotFound(path: String) | ReadFailed(reason: String) | WriteFailed(reason: String)
 ```
 
 - `NotUtf8` is input that isn't UTF-8. It carries nothing, as `decode` returns a bare `None`.
-- `ReadFailed` carries the system's message, such as `Is a directory`, and no error number, since those differ between systems. A kind of failure that programs want to tell apart becomes a member of its own.
+- `NotFound` is a [file](programs.md#files) that isn't there.
+- `ReadFailed` and `WriteFailed` carry the system's message, such as `Is a directory`, and no error number, since those differ between systems. A kind of failure that programs want to tell apart becomes a member of its own, as `NotFound` is.
 
 A function returns only the members it can produce, so a `match` on its result lists only those, and stays complete as `IoError` grows. `?` widens them into `IoError`, or into any list that holds them.
 
@@ -250,7 +251,7 @@ def main(): Unit ! IoError | ParseError {
 }
 ```
 
-An error returned from `main` is printed to standard error as `error: ` and the value, and the program exits with status 1. A panic exits with status 101, so a script can tell a program that reported a failure from one that's broken.
+An error returned from `main` is printed to standard error as `error: ` and the value, and the program exits with status 1. A panic exits with status 101, so a script can tell a program that reported a failure from one that's broken. [Programs](programs.md#exit-status) has the rest of what decides a program's status.
 
 ```
 error: Missing(port)
@@ -259,8 +260,6 @@ error: Missing(port)
 ## Open questions
 
 - How a function names a list of errors it receives, as a helper that describes a `Negative | Overflow` would. A list is written only after `!` today, so the helper takes a declared sum.
-- The exit statuses, 1 and 101, which are placeholders until program arguments and exit codes are designed.
-- Whether `print` reports a failure to write, as a `WriteFailed` member of `IoError`. It panics today.
 - Whether other maths written for speed counts as arithmetic under the standard library's rule, as `powInt` does.
 - A record of where an error was passed on by `?`, printed when it reaches `main` or a `!`.
 
@@ -271,4 +270,5 @@ Two proposals build on this: [checked operations](../proposals/checked-operation
 The implementation matches this description, except:
 
 - `Ok` and `Error` can't be passed as function values, as `Some` can't.
+- `IoError` has only `NotUtf8` and `ReadFailed`, until [files](programs.md#current-implementation) are built.
 - With an [invariant](user-types.md#current-implementation) on a type, which is to be removed, what's expected of `x!` or `x?` also picks a member over its sum, so `val c: Circle = Circle(1.0)!` builds the member.
