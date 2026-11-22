@@ -1,0 +1,8 @@
+// Handles compare equal or not by address, and aren't ordered.
+native type File
+
+native def open(): File
+
+def main(): Unit {
+    printl(open() < open())
+}

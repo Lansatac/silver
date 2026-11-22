@@ -23,6 +23,9 @@ static immutable RuntimeFunction[string] runtime = [
     "silver_format_float": RuntimeFunction("void", ["double", "ptr", "ptr"]),
     "silver_format_bool": RuntimeFunction("void", ["i1 zeroext", "ptr", "ptr"]),
     "silver_format_char": RuntimeFunction("void", ["i32", "ptr", "ptr"]),
+    "silver_format_address": RuntimeFunction("void", ["ptr", "ptr", "ptr"]),
+    "silver_toCString":   RuntimeFunction("ptr", ["ptr", "i64"]),
+    "silver_fromCString": RuntimeFunction("i1", ["ptr", "ptr", "ptr"]),
 
     "silver_readLine":    RuntimeFunction("i32", ["ptr", "ptr"]),
     "silver_arguments":   RuntimeFunction("void", ["ptr", "ptr"]),

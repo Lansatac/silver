@@ -820,6 +820,8 @@ struct TypeDecl
     /// `intrinsic type Name(params)`, which the compiler implements. `fields` are its
     /// constructor's parameters; a value of it has no fields.
     bool intrinsic;
+    /// `native type Name`, a handle to something a library owns: no fields, constructor or patterns.
+    bool native;
     /// The function holding the invariant, which syntax lowering declares beside the type with the
     /// fields as its parameters, or an invalid ID when it has none.
     Id!FunctionDecl invariantFunction;
@@ -1056,6 +1058,7 @@ private string printTypeDecl(const TypeDecl t)
     import std.array : join;
 
     auto name = t.name ~ printTypeParams(t.typeParams);
+    if (t.native) return "(native type " ~ name ~ ")";
     if (t.intrinsic)
     {
         return "(intrinsic type " ~ name ~ " (" ~ t.fields.map!(f => f.name ~ ": " ~ printTypeExpr(f.type)).join(", ") ~ "))";

@@ -455,6 +455,18 @@ package final class Declarer
         return _resolutions.declarations.types[decl].intrinsic;
     }
 
+    /// Whether `decl` is a `native type`.
+    package bool isNative(Id!TypeDecl decl)
+    {
+        return _resolutions.declarations.types[decl].native;
+    }
+
+    /// Whether `type` is a native type.
+    package bool isNativeType(Type type)
+    {
+        return _types[type].match!((const NominalData nominal) => isNative(nominal.decl), _ => false);
+    }
+
     package Type aliasType(Id!AliasDecl id)
     {
         if (auto known = id in _aliasTypes) return *known;
@@ -521,9 +533,10 @@ package final class Declarer
     {
         if (type == _types.error || _types.isInteger(type) || type == _types.float_ || type == _types.bool_) return;
         if (isReturn && (type == _types.unit || type == _types.never)) return;
+        if (isNativeType(type) || (_types.isOption(type) && isNativeType(_types.optionInner(type)))) return;
         _collector.reportError(DiagnosticCode.InvalidNativeType, span,
-            "`%s` can't cross into C; a native function takes integers, `Float` and `Bool`%s".format(_types.describe(type),
-                isReturn ? ", and can also return `Unit` or `Never`" : ""));
+            "`%s` can't cross into C; a native function takes integers, `Float`, `Bool`, native types and options of native types%s"
+                .format(_types.describe(type), isReturn ? ", and can also return `Unit` or `Never`" : ""));
     }
 
     package void declareSum(const TypeDecl decl)
@@ -633,6 +646,13 @@ package final class Declarer
     package void declareConstructor(const TypeDecl decl)
     {
         if (decl.members.length > 0) return declareSum(decl);
+        if (decl.native)
+        {
+            _typing.fields[decl.id] = null;
+            // Using the name as a value is reported where it's used.
+            _typing.symbolTypes[SymbolId(decl.id)] = _types.error;
+            return;
+        }
 
         auto fields = decl.fields.map!(f => FieldInfo(f.name, resolveType(f.type))).array;
         _typing.fields[decl.id] = fields;

@@ -9,6 +9,7 @@ module silver.interpreter.values;
 /// - A `[UInt8]` is a `string`, as a String is, so that one can be viewed as the other without
 ///   copying. Written `[]` it can still arrive as an empty `ArrayValue`.
 /// - A `Ref` is a `CellValue`, the one value that changes after it's built.
+/// - A value of a native type is a `Handle`, the real pointer the C function gave.
 /// - A `Jump` isn't a Silver value. It's what evaluating a `Break`, `Continue` or `Return` gives,
 ///   in place of the value an expression of type `Never` hasn't got.
 ///
@@ -27,6 +28,7 @@ struct Value
         record,
         closure,
         cell,
+        handle,
         jump,
     }
 
@@ -41,6 +43,7 @@ struct Value
         Record _record;
         Closure _closure;
         CellValue _cell;
+        Handle _handle;
         Jump _jump;
     }
 
@@ -96,6 +99,12 @@ struct Value
         _cell = value;
     }
 
+    this(Handle value)
+    {
+        _kind = Kind.handle;
+        _handle = value;
+    }
+
     this(Jump value)
     {
         _kind = Kind.jump;
@@ -121,6 +130,7 @@ struct Value
         else static if (is(T == Record)) return _record;
         else static if (is(T == Closure)) return _closure;
         else static if (is(T == CellValue)) return _cell;
+        else static if (is(T == Handle)) return _handle;
         else static if (is(T == Jump)) return _jump;
         else static assert(0, T.stringof ~ " is no layout of a Value");
     }
@@ -136,6 +146,7 @@ struct Value
         else static if (is(T == Record)) enum kindOf = Kind.record;
         else static if (is(T == Closure)) enum kindOf = Kind.closure;
         else static if (is(T == CellValue)) enum kindOf = Kind.cell;
+        else static if (is(T == Handle)) enum kindOf = Kind.handle;
         else static if (is(T == Jump)) enum kindOf = Kind.jump;
         else static assert(0, T.stringof ~ " is no layout of a Value");
     }
@@ -173,6 +184,14 @@ final class CellValue
     {
         this.contents = contents;
     }
+}
+
+/// A value of a native type. Only while it crosses into or out of a C function can it be null,
+/// standing for `None`. One that points into the collector's memory, as a `CString` does, keeps
+/// that memory alive.
+struct Handle
+{
+    void* address;
 }
 
 /// A function value: the Core function `target`, and the values its captures take.

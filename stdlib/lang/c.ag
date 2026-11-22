@@ -1,6 +1,14 @@
-// C's integer types whose width depends on the platform being compiled for.
+// C's integer types whose width depends on the platform being compiled for, and C's strings.
 module lang.c
 
 // 32 bits on Windows and 64 on Linux.
 intrinsic alias CLong
 intrinsic alias CULong
+
+// A NUL-terminated string, for natives that take or give a `char*`.
+native type CString
+
+// A copy of `s`'s bytes followed by a NUL. C reads up to the first NUL, so one inside `s` ends it early.
+intrinsic def toCString(s: String): CString
+// A copy of the bytes up to the NUL, or `None` if they aren't UTF-8.
+intrinsic def fromCString(s: CString): String?

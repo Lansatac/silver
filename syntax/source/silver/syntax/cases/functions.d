@@ -105,6 +105,16 @@ immutable Case[] natives = [
     rejectsDeclaration("intrinsic type Ref<T>"),
     rejectsDeclaration("intrinsic type Ref<T> = A | B"),
 
+    declaresAs("native type File", "(native type File)"),
+    declaresAs("native\ntype\nFile", "(native type File)"),
+    declaresAs("private native type File", "(private (native type File))"),
+    rejectsDeclaration("native type File<T>"),
+    rejectsDeclaration("native type File()"),
+    rejectsDeclaration("native type File(handle: Int)"),
+    rejectsDeclaration(`native("FILE") type File`),
+    rejectsDeclaration("native type file"),
+    rejectsDeclaration("native type File = A | B"),
+
     declaresAs(`native library "SDL2"`, `(native library "SDL2")`),
     declaresAs("module sdl.video\nnative library \"SDL2\"\nnative(\"SDL_Init\") def init(flags: UInt32): Int32", [
         "(module sdl.video)",

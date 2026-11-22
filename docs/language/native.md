@@ -44,9 +44,16 @@ native def fopen(path: CString, mode: CString): File?
 native def fclose(file: File): CInt
 ```
 
-A native type is a handle to something a library owns. It has no fields, constructor or patterns, so a value of one only ever comes from a native function. It can be stored, passed and compared with `==`, which compares addresses.
+A native type is a handle to something a library owns. It has no fields, constructor or patterns, so a value of one only ever comes from a native function. It can be private, but can't take type parameters.
 
-A handle is never null. A native that can return a null pointer declares its result as an option, and null arrives as `None`.
+A handle is an ordinary value otherwise. It can be stored in a product, a tuple, an array, an option, a `Ref` or a dictionary, and be a member of a sum (`type Source = :File | Path(text: String)`), and it can be passed to and returned from any function.
+
+- `==` compares addresses: two handles are equal when they point to the same place.
+- A handle hashes by its address, so it can be a dictionary key. Handles aren't ordered, so `<` on two is an error.
+- A handle prints as its type's name and its address in hexadecimal, as a product with one field would: `File(0x1f4a3c02340)`, or `Some(File(0x1f4a3c02340))` inside an option. `String(f)` and a hole `{f}` give the same text. The address differs from run to run.
+- A native type's module can replace its equality, hashing or printing with `opEquals`, `opHash` and `opString`, as for any declared type (see [Equality and hashing](functions.md#equality-and-hashing)).
+
+A handle is never null. A native that can return a null pointer declares its result as an option, and null arrives as `None`. An option of a native type taken as a parameter is passed as null when it's `None`. Only one level crosses: `File?` is a pointer that may be null, and `File??`, `[File]` or a tuple of handles can't appear in a native signature. Nothing checks a native declared to return `File` that returns null.
 
 Silver doesn't manage what a handle refers to. Releasing it is up to the program, through whatever the library provides.
 
@@ -57,9 +64,17 @@ A Silver `String` isn't NUL-terminated, so it is never passed directly. `std.c` 
 ```silver
 import std.c
 
+native def getenv(name: CString): CString?
+
+def home(): String? => fromCString(getenv(toCString("HOME"))?)
+
 val file = fopen(toCString("notes.txt"), toCString("r"))
-val text = fromCString(getenv(toCString("HOME"))?)
 ```
+
+- `toCString(s: String): CString` copies every byte of `s` and adds a NUL. A `\0` inside `s` isn't an error: C reads up to the first NUL, so it ends the string there.
+- `fromCString(s: CString): String?` copies the bytes up to the NUL. It's `None` when they aren't UTF-8, as for [`decode`](strings.md).
+- A `CString` from `toCString` stays valid while the program holds it. One that a native returns, such as `getenv`'s, points into the library's memory and is valid for as long as the library says.
+- A `CString` prints like any handle, as `CString(0x...)`, never as its text.
 
 ## Libraries
 
@@ -99,8 +114,8 @@ intrinsic def panic(message: String): Never
 
 ## Current implementation
 
-- `native def`, `native("...")`, `native library`, `intrinsic def`, `intrinsic alias`, `intrinsic type` and `std.c` are available. `native type`, `CString` and its conversions aren't, so a native signature can use only the integer types, `Float` and `Bool`, with `Unit` or `Never` also allowed as the return type.
+- `native def`, `native("...")`, `native library`, `native type`, `intrinsic def`, `intrinsic alias`, `intrinsic type`, `std.c`, `CString` and its conversions are available.
 - The platform being compiled for is always the one the compiler runs on.
-- Compiled programs call natives directly. The interpreter can call only the natives that `lang` and the standard library declare, which it has built in; calling any other native while interpreting is an error.
+- Compiled programs call natives directly. The interpreter can call only the natives it has built in: those that `lang` and the standard library declare, and the C library's `strlen`, `strcmp`, `strchr`, `getenv`, `malloc` and `free`. Calling any other native while interpreting is an error.
 - A module's `native library` is passed to the linker when the program calls one of that module's natives or uses one as a value.
 - An intrinsic with an `Any` parameter, such as `print`, can only be called, not used as a value.

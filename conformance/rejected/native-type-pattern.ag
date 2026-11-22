@@ -1,0 +1,10 @@
+// A handle has nothing in it for a pattern to take apart.
+native type File
+
+native def open(): File
+
+def main(): Unit {
+    match open() {
+        File(handle) => printl(handle)
+    }
+}

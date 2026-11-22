@@ -272,6 +272,24 @@ unittest
     ir.should.contain("declare ccc zeroext i1 @h()");
 }
 
+@("codegen passes a native type as a pointer, and an option of one as a pointer that may be null")
+unittest
+{
+    auto source = "native type Block\nnative def malloc(size: UInt64): Block?\nnative def free(block: Block?): Unit\n"
+        ~ "native def realloc(block: Block, size: UInt64): Block\n"
+        ~ "def main(): Unit {\n    val b = malloc(8)\n    printl(b != None)\n    free(b)\n    free(None)\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("declare ccc ptr @malloc(i64) nobuiltin");
+    ir.should.contain("declare ccc void @free(ptr) nobuiltin");
+    ir.should.contain("icmp ne ptr");
+    ir.should.contain("select i1");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("true\n");
+}
+
 @("codegen calls a native returning Unit as void, and one returning Never as noreturn")
 unittest
 {

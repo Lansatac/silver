@@ -272,6 +272,7 @@ private final class Parser
         case TokenKind.kwDef:
             return [one(parseFunction(FunctionKind.ordinary))];
         case TokenKind.kwNative:
+            if (kindAt(1) == TokenKind.kwType) return [one(parseNativeType())];
             return [one(parseFunction(FunctionKind.native))];
         case TokenKind.kwIntrinsic:
             switch (kindAt(1))
@@ -365,6 +366,27 @@ private final class Parser
         return ImportStmt(ids.next!ImportStmt, path, names, forward);
     }
 
+    /// `native type Name`, a handle to something a library owns.
+    private TypeDecl parseNativeType()
+    {
+        pos += 2;
+        auto nameToken = expect(TokenKind.typeName, "a type name");
+        if (at(TokenKind.less))
+        {
+            auto paramsStart = here;
+            parseTypeParameters();
+            throw error(spanFrom(paramsStart), "A native type can't take type parameters, since a C pointer has one type");
+        }
+        if (at(TokenKind.leftParen))
+        {
+            throw error(spanOf(tokens[pos]),
+                "A native type has no fields or constructor; its values only come from native functions");
+        }
+        auto native = TypeDecl(ids.next!TypeDecl, text(nameToken), spanOf(nameToken), null, false);
+        native.native = true;
+        return native;
+    }
+
     /// `def`, `native def`, `intrinsic def`, or a function an interface requires, which has no body.
     private FunctionDecl parseFunction(FunctionKind kind)
     {
@@ -376,6 +398,10 @@ private final class Parser
             {
                 symbol = plainString(parseStringLiteral(), "A native's symbol");
                 expect(TokenKind.rightParen, "`)`");
+                if (at(TokenKind.kwType))
+                {
+                    throw error(spanOf(tokens[pos]), "A native type is written `native type Name`, with no symbol");
+                }
             }
         }
         else if (kind == FunctionKind.intrinsic)

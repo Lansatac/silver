@@ -43,6 +43,9 @@ enum Intrinsic
     countOnes,
     /// Lowering expands a call of it from the `DerivedOrder` sema worked out.
     derivedCompare,
+    /// `lang.c`'s conversions between a String and a `CString`, each copying.
+    toCString,
+    fromCString,
     /// Not in the prelude: lowering calls it when `main` returns an error, to print it and exit.
     exitWithError,
     /// Not in the prelude either: the `[String]` lowering passes to a `main` that takes the arguments.

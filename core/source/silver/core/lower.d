@@ -553,6 +553,11 @@ private final class Lowering
             if (types.depth(type) > instanceNestingLimit) reportTypeNesting(type);
             types[type].match!(
                 (const NominalData nominal) {
+                    if (isNativeType(type))
+                    {
+                        program.nativeTypes[type] = true;
+                        return;
+                    }
                     if (isCellType(type))
                     {
                         auto contents = cellContents(type);
@@ -2287,7 +2292,7 @@ private final class Lowering
                 assert(0, "only the wrapper lowering makes for `main` calls `exitWithError` and `programArguments`");
             case Intrinsic.print, Intrinsic.printl, Intrinsic.readLine, Intrinsic.panic, Intrinsic.panics:
             case Intrinsic.readWhole, Intrinsic.writeWhole, Intrinsic.exists:
-            case Intrinsic.bytes, Intrinsic.uncheckedString:
+            case Intrinsic.bytes, Intrinsic.uncheckedString, Intrinsic.toCString, Intrinsic.fromCString:
                 break;
         }
         bool[] anyArgs;
@@ -2394,6 +2399,7 @@ private final class Lowering
         if (isPrimitive(type) || types.isFunction(type) || isCellType(type)) return prim(PrimOp.Equal, types.bool_, a, b);
         auto own = _analysis.equalityOf(type);
         if (own.found) return Expr(types.bool_, a.span, ExprKind(Call(writtenFunction(own), [a, b])));
+        if (isNativeType(type)) return prim(PrimOp.Equal, types.bool_, a, b);
         return Expr(types.bool_, a.span, ExprKind(Call(equalityFunction(type), [a, b])));
     }
 
@@ -2562,6 +2568,11 @@ private final class Lowering
             }
             body = chain;
         }
+        else if (isNativeType(type))
+        {
+            body = concat(text(typeName(type) ~ "("), Expr(types.string_, span, ExprKind(Prim(PrimOp.Format, [value()]))),
+                text(")"));
+        }
         else if (isCellType(type))
         {
             auto contents = Expr(cellContents(type), span, ExprKind(Cell(CellOp.Get, [value()])));
@@ -2601,6 +2612,7 @@ private final class Lowering
         if (isPrimitive(type) || types.isFunction(type) || isCellType(type)) return prim(PrimOp.Hash, types.uint_, value);
         auto own = _analysis.hashOf(type);
         if (own.found) return Expr(types.uint_, span, ExprKind(Call(writtenFunction(own), [value])));
+        if (isNativeType(type)) return prim(PrimOp.Hash, types.uint_, value);
         return Expr(types.uint_, span, ExprKind(Call(hashFunction(type), [value])));
     }
 
@@ -2718,6 +2730,15 @@ private final class Lowering
     {
         return types[type].match!(
             (const NominalData nominal) => _analysis.declarationOf(nominal.decl).intrinsic,
+            _ => false,
+        );
+    }
+
+    /// Whether `type` is a native type, a pointer that a library owns.
+    private bool isNativeType(Type type)
+    {
+        return types[type].match!(
+            (const NominalData nominal) => _analysis.declarationOf(nominal.decl).native,
             _ => false,
         );
     }

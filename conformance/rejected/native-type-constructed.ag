@@ -1,0 +1,7 @@
+// A native type has no constructor: its values only come from native functions.
+native type File
+
+def main(): Unit {
+    val file = File
+    printl(file == file)
+}

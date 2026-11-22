@@ -1317,13 +1317,16 @@ private final class Generator
         if (type == types.string_) return callRuntime("silver_hash_string", value);
         if (types.isFunction(type)) return emitFunctionHash(value);
         Fragment bits;
-        if (type in _program.cellContents) bits = _function.convert("ptrtoint", "ptr", value[0], "i64");
+        if (type in _program.cellContents || type in _program.nativeTypes)
+        {
+            bits = _function.convert("ptrtoint", "ptr", value[0], "i64");
+        }
         else if (types.isInteger(type)) bits = widened(type, value[0], span);
         else if (type == types.bool_) bits = _function.convert("zext", "i1", value[0], "i64");
         else if (type == types.char_) bits = _function.convert("zext", llvmType(type, span), value[0], "i64");
         else
         {
-            assert(type == types.float_, "lowering hashes only primitives, Refs and function values with `Hash`");
+            assert(type == types.float_, "lowering hashes only primitives, Refs, native types and function values with `Hash`");
             // `0.0 == -0.0`, so both hash as `0.0`.
             auto zero = _function.result("fcmp oeq double %s, 0.0".format(value[0]));
             auto chosen = _function.result("select i1 %s, double 0.0, double %s".format(zero.value, value[0]));
@@ -1385,6 +1388,15 @@ private final class Generator
             arguments = arguments.then(value);
             if (param == "void") continue;
             params ~= param;
+            if (isNullableHandle(arg.type))
+            {
+                // `None` is null, whatever its pointer scalar holds.
+                auto option = operandsOf(arg, value.operands, 2);
+                auto pointer = _function.result("select i1 %s, ptr %s, ptr null".format(option[0], option[1]));
+                arguments = arguments.then(pointer);
+                operands ~= "ptr " ~ pointer.value;
+                continue;
+            }
             operands ~= param ~ " " ~ operandOf(arg, value);
         }
 
@@ -1403,7 +1415,19 @@ private final class Generator
         _foreign[call.symbol] = declaration;
 
         auto called = arguments.then(_function.call(returnType, "@" ~ call.symbol, operands, "ccc"));
+        if (isNullableHandle(e.type))
+        {
+            auto present = _function.result("icmp ne ptr %s, null".format(called.value));
+            return called.then(present).withOperands([present.value, called.value]);
+        }
         return endIfNever(called, e.type);
+    }
+
+    /// Whether `type` is an option of a native type, which crosses into C as a pointer that may be null.
+    private bool isNullableHandle(Type type)
+    {
+        auto types = _program.types;
+        return types.isOption(type) && (types.optionInner(type) in _program.nativeTypes) !is null;
     }
 
     /// `type` as a C function takes or returns it: C's ABI wants `bool`, and integers narrower
@@ -1412,6 +1436,7 @@ private final class Generator
     {
         auto types = _program.types;
         if (type == types.bool_) return "zeroext i1";
+        if (isNullableHandle(type)) return "ptr";
         if (types.isInteger(type))
         {
             auto info = types.integerOf(type);
@@ -1445,6 +1470,11 @@ private final class Generator
             case Intrinsic.bytes, Intrinsic.uncheckedString:
                 // A String and a `[UInt8]` have one layout, so the value is already the other.
                 return emitExpr(call.args[0]);
+            case Intrinsic.toCString:
+                auto text = emitExpr(call.args[0]);
+                return text.then(callRuntime("silver_toCString", operandsOf(call.args[0], text.operands, 2)));
+            case Intrinsic.fromCString:
+                return emitFromCString(call.args[0]);
             case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect, Intrinsic.uncheckedChar:
             case Intrinsic.hash, Intrinsic.countOnes:
                 assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, `hash` a derived function, `countOnes` a CountOnes, and the others operations on a Cell");
@@ -1498,6 +1528,18 @@ private final class Generator
         auto status = callRuntime(name, operands ~ [FunctionState.outData, FunctionState.outLength]);
         auto text = loadOutSlice();
         return arguments.then(status).then(text).withOperands(status.value ~ text.operands);
+    }
+
+    /// `fromCString(s)`: the runtime says whether the bytes are UTF-8, and hands back the String
+    /// through the out slots, which makes the `String?`.
+    private Fragment emitFromCString(const Expr pointer)
+    {
+        _function.usesOutSlots = true;
+        auto value = emitExpr(pointer);
+        auto valid = callRuntime("silver_fromCString",
+            [operandOf(pointer, value), FunctionState.outData, FunctionState.outLength]);
+        auto text = loadOutSlice();
+        return value.then(valid).then(text).withOperands(valid.value ~ text.operands);
     }
 
     /// The String or array a runtime call has just written to the out slots.
@@ -1656,9 +1698,10 @@ private final class Generator
 
         // `()` has one value, so comparing two is a constant.
         if (operandType == types.unit) return arguments.then(Fragment.constant(prim.op == PrimOp.Equal ? "true" : "false"));
-        if (types.isFunction(operandType) || operandType in _program.cellContents)
+        if (types.isFunction(operandType) || operandType in _program.cellContents || operandType in _program.nativeTypes)
         {
-            assert(prim.op == PrimOp.Equal || prim.op == PrimOp.NotEqual, "function values and Refs are only compared for equality");
+            assert(prim.op == PrimOp.Equal || prim.op == PrimOp.NotEqual,
+                "function values, Refs and native types are only compared for equality");
             Fragment same;
             if (types.isFunction(operandType))
             {
@@ -1768,6 +1811,7 @@ private final class Generator
         if (type == types.float_) return callRuntimeForString("silver_format_float", value);
         if (type == types.bool_) return callRuntimeForString("silver_format_bool", value);
         if (type == types.char_) return callRuntimeForString("silver_format_char", value);
+        if (type in _program.nativeTypes) return callRuntimeForString("silver_format_address", value);
         assert(types.isFunction(type), "lowering formats anything but a primitive or a function itself");
         return loadScalars(descriptorScalars, value[0], 1, 2);
     }
@@ -3183,7 +3227,7 @@ private final class Generator
         }
         if (types.isTuple(type)) return recordScalars(type, span);
         if (type in _program.recordFields) return recordScalars(type, span);
-        if (type in _program.cellContents) return ["ptr"];
+        if (type in _program.cellContents || type in _program.nativeTypes) return ["ptr"];
         if (type in _program.sumMembers) return isAllMarkers(type) ? ["i32"] : ["i32", "ptr"];
         return notImplemented!(const(string)[])("the type " ~ types.describe(type), span);
     }

@@ -1,0 +1,9 @@
+// Memory from the C library, which only these functions look inside.
+module native_types_support.blocks
+
+import std.c
+
+native type Block
+
+native def malloc(size: CSize): Block?
+native def free(block: Block?): Unit

@@ -62,6 +62,15 @@ unittest
         ~ "    val now = nowNanos()\n    printl(now > 1600000000000000000)\n}").should.equal("4\n1024\ntrue\n");
 }
 
+@("a native type is the real pointer, and an option of one crosses into C as one that may be null")
+unittest
+{
+    run("import std.c\nnative def strchr(text: CString, c: CInt): CString?\nnative def strlen(text: CString): CSize\n"
+        ~ "def main(): Unit {\n    val text = toCString(\"abc\")\n    printl(fromCString(strchr(text, 98) ?? text))\n"
+        ~ "    printl(strchr(text, 122))\n    printl(strlen(text))\n    printl(String(text) == String(text))\n}")
+        .should.equal("Some(bc)\nNone\n3\ntrue\n");
+}
+
 @("read reports input it can't read as InputFailed, with the OS's message")
 unittest
 {

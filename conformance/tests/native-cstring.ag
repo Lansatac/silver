@@ -1,0 +1,41 @@
+import std.c
+
+native def strlen(text: CString): CSize
+native def strchr(text: CString, c: CInt): CString?
+native def strcmp(a: CString, b: CString): CInt
+native def getenv(name: CString): CString?
+
+def main(): Unit {
+    val hello = toCString("hello")
+    printl(strlen(hello))
+    printl(fromCString(hello))
+    printl(strcmp(hello, toCString("hello")) == 0)
+    printl(strcmp(hello, toCString("help")) < 0)
+    // Each conversion copies, so two of one String are different handles.
+    printl(hello == hello)
+    printl(hello != toCString("hello"))
+
+    printl(strlen(toCString("")))
+    printl(fromCString(toCString("")))
+    printl(fromCString(toCString("née, 日本")))
+    printl(strlen(toCString("née")))
+    // C reads up to the first NUL.
+    printl(strlen(toCString("a\0b")))
+    printl(fromCString(toCString("a\0b")))
+
+    // A result into the original: the rest from the first `l`, and nothing for a missing `z`.
+    printl(fromCString(strchr(hello, 108) ?? hello))
+    printl(strchr(hello, 122))
+    // The second byte of `é` on its own isn't UTF-8.
+    val accented = toCString("é!")
+    printl(fromCString(strchr(accented, 0xA9) ?? accented))
+    printl(fromCString(strchr(accented, 0x21) ?? accented))
+
+    printl(getenv(toCString("SILVER_CONFORMANCE_SURELY_UNSET_VARIABLE")))
+    val lookUp = getenv
+    printl(lookUp(toCString("SILVER_CONFORMANCE_SURELY_UNSET_VARIABLE")) == None)
+    val convert: (String) -> CString = toCString
+    printl(fromCString(convert("through a value")))
+    val back = fromCString
+    printl(back(hello))
+}

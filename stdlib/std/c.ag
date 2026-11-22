@@ -1,7 +1,7 @@
-// C's integer types, as the Silver type of the same width on the platform being compiled for.
+// C's integer types, as the Silver type of the same width on the platform being compiled for, and C's strings.
 module std.c
 
-// `CLong` and `CULong`, whose width depends on the platform.
+// `CLong` and `CULong`, whose width depends on the platform, and `CString` with its conversions.
 forward import lang.c
 
 // Every supported platform has a signed `char`.

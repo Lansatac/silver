@@ -24,6 +24,8 @@ struct Program
     const(Type)[][Type] sumMembers;
     /// What each `Ref` type the program uses holds.
     Type[Type] cellContents;
+    /// Each native type the program uses. A value of one is a pointer that a library owns.
+    bool[Type] nativeTypes;
     /// When the program is run for its tests, those tests in the order written, and `entryPoint`
     /// is unused.
     TestCase[] tests;
@@ -164,7 +166,9 @@ struct MakeClosure
 }
 
 /// A call to a `native def`: the C function `symbol`, through the C calling convention. Every
-/// argument is an integer, `Float` or `Bool`, and so is the result, unless it's `Unit` or `Never`.
+/// argument is an integer, `Float`, `Bool`, native type or option of a native type, and so is the
+/// result, unless it's `Unit` or `Never`. An option of a native type crosses as a pointer, `None`
+/// being null.
 struct ForeignCall
 {
     string symbol;
@@ -202,7 +206,8 @@ enum PrimOp
     ShiftLeft,
     ShiftRight,
     /// Comparisons take two arguments of one primitive type. `Equal` and `NotEqual` also take two
-    /// `Ref`s, equal when they're the same cell, and two function values, equal when they're
+    /// `Ref`s, equal when they're the same cell, two values of a native type, equal when they're the
+    /// same address, and two function values, equal when they're
     /// closures of the same function and its `captureEquality`, if it has one, says so.
     Equal,
     NotEqual,
@@ -217,10 +222,12 @@ enum PrimOp
     /// leave room to grow.
     Append,
     /// An integer, `Float`, `Bool` or function value as a String, the way `print` shows it: a
-    /// function value as its function's `printedName`.
+    /// function value as its function's `printedName`. A value of a native type is its address, as
+    /// `0x` and lowercase hex digits.
     Format,
-    /// An integer, `Float`, `Bool`, `Char`, String, `Ref` or function value as a `UInt` hash, with
-    /// its bits mixed. `0.0` and `-0.0` hash alike. A `Ref` hashes by which cell it is, and a
+    /// An integer, `Float`, `Bool`, `Char`, String, `Ref`, native type or function value as a `UInt`
+    /// hash, with its bits mixed. `0.0` and `-0.0` hash alike. A `Ref` hashes by which cell it is, a
+    /// native type by its address, and a
     /// function value by its function and, when that has a `captureHash`, what it gives.
     Hash,
     /// How many bits of a `UInt` are set, as an `Int`.

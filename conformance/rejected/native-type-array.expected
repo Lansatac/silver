@@ -1,0 +1,1 @@
+T0028: `[File]` can't cross into C; a native function takes integers, `Float`, `Bool`, native types and options of native types

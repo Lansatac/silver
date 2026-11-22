@@ -2036,7 +2036,8 @@ private final class TypeChecker
         return (*symbol).match!(
             (const Id!TypeDecl type) {
                 Id!TypeDecl marker;
-                if (_resolutions.declarations.types[type].fields.length == 0) marker = type;
+                auto decl = _resolutions.declarations.types[type];
+                if (decl.fields.length == 0 && !decl.native) marker = type;
                 return marker;
             },
             _ => Id!TypeDecl.init,
@@ -2625,6 +2626,13 @@ private final class TypeChecker
                 "A sum type has no value of its own; build one of its members");
             return _types.error;
         }
+        if (symbol.match!((const Id!TypeDecl type) => _declarer.isNative(type), _ => false))
+        {
+            _collector.reportError(DiagnosticCode.InvalidOperand, span,
+                "`%s` is a native type, which has no constructor; its values only come from native functions"
+                    .format(symbolName(symbol)));
+            return _types.error;
+        }
 
         if (!symbol.match!((const Id!TypeDecl type) => requireInvariant(type, span, site), _ => true)) return _types.error;
 
@@ -2680,7 +2688,8 @@ private final class TypeChecker
         auto subject = (*given)[0];
         if (subject == _types.error) return type;
 
-        auto declared = _types[subject].match!((const NominalData nominal) => !_declarer.isIntrinsic(nominal.decl), _ => false);
+        auto declared = _types[subject].match!(
+            (const NominalData nominal) => !_declarer.isIntrinsic(nominal.decl) && !_declarer.isNative(nominal.decl), _ => false);
         if (!declared)
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, expr.span,
@@ -7670,6 +7679,12 @@ private final class TypeChecker
                 .format(printTypeExpr(constructor.type), printTypeExpr(constructor.type)));
         }
 
+        if (_declarer.isNative(decl))
+        {
+            checkArgumentsAsUnknown();
+            return reportPattern(pattern.span, "A native type isn't taken apart by a pattern; bind a value of it with `name: %s`"
+                .format(printTypeExpr(constructor.type)));
+        }
         if (_declarer.isIntrinsic(decl))
         {
             checkArgumentsAsUnknown();

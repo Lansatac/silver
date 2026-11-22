@@ -1,0 +1,84 @@
+import std.c
+import std.ref
+import std.string
+import native_types_support.blocks
+
+private native type Found
+private native("strchr") def search(text: CString, c: CInt): Found?
+
+// A module can print its own native type as it likes.
+private native type Quiet
+private native("strchr") def quietly(text: CString, c: CInt): Quiet?
+private def opString(q: Quiet): String => "Quiet"
+
+type Owned(name: String, block: Block)
+type Place = :Block | Nowhere
+
+def allocate(size: CSize): Block => match malloc(size) {
+    Some(block) => block
+    None => panic("out of memory")
+}
+
+def where(place: Place): String => match place {
+    _: Block => "a block"
+    Nowhere => "nowhere"
+}
+
+// Whether `text` is `name(0x...)` with lowercase hex digits, which is how a handle prints.
+def printsAsHandle(text: String, name: String): Bool {
+    val digits = stripSuffix(stripPrefix(text, name ~ "(0x") ?? "", ")") ?? ""
+    if isEmpty(digits) { return false }
+    for b in bytes(digits) {
+        if !((b >= 48 && b <= 57) || (b >= 97 && b <= 102)) { return false }
+    }
+    true
+}
+
+def main(): Unit {
+    val a = allocate(16)
+    val b = allocate(16)
+    printl(a == a)
+    printl(a != b)
+
+    val owned = Owned("first", a)
+    printl(owned.block == a)
+    printl(owned == Owned("first", a))
+    printl(owned != Owned("first", b))
+    val blocks = [a, b]
+    printl(blocks[1] == b)
+    val cell = Ref(a)
+    cell.set(b)
+    printl(cell.get() == b)
+    val maybe: Block? = Some(a)
+    printl(maybe == Some(a))
+    printl(maybe != None)
+    val names = [a: "a", b: "b"]
+    printl(names[b])
+    val byOwner = [owned: 1]
+    printl(byOwner[Owned("first", a)])
+    printl(byOwner[Owned("first", b)])
+    printl(where(a))
+    printl(where(Nowhere))
+
+    printl(printsAsHandle(String(a), "Block"))
+    printl(printsAsHandle("{b}", "Block"))
+    printl(String(Some(a)) == "Some(" ~ String(a) ~ ")")
+    printl(String(owned) == "Owned(first, " ~ String(a) ~ ")")
+    printl(String(a) != String(b))
+    val text = toCString("handle")
+    val found = search(text, 110)
+    printl(match found {
+        Some(f) => printsAsHandle(String(f), "Found")
+        None => false
+    })
+    printl(search(text, 122) == None)
+    printl(quietly(text, 104))
+
+    val allocator = malloc
+    val c = allocator(8)
+    printl(c != None)
+    free(c)
+    free(None)
+    free(Some(a))
+    free(Some(b))
+}

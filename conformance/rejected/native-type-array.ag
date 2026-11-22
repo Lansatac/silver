@@ -1,0 +1,8 @@
+// An array of handles has no C equivalent.
+native type File
+
+native def closeAll(files: [File]): Unit
+
+def main(): Unit {
+    printl(1)
+}

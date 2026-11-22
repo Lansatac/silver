@@ -12,7 +12,7 @@ import silver.sema;
 import silver.core;
 import silver.interpreter.errors;
 import silver.interpreter.stack : checkStack, runOnLargeStack;
-import silver.interpreter.foreign : foreignFunctions;
+import silver.interpreter.foreign : addressText, foreignFunctions, fromCString, toCString;
 import silver.interpreter.values;
 import silver.runtime.files : pathExists, readWhole, writeWhole;
 
@@ -534,10 +534,13 @@ final class Evaluator
                 default: assert(0, "an integer type with no D type of its width");
             }
         }
-        if (lhs.has!Closure || lhs.has!CellValue)
+        if (lhs.has!Closure || lhs.has!CellValue || lhs.has!Handle)
         {
-            assert(prim.op == PrimOp.Equal || prim.op == PrimOp.NotEqual, "function values and Refs are only compared for equality");
-            auto same = lhs.has!Closure ? sameFunction(lhs.as!Closure, rhs.as!Closure) : lhs.as!CellValue is rhs.as!CellValue;
+            assert(prim.op == PrimOp.Equal || prim.op == PrimOp.NotEqual,
+                "function values, Refs and native types are only compared for equality");
+            auto same = lhs.has!Closure ? sameFunction(lhs.as!Closure, rhs.as!Closure)
+                : lhs.has!Handle ? lhs.as!Handle.address is rhs.as!Handle.address
+                : lhs.as!CellValue is rhs.as!CellValue;
             return Value(prim.op == PrimOp.Equal ? same : !same);
         }
         if (lhs.has!double) return floatPrim(prim.op, lhs.as!double, rhs);
@@ -570,7 +573,8 @@ final class Evaluator
         }
         if (value.has!string) return hashBytes(cast(const(ubyte)[]) value.as!string);
         if (value.has!CellValue) return mixHash(cast(size_t) cast(void*) value.as!CellValue);
-        assert(value.has!Closure, "lowering hashes only primitives, Refs and function values with `Hash`");
+        if (value.has!Handle) return mixHash(cast(size_t) value.as!Handle.address);
+        assert(value.has!Closure, "lowering hashes only primitives, Refs, native types and function values with `Hash`");
         auto closure = value.as!Closure;
         auto captures = _program.functions[closure.target].captureHash;
         auto hash = captures == noFunction ? 0 : cast(ulong) invoke(captures, [value], null).as!long;
@@ -895,6 +899,11 @@ final class Evaluator
                 return Value(ArrayValue(each));
             case Intrinsic.bytes, Intrinsic.uncheckedString:
                 return Value(byteString(args[0]));
+            case Intrinsic.toCString:
+                return Value(Handle(toCString(byteString(args[0]))));
+            case Intrinsic.fromCString:
+                auto text = fromCString(args[0].as!Handle.address);
+                return text is null ? Value(Record(0, null)) : Value(Record(1, [Value(text)]));
             case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect, Intrinsic.uncheckedChar:
             case Intrinsic.hash, Intrinsic.countOnes:
                 assert(0, "lowering makes `length` a Length, `assert` and `expect` a test, `uncheckedChar` a Convert, `hash` a derived function, `countOnes` a CountOnes, and the others operations on a Cell");
@@ -922,7 +931,25 @@ final class Evaluator
         Value[] args;
         auto jump = all(call.args, frame, args);
         if (jump.has!Jump) return jump;
-        return (*native)(args);
+        foreach (i, ref arg; args)
+        {
+            if (isNullableHandle(call.args[i].type))
+            {
+                auto option = arg.as!Record;
+                arg = option.tag == 0 ? Value(Handle(null)) : option.fields[0];
+            }
+        }
+        auto result = (*native)(args);
+        if (!isNullableHandle(e.type)) return result;
+        auto handle = result.as!Handle;
+        return handle.address is null ? Value(Record(0, null)) : Value(Record(1, [result]));
+    }
+
+    /// Whether `type` is an option of a native type, which crosses into C as a pointer that may be null.
+    private bool isNullableHandle(Type type)
+    {
+        auto types = _program.types;
+        return types.isOption(type) && (types.optionInner(type) in _program.nativeTypes) !is null;
     }
 
     /// A primitive or function `value` of `type`, as `print` shows it.
@@ -945,6 +972,7 @@ final class Evaluator
             return d != d ? "nan" : d.to!string;
         }
         if (value.has!string) return value.as!string;
+        if (value.has!Handle) return addressText(value.as!Handle.address);
         assert(value.has!Closure, "lowering formats anything else itself");
         return _program.functions[value.as!Closure.target].printedName;
     }

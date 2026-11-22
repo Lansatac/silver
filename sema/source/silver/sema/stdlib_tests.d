@@ -41,6 +41,9 @@ unittest
 unittest
 {
     analyzed("import std.c\nnative def f(x: CInt, y: CLong, z: CSize): CUChar\ndef main(): Unit { }").shouldHaveNoDiagnostics();
+    analyzed("import std.c\nnative def getenv(name: CString): CString?\n"
+        ~ "def main(): Unit => printl(fromCString(getenv(toCString(\"HOME\")) ?? toCString(\"\")))").shouldHaveNoDiagnostics();
+    analyzed("def main(): Unit => printl(toCString(\"a\"))").shouldReport(DiagnosticCode.UnknownName, At("toCString", 1));
 }
 
 @("std.c's long is as wide as the target says, and its other types are the same everywhere")

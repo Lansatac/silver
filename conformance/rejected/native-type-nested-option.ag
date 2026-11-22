@@ -1,0 +1,10 @@
+// Only one option of a native type crosses into C, as a pointer that may be null.
+native type File
+
+alias MaybeFile = File?
+
+native def open(): MaybeFile?
+
+def main(): Unit {
+    printl(open() == None)
+}

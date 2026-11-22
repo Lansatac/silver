@@ -2732,6 +2732,43 @@ unittest
     }
 }
 
+@("a native type and an option of one cross into C, and nothing else made of one does")
+unittest
+{
+    enum file = "native type File\nalias MaybeFile = File?\n";
+    analyzed(file ~ "native def open(name: Int): File?\nnative def close(file: File, other: File?): File\ndef main(): Unit { }")
+        .shouldHaveNoDiagnostics();
+    foreach (type; ["[File]", "(File, File)", "MaybeFile?", "(File) -> Int"])
+    {
+        analyzed(file ~ "native def f(x: " ~ type ~ "): Int\ndef main(): Unit { }")
+            .shouldReport(DiagnosticCode.InvalidNativeType, At(type, 1));
+    }
+}
+
+@("a native type has no constructor, fields or patterns, and is compared only for equality")
+unittest
+{
+    enum file = "native type File\nnative def open(): File\ntype Held(file: File)\ntype Source = :File | Path(text: String)\n";
+    analyzed(file ~ `def main(): Unit {
+    val f = open()
+    val held = Held(f)
+    val source: Source = f
+    val ok = f == held.file && [f: 1][f] != None && Some(f) != None
+    match source {
+        g: File => printl(g == f)
+        Path(text) => printl(text)
+    }
+}`).shouldHaveNoDiagnostics();
+    analyzed(file ~ "def main(): Unit {\n    val f = File\n}").shouldReport(DiagnosticCode.InvalidOperand, At("File", 5));
+    analyzed(file ~ "def main(): Unit {\n    val f = File()\n}").shouldReport(DiagnosticCode.InvalidOperand, At("File", 5));
+    analyzed(file ~ "def main(): Unit {\n    val f = open().handle\n}")
+        .shouldReport(DiagnosticCode.UnknownMember, At("open().handle", 1));
+    analyzed(file ~ "def main(): Unit {\n    val f = open() < open()\n}")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("open() < open()", 1));
+    analyzed(file ~ "def main(): Unit {\n    match open() {\n        File(x) => printl(1)\n    }\n}")
+        .shouldReport(DiagnosticCode.PatternMismatch, At("File(x)", 1));
+}
+
 @("an intrinsic is declared only in lang, and only for one the compiler implements")
 unittest
 {
