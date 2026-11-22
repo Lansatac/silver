@@ -12,7 +12,8 @@
 		"./codegen/",
 		"./testing/",
 		"./conformance/",
-		"./frontend/"
+		"./frontend/",
+		"./testrunner/"
 	],
 	"license": "MIT",
 	"copyright": "Copyright © 2026, Jason Yegge",

@@ -15,7 +15,7 @@
 			"name": "unittest",
 			"targetPath": "..",
 			"dependencies": {
-				"silly": "~>1.2.0-dev.2",
+				"silver:testrunner": "*",
 				"fluent-asserts": "~>2.1"
 			},
 			"libs-windows": ["psapi"],
