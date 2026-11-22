@@ -1,11 +1,19 @@
 {
   "name": "Silver Development",
   "build": { "dockerfile": "Dockerfile" },
-  "workspaceMount": "source=${localWorkspaceFolder},target=/code,type=bind",
+  // The source is a clone on a volume, made from the Windows clone by setup.sh. Working on the
+  // Windows drive directly goes through WSL's 9p file sharing, which was about 5x slower to build
+  // and test on. The Windows clone is mounted for setup.sh, the files it links, and as a remote.
+  "workspaceMount": "source=silver-code,target=/code,type=volume",
   "workspaceFolder": "/code",
+  "postCreateCommand": "bash /mnt/windows-silver/.devcontainer/setup.sh",
+  // Conformance writes thousands of IR files, objects and executables to /tmp per run, and runs
+  // the executables from there, so it needs exec.
+  "runArgs": ["--tmpfs", "/tmp:rw,exec,mode=1777,size=8g"],
   "mounts": [
     // Keeps ~/.dub (fetched packages) and shell history across container rebuilds.
-    "source=silver-dev-home,target=/home/dev,type=volume"
+    "source=silver-dev-home,target=/home/dev,type=volume",
+    "source=${localWorkspaceFolder},target=/mnt/windows-silver,type=bind"
   ],
   "customizations": {
     "vscode": {
