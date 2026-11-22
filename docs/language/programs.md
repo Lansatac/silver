@@ -128,7 +128,7 @@ def main(args: [String]): Unit ! IoError {
 
 - A path is a `String`, relative to the directory the program was started in unless it's absolute, with `/` between its parts on every system.
 - A path ending in a separator names a directory, so it's never a file: `readFile("notes.txt/")` is `ReadFailed`, and `writeFile("new/", text)` is `WriteFailed` rather than creating a file `new`. `exists("logs/")` is `true` only when `logs` is a directory.
-- Nothing else about a path is Silver's: the system decides the rest. On Windows `\` separates parts too, a name's case doesn't matter, and `NUL` is a device, where on Linux each is an ordinary character or name.
+- Nothing else about a path is Silver's: the system decides the rest. On Windows `\` separates parts too, so a path ending in one is refused there as well, a name's case doesn't matter, and `NUL` is a device. Elsewhere `\` is an ordinary character in a name, at the end as anywhere, and `NUL` an ordinary name.
 - `readFile` returns the file's bytes as text when they're UTF-8, and nothing is translated: a `\r\n` stays one, and a byte-order mark at the start stays a `\u{feff}`. `readBytes` is for everything else.
 - `writeFile` and `writeBytes` replace the file, creating it when it isn't there. `appendFile` adds to its end, creating it too, and two programs appending to one file don't overwrite each other. None creates a directory.
 - A write isn't all or nothing: one that fails part way, as on a full disk, can leave part of the file.
@@ -166,6 +166,7 @@ On Windows the reason reads `The system cannot find the path specified.` instead
 - A pattern such as `*.txt` arrives unexpanded on Windows, where nothing expands it, and as the files it names elsewhere, where the shell does. To settle when directories are designed.
 - Standard input as bytes, and reading all of it at once.
 - Starting another program.
+- An error whose fields are both Strings prints them side by side without quotes, so `WriteFailed(notes, final.txt, Access is denied.)` doesn't show where the path ends. Whether Strings inside a printed value, or only in the `error:` line, should be quoted.
 - Whether each test starts in an empty directory of its own. A `test` that writes a file today writes it into the directory `silver test` was run from, and two tests using one name see each other's file.
 - `exists` doesn't say whether it found a file or a directory, and is `false` for a directory it isn't allowed to look in. Functions that ask which, such as `isFile` and `isDirectory`, belong with the directory functions, rather than a second meaning for `exists`.
 
