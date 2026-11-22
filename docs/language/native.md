@@ -92,6 +92,8 @@ native("SDL_Init") def init(flags: UInt32): CInt
 
 `native library` names the library that provides every native function in the module. A module has at most one. Without it, natives are looked up in the C library and Silver's own runtime.
 
+A compiled program is linked against the library. An interpreted one loads it as the program starts, so it must exist as a shared library, `SDL2.dll` on Windows or `libSDL2.so` on Linux, where the system looks for shared libraries. Either way, a library or function that can't be found is an error before `main` runs.
+
 ## Lifetimes
 
 Anything passed to a native function is valid until that call returns. A library that keeps a pointer for longer must be given something the program keeps alive itself, such as a handle the library allocated.
