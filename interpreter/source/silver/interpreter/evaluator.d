@@ -26,12 +26,15 @@ final class Evaluator
     /// Whether tests are running, so `read` finds no input; and the failures of the current one.
     private bool _testing;
     private string[] _failures;
+    /// The program's arguments, each already known to be UTF-8.
+    private string[] _arguments;
 
     /// With `useStdOut`, output goes straight to standard output; otherwise it's kept for `output`.
-    this(Program program, bool useStdOut = false)
+    this(Program program, bool useStdOut = false, string[] arguments = null)
     {
         _program = program;
         _useStdOut = useStdOut;
+        _arguments = arguments;
     }
 
     /// Everything the program has printed so far.
@@ -43,6 +46,7 @@ final class Evaluator
     /// Throws: RuntimeError when the program panics, and ProgramFailed when `main` returns an error.
     void run()
     {
+        if (auto mistake = argumentsMistake(_arguments)) throw new ProgramFailed(mistake);
         runOnLargeStack(&runProgram);
     }
 
@@ -755,6 +759,10 @@ final class Evaluator
                 throw new CodedException(DiagnosticCode.ExplicitPanic, args[0].as!string);
             case Intrinsic.exitWithError:
                 throw new ProgramFailed(args[0].as!string);
+            case Intrinsic.programArguments:
+                Value[] each;
+                foreach (argument; _arguments) each ~= Value(argument);
+                return Value(ArrayValue(each));
             case Intrinsic.bytes, Intrinsic.uncheckedString:
                 return Value(byteString(args[0]));
             case Intrinsic.length, Intrinsic.get, Intrinsic.set, Intrinsic.update, Intrinsic.assert_, Intrinsic.expect, Intrinsic.uncheckedChar:

@@ -1,0 +1,13 @@
+alias Words = [String]
+
+def shout(words: Words): Words => words.map(w => w ~ "!").array()
+
+def main(words: Words): Unit {
+    mutable val more = words
+    more ~= ["c"]
+    val again = words ~ ["d"]
+    printl(words)
+    printl(more)
+    printl(again)
+    printl(shout(words))
+}

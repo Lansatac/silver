@@ -38,6 +38,25 @@ version (unittest)
         string errorMessage;
         /// The program's standard input, from `.stdin`. Null when the case has none.
         string inputPath;
+        /// The program's arguments, from `.args`, one to a line, so an empty line is an empty argument.
+        string[] arguments;
+    }
+
+    /// The arguments in the `.args` file at `path`: each line, without its `\n` or `\r\n`.
+    string[] argumentsIn(string path)
+    {
+        import std.string : chomp, indexOf;
+
+        auto text = cast(string) readBytes(path);
+        string[] lines;
+        while (text.length > 0)
+        {
+            auto end = text.indexOf('\n');
+            if (end < 0) end = text.length;
+            lines ~= text[0 .. end].chomp("\r");
+            text = text[end == text.length ? end : end + 1 .. $];
+        }
+        return lines;
     }
 
     /// Every `*.ag` in `directory` under conformance/ with its `.expected` output, sorted by name.
@@ -57,8 +76,9 @@ version (unittest)
             auto errorPath = buildPath(casesDirectory, name ~ ".error");
             auto errorMessage = exists(errorPath) ? readText(errorPath).strip : null;
             auto inputPath = buildPath(casesDirectory, name ~ ".stdin");
+            auto argumentsPath = buildPath(casesDirectory, name ~ ".args");
             result ~= Case(name, entry.name, readText(expectedPath).normalizeNewlines, panicMessage, errorMessage,
-                exists(inputPath) ? inputPath : null);
+                exists(inputPath) ? inputPath : null, exists(argumentsPath) ? argumentsIn(argumentsPath) : null);
         }
         assert(result.length > 0, "No conformance .ag files were found in " ~ directory);
         return result.sort!((a, b) => a.name < b.name).release;
@@ -316,7 +336,7 @@ version (unittest)
             return "linking failed (IR kept at " ~ irPath ~ "):\n" ~ linked.output;
         }
 
-        auto process = pipeProcess([exePath], Redirect.stdin | Redirect.stdout | Redirect.stderrToStdout);
+        auto process = pipeProcess([exePath] ~ c.arguments, Redirect.stdin | Redirect.stdout | Redirect.stderrToStdout);
         if (c.inputPath !is null)
         {
             process.stdin.rawWrite(readBytes(c.inputPath));
@@ -379,8 +399,9 @@ version (unittest)
             return statement.startsWith("import ") && !statement.startsWith("import std");
         }
 
-        // A bundle's members are loaded with the bundle's packages, not their own.
-        if (c.inputPath !is null || exists(packagesFile(c)))
+        // A bundle's members are loaded with the bundle's packages, not their own, and run with its
+        // arguments, which are none.
+        if (c.inputPath !is null || c.arguments !is null || exists(packagesFile(c)))
         {
             return false;
         }
@@ -391,7 +412,8 @@ version (unittest)
             return false;
         }
         auto lines = text.lineSplitter.map!(line => line.strip).array;
-        return lines.canFind!(line => line.startsWith("def main("))
+        // The bundle calls each member's `main` with nothing.
+        return lines.canFind!(line => line.startsWith("def main()"))
             && !lines.canFind!(line => line.startsWith("module ") || importsSibling(line));
     }
 
@@ -525,7 +547,7 @@ version (unittest)
         if (prepare(c, context, program, lowered) !is null) return null;
         try
         {
-            runWithInput(c, new Evaluator(lowered));
+            runWithInput(c, new Evaluator(lowered, false, c.arguments));
         }
         catch (DiagnosticException e)
         {
@@ -560,7 +582,7 @@ version (unittest)
             return failure;
         }
 
-        auto evaluator = new Evaluator(lowered);
+        auto evaluator = new Evaluator(lowered, false, c.arguments);
         try
         {
             runWithInput(c, evaluator);
@@ -591,7 +613,7 @@ version (unittest)
             return failure;
         }
 
-        auto evaluator = new Evaluator(lowered);
+        auto evaluator = new Evaluator(lowered, false, c.arguments);
         try
         {
             runWithInput(c, evaluator);
@@ -618,7 +640,7 @@ version (unittest)
             return failure;
         }
 
-        auto evaluator = new Evaluator(lowered);
+        auto evaluator = new Evaluator(lowered, false, c.arguments);
         try
         {
             runWithInput(c, evaluator);
@@ -680,6 +702,8 @@ version (unittest)
     {
         auto directory = buildPath(tempDir, "silver-conformance-" ~ kind
             ~ (optimization == Optimization.full ? "-optimized-" : "-") ~ thisProcessID.to!string);
+        // A failed run keeps its files, and a later process can be given the same ID.
+        if (exists(directory)) rmdirRecurse(directory);
         mkdirRecurse(directory);
         return directory;
     }

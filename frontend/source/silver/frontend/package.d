@@ -19,6 +19,7 @@ immutable usage = "Usage: silver <file>                           run <file>\n"
     ~ "       silver test [OPTION]...                 run the tests of the project here\n"
     ~ "\n"
     ~ "A word that isn't one of these commands is a file, so a file named `build` is `silver ./build`.\n"
+    ~ "What follows the file is the program's arguments. With no file, or a directory, they follow `--`.\n"
     ~ "Options go before the file, and are the compiler's: run `silverc --help` for them, other than\n"
     ~ "--show-command, which prints the compiler's command line before running it.\n"
     ~ "A silver.toml in the file's directory or above describes its project's packages. With no file,\n"
@@ -35,9 +36,10 @@ shared static this()
         ~ "above the working directory describes, whose directory holds it: the silver.toml's directory for\n"
         ~ "its own package, and the `path` of a package it describes.";
     commandUsage = [
-        "run": "Usage: silver run [OPTION]... <file>        run <file>\n"
-            ~ "       silver run [OPTION]...               run the program of the package silver is started in\n"
-            ~ "       silver run [OPTION]... <directory>   run the program of the package at <directory>\n\n"
+        "run": "Usage: silver run [OPTION]... <file> [ARGUMENT]...              run <file>\n"
+            ~ "       silver run [OPTION]... [-- ARGUMENT...]               run the program of the package silver is started in\n"
+            ~ "       silver run [OPTION]... <directory> [-- ARGUMENT...]   run the program of the package at <directory>\n\n"
+            ~ "What follows the file, or `--`, is the program's arguments, untouched.\n"
             ~ startedIn ~ "\nA package's program is its module that declares `main`, or the one package it describes\n"
             ~ "that's a program. When several are programs, silver lists them, and one is run by its\n"
             ~ "directory, as `silver run compiler`. A package with a silver.toml of its own is run from its\n"
@@ -135,12 +137,15 @@ struct Arguments
     string[] options;
     /// The file or directory, or null when there's none.
     string file;
-    /// What follows the file, which is the program's.
+    /// What follows the file, which is the program's, or with `dashed`, what follows `--`.
     string[] after;
     bool show;
+    /// Whether `--` came where the file would be, so there's no file and what follows it is the program's.
+    bool dashed;
 }
 
-/// Takes `rest` apart. The file is the first word that isn't an option or an option's value.
+/// Takes `rest` apart. The file is the first word that isn't an option or an option's value, and `--`
+/// in its place says there's none.
 Arguments split(string[] rest)
 {
     import std.algorithm : canFind, startsWith;
@@ -156,6 +161,12 @@ Arguments split(string[] rest)
         {
             result.options ~= rest[i .. i + 2 > rest.length ? rest.length : i + 2];
             i++;
+        }
+        else if (rest[i] == "--")
+        {
+            result.after = rest[i + 1 .. $];
+            result.dashed = true;
+            return result;
         }
         else if (!rest[i].startsWith("-") || rest[i] == "-")
         {
@@ -182,6 +193,9 @@ unittest
     assert(split(["f.ag", "--show-command"]) == Arguments([], "f.ag", ["--show-command"]));
     assert(split(["-b"]) == Arguments(["-b"], null, []));
     assert(split([]) == Arguments.init);
+    assert(split(["-b", "llvm", "--", "a", "--", "-b"]) == Arguments(["-b", "llvm"], null, ["a", "--", "-b"], false, true));
+    assert(split(["-o", "--", "f.ag"]) == Arguments(["-o", "--"], "f.ag", []));
+    assert(split(["dir", "--", "a"]) == Arguments([], "dir", ["--", "a"]));
 }
 
 @("the copy of the compiler's options with values matches the compiler's own")
@@ -202,6 +216,81 @@ unittest
     foreach (m; matchAll(text[start .. end], regex(`"([^"]*)"`))) theirs ~= m[1];
     auto ours = compilerOptionsWithValues.dup;
     assert(theirs.sort.release == ours.sort.release, "the front end's copy differs from " ~ driver);
+}
+
+/// What ends a program given `arguments` before its `main` starts, as `silverc` and a compiled program
+/// say it, or null when every one is UTF-8. A copy of `argumentsMistake` in interpreter/errors.d.
+string notUtf8(const string[] arguments)
+{
+    import std.format : format;
+    import std.utf : UTFException, validate;
+
+    foreach (i, argument; arguments)
+    {
+        try validate(argument);
+        catch (UTFException) return "argument %s isn't UTF-8".format(i + 1);
+    }
+    return null;
+}
+
+/// The command line as it was given. On Windows druntime turns an unpaired surrogate into U+FFFD, which
+/// would hand a program a different argument, so the command line is read again and such an argument
+/// written as WTF-8, which isn't UTF-8 and is refused. A copy of `exactArguments` in source/silver/driver.d.
+string[] exactArguments(string[] given)
+{
+    version (Windows)
+    {
+        import core.sys.windows.shellapi : CommandLineToArgvW;
+        import core.sys.windows.winbase : GetCommandLineW, LocalFree;
+        import core.stdc.wchar_ : wcslen;
+
+        int count;
+        auto wide = CommandLineToArgvW(GetCommandLineW(), &count);
+        if (wide is null) return given;
+        scope (exit) LocalFree(wide);
+        if (count != given.length) return given;
+        auto exact = given.dup;
+        foreach (i; 0 .. count) exact[i] = wtf8(wide[i][0 .. wcslen(wide[i])]);
+        return exact;
+    }
+    else return given;
+}
+
+/// `text` as UTF-8, with each unpaired surrogate encoded as if it were a code point.
+string wtf8(const(wchar)[] text)
+{
+    char[] result;
+    void put(uint c)
+    {
+        if (c < 0x80) result ~= cast(char) c;
+        else if (c < 0x800) result ~= [cast(char)(0xC0 | c >> 6), cast(char)(0x80 | (c & 0x3F))];
+        else if (c < 0x10000)
+            result ~= [cast(char)(0xE0 | c >> 12), cast(char)(0x80 | (c >> 6 & 0x3F)), cast(char)(0x80 | (c & 0x3F))];
+        else result ~= [cast(char)(0xF0 | c >> 18), cast(char)(0x80 | (c >> 12 & 0x3F)), cast(char)(0x80 | (c >> 6 & 0x3F)),
+            cast(char)(0x80 | (c & 0x3F))];
+    }
+    for (size_t i = 0; i < text.length; i++)
+    {
+        uint c = text[i];
+        if (c >= 0xD800 && c < 0xDC00 && i + 1 < text.length && text[i + 1] >= 0xDC00 && text[i + 1] < 0xE000)
+        {
+            c = 0x10000 + ((c - 0xD800) << 10) + (text[i + 1] - 0xDC00);
+            i++;
+        }
+        put(c);
+    }
+    return result.idup;
+}
+
+@("WTF-8 is UTF-8 for text with no unpaired surrogate, and isn't UTF-8 for text with one")
+unittest
+{
+    assert(wtf8("héllo 😀"w) == "héllo 😀");
+    wchar[] lone = ['a', cast(wchar) 0xD800, 'b'];
+    assert(wtf8(lone) == "a\xed\xa0\x80b");
+    assert(notUtf8(["x", wtf8(lone)]) == "argument 2 isn't UTF-8");
+    wchar[] reversed = [cast(wchar) 0xDC00, cast(wchar) 0xD800];
+    assert(notUtf8([wtf8(reversed)]) == "argument 1 isn't UTF-8");
 }
 
 /// Where the compiler is: where `SILVERC` says, or beside this program.
@@ -273,6 +362,32 @@ Plan plan(string compiler, Request request, string workingDirectory)
     auto named = arguments.file is null || arguments.file == "-" ? null
         : buildNormalizedPath(absolutePath(arguments.file, workingDirectory));
     immutable byDirectory = !testing && named !is null && isDirectory(named);
+    if (testing && arguments.dashed)
+    {
+        result.mistake = "`silver test` runs tests, which aren't given arguments, so nothing follows `--`.";
+        return result;
+    }
+    // After a file, every word is the program's; after a directory, they follow `--`, as with no file.
+    auto programArguments = arguments.after;
+    if (byDirectory && programArguments.length > 0)
+    {
+        if (programArguments[0] != "--")
+        {
+            result.mistake = "`" ~ programArguments[0] ~ "` follows the directory " ~ arguments.file ~ ", and there "
+                ~ "the program's arguments follow `--`, as `silver " ~ request.command ~ " " ~ arguments.file ~ " -- "
+                ~ programArguments[0] ~ "`.";
+            return result;
+        }
+        programArguments = programArguments[1 .. $];
+    }
+    if (!testing)
+    {
+        if (auto wrong = notUtf8(programArguments))
+        {
+            result.mistake = "error: " ~ wrong;
+            return result;
+        }
+    }
     string[] facts;
     if (auto start = searchStart(arguments.file, workingDirectory))
     {
@@ -316,17 +431,12 @@ Plan plan(string compiler, Request request, string workingDirectory)
                         ~ homesOf(project, shown) ~ "; name one of those directories, or a file"));
                     return result;
                 }
-                if (arguments.after.length > 0)
-                {
-                    result.mistake = "`" ~ arguments.after[0] ~ "` follows the directory " ~ arguments.file ~ ", and "
-                        ~ "what follows it is for the program, which can't be given arguments yet.";
-                    return result;
-                }
                 if (!testing)
                 {
                     result.program = at.name;
                     result.arguments = [compiler, request.command, fromSilver] ~ compilerOptions(project, shown,
-                        programHomes(project, *at)) ~ ["--program", at.name] ~ arguments.options;
+                        programHomes(project, *at)) ~ ["--program", at.name] ~ arguments.options
+                        ~ (programArguments.length > 0 ? ["--"] ~ programArguments : []);
                     return result;
                 }
                 named = at.home;
@@ -543,6 +653,16 @@ int run(string[] args)
     {
         stderr.writeln(commandLine(planned.arguments));
         if (planned.note !is null) stderr.writeln(planned.note);
+    }
+    // Windows passes a command line as UTF-16, so a word that isn't UTF-8 can't be passed on. The
+    // program's arguments were checked by `plan`; this is a path or an option.
+    version (Windows)
+    {
+        if (notUtf8(planned.arguments) !is null)
+        {
+            stderr.writeln("A word given to silver isn't UTF-8, so it can't be passed on to the compiler.");
+            return 1;
+        }
     }
     try
     {

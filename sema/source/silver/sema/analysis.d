@@ -594,7 +594,7 @@ final class Analysis
 /// program is run for its tests, so it needn't have a `main`.
 Analysis analyze(const ref Program program, Collector collector, Target target = Target.host, bool testing = false)
 {
-    import silver.sema.entry : checkEntryPoint, checkEntryPointReturn;
+    import silver.sema.entry : checkEntryPoint, checkEntryPointSignature;
     import silver.sema.resolve : resolveNames;
 
     auto entryPoint = checkEntryPoint(program, collector, testing);
@@ -603,7 +603,7 @@ Analysis analyze(const ref Program program, Collector collector, Target target =
     auto made = new NodeIds(ModuleKey.analysis);
     auto resolution = resolveNames(program, collector, target, made);
     auto typing = checkTypes(program, resolution, collector, made);
-    checkEntryPointReturn(entryPoint, resolution, typing, collector);
+    checkEntryPointSignature(entryPoint, resolution, typing, collector);
     return new Analysis(resolution, typing, entryPoint);
 }
 
@@ -633,6 +633,21 @@ unittest
         collector.diagnostics[0].code.should.equal(DiagnosticCode.MainInvalidDefinition);
     }
     analyzeSource("alias Empty = Unit\ndef main(): Empty => ()").diagnostics.length.should.equal(0);
+}
+
+@("analyze requires main's parameter to be a [String], however that's spelled")
+unittest
+{
+    foreach (source; ["def main(a: Int): Unit {}", "def main(a: [String]?): Unit {}", "def main(a: [Char]): Unit {}"])
+    {
+        auto collector = analyzeSource(source);
+        collector.diagnostics.length.should.equal(1);
+        collector.diagnostics[0].code.should.equal(DiagnosticCode.MainInvalidDefinition);
+    }
+    analyzeSource("alias Words = [String]\ndef main(words: Words): Unit {}").diagnostics.length.should.equal(0);
+    auto unknown = analyzeSource("def main(args: [Nope]): Unit {}");
+    unknown.diagnostics.length.should.equal(1);
+    unknown.diagnostics[0].code.should.equal(DiagnosticCode.UnknownType);
 }
 
 @("analyze doesn't report main's return type when it's already unknown")

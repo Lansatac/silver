@@ -1,0 +1,6 @@
+def main(args: [String]): Unit {
+    printl(length(args))
+    for argument in args {
+        printl("[{argument}]")
+    }
+}

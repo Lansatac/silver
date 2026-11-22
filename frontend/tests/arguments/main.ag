@@ -1,0 +1,5 @@
+module echo.main
+
+def main(args: [String]): Unit {
+    printl("echo {args}")
+}

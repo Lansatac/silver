@@ -50,10 +50,15 @@ void checkEntryPointShape(const ref Program program, Collector collector, const 
             (const FunctionDecl f) {
                 if (f.name == "main")
                 {
-                    if (!f.params.empty)
+                    if (f.params.length > 1)
                     {
-                        collector.reportError(DiagnosticCode.MainInvalidDefinition, f.nameSpan,
-                            "`main` must not have parameters");
+                        collector.reportError(DiagnosticCode.MainInvalidDefinition, f.params[1].nameSpan,
+                            "`main` takes no parameters, or one, the program's arguments, as `main(args: [String])`");
+                    }
+                    else if (f.params.length == 1 && f.params[0].mutable)
+                    {
+                        collector.reportError(DiagnosticCode.MainInvalidDefinition, f.params[0].nameSpan,
+                            "`main`'s arguments can't be `mutable`, since nothing reads them back");
                     }
                     if (!f.typeParams.empty)
                     {
@@ -67,23 +72,35 @@ void checkEntryPointShape(const ref Program program, Collector collector, const 
     }
 }
 
-/// Separate from the shape check because it needs the resolved type: `main`'s return type can be
-/// written as an alias of `Unit`.
-package void checkEntryPointReturn(Id!FunctionDecl entryPoint, const ref Resolution resolution, ref Typing typing,
+/// Separate from the shape check because it needs the resolved types: `main`'s parameter and return
+/// types can be written as aliases.
+package void checkEntryPointSignature(Id!FunctionDecl entryPoint, const ref Resolution resolution, ref Typing typing,
     Collector collector)
 {
     import std.sumtype : match;
 
     if (!entryPoint.isValid) return;
-    auto returnType = typing.types[typing.symbolTypes[SymbolId(entryPoint)]].match!(
-        (const FunctionData f) => f.ret,
-        _ => typing.types.error,
-    );
     auto types = typing.types;
+    auto signature = types[typing.symbolTypes[SymbolId(entryPoint)]].match!(
+        (const FunctionData f) => f,
+        _ => FunctionData(null, types.error),
+    );
+    auto decl = resolution.declarations.functions[entryPoint];
+    if (signature.params.length == 1)
+    {
+        auto param = signature.params[0];
+        immutable arguments = types.isArray(param) && types.arrayElement(param) == types.string_;
+        if (!arguments && !types.mentionsError(param))
+        {
+            collector.reportError(DiagnosticCode.MainInvalidDefinition, decl.params[0].type.span,
+                "`main`'s parameter is the program's arguments, a `[String]`, not `" ~ types.describe(param) ~ "`");
+        }
+    }
+    auto returnType = signature.ret;
     auto fallible = types.isErrorUnion(returnType) && types.successOf(returnType) == types.unit;
     if (returnType != types.unit && returnType != types.error && !fallible)
     {
-        collector.reportError(DiagnosticCode.MainInvalidDefinition, resolution.declarations.functions[entryPoint].nameSpan,
+        collector.reportError(DiagnosticCode.MainInvalidDefinition, decl.nameSpan,
             "`main` must return `Unit`, or `Unit ! E` for an error type `E`");
     }
 }
@@ -182,10 +199,14 @@ unittest
     errors[0].code.should.equal(DiagnosticCode.MissingMain);
 }
 
-@("analyze reports an invlaid main function definition")
+@("checkEntryPoint accepts main with no parameter or one, and reports two or a mutable one")
 unittest
 {
-    auto parameterErrors = entryPointErrors(["app": "def main(a: Int): Unit {}"]);
-    parameterErrors.length.should.equal(1);
-    parameterErrors[0].code.should.equal(DiagnosticCode.MainInvalidDefinition);
+    entryPointErrors(["app": "def main(args: [String]): Unit {}"]).length.should.equal(0);
+    foreach (source; ["def main(a: [String], b: [String]): Unit {}", "def main(mutable a: [String]): Unit {}"])
+    {
+        auto errors = entryPointErrors(["app": source]);
+        errors.length.should.equal(1);
+        errors[0].code.should.equal(DiagnosticCode.MainInvalidDefinition);
+    }
 }

@@ -34,8 +34,8 @@ Analysis loadAndAnalyze(string programFile, const Packages packages, SourceConte
     return analyze(program, context.collector, Target.host);
 }
 
-/// Interprets the program in `programFile`, or with `emitCore`, prints the Core it lowers to.
-int interpret(string programFile, const Packages packages, bool emitCore = false)
+/// Interprets the program in `programFile` with `arguments`, or with `emitCore`, prints the Core it lowers to.
+int interpret(string programFile, const Packages packages, bool emitCore = false, string[] arguments = null)
 {
     auto context = new SourceContext();
     Program program;
@@ -54,7 +54,7 @@ int interpret(string programFile, const Packages packages, bool emitCore = false
             writeln(printCore(lowered));
             return 0;
         }
-        auto evaluator = new Evaluator(lowered, true);
+        auto evaluator = new Evaluator(lowered, true, arguments);
         evaluator.run();
     }
     catch (RuntimeError e)
@@ -219,10 +219,11 @@ int build(string programFile, const Packages packages, string outputPath, bool e
         outputPath.empty ? executablePath(name) : outputPath, optimization) ? 0 : 1;
 }
 
-/// Compiles the program in `programFile` to a temporary executable and runs it,
+/// Compiles the program in `programFile` to a temporary executable and runs it with `arguments`,
 /// returning its exit status.
-int compileAndRun(string programFile, const Packages packages, Optimization optimization)
+int compileAndRun(string programFile, const Packages packages, Optimization optimization, string[] arguments = null)
 {
+    import silver.interpreter : argumentsMistake;
     import std.process : spawnProcess, wait;
 
     auto exePath = executablePath(temporaryPath(programFile, ""));
@@ -231,7 +232,13 @@ int compileAndRun(string programFile, const Packages packages, Optimization opti
         return 1;
     }
     scope (exit) remove(exePath);
-    return wait(spawnProcess([exePath]));
+    // The executable would say the same, but on Windows an argument that isn't UTF-8 can't be passed to it.
+    if (auto mistake = argumentsMistake(arguments))
+    {
+        stderr.writeln("error: ", mistake);
+        return 1;
+    }
+    return wait(spawnProcess([exePath] ~ arguments));
 }
 
 /// How `silver test` reports.
@@ -355,10 +362,10 @@ unittest
     assert(takeOptimization(args, optimize) !is null);
 }
 
-immutable usage = "Usage: silverc [run] [OPTION]... <file>   run <file>\n"
+immutable usage = "Usage: silverc [run] [OPTION]... <file> [ARGUMENT]...   run <file> with the arguments\n"
     ~ "       silverc build [OPTION]... <file>   compile <file> to an executable with LLVM\n"
     ~ "       silverc test [OPTION]... <path>    run the tests in <path>, a file or a directory\n"
-    ~ "       silverc run|build [OPTION]... --program <package>\n"
+    ~ "       silverc run|build [OPTION]... --program <package> [-- ARGUMENT...]\n"
     ~ "                                          run or compile the program of <package>, in place of a file";
 
 /// Takes the command off the front of `args`. Only the first word can be one, so a file named
@@ -394,14 +401,23 @@ immutable optionsWithValues = ["--package", "--uses", "--project", "--package-fi
     "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip", "--also"];
 
 /// Takes what follows the file off `args` and returns it. The file is the first word that isn't an
-/// option or an option's value, and options stop there: what follows is for the program. getopt's own
+/// option or an option's value, and options stop there: what follows is for the program. With
+/// `--program` there's no file, and the program's words follow `--`. getopt's own
 /// `stopOnFirstNonOption` can't do this, since it takes an option's value for the first non-option.
 string[] takeAfterFile(ref string[] args)
 {
     import std.algorithm : canFind, startsWith;
 
+    auto program = false;
     for (size_t i = 1; i < args.length; i++)
     {
+        if (args[i] == "--program" || args[i].startsWith("--program=")) program = true;
+        if (args[i] == "--" && program)
+        {
+            auto after = args[i + 1 .. $];
+            args = args[0 .. i];
+            return after;
+        }
         if (optionsWithValues.canFind(args[i])) i++;
         else if (!args[i].startsWith("-") || args[i] == "-")
         {
@@ -426,6 +442,12 @@ unittest
     assert(takeAfterFile(args) == ["-o", "out"] && args == ["silverc", "f.ag"]);
     args = ["silverc", "--package", "a=a", "--package-file", "a=a/silver.toml", "f.ag", "x"];
     assert(takeAfterFile(args) == ["x"] && args.length == 6);
+    args = ["silverc", "--program", "app", "--", "-b", "x"];
+    assert(takeAfterFile(args) == ["-b", "x"] && args == ["silverc", "--program", "app"]);
+    args = ["silverc", "--program=app", "--"];
+    assert(takeAfterFile(args) == [] && args == ["silverc", "--program=app"]);
+    args = ["silverc", "f.ag", "--", "x"];
+    assert(takeAfterFile(args) == ["--", "x"] && args == ["silverc", "f.ag"]);
 }
 
 @("--package-file names a declared package and its file, and anything else is refused before loading")
@@ -566,13 +588,15 @@ unittest
 
 /// What's wrong with `command` (`run`, `build` or `test`), given `files`, which is what its options
 /// left, and those options, or null. `format` is what `--format` gave, and `program` what `--program`
-/// gave, or null without them. `bySilver` says whether `silver` is driving.
+/// gave, or null without them. `bySilver` says whether `silver` is driving. `arguments` are what
+/// follows the file, or `--` with `--program`, which only `run` takes.
 string commandLineMistake(string command, const string[] files, string outputPath, bool optimize,
     Backend backend, const string[] filters = null, string format = null, const string[] skipped = null,
-    string program = null, bool bySilver = false, const string[] also = null)
+    string program = null, bool bySilver = false, const string[] also = null, const string[] arguments = null)
 {
     immutable building = command == "build";
     immutable testing = command == "test";
+    immutable help = bySilver ? "\nRun `silver --help` for its commands." : "\n" ~ usage ~ "\nRun `silverc --help` for the options.";
     if (program !is null && testing)
     {
         return "--program applies to `run` and `build`: `" ~ (bySilver ? "silver" : "silverc")
@@ -581,18 +605,26 @@ string commandLineMistake(string command, const string[] files, string outputPat
     if (program !is null && files.length > 0)
     {
         return "--program says which package's program to " ~ command ~ ", so no file is given with it, and `"
-            ~ files[0] ~ "` was.";
+            ~ files[0] ~ "` was." ~ (building ? "" : " The program's arguments follow `--`.");
     }
     if (program is null && files.length != 1)
     {
-        // `-o f.ag` takes the file as its value. Options stop at the file, so that what follows it
-        // can be the program's once a program can read it.
+        // `-o f.ag` takes the file as its value.
         return (files.length == 0 && !outputPath.empty
             ? "-o needs a value, and took `" ~ outputPath ~ "`, which leaves no file to compile."
             : files.length == 0 ? "No file was given."
-            : "Too many arguments: `" ~ files[1] ~ "` follows `" ~ files[0] ~ "`. Options go before the"
-                ~ " file, and a program can't be given arguments yet.")
-            ~ (bySilver ? "\nRun `silver --help` for its commands." : "\n" ~ usage ~ "\nRun `silverc --help` for the options.");
+            : "Too many arguments: `" ~ files[1] ~ "` follows `" ~ files[0] ~ "`.") ~ help;
+    }
+    if (arguments.length > 0 && building)
+    {
+        return "`" ~ arguments[0] ~ "` follows " ~ (program is null ? "`" ~ files[0] ~ "`" : "`--`") ~ ", and a "
+            ~ "program is given its arguments when it's run, not when it's built."
+            ~ (program is null ? " Options go before the file." : "") ~ help;
+    }
+    if (arguments.length > 0 && testing)
+    {
+        return "`" ~ arguments[0] ~ "` follows `" ~ files[0] ~ "`, and `test` takes one path. Options go before it."
+            ~ help;
     }
     if (!outputPath.empty && !building)
     {
@@ -799,6 +831,71 @@ unittest
     assert(commandLineMistake("test", ["a"], "", true, Backend.interpreter).canFind("-b both"));
 }
 
+@("only run takes the program's arguments: build and test refuse what follows the file")
+unittest
+{
+    import std.algorithm : canFind;
+
+    assert(commandLineMistake("run", ["a.ag"], "", false, Backend.interpreter, null, null, null, null, false, null,
+        ["x", "-b"]) is null);
+    assert(commandLineMistake("run", [], "", false, Backend.interpreter, null, null, null, "app", false, null, ["x"])
+        is null);
+    auto built = commandLineMistake("build", ["a.ag"], "", false, Backend.interpreter, null, null, null, null, false,
+        null, ["x"]);
+    assert(built.canFind("`x` follows `a.ag`, and a program is given its arguments when it's run"), built);
+    assert(commandLineMistake("build", [], "", false, Backend.interpreter, null, null, null, "app", false, null, ["x"])
+        .canFind("`x` follows `--`"));
+    assert(commandLineMistake("test", ["dir"], "", false, Backend.interpreter, null, null, null, null, false, null, ["x"])
+        .canFind("`x` follows `dir`, and `test` takes one path"));
+    assert(commandLineMistake("run", ["a"], "", false, Backend.interpreter, null, null, null, "app")
+        .canFind("The program's arguments follow `--`."));
+}
+
+@("a program is given what follows its file, or `--` after --program, on both backends, and refuses an argument that isn't UTF-8")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.array : replace;
+
+    auto directory = testDirectory("arguments", [
+        "show.ag": "def main(args: [String]): Unit {\n    printl(args)\n}",
+        "app/main.ag": "module app.main\n\ndef main(args: [String]): Unit {\n    printl(args)\n}",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+    auto show = buildPath(directory, "show.ag");
+    string written(string[] args, out int status, out string errors)
+    {
+        auto savedOut = stdout;
+        auto savedErr = stderr;
+        auto outPath = buildPath(directory, "stdout.txt");
+        auto errPath = buildPath(directory, "stderr.txt");
+        stdout = File(outPath, "w");
+        stderr = File(errPath, "w");
+        status = run(args);
+        stdout.close();
+        stderr.close();
+        stdout = savedOut;
+        stderr = savedErr;
+        errors = readText(errPath);
+        return readText(outPath).replace("\r\n", "\n");
+    }
+
+    Toolchain toolchain;
+    immutable compiles = findToolchain(toolchain) is null;
+    foreach (backend; compiles ? ["interpreter", "llvm"] : ["interpreter"])
+    {
+        int status;
+        string errors;
+        auto text = written(["silverc", "-b", backend, show, "-b", "llvm", "", "a b"], status, errors);
+        assert(status == 0 && text == "[-b, llvm, , a b]\n", text ~ errors);
+        text = written(["silverc", "run", "-b", backend, "--package", "app=" ~ buildPath(directory, "app"), "--program",
+            "app", "--", "x", "--", "y"], status, errors);
+        assert(status == 0 && text == "[x, --, y]\n", text ~ errors);
+        text = written(["silverc", "-b", backend, show, "ok", "b\xff"], status, errors);
+        assert(status == 1 && text == "" && errors.canFind("error: argument 2 isn't UTF-8"), text ~ errors);
+    }
+}
+
 @("an unwritable path is reported, not thrown")
 unittest
 {
@@ -973,6 +1070,69 @@ unittest
     assert(report.canFind(`"filesNotRun": 1`) && status == 1);
 }
 
+/// The command line as it was given. On Windows druntime turns an unpaired surrogate into U+FFFD, which
+/// would hand a program a different argument, so the command line is read again and such an argument
+/// written as WTF-8, which isn't UTF-8 and is refused. The front end keeps a copy
+/// (`exactArguments` in frontend/source/silver/frontend/package.d).
+string[] exactArguments(string[] given)
+{
+    version (Windows)
+    {
+        import core.sys.windows.shellapi : CommandLineToArgvW;
+        import core.sys.windows.winbase : GetCommandLineW, LocalFree;
+        import core.stdc.wchar_ : wcslen;
+
+        int count;
+        auto wide = CommandLineToArgvW(GetCommandLineW(), &count);
+        if (wide is null) return given;
+        scope (exit) LocalFree(wide);
+        if (count != given.length) return given;
+        auto exact = given.dup;
+        foreach (i; 0 .. count) exact[i] = wtf8(wide[i][0 .. wcslen(wide[i])]);
+        return exact;
+    }
+    else return given;
+}
+
+/// `text` as UTF-8, with each unpaired surrogate encoded as if it were a code point.
+string wtf8(const(wchar)[] text)
+{
+    char[] result;
+    void put(uint c)
+    {
+        if (c < 0x80) result ~= cast(char) c;
+        else if (c < 0x800) result ~= [cast(char)(0xC0 | c >> 6), cast(char)(0x80 | (c & 0x3F))];
+        else if (c < 0x10000)
+            result ~= [cast(char)(0xE0 | c >> 12), cast(char)(0x80 | (c >> 6 & 0x3F)), cast(char)(0x80 | (c & 0x3F))];
+        else result ~= [cast(char)(0xF0 | c >> 18), cast(char)(0x80 | (c >> 12 & 0x3F)), cast(char)(0x80 | (c >> 6 & 0x3F)),
+            cast(char)(0x80 | (c & 0x3F))];
+    }
+    for (size_t i = 0; i < text.length; i++)
+    {
+        uint c = text[i];
+        if (c >= 0xD800 && c < 0xDC00 && i + 1 < text.length && text[i + 1] >= 0xDC00 && text[i + 1] < 0xE000)
+        {
+            c = 0x10000 + ((c - 0xD800) << 10) + (text[i + 1] - 0xDC00);
+            i++;
+        }
+        put(c);
+    }
+    return result.idup;
+}
+
+@("WTF-8 is UTF-8 for text with no unpaired surrogate, and isn't UTF-8 for text with one")
+unittest
+{
+    import silver.interpreter : argumentsMistake;
+
+    assert(wtf8("héllo 😀"w) == "héllo 😀");
+    wchar[] lone = ['a', cast(wchar) 0xD800, 'b'];
+    assert(wtf8(lone) == "a\xed\xa0\x80b");
+    assert(argumentsMistake(["x", wtf8(lone)]) == "argument 2 isn't UTF-8");
+    wchar[] reversed = [cast(wchar) 0xDC00, cast(wchar) 0xD800];
+    assert(argumentsMistake([wtf8(reversed)]) == "argument 1 isn't UTF-8");
+}
+
 /// Runs the driver with the command line `args`, returning the exit status.
 int run(string[] args)
 {
@@ -998,6 +1158,18 @@ int run(string[] args)
     GetoptResult arguments;
     immutable command = takeCommand(args);
     auto afterFile = takeAfterFile(args);
+    // Only the program's arguments are checked when it starts: a path that isn't UTF-8 is a path
+    // elsewhere, but on Windows it can't be one, and std.file would throw.
+    version (Windows)
+    {
+        import silver.interpreter : argumentsMistake;
+
+        if (argumentsMistake(args) !is null)
+        {
+            stderr.writeln("A word given to silverc before the program's arguments isn't UTF-8.");
+            return 1;
+        }
+    }
     if (auto mistake = takeOptimization(args, optimize))
     {
         stderr.writeln(mistake, "\nRun `silverc --help` for the options.");
@@ -1054,8 +1226,8 @@ int run(string[] args)
         return 1;
     }
     immutable program = programs.length == 0 ? null : programs[0];
-    if (auto mistake = commandLineMistake(command, args[1 .. $] ~ afterFile, outputPath, optimize, backend, filters, format,
-        skipped, program, packageFileOptions.length > 0 || fromSilver, also))
+    if (auto mistake = commandLineMistake(command, args[1 .. $], outputPath, optimize, backend, filters, format,
+        skipped, program, packageFileOptions.length > 0 || fromSilver, also, afterFile))
     {
         stderr.writeln(mistake);
         return 1;
@@ -1124,8 +1296,8 @@ int run(string[] args)
     }
     final switch (backend)
     {
-        case Backend.interpreter: return interpret(programFile, packages, emitCore);
-        case Backend.llvm: return compileAndRun(programFile, packages, optimization);
+        case Backend.interpreter: return interpret(programFile, packages, emitCore, afterFile);
+        case Backend.llvm: return compileAndRun(programFile, packages, optimization, afterFile);
         case Backend.both:
             stderr.writeln("Only `silver test` runs a program both ways");
             return 1;

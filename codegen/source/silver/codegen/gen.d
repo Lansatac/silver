@@ -1432,6 +1432,9 @@ private final class Generator
                 return emitExplicitPanic(call.args[0], e.span);
             case Intrinsic.exitWithError:
                 return emitExitWithError(call.args[0]);
+            case Intrinsic.programArguments:
+                // A `[String]`, handed back through the out slots as a String is.
+                return callRuntimeForString("silver_arguments", []);
             case Intrinsic.bytes, Intrinsic.uncheckedString:
                 // A String and a `[UInt8]` have one layout, so the value is already the other.
                 return emitExpr(call.args[0]);

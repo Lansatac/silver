@@ -1,0 +1,3 @@
+def main(args: [String]): Unit {
+    printl("show {args}")
+}

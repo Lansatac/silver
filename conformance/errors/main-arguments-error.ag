@@ -1,0 +1,10 @@
+type UsageError(message: String)
+
+def main(args: [String]): Unit ! UsageError {
+    printl("given {length(args)}")
+    val path = first(args) ?? fail UsageError("expected a file")
+    if length(args) > 1 {
+        fail UsageError("expected one file, and `{args[1]}` follows `{path}`")
+    }
+    printl("not reached")
+}

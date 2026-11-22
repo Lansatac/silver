@@ -37,11 +37,20 @@ private void runProgram()
     silver_main();
 }
 
-void main()
+int main(string[] args)
 {
+    import core.stdc.stdio : fprintf, stderr;
     import core.thread : Thread;
+    import silver.runtime.arguments : takeArguments;
 
+    // As an error returned from `main` is reported.
+    if (auto wrong = takeArguments(args))
+    {
+        fprintf(stderr, "error: argument %llu isn't UTF-8\n", cast(ulong) wrong);
+        return 1;
+    }
     auto thread = new Thread(&runProgram, stackSize);
     thread.start();
     thread.join();
+    return 0;
 }

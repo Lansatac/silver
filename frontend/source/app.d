@@ -1,6 +1,6 @@
-import silver.frontend : run;
+import silver.frontend : exactArguments, run;
 
 int main(string[] args)
 {
-    return run(args);
+    return run(exactArguments(args));
 }

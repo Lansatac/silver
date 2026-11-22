@@ -1,0 +1,1 @@
+S0009: `main`'s parameter is the program's arguments, a `[String]`, not `Int`

@@ -1,0 +1,4 @@
+def main(args: [String]): Unit {
+    printl(length(args))
+    printl(args[0] == "")
+}

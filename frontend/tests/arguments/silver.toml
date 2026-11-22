@@ -1,0 +1,2 @@
+# A program that prints its arguments, and a script beside it that does too.
+name = "echo"

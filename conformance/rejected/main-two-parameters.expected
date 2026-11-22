@@ -1,0 +1,1 @@
+S0009: `main` takes no parameters, or one, the program's arguments, as `main(args: [String])`

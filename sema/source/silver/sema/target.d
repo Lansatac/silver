@@ -42,6 +42,8 @@ enum Intrinsic
     derivedCompare,
     /// Not in the prelude: lowering calls it when `main` returns an error, to print it and exit.
     exitWithError,
+    /// Not in the prelude either: the `[String]` lowering passes to a `main` that takes the arguments.
+    programArguments,
 }
 
 /// Whether the compiler implements an `intrinsic type` named `name`.

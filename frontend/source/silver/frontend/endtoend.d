@@ -416,8 +416,98 @@ unittest
         ~ " is a directory, and no package that silver.toml describes is there, so it has no program to run. Its packages "
         ~ "are 'tool' at ., 'tool.ast' at ast, 'tool.syntax' at syntax, 'tool.compiler' at compiler, 'tool.frontend' at "
         ~ "frontend, 'tool.docs' at docs; name one of those directories, or a file\n", 1);
-    expectRan(silver(["run", "compiler", "x"], tool), "`x` follows the directory compiler, and what follows it is for the "
-        ~ "program, which can't be given arguments yet.\n", 1);
+    expectRan(silver(["run", "compiler", "x"], tool), "`x` follows the directory compiler, and there the program's "
+        ~ "arguments follow `--`, as `silver run compiler -- x`.\n", 1);
+}
+
+@("a program is given what follows its file untouched, and what follows `--` with no file or with a package's directory, on both backends")
+unittest
+{
+    auto echo = buildPath(fixtures, "arguments");
+    foreach (backend; [["-b", "interpreter"], ["-b", "llvm"]])
+    {
+        expectRan(silver(backend ~ ["show.ag", "-b", "llvm", "--", "a b", ""], echo), "show [-b, llvm, --, a b, ]\n");
+        expectRan(silver(["run"] ~ backend ~ ["show.ag"], echo), "show []\n");
+        expectRan(silver(["run"] ~ backend ~ ["--", "-b", "x"], echo), "echo [-b, x]\n");
+        expectRan(silver(["run"] ~ backend, echo), "echo []\n");
+        expectRan(silver(["run"] ~ backend ~ ["arguments", "--", "naïve", "--show-command"], fixtures),
+            "echo [naïve, --show-command]\n");
+    }
+    expectRan(silver(["run", "--", "a"], fixtures), "Error F0033: There's no silver.toml in " ~ fixtures ~ " or any "
+        ~ "directory above it, so there's no project here to run: name a file, as `silver run hello.ag`\n", 1);
+    expectRan(silver(["test", "--", "a"], echo), "`silver test` runs tests, which aren't given arguments, so nothing "
+        ~ "follows `--`.\n", 1);
+    auto built = silver(["build", "--", "a"], echo);
+    assert(built.status == 1 && built.output.startsWith("`a` follows `--`, and a program is given its arguments when it's "
+        ~ "run, not when it's built.\nRun `silver --help` for its commands."), built.output);
+    built = silver(["build", "show.ag", "a"], echo);
+    assert(built.status == 1 && built.output.startsWith("`a` follows `show.ag`, and a program is given its arguments"),
+        built.output);
+    auto tested = silver(["test", "show.ag", "a"], echo);
+    assert(tested.status == 1 && tested.output.startsWith("`a` follows `show.ag`, and `test` takes one path."),
+        tested.output);
+    auto p = plan("silverc", request(["run", "-b", "llvm", "arguments", "--", "x"]), fixtures);
+    assert(p.arguments[$ - 6 .. $] == ["--program", "echo", "-b", "llvm", "--", "x"], p.arguments.join(" "));
+}
+
+@("an argument that isn't UTF-8 ends the program before main, through silver, silverc, and a compiled executable")
+unittest
+{
+    auto echo = buildPath(fixtures, "arguments");
+    auto directory = makeTree("frontend-not-utf8", null);
+    scope (exit) rmdirRecurse(directory);
+    auto output = buildPath(directory, "show" ~ exe);
+    expectRan(silver(["build", "-o", output, "show.ag"], echo), "");
+    foreach (command; [[built("silver"), "show.ag"], [built("silver"), "-b", "llvm", "show.ag"], [built("silver"), "run", "--"],
+        [built("silverc"), "show.ag"], [built("silverc"), "-b", "llvm", "show.ag"], [output]])
+    {
+        expectRan(withBadArgument(command ~ "ok", echo), "error: argument 2 isn't UTF-8\n", 1);
+    }
+}
+
+/// Runs `words` followed by an argument that isn't UTF-8, from `workingDirectory`. On Windows that's
+/// an unpaired surrogate, the only such argument there, which std.process can't pass, so the process is
+/// started with CreateProcessW; elsewhere it's the byte 0xFF.
+Ran withBadArgument(string[] words, string workingDirectory)
+{
+    version (Windows)
+    {
+        import core.sys.windows.windows;
+        import std.file : readText, remove;
+        import std.process : escapeWindowsArgument;
+        import std.utf : toUTF16;
+
+        wstring wide;
+        foreach (word; words) wide ~= escapeWindowsArgument(word).toUTF16 ~ " ";
+        auto line = (wide ~ cast(wchar) 0xD800 ~ "\0"w).dup;
+        auto outputPath = buildPath(tempDir, "silver-wide-output.txt");
+        SECURITY_ATTRIBUTES inherit = {SECURITY_ATTRIBUTES.sizeof, null, TRUE};
+        auto file = CreateFileW((outputPath.toUTF16 ~ "\0").ptr, GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL, null);
+        assert(file != INVALID_HANDLE_VALUE);
+        STARTUPINFOW startup;
+        startup.cb = STARTUPINFOW.sizeof;
+        startup.dwFlags = STARTF_USESTDHANDLES;
+        startup.hStdOutput = file;
+        startup.hStdError = file;
+        startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        PROCESS_INFORMATION process;
+        auto started = CreateProcessW(null, line.ptr, null, null, TRUE, 0, null,
+            (workingDirectory.toUTF16 ~ "\0").ptr, &startup, &process);
+        CloseHandle(file);
+        assert(started, "CreateProcessW failed");
+        WaitForSingleObject(process.hProcess, INFINITE);
+        DWORD status;
+        GetExitCodeProcess(process.hProcess, &status);
+        CloseHandle(process.hProcess);
+        CloseHandle(process.hThread);
+        scope (exit) remove(outputPath);
+        return Ran(cast(int) status, readText(outputPath).replace("\r\n", "\n"));
+    }
+    else
+    {
+        return runIn(words ~ "\xFF", workingDirectory);
+    }
 }
 
 @("a package with a main of its own that describes a program lists its own as chosen by its file, and the other by its directory")

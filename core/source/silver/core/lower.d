@@ -26,17 +26,17 @@ Program lowerProgram(const ref ast.Program program, const Analysis analysis)
 {
     auto mains = ast.mainFunctions(program);
     assert(mains.length == 1, "sema reports a program without exactly one `main`");
-    return lowerFrom(mains[0].id, analysis, program.sources);
+    return lowerFrom(mains[0].id, analysis, program.sources, true);
 }
 
 /// `root` and every function it calls, directly or not, as a Program whose entry point is
-/// `root`.
-Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis, const ast.SourceMap sources)
+/// `root`. When `root` is the program's `main`, it's given the program's arguments if it takes them.
+Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis, const ast.SourceMap sources, bool isMain = false)
 {
     auto lowering = new Lowering(analysis, sources);
     auto entry = lowering.slotFor(InstanceKey(root));
     lowering.lowerPending();
-    entry = lowering.reportingErrors(entry);
+    entry = lowering.entryFor(entry, isMain);
     auto program = Program(rebindable(analysis.types), lowering.functions, entry, lowering.libraries);
     lowering.describeTypes(program);
     return program;
@@ -341,21 +341,35 @@ private final class Lowering
         return key.args.length == 0 ? name : "%s<%-(%s, %)>".format(name, key.args.map!(a => types.describe(a)));
     }
 
-    /// The entry point for `main` at `slot`: `main` itself, or when it returns an error union, a
-    /// function that calls it and exits with the error printed when there is one.
-    size_t reportingErrors(size_t slot)
+    /// The entry point for `main` at `slot`: `main` itself, or a function that calls it with the
+    /// program's arguments when it takes them, and when it returns an error union, exits with the
+    /// error printed when there is one.
+    size_t entryFor(size_t slot, bool isMain)
     {
         auto main = functions[slot];
-        if (!types.isErrorUnion(main.returnType)) return slot;
+        immutable fallible = types.isErrorUnion(main.returnType);
+        immutable takesArguments = isMain && main.params.length > 0;
+        if (!fallible && !takesArguments) return slot;
         auto span = main.body.span;
         _span = span;
         _moduleName = main.moduleName;
-        auto result = temp("result", main.returnType);
-        auto call = Expr(main.returnType, span, ExprKind(Call(slot, [])));
-        auto message = formatted(payload(use(result, span), 0));
-        auto exit = Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.exitWithError, [message], [false])));
-        auto body = Expr(types.unit, span, ExprKind(Block([let(result, call),
-            eval(when(not(isMember(use(result, span), 1)), exit))], null)));
+        Expr[] args;
+        if (takesArguments)
+        {
+            assert(main.params.length == 1, "sema gives `main` no parameter or the arguments");
+            args = [Expr(main.params[0].type, span, ExprKind(IntrinsicCall(Intrinsic.programArguments, [], [])))];
+        }
+        auto call = Expr(main.returnType, span, ExprKind(Call(slot, args)));
+        Expr body;
+        if (!fallible) body = call;
+        else
+        {
+            auto result = temp("result", main.returnType);
+            auto message = formatted(payload(use(result, span), 0));
+            auto exit = Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.exitWithError, [message], [false])));
+            body = Expr(types.unit, span, ExprKind(Block([let(result, call),
+                eval(when(not(isMember(use(result, span), 1)), exit))], null)));
+        }
         auto entry = reserveSlot();
         functions[entry] = Function("main.entry", main.moduleName, null, null, types.unit, body, FunctionOrigin.derived);
         return entry;
@@ -2264,8 +2278,8 @@ private final class Lowering
                 assert(0, "`assert` and `expect` are expanded from what's written, and sema rejects them as values");
             case Intrinsic.derivedCompare:
                 assert(0, "`derivedCompare` is expanded where it's called, and sema rejects it as a value");
-            case Intrinsic.exitWithError:
-                assert(0, "only the wrapper lowering makes for `main` calls `exitWithError`");
+            case Intrinsic.exitWithError, Intrinsic.programArguments:
+                assert(0, "only the wrapper lowering makes for `main` calls `exitWithError` and `programArguments`");
             case Intrinsic.print, Intrinsic.printl, Intrinsic.readLine, Intrinsic.panic, Intrinsic.panics:
             case Intrinsic.bytes, Intrinsic.uncheckedString:
                 break;

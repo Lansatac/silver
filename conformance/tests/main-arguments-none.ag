@@ -1,0 +1,4 @@
+def main(arguments: [String]): Unit {
+    printl(arguments)
+    printl(isEmpty(arguments))
+}

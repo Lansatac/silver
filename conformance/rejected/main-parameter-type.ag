@@ -1,0 +1,3 @@
+def main(count: Int): Unit {
+    printl(count)
+}
