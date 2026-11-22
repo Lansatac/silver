@@ -151,16 +151,20 @@ The errors are members of `lang`'s [`IoError`](errors.md#ioerror), so `?` widens
 
 ## Current implementation
 
-[main](#main) and [Arguments](#arguments) are built, on both backends:
+[main](#main), [Arguments](#arguments) and [Files](#files) are built, on both backends:
 
 - `main` takes no parameters or one of type `[String]`, written directly or through an alias. Two parameters, a `mutable` one, or one of another type is `S0009`.
 - `silver` and `silverc` give the program what follows the file, options included, with the first `--` dropped by the rule above.
 - An argument that isn't UTF-8 ends the program whether `main` takes the arguments or not. On Windows the arguments are read as UTF-16, so only an unpaired surrogate does, and the message shows it as `\u{D800}`. `silverc` and a compiled program check once the program is compiled. On Windows, where such an argument can't be passed on, `silver run` checks before it calls the compiler, so there that message comes before any about the program's source.
 - A word starting `--DRT-`, which a D program's runtime would take as its own option, is the program's like any other, for `silver`, `silverc` and a compiled program.
+- `std.file` is as described. A path is opened through the system's UTF-16 functions on Windows, so a name that isn't ASCII works there too.
+- `NotFound` is a file that isn't there, or a path through a directory that isn't, or through a file. On Windows a name the system can't take, such as one holding `?`, is `NotFound` when read.
+- A directory given as a file is `ReadFailed(Is a directory)` or `WriteFailed(Is a directory)` on every system, where Windows would say `Access is denied.`. A path holding the character `\u{0}`, which no system can take, fails with `The path contains a NUL character`, and `exists` is `false` for it.
+- Any other reason is the system's own words, so it differs between Windows and Linux: writing into a directory that isn't there is `No such file or directory` on Linux and `The system cannot find the path specified.` on Windows.
 
 The rest of this document's additions aren't built:
 
-- There is no `exit`, `eprint`, `eprintl` or `environment`, and no `std.process` or `std.file`. `IoError` has only `NotUtf8` and `ReadFailed`.
+- There is no `exit`, `eprint`, `eprintl` or `environment`, and no `std.process`.
 - `print` panics when the write fails, and when interpreted a closed pipe ends the program with the interpreter's own error.
 
 The exit statuses, and an error from `main`, are as described.

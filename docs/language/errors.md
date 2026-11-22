@@ -270,5 +270,4 @@ Two proposals build on this: [checked operations](../proposals/checked-operation
 The implementation matches this description, except:
 
 - `Ok` and `Error` can't be passed as function values, as `Some` can't.
-- `IoError` has only `NotUtf8` and `ReadFailed`, until [files](programs.md#current-implementation) are built.
 - With an [invariant](user-types.md#current-implementation) on a type, which is to be removed, what's expected of `x!` or `x?` also picks a member over its sum, so `val c: Circle = Circle(1.0)!` builds the member.
