@@ -1310,7 +1310,7 @@ private final class Generator
         return name;
     }
 
-    /// `PrimOp.Hash` of `value`, of the primitive, `Ref` or function type `type`.
+    /// `PrimOp.Hash` of `value`, of the primitive, `Ref`, native or function type `type`.
     private Fragment emitHash(Type type, const string[] value, Span span)
     {
         auto types = _program.types;
