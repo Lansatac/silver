@@ -126,7 +126,7 @@ conform R: Iterable<R> when R: Range<T>                 // in `lang`: every rang
 conform Dictionary<K, V>: Iterable<Entries<K, V>>       // a collection declares the range that steps it
 ```
 
-- Every range is an `Iterable` of itself, so anything that takes an `Iterable` takes a range.
+- Every range is an `Iterable` of itself, so anything that takes an `Iterable` takes a range, and `iterate(r)` on a range is `r`.
 - A collection that isn't a range conforms by giving an `iterate` that returns one. Then `for x in c` loops over it, and `c.map(...)`, `c.filter(...)`, `c.count()` and the rest take it as they take a range:
 
   ```silver
@@ -155,17 +155,22 @@ conform Dictionary<K, V>: Iterable<Entries<K, V>>       // a collection declares
 | Function | Gives |
 | --- | --- |
 | `a..b` | An `Interval`, which is sized and indexed |
-| `iterate(range)` | An `Iterator<R>` over a value with a `length` and an `opIndex`, which is sized and indexed too |
+| `byIndex(value)` | A `ByIndex<R>` over a value with a `length` and an `opIndex`, which is sized and indexed too |
 | `unfold(state, produce)` | An `Unfolded<S, T>` of the items `produce` gives from each state, until it gives `None` |
 | `repeat(value)` | A `Repeated<T>` of `value`, again and again |
 
 ```silver
-Row([7, 8, 9]).iterate().map(x => x + 1).array()                // [8, 9, 10]
+Row([7, 8, 9]).byIndex().map(x => x + 1).array()                // [8, 9, 10]
 unfold(1, n => if n > 100 => None else (n, n * 2)).array()     // [1, 2, 4, 8, 16, 32, 64]
 repeat("a").take(3).array()                                     // [a, a, a]
 ```
 
-- `iterate` here is how a type that's `Indexed` but isn't a `Range` or an `Iterable` is looped over or passed to an adapter: `for cell in row.iterate()`.
+- `byIndex` is how a type that's `Indexed` but isn't a `Range` is looped over or passed to an adapter: `for cell in row.byIndex()`. To have `for cell in row` and `row.map(...)` work on it directly, the type says so:
+
+  ```silver
+  def iterate(row: Row): ByIndex<Row> => byIndex(row)
+  conform Row: Iterable<ByIndex<Row>>
+  ```
 - `repeat`, and an `unfold` whose `produce` never gives `None`, never end. `array()` or `count()` on one never finishes, and nothing in its type says so, so it's used with something that stops, such as `take` or `takeWhile`.
 
 ## The erased form
@@ -241,7 +246,7 @@ people.sortedBy(p => (Descending(p.age), p.name))   // Ann, Cy, Bob
 
 ## What the prelude brings
 
-The prelude forwards `std.range`'s functions and the types a program writes: `Sized`, `Indexed`, `Seq` and `Descending`. The adapter types such as `Mapped` and `Taken` are inferred, so they come only with `import std.range`, and a module of your own is free to use those names. A library that declares its own `Seq` or `Sized` is ambiguous beside the prelude's, as between any two imports that bring every name, and [listing the name or qualifying it](modules.md#which-declaration-a-name-means) settles it.
+The prelude forwards `std.range`'s functions and the types a program writes: `Sized`, `Indexed`, `Seq`, `Descending` and `ByIndex`. The adapter types such as `Mapped` and `Taken` are inferred, so they come only with `import std.range`, and a module of your own is free to use those names. A library that declares its own `Seq` or `Sized` is ambiguous beside the prelude's, as between any two imports that bring every name, and [listing the name or qualifying it](modules.md#which-declaration-a-name-means) settles it.
 
 ## Open questions
 
@@ -250,10 +255,10 @@ These are listed in the [ranges proposal](../proposals/ranges.md#open-questions)
 ## Current implementation
 
 - Everything above is built, in plain Silver in `stdlib/std/range.ag`, with `Iterable` in `lang`.
-- `std.range`'s `iterate` for a type with a `length` and an `opIndex` is a function of the same name as the interface's, and declares no conformance: a type that's `Indexed` isn't an `Iterable` for that, so `for cell in row` still needs `row.iterate()`. Called on an array by name, `xs.iterate()` is this one and gives an `Iterator<[T]>`, while the array's conformance gives the array itself.
+- A type that's `Indexed` isn't an `Iterable` for that: it declares one, as above, or is stepped with `byIndex`.
 - `array` steps every range. Sizing its result first needs a way to make an array with room for a known number of items, which there isn't yet.
 - Not built yet, as designed in the proposal: `sum`, `Backward` and `reversed`. `sorted` and `sortedBy` are a merge sort written in Silver.
 - An adapter's type can be built with its constructor by a module that imports it, which skips what `take` and `step` check: `Stepped(xs, 0)` divides by zero when asked for its length.
 - A panic in an adapter, such as indexing a `Taken` past its length, is reported at the line in `std.range` that panics, not at the caller's index.
-- Passing a type that isn't a range to an adapter says so, but doesn't yet suggest `iterate()` for a type with a `length` and an `opIndex`. `iterate()` on a type that isn't `Indexed` reports the missing `Sized` as well.
+- Passing a type that isn't a range to an adapter says so, but doesn't yet suggest `byIndex()` for a type with a `length` and an `opIndex`. `byIndex()` on a type that isn't `Indexed` reports the missing `Sized` as well.
 - Assigning a chain where an array is expected is a type mismatch that doesn't yet suggest `array()`.

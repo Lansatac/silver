@@ -268,21 +268,21 @@ conform Appended<A, B>: Range<T> when A: Range<T>, B: Range<T>
 // Sources.
 
 // A range over anything with a length and an opIndex, from `position` on.
-type Iterator<R>(range: R, position: Int)
+type ByIndex<R>(range: R, position: Int)
 
-def iterate<R: Indexed<T>, T>(range: R): Iterator<R> => Iterator(range, 0)
+def byIndex<R: Indexed<T>, T>(range: R): ByIndex<R> => ByIndex(range, 0)
 
-def next<R: Indexed<T>, T>(it: Iterator<R>): (T, Iterator<R>)? =>
+def next<R: Indexed<T>, T>(it: ByIndex<R>): (T, ByIndex<R>)? =>
     if it.position >= length(it.range) => None
-    else (it.range[it.position], Iterator(it.range, it.position + 1))
+    else (it.range[it.position], ByIndex(it.range, it.position + 1))
 
-def length<R: Sized>(it: Iterator<R>): Int {
+def length<R: Sized>(it: ByIndex<R>): Int {
     val total = length(it.range)
     if total > it.position => total - it.position else 0
 }
-def opIndex<R: Indexed<T>, T>(it: Iterator<R>, index: Int): T => it.range[checked(index, length(it)) + it.position]
+def opIndex<R: Indexed<T>, T>(it: ByIndex<R>, index: Int): T => it.range[checked(index, length(it)) + it.position]
 
-conform Iterator<R>: Range<T> & Sized & Indexed<T> when R: Indexed<T>
+conform ByIndex<R>: Range<T> & Sized & Indexed<T> when R: Indexed<T>
 
 // The items `produce` gives, starting from `state`, until it gives `None`. It may never end.
 type Unfolded<S, T>(state: S, produce: (S) -> (T, S)?)

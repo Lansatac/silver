@@ -89,14 +89,14 @@ def main(): () {
     printl(Countdown(0).append(xs.take(1)).array())
     printl("ab".append("cd").array())
 
-    // Sources: iterate for a type with a length and an opIndex, unfold and repeat.
+    // Sources: byIndex for a type with a length and an opIndex, unfold and repeat.
     val row = Row([7, 8, 9])
-    printl(row.iterate().map(x => x + 1).array())
-    printl(lengthOf(row.iterate()))
-    printl(at(row.iterate(), 2))
-    printl(lengthOf(row.iterate().rest()))
-    printl(at(row.iterate().rest(), 0))
-    for cell in row.iterate() { print("{cell} ") }
+    printl(row.byIndex().map(x => x + 1).array())
+    printl(lengthOf(row.byIndex()))
+    printl(at(row.byIndex(), 2))
+    printl(lengthOf(row.byIndex().rest()))
+    printl(at(row.byIndex().rest(), 0))
+    for cell in row.byIndex() { print("{cell} ") }
     printl("")
     printl(unfold(1, n => if n > 100 => None else (n, n * 2)).array())
     printl(unfold((0, 1), p => { val (a, b) = p; (a, (b, a + b)) }).take(8).array())

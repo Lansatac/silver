@@ -6,9 +6,9 @@ forward import std.of
 
 // std.range's functions, and the types written in bounds, conformances and fields. The adapters'
 // types are left to `import std.range`, since a chain's type is inferred.
-forward import std.range : Sized, Indexed, Seq, Descending,
+forward import std.range : Sized, Indexed, Seq, Descending, ByIndex,
     next, length, opIndex, compare,
     map, take, drop, zip, enumerate, step, filter, takeWhile, dropWhile, flatMap, append,
-    iterate, unfold, repeat, seq,
+    byIndex, unfold, repeat, seq,
     first, rest, last, array, fold, count, isEmpty, any, all, find, contains, splitAt,
     min, max, sorted, sortedBy

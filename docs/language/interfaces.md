@@ -111,7 +111,7 @@ interface Iterable<R> {
     def iterate(value: Self): R
 }
 
-private def iterate<R: Range<T>, T>(range: R): R => range
+def iterate<R: Range<T>, T>(range: R): R => range
 conform R: Iterable<R> when R: Range<T>          // every range is an `Iterable` of itself
 ```
 
