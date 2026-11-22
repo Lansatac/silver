@@ -929,8 +929,8 @@ final class Evaluator
                     .format(call.symbol)));
         }
         auto types = _program.types;
-        auto fits = native.params.length == call.args.length && accepts(native.result, e.type, true);
-        foreach (i, ref arg; call.args) fits = fits && accepts(native.params[i], arg.type, false);
+        auto fits = native.params.length == call.params.length && accepts(native.result, e.type, true);
+        foreach (i, param; call.params) fits = fits && accepts(native.params[i], param, false);
         if (!fits)
         {
             throw new RuntimeError(Diagnostic(DiagnosticCode.MissingNativeBinding, e.span,
@@ -944,7 +944,7 @@ final class Evaluator
         CValue[] args;
         foreach (i, value; values)
         {
-            auto type = call.args[i].type;
+            auto type = call.params[i];
             if (types.isInteger(type)) args ~= CValue(value.as!long, cast(void*) value.as!long);
             else if (type == types.float_) args ~= CValue(0, null, value.as!double);
             else if (isNullableHandle(type))
@@ -958,6 +958,7 @@ final class Evaluator
         auto result = native.call(args);
         if (e.type == types.unit || e.type == types.never) return Value(Unit());
         if (e.type == types.float_) return Value(result.float_);
+        if (e.type == types.bool_) return Value(result.integer != 0);
         if (types.isInteger(e.type))
         {
             auto bits = native.result == CKind.pointer ? cast(long) result.pointer : result.integer;
@@ -968,14 +969,17 @@ final class Evaluator
     }
 
     /// Whether C passes a value of `type` as a `kind`: a pointer is a native type, an option of one or
-    /// a 64-bit integer, an integer any integer type, and `void` a result of `Unit` or `Never`.
+    /// a 64-bit integer, and `void` a result of `Unit` or `Never`. An integer result can be any integer
+    /// type or `Bool`, cut down from C's; an integer parameter has to be at least as wide as C's `int`,
+    /// since Windows' convention leaves the upper bits of a narrower one undefined.
     private bool accepts(CKind kind, Type type, bool isResult)
     {
         auto types = _program.types;
         final switch (kind)
         {
             case CKind.integer:
-                return types.isInteger(type);
+                if (isResult) return types.isInteger(type) || type == types.bool_;
+                return types.isInteger(type) && types.integerOf(type).bits >= 32;
             case CKind.float_:
                 return type == types.float_;
             case CKind.pointer:

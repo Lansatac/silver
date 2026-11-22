@@ -35,6 +35,8 @@ Only types with a C equivalent can appear in a native signature:
 
 C's own integer types differ between platforms: `long` is 32 bits on Windows and 64 on Linux. `std.c` names them (`CInt`, `CLong`, `CSize` and the rest), each an alias for the Silver type of the right width on the platform being compiled for.
 
+A parameter has to be declared with the C function's own width. A C function taking an `int` is declared with `CInt`, not `Int8`: Windows' calling convention leaves the upper bits of a narrower argument undefined, so the function would read garbage. A result can be declared narrower than C's, or as `Bool` for one that is only ever 0 or 1, and is cut down to it.
+
 ## Native types
 
 ```silver
@@ -120,6 +122,6 @@ intrinsic def panic(message: String): Never
 
 - `native def`, `native("...")`, `native library`, `native type`, `intrinsic def`, `intrinsic alias`, `intrinsic type`, `std.c`, `CString` and its conversions are available.
 - The platform being compiled for is always the one the compiler runs on.
-- Compiled programs call natives directly. The interpreter can call only the natives it has built in: those that `lang` and the standard library declare, and the C library's `strlen`, `strcmp`, `strchr`, `getenv`, `malloc` and `free`, each for any declaration C passes the same way as its own signature, a pointer declared as `UInt64` included. Calling any other native while interpreting, or one of these declared some other way, is an error.
+- Compiled programs call natives directly. The interpreter can call only the natives it has built in: those that `lang` and the standard library declare, and the C library's `strlen`, `strcmp`, `strchr`, `getenv`, `malloc`, `free`, `abs`, `toupper`, `tolower`, `isdigit` and `ilogb`, each for any declaration C passes the same way as its own signature: a pointer as a native type, an option of one or `UInt64`, an integer parameter as an integer type at least as wide as C's, and an integer result as any integer type or `Bool`. Calling any other native while interpreting, or one of these declared some other way, is an error.
 - A module's `native library` is passed to the linker when the program calls one of that module's natives or uses one as a value.
 - An intrinsic with an `Any` parameter, such as `print`, can only be called, not used as a value.

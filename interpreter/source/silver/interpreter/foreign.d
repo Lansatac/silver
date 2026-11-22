@@ -41,8 +41,9 @@ private char* text(CValue value) => cast(char*) value.pointer;
 
 shared static this()
 {
-    import core.stdc.math : atan, cos, exp, log, pow, sin, sqrt;
-    import core.stdc.stdlib : free, getenv, malloc;
+    import core.stdc.ctype : isdigit, tolower, toupper;
+    import core.stdc.math : atan, cos, exp, ilogb, log, pow, sin, sqrt;
+    import core.stdc.stdlib : abs, free, getenv, malloc;
     import core.stdc.string : strchr, strcmp, strlen;
 
     static ForeignFunction unary(alias f)()
@@ -59,6 +60,11 @@ shared static this()
         "cos": unary!cos,
         "atan": unary!atan,
         "pow": ForeignFunction([float_, float_], float_, (CValue[] args) => floatValue(pow(args[0].float_, args[1].float_))),
+        "ilogb": ForeignFunction([float_], integer, (CValue[] args) => integerValue(ilogb(args[0].float_))),
+        "isdigit": ForeignFunction([integer], integer, (CValue[] args) => integerValue(isdigit(cast(int) args[0].integer))),
+        "abs": ForeignFunction([integer], integer, (CValue[] args) => integerValue(abs(cast(int) args[0].integer))),
+        "toupper": ForeignFunction([integer], integer, (CValue[] args) => integerValue(toupper(cast(int) args[0].integer))),
+        "tolower": ForeignFunction([integer], integer, (CValue[] args) => integerValue(tolower(cast(int) args[0].integer))),
         "silver_nowNanos": ForeignFunction([], integer, (CValue[] _) => integerValue(nowNanos())),
         "strlen": ForeignFunction([pointer], integer, (CValue[] args) => integerValue(cast(long) strlen(text(args[0])))),
         "strcmp": ForeignFunction([pointer, pointer], integer,

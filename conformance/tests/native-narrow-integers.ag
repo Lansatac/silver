@@ -1,0 +1,27 @@
+import std.c
+
+// Results narrower than C's `int`, and `Bool`, cut down from the `int` C returns. A parameter
+// keeps C's own width.
+native def toupper(c: CInt): UInt8
+native def tolower(c: CInt): Bool
+native def ilogb(x: Float): Int16
+native def isdigit(c: CInt): Int8
+native def abs(x: CInt): CInt
+
+def main(): Unit {
+    printl(toupper(97))
+    printl(toupper(233))
+    printl(tolower(1))
+    printl(tolower(0))
+    printl(ilogb(0.125))
+    printl(ilogb(1e300))
+    printl(isdigit(53) != 0)
+    printl(isdigit(97) == 0)
+    printl(abs(-100))
+    val upper = toupper
+    printl(upper(98))
+    val lower = tolower
+    printl(lower(1))
+    val exponent = ilogb
+    printl(exponent(0.25))
+}

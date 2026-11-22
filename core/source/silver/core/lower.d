@@ -903,7 +903,7 @@ private final class Lowering
         Local[] params;
         foreach (i, ref param; decl.params) params ~= new Local(paramName(param.name, i), signature.params[i]);
         auto args = params.map!(p => use(p, _span)).array;
-        auto body = Expr(signature.ret, _span, ExprKind(ForeignCall(decl.symbol, args)));
+        auto body = Expr(signature.ret, _span, ExprKind(ForeignCall(decl.symbol, args, signature.params)));
         noteLibrary(func);
         functions[slot] = Function(decl.name, _analysis.moduleOf(func), params, null, signature.ret, body,
             FunctionOrigin.derived, decl.name);
@@ -2076,7 +2076,7 @@ private final class Lowering
                 noteLibrary(callee.decl);
                 auto symbol = decl.symbol;
                 return callWith(written, signature, type, span, null,
-                    (Expr[] args, Expr* _) => Expr(signature.ret, span, ExprKind(ForeignCall(symbol, args))));
+                    (Expr[] args, Expr* _) => Expr(signature.ret, span, ExprKind(ForeignCall(symbol, args, signature.params))));
             case ast.FunctionKind.intrinsic:
                 return lowerIntrinsic(e.id, callee.decl, written, signature, span);
             case ast.FunctionKind.required:
@@ -2106,7 +2106,7 @@ private final class Lowering
                 return Expr(signature.ret, span, ExprKind(Call(slotFor(callee), args)));
             case ast.FunctionKind.native:
                 noteLibrary(callee.decl);
-                return Expr(signature.ret, span, ExprKind(ForeignCall(decl.symbol, args)));
+                return Expr(signature.ret, span, ExprKind(ForeignCall(decl.symbol, args, signature.params)));
             case ast.FunctionKind.intrinsic:
                 auto intrinsic = _analysis.intrinsicOf(callee.decl);
                 if (intrinsic == Intrinsic.assert_ || intrinsic == Intrinsic.expect) return notLowered!Expr("`%s` as a conformance".format(decl.name));

@@ -1,0 +1,21 @@
+import std.c
+
+native def strlen(text: CString): CSize
+
+// An argument that leaves before the native is called, beside an ordinary call of the same native.
+def size(text: String): CSize {
+    if text == "" { strlen(return 5) }
+    strlen(toCString(text))
+}
+
+def main(): Unit {
+    printl(size(""))
+    printl(size("abc"))
+    for i in 0..3 {
+        printl(i)
+        if i == 1 { strlen(break) }
+    }
+    val measure = strlen
+    printl(measure(toCString("four")))
+    printl("done")
+}

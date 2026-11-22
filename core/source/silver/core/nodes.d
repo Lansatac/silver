@@ -173,6 +173,9 @@ struct ForeignCall
 {
     string symbol;
     Expr[] args;
+    /// The native's parameter types as declared, which an argument of type `Never` doesn't have, and
+    /// which say how each argument crosses.
+    const(Type)[] params;
 }
 
 /// A call to an `intrinsic def`, an operation each backend implements itself. `print` and

@@ -266,10 +266,17 @@ unittest
         ~ "native def g(): Int16\nnative def h(): Bool\n"
         ~ "def main(): Unit {\n    val x = f(-1, 2, true, 3, 4)\n    val y = g()\n    val z = h()\n}");
 
-    ir.should.contain("declare ccc zeroext i8 @f(signext i8, zeroext i16, zeroext i1, i32, i64)");
-    ir.should.contain("call ccc zeroext i8 @f(signext i8 -1, zeroext i16 2, zeroext i1 true, i32 3, i64 4)");
+    ir.should.contain("declare ccc zeroext i8 @f(i8 signext, i16 zeroext, i1 zeroext, i32, i64)");
+    ir.should.contain("call ccc zeroext i8 @f(i8 signext -1, i16 zeroext 2, i1 zeroext true, i32 3, i64 4)");
     ir.should.contain("declare ccc signext i16 @g()");
     ir.should.contain("declare ccc zeroext i1 @h()");
+
+    // The attribute goes after a parameter's type, or clang refuses the declaration.
+    auto source = "native(\"toupper\") def upper(c: UInt8): Int32\nnative(\"srand\") def seed(value: Bool): Unit\n"
+        ~ "def main(): Unit {\n    seed(true)\n    printl(upper(97) > 0)\n}";
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.status.should.equal(0);
 }
 
 @("codegen passes a native type as a pointer, and an option of one as a pointer that may be null")

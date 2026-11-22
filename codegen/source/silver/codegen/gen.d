@@ -1377,18 +1377,18 @@ private final class Generator
     /// A call to the C function `call.symbol`, declared from the types at the call.
     private Fragment emit(const Expr e, const ForeignCall call)
     {
-        auto returnType = cType(e.type, e.span);
+        auto returnType = cType(e.type, e.span, true);
         Fragment arguments;
         string[] params;
         string[] operands;
-        foreach (ref arg; call.args)
+        foreach (i, ref arg; call.args)
         {
-            auto param = cType(arg.type, arg.span);
+            auto param = cType(call.params[i], arg.span, false);
             auto value = emitExpr(arg);
             arguments = arguments.then(value);
             if (param == "void") continue;
             params ~= param;
-            if (isNullableHandle(arg.type))
+            if (isNullableHandle(call.params[i]))
             {
                 // `None` is null, whatever its pointer scalar holds.
                 auto option = operandsOf(arg, value.operands, 2);
@@ -1432,15 +1432,17 @@ private final class Generator
 
     /// `type` as a C function takes or returns it: C's ABI wants `bool`, and integers narrower
     /// than an `int`, extended to 32 bits by whoever passes them, which LLVM leaves to the attribute.
-    private string cType(Type type, Span span)
+    /// The attribute comes before a result's type and after a parameter's.
+    private string cType(Type type, Span span, bool isResult)
     {
         auto types = _program.types;
-        if (type == types.bool_) return "zeroext i1";
+        string extended(string extension, string llvm) => isResult ? extension ~ " " ~ llvm : llvm ~ " " ~ extension;
+        if (type == types.bool_) return extended("zeroext", "i1");
         if (isNullableHandle(type)) return "ptr";
         if (types.isInteger(type))
         {
             auto info = types.integerOf(type);
-            if (info.bits < 32) return "%s i%s".format(info.signed ? "signext" : "zeroext", info.bits);
+            if (info.bits < 32) return extended(info.signed ? "signext" : "zeroext", "i%s".format(info.bits));
         }
         return llvmType(type, span);
     }
