@@ -229,6 +229,26 @@ type IoError = NotUtf8 | NotFound(path: String) | ReadFailed(path: String, reaso
 - `ReadFailed` and `WriteFailed` are any other failure to read or write a file, with its path as the program gave it and the system's words for what went wrong. `InputFailed` is a failure to read standard input, which has no path.
 - A reason is the system's text in the system's language, for showing to a person, and carries no error number, since those differ between systems. A program mustn't compare it with anything: a kind of failure that programs want to tell apart becomes a member of its own, as `NotFound` is.
 
+Each member prints as a message, so an `IoError` that reaches `main` reads as a sentence after `error: `. It prints the same however it's held: on its own, as `IoError`, or in a narrower list such as `readFile`'s, and in `print`, `String(e)` and a string hole alike.
+
+| Value | Prints as |
+| --- | --- |
+| `NotUtf8` | `the text isn't UTF-8` |
+| `NotFound("a.txt")` | `a.txt wasn't found` |
+| `ReadFailed("a.txt", reason)` | `couldn't read a.txt: ` and the reason |
+| `WriteFailed("a.txt", reason)` | `couldn't write a.txt: ` and the reason |
+| `InputFailed(reason)` | `couldn't read input: ` and the reason |
+
+```silver
+def main(): Unit ! IoError {
+    printl(readFile("settings.conf")?)
+}
+```
+
+```
+error: settings.conf wasn't found
+```
+
 A function returns only the members it can produce, so a `match` on its result lists only those, and stays complete as `IoError` grows. `?` widens them into `IoError`, or into any list that holds them. A function that takes the whole of `IoError` sees it grow, so its `match` wants a `_` arm.
 
 ```silver

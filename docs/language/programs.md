@@ -135,7 +135,7 @@ def main(args: [String]): Unit ! IoError {
 - A file too large to hold in memory ends the program as running out of memory does anywhere, with a panic.
 - `exists` is `true` for a file or a directory. It's a question about one moment, so a `readFile` after it can still be `NotFound`.
 
-The errors are members of `lang`'s [`IoError`](errors.md#ioerror), so `?` widens each into it. Each names the path as the program gave it:
+The errors are members of `lang`'s [`IoError`](errors.md#ioerror), so `?` widens each into it. Each names the path as the program gave it, and prints as a message:
 
 - `NotFound(path)` is a file that isn't there. It's a member of its own because it's the failure a program most often answers itself, as by using its defaults.
 - `ReadFailed(path, reason)` and `WriteFailed(path, reason)` are every other failure, with the system's words for it, in the system's language. A reason is for showing to a person, not for comparing: it differs between systems, so a program that needs to tell two failures apart needs a member of `IoError` for it.
@@ -149,7 +149,7 @@ def main(): Unit ! IoError {
 With `in.txt` there and no directory `out`, on Linux:
 
 ```
-error: WriteFailed(out/report.txt, No such file or directory)
+error: couldn't write out/report.txt: No such file or directory
 ```
 
 On Windows the reason reads `The system cannot find the path specified.` instead.
@@ -166,7 +166,6 @@ On Windows the reason reads `The system cannot find the path specified.` instead
 - A pattern such as `*.txt` arrives unexpanded on Windows, where nothing expands it, and as the files it names elsewhere, where the shell does. To settle when directories are designed.
 - Standard input as bytes, and reading all of it at once.
 - Starting another program.
-- An error whose fields are both Strings prints them side by side without quotes, so `WriteFailed(notes, final.txt, Access is denied.)` doesn't show where the path ends. Whether Strings inside a printed value, or only in the `error:` line, should be quoted.
 - Whether each test starts in an empty directory of its own. A `test` that writes a file today writes it into the directory `silver test` was run from, and two tests using one name see each other's file.
 - `exists` doesn't say whether it found a file or a directory, and is `false` for a directory it isn't allowed to look in. Functions that ask which, such as `isFile` and `isDirectory`, belong with the directory functions, rather than a second meaning for `exists`.
 
