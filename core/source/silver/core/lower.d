@@ -731,7 +731,9 @@ private final class Lowering
             (const ast.WithExpr with_) => lowerWith(e, with_, type),
             (const ast.MatchExpr match_) => lowerMatch(match_, type, span),
             (const ast.Lambda lambda) => lowerLambda(e, lambda, type),
-            (const ast.MapLiteral literal) => lowerDictionary(e, literal, span),
+            // One with no type of its own is made where it's promoted, as a bare `None` is.
+            (const ast.MapLiteral literal) => type == types.emptyDictionary ? make(ExprKind(UnitLit()))
+                : lowerDictionary(e, literal, span),
             // Outside a slice or a `for`, `a..b` builds an `Interval`.
             (const ast.RangeExpr range) => construct(type, [lowerExpr(*range.start), lowerExpr(*range.end)], span),
         );
@@ -1138,7 +1140,7 @@ private final class Lowering
     }
 
     /// `value`, of type `from`, as `to`: injected into a sum, wrapped in as many `Some`s as the
-    /// option types between them, or a `None` or `[]` taking on its type.
+    /// option types between them, or a `None`, `[]` or `[:]` taking on its type.
     private Expr promote(Expr value, Type from, Type to)
     {
         if (from == to || from == types.never) return value;
@@ -1180,6 +1182,13 @@ private final class Lowering
         {
             value.type = to;
             return value;
+        }
+        if (from == types.emptyDictionary)
+        {
+            auto empty = instanceOf(_analysis.emptyDictionaryFunction, types.nominalArgs(to).idup, null);
+            auto made = callInstance(empty, [], value.span);
+            auto bare = value.kind.match!((const UnitLit _) => true, _ => false);
+            return bare ? made : Expr(to, value.span, ExprKind(Block([eval(value)], boxed(made))));
         }
         if (types.isOption(to)) return inject(1, promote(value, from, types.optionInner(to)), to);
         return value;

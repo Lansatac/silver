@@ -2536,7 +2536,7 @@ private final class Generator
     private bool isEmpty(Type type)
     {
         auto types = _program.types;
-        if (type == types.unit || type == types.never || type == types.none) return true;
+        if (type == types.unit || type == types.never || type == types.none || type == types.emptyDictionary) return true;
         if (types.isTuple(type)) return types.tupleElements(type).all!(t => isEmpty(t));
         if (auto fields = type in _program.recordFields)
         {
@@ -3152,7 +3152,7 @@ private final class Generator
     private const(string)[] scalarsOfNew(Type type, Span span)
     {
         auto types = _program.types;
-        if (type == types.unit || type == types.never || type == types.none) return null;
+        if (type == types.unit || type == types.never || type == types.none || type == types.emptyDictionary) return null;
         if (type == types.bool_) return ["i1"];
         if (type == types.float_) return ["double"];
         if (types.isInteger(type) || type == types.char_) return ["i%s".format(types.integerOf(type).bits)];

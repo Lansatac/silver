@@ -1923,6 +1923,7 @@ unittest
     analyzedMain(`print([] == [])`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
     analyzedMain(`print([] ~ [])`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
     analyzedMain(`print(length([]))`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
+    analyzedMain(`val x = Some([])`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
     analyzedMain(`val x = [None]`).shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
 }
 

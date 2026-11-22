@@ -197,6 +197,12 @@ final class Analysis
         return literal in _typing.dictionaryLiterals;
     }
 
+    /// The function that makes the dictionary a value of type `emptyDictionary` is promoted to.
+    Id!FunctionDecl emptyDictionaryFunction() const
+    {
+        return _typing.emptyDictionary;
+    }
+
     /// The functions `index` calls, or null if it indexes an array.
     const(IndexFunctions)* indexingOf(Id!Expr index) const
     {

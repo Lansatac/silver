@@ -52,6 +52,8 @@ package struct Typing
     SideTable!(Id!Expr, IndexFunctions) indexing;
     /// For each dictionary literal, `lang`'s functions that build it, by the literal.
     SideTable!(Id!Expr, DictionaryFunctions) dictionaryLiterals;
+    /// `lang`'s `empty`, which makes the dictionary a `[:]` with no type of its own is promoted to.
+    Id!FunctionDecl emptyDictionary;
     /// For each overloaded name, the function chosen, by the name's expression.
     SideTable!(Id!Expr, SymbolId) chosenSymbols;
     /// For each call of an overloaded name, the function chosen, by the call.

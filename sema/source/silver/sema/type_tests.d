@@ -27,6 +27,7 @@ private string shape(TypeTable table, Type type)
         (const NoneType _) => "None",
         (const ArrayData _) => "Array",
         (const EmptyArrayType _) => "EmptyArray",
+        (const EmptyDictionaryType _) => "EmptyDictionary",
         (const FunctionData f) => "Function/" ~ f.params.length.to!string,
         (const NominalData _) => "Nominal",
         (const TupleData t) => "Tuple/" ~ t.elements.length.to!string,

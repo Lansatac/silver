@@ -32,7 +32,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Errors](language/errors.md) | `T ! E`, `fail`, `?` and `!` on errors, what panics, `main` | Implemented |
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, `a..b` as an `Interval` | Implemented, except that element assignment always copies |
 | [Ranges](language/ranges.md) | `Range`, sources of your own, `std.range` adapters and consumers | Partial: adapters, sources, consumers, ordering, `Sized`, `Indexed` and `Seq`; `sum` and `reversed` aren't built |
-| [Dictionaries](language/dictionaries.md) | `[K: V]`, lookup and update, insertion order, keys | Implemented; `[:]` needs its type from where it's written |
+| [Dictionaries](language/dictionaries.md) | `[K: V]`, lookup and update, insertion order, keys | Implemented |
 | [Strings](language/strings.md) | Text, interpolation, characters, cutting, `std.string` | Partial: no raw or multi-line strings |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, `match` | Implemented, with `invariant` still to be removed |

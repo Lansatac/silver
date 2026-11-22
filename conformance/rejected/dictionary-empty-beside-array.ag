@@ -1,0 +1,5 @@
+// A `[:]` is no array, so the arms have no type in common.
+def main(): Unit {
+    val mixed = if true { [1] } else { [:] }
+    printl(mixed)
+}

@@ -11,7 +11,7 @@ val maybe = [Some(1), None]        // [Int?]
 val empty: [Int] = []
 ```
 
-Against an expected `[T]`, each element is checked against `T`, so literals adapt and elements promote. Unannotated, the elements must have a common type. `[1, 2.0]` is an error, and `val x = []` needs an annotation.
+Against an expected `[T]`, each element is checked against `T`, so literals adapt and elements promote. Unannotated, the elements must have a common type. `[1, 2.0]` is an error, and `val x = []` needs an annotation, as does `val x = Some([])`.
 
 A literal may have a trailing comma, and can span lines.
 

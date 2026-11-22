@@ -1,0 +1,64 @@
+// `[:]` beside a dictionary, or where a type parameter is decided elsewhere, is that dictionary's type.
+type Box<K, V>(items: [K: V], key: K, value: V)
+type Setting = :[String: Int] | :String
+
+def put<K, V>(d: [K: V], key: K, value: V): [K: V] {
+    mutable val changed = d
+    changed[key] = value
+    changed
+}
+def later<K, V>(key: K, value: V, d: [K: V]): [K: V] => put(d, key, value)
+def orEmpty<K, V>(keep: Bool, d: [K: V]): [K: V] => if keep { d } else { [:] }
+def nothing<K, V>(first: Bool): [K: V] => if first { [:] } else { [:] }
+def show(d: [String: Int]): Unit { printl(d) }
+def checked(fails: Bool): [String: Int] ! String {
+    if fails { return Error("failed") }
+    if fails { ["a": 1] } else { [:] }
+}
+def kind(x: [Int]): String => "array"
+def kind(x: [String: Int]): String => "dictionary"
+
+def main(): Unit {
+    val yes = true
+
+    // An `if`'s or a `match`'s other arm says what it is.
+    printl(if yes { ["a": 1] } else { [:] })
+    printl(if yes { [:] } else { ["a": 1] })
+    val matched = match 1 {
+        1 => [:]
+        _ => ["a": 2]
+    }
+    printl(matched)
+    mutable val counts = if yes { [:] } else { ["a": 1] }
+    counts["z"] = 26
+    printl(counts)
+    val choose = (full: Bool) => if full { ["a": 1] } else { [:] }
+    printl(choose(false))
+
+    // So do the other elements of an array, and the other values of a dictionary.
+    printl([[:], ["a": 1]])
+    printl([["a": 1], [:]])
+    printl(["a": [:], "b": ["x": 1]])
+
+    // Another argument decides a type parameter.
+    printl(put([:], "a", 1))
+    printl(later(1, 1.5, [:]))
+    printl(Box([:], 'k', 2))
+    printl(orEmpty(false, ["a": 1]))
+    printl(orEmpty(true, [1: 'x']))
+    val chars: [Char: Int] = nothing(true)
+    printl(chars)
+
+    // A block or an `if` that ends in one still runs.
+    show({ print("block "); [:] })
+    show(if yes { print("arm "); [:] } else { [:] })
+    val maybe: [String: Int]? = if yes { [:] } else { [:] }
+    printl(maybe)
+    printl(checked(false))
+
+    // As a sum's member, and choosing between overloads.
+    val setting: Setting = [:]
+    printl(setting)
+    printl(kind([]))
+    printl(kind([:]))
+}

@@ -1,0 +1,1 @@
+T0015: This `[:]` has no type to take here; annotate one, as in `val x: [String: Int] = [:]`

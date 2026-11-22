@@ -882,7 +882,7 @@ private final class TypeChecker
     {
         if (actual == _types.error || _types.mentionsError(floored.written)) return _types.error;
         if (_types.isFailure(actual)) return _declarer.requireTyped(actual, span);
-        auto untyped = actual == _types.none || actual == _types.emptyArray;
+        auto untyped = isBareLiteralType(actual);
         Substitution found;
         bindParams(floored.written, actual, floored.floors, found);
         foreach (floor; floored.floors)
@@ -1511,7 +1511,7 @@ private final class TypeChecker
                 types ~= _typing.promotions.get(element.id, _typing.exprTypes.get(element.id, _types.error));
             }
             // Never built, so only recorded for completeness; a dropped `None` leaves it untyped.
-            _typing.exprTypes[value.id] = types.canFind(_types.none) || types.canFind(_types.emptyArray)
+            _typing.exprTypes[value.id] = types.any!(t => isBareLiteralType(t))
                 ? _types.error : _declarer.tupleOf(types);
             return;
         }
@@ -2001,7 +2001,7 @@ private final class TypeChecker
                     types ~= _typing.promotions.get(literal[i].id, _typing.exprTypes.get(literal[i].id, _types.error));
                 }
                 // Never built, as with a `val` pattern's literal.
-                _typing.exprTypes[v.id] = types.canFind(_types.none) || types.canFind(_types.emptyArray)
+                _typing.exprTypes[v.id] = types.any!(t => isBareLiteralType(t))
                     ? _types.error : _declarer.tupleOf(types);
                 return;
             }
@@ -2093,7 +2093,15 @@ private final class TypeChecker
             (const BlockExpr block) => synthesizeBlock(block, expr.span, ctx),
             (const UnitLiteral _) => _types.unit,
             (const Identifier _) => synthesizeIdentifier(expr, expected, ctx.site),
-            (const SomeExpr some) => _declarer.optionOf(synthesize(*some.value, ctx), some.value.span),
+            (const SomeExpr some) {
+                auto inner = synthesize(*some.value, ctx);
+                // A `[]?` or a `[:]?` fits no array's or dictionary's option, so nothing could use it.
+                if (inner == _types.emptyArray || inner == _types.emptyDictionary)
+                {
+                    inner = _declarer.requireTyped(inner, some.value.span);
+                }
+                return _declarer.optionOf(inner, some.value.span);
+            },
             (const NoneLiteral _) => _types.none,
             (const PropagateExpr propagate) => synthesizePropagate(propagate, expr.span, ctx, expected),
             (const OkExpr ok) {
@@ -2153,8 +2161,9 @@ private final class TypeChecker
     {
         if (literal.keys.length == 0)
         {
-            _collector.reportError(DiagnosticCode.UntypedEmptyArray, expr.span,
-                "This `[:]` has no type to take here; annotate one, as in `val x: [String: Int] = [:]`");
+            _typing.emptyDictionary = dictionaryFunction("empty");
+            if (_typing.emptyDictionary.isValid) return _types.emptyDictionary;
+            _collector.reportError(DiagnosticCode.InternalError, expr.span, "`lang.dictionary` has no `empty` to make a `[:]` with");
             return _types.error;
         }
         Type joined(const(Expr)[] parts, string what)
@@ -2170,6 +2179,12 @@ private final class TypeChecker
         auto key = joined(literal.keys, "Dictionary keys");
         auto value = joined(literal.values, "Dictionary values");
         return builtDictionary(expr, literal, _declarer.dictionaryOf(key, value, expr.span), ctx);
+    }
+
+    /// Whether `type` is what a bare `None`, `[]` or `[:]` has until it lands somewhere.
+    private bool isBareLiteralType(Type type)
+    {
+        return type == _types.none || type == _types.emptyArray || type == _types.emptyDictionary;
     }
 
     /// Whether `type` is a `[K: V]`.
@@ -2496,6 +2511,10 @@ private final class TypeChecker
         if (leftType == _types.emptyArray && rightType == _types.emptyArray)
         {
             return _declarer.reportUntypedEmptyArray(binary.left.span);
+        }
+        if (leftType == _types.emptyDictionary && rightType == _types.emptyDictionary)
+        {
+            return _declarer.reportUntypedEmptyDictionary(binary.left.span);
         }
         if (leftType != rightType)
         {
@@ -3266,6 +3285,7 @@ private final class TypeChecker
             && (isNumeric(core) || _declarer.isSum(core) && _declarer.membersOf(core).any!(m => isNumeric(m)));
         if (_declarer.isSum(target)) return isAssignable(type, target) || literalFits;
         if (type == _types.emptyArray && _types.isArray(target)) return true;
+        if (type == _types.emptyDictionary && isDictionary(target)) return true;
         if (_types.isErrorUnion(target)) return isAssignable(type, target) || literalFits;
         if (!_types.isOption(target) || _types.isOption(type) && !isAssignable(type, target)) return false;
         return isAssignable(type, target) || literalFits;
@@ -3406,6 +3426,10 @@ private final class TypeChecker
                 if (leftType == _types.emptyArray && rightType == _types.emptyArray)
                 {
                     return _declarer.reportUntypedEmptyArray(binary.left.span);
+                }
+                if (leftType == _types.emptyDictionary && rightType == _types.emptyDictionary)
+                {
+                    return _declarer.reportUntypedEmptyDictionary(binary.left.span);
                 }
                 if (leftType != rightType && promotes(*binary.right, rightType, leftType))
                 {
@@ -3753,7 +3777,7 @@ private final class TypeChecker
                     && couldBe(f.ret, g.ret, params, injects),
                 _ => false,
             ),
-            (const NominalData n) => data.match!(
+            (const NominalData n) => actual == _types.emptyDictionary ? isDictionary(declared) : data.match!(
                 (const NominalData m) => m.decl == n.decl
                     ? n.args.length.iota.all!(i => couldBe(n.args[i], m.args[i], params, injects))
                     : injects && _typing.members.get(n.decl, null).any!(member => declOf(member) == m.decl),
@@ -3893,6 +3917,11 @@ private final class TypeChecker
                 return inOption((Type t) => _types.isArray(t)
                     ? literal.elements.map!(e => shapeFit(e, _types.arrayElement(t), params)).fold!min(Fit.exact)
                     : Fit.none);
+            },
+            // Only the empty one is fitted by its shape.
+            (const MapLiteral _) {
+                auto dictionary = isDictionary(param) || _types.isOption(param) && isDictionary(_types.optionInner(param));
+                return bare || dictionary || sumHas(m => isDictionary(m)) ? Fit.converted : Fit.none;
             },
             (const TupleLiteral literal) {
                 if (bare) return Fit.exact;
@@ -5500,8 +5529,7 @@ private final class TypeChecker
     /// `actual`. Nothing is reported, and a parameter that's already bound is left alone.
     private void bindParams(Type declared, Type actual, const(TypeParam)[] params, ref Substitution bound)
     {
-        if (actual == _types.error || actual == _types.never || actual == _types.none || actual == _types.emptyArray
-            || actual == _types.any) return;
+        if (actual == _types.error || actual == _types.never || isBareLiteralType(actual) || actual == _types.any) return;
         // What `!` unwraps is an option or an error union whose error isn't known, so it's either.
         auto unwrapped = _types.isErrorUnion(actual) && _types.errorOf(actual) == _types.error;
         auto data = _types[actual];
@@ -5622,8 +5650,8 @@ private final class TypeChecker
         foreach (param; g.params ~ g.ownerParams) bound[param.id] = _types.error;
     }
 
-    /// An argument whose type depends on where it goes: an integer literal, a lambda, `None` or
-    /// `[]`, and as with `None`, a generic name with no type arguments that isn't called, like `Nil`.
+    /// An argument whose type depends on where it goes: an integer literal, a lambda, `None`, `[]`
+    /// or `[:]`, and as with `None`, a generic name with no type arguments that isn't called, like `Nil`.
     private bool isUntyped(const Expr expr)
     {
         if (expr.id in _resolutions.overloads) return true;
@@ -5637,6 +5665,7 @@ private final class TypeChecker
             (const NoneLiteral _) => true,
             (const OkExpr _) => true,
             (const ArrayLiteral literal) => literal.elements.length == 0,
+            (const MapLiteral literal) => literal.keys.length == 0,
             _ => false,
         );
     }
@@ -5967,6 +5996,7 @@ private final class TypeChecker
                 auto i = culprit.front;
                 if (typed[i] == _types.none) _declarer.reportUntypedNone(args[i].span);
                 else if (typed[i] == _types.emptyArray) _declarer.reportUntypedEmptyArray(args[i].span);
+                else if (typed[i] == _types.emptyDictionary) _declarer.reportUntypedEmptyDictionary(args[i].span);
                 else if (_types.mentionsError(typed[i]) || typed[i] == _types.never) continue;
                 else
                 {
@@ -5985,6 +6015,7 @@ private final class TypeChecker
                     (const NoneLiteral _) { _declarer.reportUntypedNone(arg.span); },
                     (const OkExpr _) { _declarer.reportUntypedErrorUnion("Ok", arg.span); },
                     (const ArrayLiteral _) { _declarer.reportUntypedEmptyArray(arg.span); },
+                    (const MapLiteral _) { _declarer.reportUntypedEmptyDictionary(arg.span); },
                     (_) {
                         if (arg.id in _resolutions.overloads) reportOverloadedValue(arg);
                         else reportUninferredValue(arg, genericNamed(arg), true);
@@ -6894,7 +6925,7 @@ private final class TypeChecker
         if (a == _types.none) return _declarer.optionOf(b, span);
         if (b == _types.none) return _declarer.optionOf(a, span);
         // A bare `Error(e)` beside a value that isn't an error union makes one.
-        auto valued = (Type t) => !_types.isFailure(t) && !_types.isErrorUnion(t) && t != _types.emptyArray;
+        auto valued = (Type t) => !_types.isFailure(t) && !_types.isErrorUnion(t) && t != _types.emptyArray && t != _types.emptyDictionary;
         if (_types.isFailure(a) && valued(b)) return _types.errorUnion(b, _types.errorOf(a));
         if (_types.isFailure(b) && valued(a)) return _types.errorUnion(a, _types.errorOf(b));
 
@@ -6970,7 +7001,7 @@ private final class TypeChecker
         return expected != owner && _declarer.membersOf(expected).canFind(member);
     }
 
-    /// The one member of `sum` that the option, array or tuple written out as `expr` can be, or
+    /// The one member of `sum` that the option, array, dictionary or tuple written out as `expr` can be, or
     /// `Type.init` if `expr` isn't one of those or there's no single member.
     private Type memberForSyntax(const Expr expr, Type sum)
     {
@@ -6978,6 +7009,7 @@ private final class TypeChecker
             (const SomeExpr _) => _declarer.membersOf(sum).filter!(m => _types.isOption(m)).array,
             (const NoneLiteral _) => _declarer.membersOf(sum).filter!(m => _types.isOption(m)).array,
             (const ArrayLiteral _) => _declarer.membersOf(sum).filter!(m => _types.isArray(m)).array,
+            (const MapLiteral _) => _declarer.membersOf(sum).filter!(m => isDictionary(m)).array,
             (const BinaryExpr _) => isArraySyntax(expr) ? _declarer.membersOf(sum).filter!(m => _types.isArray(m)).array : null,
             (const TupleLiteral literal) => _declarer.membersOf(sum)
                 .filter!(m => _types.isTuple(m) && _types.tupleElements(m).length == literal.elements.length).array,
@@ -7189,7 +7221,8 @@ private final class TypeChecker
         {
             type = _declarer.requireTyped(type, expr.span);
         }
-        else if (type == _types.emptyArray && _types.isArray(expected))
+        else if (type == _types.emptyArray && _types.isArray(expected)
+            || type == _types.emptyDictionary && isDictionary(expected))
         {
             _typing.promotions[expr.id] = expected;
             return expected;
@@ -7213,7 +7246,7 @@ private final class TypeChecker
     private bool isBothSides(const Expr expr, Type type, Type expected)
     {
         if (type == _types.error || type == _types.never || _types.mentionsError(type) || _types.isErrorUnion(type)
-            || _types.isFailure(type) || type == _types.none || type == _types.emptyArray) return false;
+            || _types.isFailure(type) || isBareLiteralType(type)) return false;
         for (auto layer = expected; _types.isOption(layer) || _types.isErrorUnion(layer);
             layer = _types.isOption(layer) ? _types.optionInner(layer) : _types.successOf(layer))
         {
@@ -7751,7 +7784,8 @@ private final class TypeChecker
                 return layer(fitSteps(from, u.success));
             },
             (const ErrorListData _) => errorFits(from, to) ? 1 : -1,
-            (const NominalData _) => _declarer.membersOf(to).canFind(from) ? 1 : -1,
+            (const NominalData _) => _declarer.membersOf(to).canFind(from)
+                || from == _types.emptyDictionary && isDictionary(to) ? 1 : -1,
             // Both have the layout of an array with no elements, so no conversion hides here.
             (const ArrayData a) => from == _types.emptyArray
                 || (_types.isArray(from) && _types.arrayElement(from) == _types.never) ? 1 : -1,

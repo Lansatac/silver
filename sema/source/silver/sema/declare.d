@@ -178,11 +178,19 @@ package final class Declarer
         return _types.error;
     }
 
-    /// Reports a value of `type` that nothing gives a type to, if it's one: a bare `None` or `[]`.
+    package Type reportUntypedEmptyDictionary(Span span)
+    {
+        _collector.reportError(DiagnosticCode.UntypedEmptyArray, span,
+            "This `[:]` has no type to take here; annotate one, as in `val x: [String: Int] = [:]`");
+        return _types.error;
+    }
+
+    /// Reports a value of `type` that nothing gives a type to, if it's one: a bare `None`, `[]` or `[:]`.
     package Type requireTyped(Type type, Span span)
     {
         if (type == _types.none) return reportUntypedNone(span);
         if (type == _types.emptyArray) return reportUntypedEmptyArray(span);
+        if (type == _types.emptyDictionary) return reportUntypedEmptyDictionary(span);
         if (_types.isFailure(type)) return reportUntypedErrorUnion("Error", span);
         return type;
     }

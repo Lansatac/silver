@@ -1,0 +1,5 @@
+// `Some([])` alone says nothing about what the array holds.
+def main(): Unit {
+    val nothing = Some([])
+    printl(nothing)
+}

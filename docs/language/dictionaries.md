@@ -13,12 +13,17 @@ printl(older)    // [ana: 31, bo: 27, cy: 40]
 
 ## Literals and the type
 
-A literal writes each entry as `key: value` inside brackets. The empty dictionary is `[:]`, which takes its type from where it's used, as `[]` does.
+A literal writes each entry as `key: value` inside brackets. The empty dictionary is `[:]`, which takes its type from where it's used, as `[]` does: an annotation, a parameter, a field or a result type, or a dictionary it's written beside.
 
 ```silver
 val empty: [String: Int] = [:]
 val grid = [(0, 0): "start", (3, 4): "end"]
+
+val scores = if fresh { [:] } else { ["ana": 3] }    // [String: Int]
+val rounds = [["ana": 3], [:]]                       // [[String: Int]]
 ```
+
+`val x = [:]` needs an annotation, since nothing says what its keys and values are.
 
 `[K: V]` is the type of a dictionary from `K` to `V`, and another spelling of `Dictionary<K, V>`. An error names the type as `[K: V]`. `Dictionary` and its functions are available everywhere, as arrays' are.
 
@@ -130,7 +135,8 @@ Looking up, adding, replacing and removing a key take time that grows with the l
 ## Current implementation
 
 - Everything above is built. `Dictionary<K, V>` and its functions are plain Silver in `stdlib/lang/dictionary.ag`, and a literal is an empty dictionary with each entry written into it in turn.
-- `[:]` takes its type from an annotation, a parameter or a field it's given to, a result type, the other side of `??` or `==`, or the option or error union it's promoted into. It has no type of its own as `[]` has, so `[:]` passed where a type parameter decides the type, as in `first([:])`, is an error that asks for an annotation.
+- `[:]` takes its type from an annotation, a parameter or a field it's given to, a result type, the other side of `??` or `==`, the option, error union or sum it's promoted into, the other arm of an `if` or a `match`, the other elements of an array or values of a dictionary, and a type parameter that another argument decides, as in `put([:], "a", 1)`. With none of those, as in `val x = [:]`, `first([:])` or `Some([:])`, it's `T0015`, which asks for an annotation.
+- An expected type doesn't reach a `[:]` or a `[]` inside a generic constructor that is itself an argument, as in `val t: Table<String, Int> = Table(Branch(0, [:]), 0)`, which is `T0015`.
 - The same constant as two keys is caught when both are literals written the same way, with a sign or as tuples of literals: `["a": 1, "a": 2]` and `[(1, 2): 0, (1, 2): 1]`. Two names for one constant, or `1` beside `0x1`, aren't caught, and the later value wins as for any repeated key.
 - `keys`, `values` and `iterate` give the types `Keys<K, V>`, `Values<K, V>` and `Entries<K, V>`, which a `val` infers. Writing one of those names needs `import lang.dictionary`.
 - A dictionary's fields can be read and it can be built with its constructor by a module that imports `lang.dictionary`, which nothing checks.

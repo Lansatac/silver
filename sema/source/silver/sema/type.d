@@ -25,6 +25,9 @@ final class TypeTable
     /// The type of a bare `[]`, assignable to every array. Its one use is as a promotion's source,
     /// like `none`, but it has a layout: every array has the same one.
     Type emptyArray;
+    /// The type of a bare `[:]`, assignable to every dictionary. Like `none`, no value keeps it,
+    /// and it has no layout: where it's promoted, the dictionary is made.
+    Type emptyDictionary;
 
     this()
     {
@@ -46,6 +49,7 @@ final class TypeTable
         any = registerTypeData(TypeData(Primitive(Primitive.Kind.Any)));
         none = registerTypeData(TypeData(NoneType()));
         emptyArray = registerTypeData(TypeData(EmptyArrayType()));
+        emptyDictionary = registerTypeData(TypeData(EmptyDictionaryType()));
     }
 
     private TypeData[int] _types;
@@ -404,6 +408,7 @@ final class TypeTable
             (const NoneType _) => "None",
             (const ArrayData a) => "[" ~ describe(a.element) ~ "]",
             (const EmptyArrayType _) => "[]",
+            (const EmptyDictionaryType _) => "[:]",
             (const FunctionData f) => "(" ~ f.params.length.iota.map!(i => (f.isMutable(i) ? "mutable " : "") ~ describe(f.params[i])).join(", ")
                 ~ ") -> " ~ describe(f.ret),
             (const TupleData t) => "(" ~ t.elements.map!(e => describe(e)).join(", ") ~ ")",
@@ -543,6 +548,10 @@ struct EmptyArrayType
 {
 }
 
+struct EmptyDictionaryType
+{
+}
+
 struct ErrorType
 {
 }
@@ -567,5 +576,5 @@ struct FailureData
     Type error;
 }
 
-alias TypeData = SumType!(Primitive, OptionData, NoneType, ArrayData, EmptyArrayType, FunctionData, NominalData, TupleData,
+alias TypeData = SumType!(Primitive, OptionData, NoneType, ArrayData, EmptyArrayType, EmptyDictionaryType, FunctionData, NominalData, TupleData,
     ErrorType, TypeParamData, ErrorUnionData, ErrorListData, FailureData);

@@ -1,0 +1,5 @@
+// Two `[:]` say no more about their keys or values than one does.
+def main(): Unit {
+    val either = if true { [:] } else { [:] }
+    printl(either)
+}
