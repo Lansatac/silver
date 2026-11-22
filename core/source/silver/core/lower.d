@@ -38,6 +38,8 @@ Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis, const ast
     auto entry = lowering.slotFor(InstanceKey(root));
     lowering.lowerPending();
     entry = lowering.entryFor(entry, isMain);
+    // Printing the error `main` returns can reach a type's own `opString`.
+    lowering.lowerPending();
     auto program = Program(rebindable(analysis.types), lowering.functions, entry, lowering.libraries);
     lowering.describeTypes(program);
     numberLocals(program);

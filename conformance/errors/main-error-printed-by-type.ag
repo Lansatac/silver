@@ -1,0 +1,9 @@
+// An error from main prints through its type's own opString, which only the entry wrapper reaches.
+type Oops(n: Int)
+
+def opString(o: Oops): String => "oops {o.n}"
+
+def main(): Unit ! Oops {
+    printl("before")
+    fail Oops(1)
+}
