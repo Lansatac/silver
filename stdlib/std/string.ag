@@ -156,6 +156,328 @@ def parseInt(text: String): Int? {
     -value
 }
 
+// `true` for the text `true` and `false` for `false`, the two ways a Bool is written, in capitals
+// or not: `True` and `FALSE` are read too. `None` for anything else.
+def parseBool(text: String): Bool? {
+    if isWord(text, "true") {
+        return true
+    }
+    if isWord(text, "false") {
+        return false
+    }
+    None
+}
+
+// Whether `text` is `word`, which is in lower case, with any of its letters `A` to `Z` in capitals.
+private def isWord(text: String, word: String): Bool {
+    val data = bytes(text)
+    val wanted = bytes(word)
+    if length(data) != length(wanted) {
+        return false
+    }
+    mutable val i = 0
+    while i < length(data) {
+        val lowered = if data[i] >= 65 && data[i] <= 90 => data[i] + 32 else data[i]
+        if lowered != wanted[i] {
+            return false
+        }
+        i += 1
+    }
+    true
+}
+
+// The Float nearest the decimal number `text` writes: digits with an optional `.` among them,
+// before them or after them, then optionally `e` or `E`, a sign and digits, with `-` before it all
+// for a negative number. `None` for anything else, and for a number too large for a Float. One too
+// small to tell from zero is zero.
+def parseFloat(text: String): Float? {
+    val data = bytes(text)
+    val count = length(data)
+    val negative = count > 0 && data[0] == 45
+    val first = if negative => 1 else 0
+    mutable val i = first
+    while i < count && isDigitByte(data[i]) {
+        i += 1
+    }
+    val wholeDigits = i - first
+    mutable val fractionDigits = 0
+    if i < count && data[i] == 46 {
+        val fraction = i + 1
+        i = fraction
+        while i < count && isDigitByte(data[i]) {
+            i += 1
+        }
+        fractionDigits = i - fraction
+    }
+    if wholeDigits + fractionDigits == 0 {
+        return None
+    }
+    val digitsEnd = i
+    mutable val exponent = 0
+    if i < count && (data[i] == 101 || data[i] == 69) {
+        i += 1
+        val down = i < count && data[i] == 45
+        if down || (i < count && data[i] == 43) {
+            i += 1
+        }
+        val written = i
+        while i < count && isDigitByte(data[i]) {
+            // Past this the number is zero or too large whatever the digits say.
+            if exponent < 100000000 {
+                exponent = exponent * 10 + Int(data[i]) - 48
+            }
+            i += 1
+        }
+        if i == written {
+            return None
+        }
+        if down {
+            exponent = -exponent
+        }
+    }
+    if i != count {
+        return None
+    }
+    exponent -= fractionDigits
+
+    // The digits from the first that isn't zero, as an Int while they fit one.
+    mutable val significant = 0
+    mutable val small = 0
+    i = first
+    while i < digitsEnd {
+        if data[i] != 46 && (significant > 0 || data[i] != 48) {
+            significant += 1
+            if significant <= 18 {
+                small = small * 10 + Int(data[i]) - 48
+            }
+        }
+        i += 1
+    }
+    if significant == 0 || significant + exponent < -330 {
+        return if negative => -0.0 else 0.0
+    }
+    if significant + exponent > 310 {
+        return None
+    }
+
+    // Up to 15 digits and a power of ten up to 22 are each exactly a Float, so one multiplication
+    // or division rounds once, which is the nearest.
+    if significant <= 15 && exponent >= -22 && exponent <= 22 {
+        mutable val power = 1.0
+        mutable val left = if exponent < 0 => -exponent else exponent
+        while left > 0 {
+            power *= 10.0
+            left -= 1
+        }
+        val value = if exponent < 0 => Float(small) / power else Float(small) * power
+        return if negative => -value else value
+    }
+
+    mutable val digits: [Int] = []
+    i = first
+    while i < digitsEnd {
+        if data[i] != 46 {
+            digits = bigTimesPlus(digits, 10, Int(data[i]) - 48)
+        }
+        i += 1
+    }
+    val value = nearestFloat(digits, exponent) ?? return None
+    if negative => -value else value
+}
+
+private def isDigitByte(byte: UInt8): Bool => byte >= 48 && byte <= 57
+
+// The Float nearest `digits * 10^exponent`, ties going to the even one, for `digits` above zero.
+// `None` when it's too large.
+private def nearestFloat(digits: [Int], exponent: Int): Float? {
+    val above = if exponent > 0 => bigTimesTenTo(digits, exponent) else digits
+    val below = if exponent < 0 => bigTimesTenTo([1], -exponent) else [1]
+    // The quotient of the two, scaled by 2^shift to have 55 or 56 bits: the 53 a Float keeps and
+    // at least two to round by.
+    val shift = 55 - (bigBits(above) - bigBits(below))
+    mutable val rest = if shift > 0 => bigShiftLeft(above, shift) else above
+    mutable val step = bigShiftLeft(below, 55 + (if shift < 0 => -shift else 0))
+    mutable val quotient = 0
+    mutable val bit = 55
+    while bit >= 0 {
+        if bigAtLeast(rest, step) {
+            rest = bigMinus(rest, step)
+            quotient |= 1 << bit
+        }
+        step = bigHalf(step)
+        bit -= 1
+    }
+    val inexact = length(rest) > 0
+    val bits = if (quotient >> 55) > 0 => 56 else 55
+    // The power of two of the number's highest bit.
+    val top = bits - 1 - shift
+    if top > 1024 {
+        return None
+    }
+    // Below 2^-1022 a Float keeps fewer bits, down to one at 2^-1074.
+    val kept = if top >= -1022 => 53 else top + 1075
+    if kept < 0 {
+        return 0.0
+    }
+    val dropped = bits - kept
+    mutable val mantissa = quotient >> dropped
+    val half = ((quotient >> (dropped - 1)) & 1) == 1
+    val more = (quotient & ((1 << (dropped - 1)) - 1)) != 0 || inexact
+    if half && (more || (mantissa & 1) == 1) {
+        mantissa += 1
+    }
+    val value = timesTwoTo(Float(mantissa), dropped - shift)
+    if value > 1.7976931348623157e308 {
+        return None
+    }
+    value
+}
+
+// `x * 2^power`, exactly when that is a Float, since each step is.
+private def timesTwoTo(x: Float, power: Int): Float {
+    val sixty = 1152921504606846976.0
+    mutable val value = x
+    mutable val left = power
+    while left >= 60 {
+        value *= sixty
+        left -= 60
+    }
+    while left > 0 {
+        value *= 2.0
+        left -= 1
+    }
+    while left <= -60 {
+        value /= sixty
+        left += 60
+    }
+    while left < 0 {
+        value /= 2.0
+        left += 1
+    }
+    value
+}
+
+// A whole number of any size, for `parseFloat`: 32 bits to an element, the lowest first, and no
+// zero as the last. Each of these builds its answer by appending, since assigning an element
+// copies the array.
+
+// `n * factor + add`, for a `factor` up to 2^30 and an `add` below 2^32.
+private def bigTimesPlus(n: [Int], factor: Int, add: Int): [Int] {
+    mutable val result: [Int] = []
+    mutable val carry = add
+    for part in n {
+        val value = part * factor + carry
+        result ~= [value & 4294967295]
+        carry = value >> 32
+    }
+    if carry > 0 {
+        result ~= [carry]
+    }
+    result
+}
+
+private def bigTimesTenTo(n: [Int], power: Int): [Int] {
+    mutable val result = n
+    mutable val left = power
+    while left >= 9 {
+        result = bigTimesPlus(result, 1000000000, 0)
+        left -= 9
+    }
+    while left > 0 {
+        result = bigTimesPlus(result, 10, 0)
+        left -= 1
+    }
+    result
+}
+
+// How many bits `n` takes to write.
+private def bigBits(n: [Int]): Int {
+    if length(n) == 0 {
+        return 0
+    }
+    mutable val bits = (length(n) - 1) * 32
+    mutable val top = n[length(n) - 1]
+    while top > 0 {
+        bits += 1
+        top >>= 1
+    }
+    bits
+}
+
+private def bigShiftLeft(n: [Int], bits: Int): [Int] {
+    if length(n) == 0 {
+        return n
+    }
+    mutable val result: [Int] = []
+    mutable val whole = bits / 32
+    while whole > 0 {
+        result ~= [0]
+        whole -= 1
+    }
+    val within = bits % 32
+    mutable val carry = 0
+    for part in n {
+        val value = (part << within) | carry
+        result ~= [value & 4294967295]
+        carry = value >> 32
+    }
+    if carry > 0 {
+        result ~= [carry]
+    }
+    result
+}
+
+private def bigHalf(n: [Int]): [Int] {
+    mutable val result: [Int] = []
+    val count = length(n)
+    mutable val i = 0
+    while i < count {
+        val above = if i + 1 < count => n[i + 1] & 1 else 0
+        val part = (n[i] >> 1) | (above << 31)
+        if i + 1 < count || part > 0 {
+            result ~= [part]
+        }
+        i += 1
+    }
+    result
+}
+
+private def bigAtLeast(a: [Int], b: [Int]): Bool {
+    if length(a) != length(b) {
+        return length(a) > length(b)
+    }
+    mutable val i = length(a) - 1
+    while i >= 0 {
+        if a[i] != b[i] {
+            return a[i] > b[i]
+        }
+        i -= 1
+    }
+    true
+}
+
+// `a - b`, for an `a` that's at least `b`.
+private def bigMinus(a: [Int], b: [Int]): [Int] {
+    mutable val result: [Int] = []
+    mutable val borrow = 0
+    mutable val used = 0
+    mutable val i = 0
+    while i < length(a) {
+        mutable val part = a[i] - borrow - (if i < length(b) => b[i] else 0)
+        borrow = 0
+        if part < 0 {
+            part += 4294967296
+            borrow = 1
+        }
+        result ~= [part]
+        if part > 0 {
+            used = i + 1
+        }
+        i += 1
+    }
+    result[..used]
+}
+
 // Where `part` first appears in `data`, as a count of bytes before it.
 private def find(data: [UInt8], part: [UInt8]): Int? {
     mutable val start = 0
@@ -431,4 +753,100 @@ test "parseInt refuses anything else" {
     expect(parseInt("9223372036854775808") == None)
     expect(parseInt("-9223372036854775809") == None)
     expect(parseInt("99999999999999999999999") == None)
+}
+
+test "parseBool reads true and false in any case" {
+    expect(parseBool("true") == Some(true))
+    expect(parseBool("false") == Some(false))
+    expect(parseBool("True") == Some(true))
+    expect(parseBool("TRUE") == Some(true))
+    expect(parseBool("fAlSe") == Some(false))
+    expect(parseBool("") == None)
+    expect(parseBool("yes") == None)
+    expect(parseBool("t") == None)
+    expect(parseBool("truer") == None)
+    expect(parseBool("TR\u{dc}E") == None)
+    expect(parseBool("true ") == None)
+    expect(parseBool("1") == None)
+}
+
+test "parseFloat reads digits, a fraction and an exponent" {
+    expect(parseFloat("0") == Some(0.0))
+    expect(parseFloat("42") == Some(42.0))
+    expect(parseFloat("-42") == Some(-42.0))
+    expect(parseFloat("007.50") == Some(7.5))
+    expect(parseFloat("3.141592653589793") == Some(3.141592653589793))
+    expect(parseFloat("0.1") == Some(0.1))
+    expect(parseFloat("-0.000001") == Some(-0.000001))
+    expect(parseFloat("1e3") == Some(1000.0))
+    expect(parseFloat("1E3") == Some(1000.0))
+    expect(parseFloat("1.5e+3") == Some(1500.0))
+    expect(parseFloat("1.5e-3") == Some(0.0015))
+    expect(parseFloat(".5") == Some(0.5))
+    expect(parseFloat("-.5") == Some(-0.5))
+    expect(parseFloat("5.") == Some(5.0))
+    expect(parseFloat("1.e3") == Some(1000.0))
+    expect(parseFloat(".5e1") == Some(5.0))
+    expect(parseFloat("123456789012345e22") == Some(123456789012345e22))
+    expect(parseFloat("0.000e999999999999999999999") == Some(0.0))
+    expect(String(parseFloat("-0")!) == String(-0.0))
+}
+
+test "parseFloat refuses anything else" {
+    expect(parseFloat("") == None)
+    expect(parseFloat("-") == None)
+    expect(parseFloat("+1") == None)
+    expect(parseFloat(" 1") == None)
+    expect(parseFloat("1 ") == None)
+    expect(parseFloat(".") == None)
+    expect(parseFloat("-.") == None)
+    expect(parseFloat(".e3") == None)
+    expect(parseFloat("e3") == None)
+    expect(parseFloat("1e") == None)
+    expect(parseFloat("1e+") == None)
+    expect(parseFloat("1e1.5") == None)
+    expect(parseFloat("1_000.0") == None)
+    expect(parseFloat("1.2.3") == None)
+    expect(parseFloat("0x10") == None)
+    expect(parseFloat("inf") == None)
+    expect(parseFloat("NaN") == None)
+    expect(parseFloat("\u{661}") == None)
+}
+
+test "parseFloat gives the nearest Float, ties to even" {
+    expect(parseFloat("0.30000000000000004") == Some(0.1 + 0.2))
+    expect(parseFloat("9007199254740993") == Some(9007199254740992.0))
+    expect(parseFloat("9007199254740993.0000000000000000000000001") == Some(9007199254740994.0))
+    expect(parseFloat("9007199254740995") == Some(9007199254740996.0))
+    expect(parseFloat("8.41e21") == Some(8.41e21))
+    expect(parseFloat("1e23") == Some(1e23))
+    expect(parseFloat("123456789012345678901234567890") == Some(123456789012345678901234567890.0))
+    expect(parseFloat("0.000000000000000000000000000001234567890123456789") == Some(1.234567890123456789e-30))
+    expect(parseFloat("1.7976931348623157e308") == Some(1.7976931348623157e308))
+    expect(parseFloat("2.2250738585072014e-308") == Some(2.2250738585072014e-308))
+    // 2^-1074, the smallest Float above zero, and the numbers either side of half of it.
+    val smallest = 2.2250738585072014e-308 / 4503599627370496.0
+    expect(smallest > 0.0)
+    expect(parseFloat("5e-324") == Some(smallest))
+    expect(parseFloat("2.4703282292062328e-324") == Some(smallest))
+    expect(parseFloat("2.4703282292062327e-324") == Some(0.0))
+    expect(parseFloat("7.4109846876186982e-324") == Some(smallest * 2.0))
+    // The largest Float below 2^-1022, where fewer bits are kept.
+    expect(parseFloat("2.2250738585072011e-308") == Some(2.2250738585072014e-308 - smallest))
+}
+
+test "parseFloat is None past the largest Float and zero below the smallest" {
+    expect(parseFloat("1.7976931348623158e308") == Some(1.7976931348623157e308))
+    expect(parseFloat("1.7976931348623159e308") == None)
+    expect(parseFloat("-1.7976931348623159e308") == None)
+    expect(parseFloat("1e309") == None)
+    expect(parseFloat("1e999999999999999999999") == None)
+    expect(parseFloat("1e-400") == Some(0.0))
+    expect(parseFloat("1e-999999999999999999999") == Some(0.0))
+    mutable val zeros = ""
+    for n in 0..400 {
+        zeros ~= "0"
+    }
+    expect(parseFloat("0.{zeros}1e400") == Some(0.1))
+    expect(parseFloat("1{zeros}e-400") == Some(1.0))
 }

@@ -79,7 +79,7 @@ import std.string
 | Asking | `contains`, `startsWith`, `endsWith`, `isEmpty` |
 | Cutting | `stripPrefix`, `stripSuffix`, `splitOnce`, `splitWhile`, `trim`, `trimStart`, `trimEnd` |
 | Many pieces | `split(text, separator)` and `lines(text)`, each an array of strings |
-| Converting | `decode`, `parseInt` |
+| Converting | `decode`, `parseInt`, `parseFloat`, `parseBool` |
 
 - The questions compare bytes, which for UTF-8 gives the same answer as comparing characters, and the empty string is found in every string, at both ends.
 - `stripPrefix`, `stripSuffix` and `splitOnce` return `None` when what they look for isn't there. `splitOnce` cuts at the first separator.
@@ -88,6 +88,8 @@ import std.string
 - `split` returns one more piece than there are separators, so some may be empty: `split(",a,", ",")` is `["", "a", ""]`. An empty separator gives each character as its own piece.
 - `lines` drops the `\n` or `\r\n` that ends each line. A final line needs no ending, and nothing follows the last ending: `lines("a\n")` is `["a"]`.
 - `parseInt` reads decimal digits with an optional `-` before them. Anything else is `None`: an empty string, a `+`, spaces, `_`, and a number that doesn't fit an `Int`.
+- `parseFloat` reads a decimal number: digits with an optional `.` among them, before them or after them, then optionally `e` or `E` with an optional `+` or `-` and digits, and an optional `-` before it all. So `"3"`, `"-0.5"`, `".5"`, `"5."` and `"1.5e-3"` are numbers, which is more than a [literal](numbers.md) allows, and `"."`, `"+1"`, `"inf"` and `"1_000.0"` are `None`. The result is the `Float` nearest the number written, however many digits it has, a tie going to the one whose last bit is zero. A number too large for a `Float` is `None`, and one too small to tell from zero is zero.
+- `parseBool` is `true` for `"true"` and `false` for `"false"`, with any of the letters in capitals, so `"True"` and `"FALSE"` are read too. Anything else is `None`: `"yes"`, `"1"`, `"t"`, and either word with a space beside it.
 
 `std.char` provides `toChar`, the questions `isDigit` (the ten ASCII digits), `isAsciiLetter` and `isWhitespace` (Unicode white space), and `toAsciiUpper` and `toAsciiLower`, which change only the 26 unaccented letters.
 
@@ -102,7 +104,7 @@ Every `String` is valid UTF-8. A literal can't be anything else, and bytes that 
 
 `String(x)` formats any printable value, as `print` would.
 
-Operations that can fail return an option under their own names, and aren't spelled as conversions: `decode(bytes)` returns `String?`, `parseInt(s)` returns `Int?` and `toChar(n)` returns `Char?`.
+Operations that can fail return an option under their own names, and aren't spelled as conversions: `decode(bytes)` returns `String?`, `parseInt(s)` returns `Int?`, `parseFloat(s)` returns `Float?`, `parseBool(s)` returns `Bool?` and `toChar(n)` returns `Char?`.
 
 ## Input
 
