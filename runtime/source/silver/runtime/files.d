@@ -157,7 +157,16 @@ version (Windows)
         this(const(char)[] path) nothrow
         {
             name = wideName(path, failure);
-            if (failure == 0) attributes = GetFileAttributesW(name);
+            if (failure != 0) return;
+            attributes = GetFileAttributesW(name);
+            if (attributes != INVALID_FILE_ATTRIBUTES || isMissing(GetLastError())) return;
+            // There, but not to be looked at, as a file the system holds without sharing
+            // (pagefile.sys): its directory's entry still says what it is.
+            WIN32_FIND_DATAW found;
+            auto search = FindFirstFileW(name, &found);
+            if (search == INVALID_HANDLE_VALUE) return;
+            FindClose(search);
+            attributes = found.dwFileAttributes;
         }
 
         bool exists() const nothrow => attributes != INVALID_FILE_ATTRIBUTES;
@@ -169,8 +178,9 @@ version (Windows)
                 OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, null);
             if (handle == INVALID_HANDLE_VALUE) return GetLastError();
             scope (exit) CloseHandle(handle);
+            // Only a hint, as on POSIX: a console or a pipe has none.
             LARGE_INTEGER size;
-            if (!GetFileSizeEx(handle, &size)) return GetLastError();
+            if (!GetFileSizeEx(handle, &size)) size.QuadPart = 0;
             if (cast(ulong) size.QuadPart > size_t.max) return ERROR_NOT_ENOUGH_MEMORY;
             return readAll(allocate, cast(size_t) size.QuadPart, (char[] room, out uint failure) {
                 DWORD count;
@@ -191,7 +201,8 @@ version (Windows)
             if (handle == INVALID_HANDLE_VALUE) return GetLastError();
             bool closed;
             scope (exit) if (!closed) CloseHandle(handle);
-            if (!append && !SetEndOfFile(handle)) return GetLastError();
+            // A device such as NUL can't be emptied, and needn't be.
+            if (!append && GetFileType(handle) == FILE_TYPE_DISK && !SetEndOfFile(handle)) return GetLastError();
             while (data.length > 0)
             {
                 DWORD count;
@@ -250,7 +261,7 @@ version (Windows)
 }
 else version (Posix)
 {
-    import core.stdc.errno : EINTR, ENOENT, ENOTDIR, errno;
+    import core.stdc.errno : EINTR, EIO, ENOENT, ENOTDIR, errno;
     import core.sys.posix.fcntl : O_APPEND, O_CLOEXEC, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, open;
     import core.sys.posix.sys.stat : fstat, S_IFDIR, S_IFMT, stat, stat_t;
     import core.sys.posix.unistd : close, posixRead = read, posixWrite = write;
@@ -312,6 +323,7 @@ else version (Posix)
                     if (errno == EINTR) continue;
                     return errno;
                 }
+                if (count == 0) return EIO;
                 data = data[count .. $];
             }
             closed = true;
@@ -588,4 +600,15 @@ unittest
     assert(second.status == FileStatus.done || second.text == first.text,
         "the failed write left the file open: " ~ second.text);
     assert(first.status == FileStatus.done, first.text);
+}
+
+version (Windows)
+@("the null device takes what's written to it, replacing or adding")
+unittest
+{
+    auto added = writeWhole("NUL", cast(const(ubyte)[]) "x", true);
+    assert(added.status == FileStatus.done, added.text);
+    assert(readWhole("NUL", true) == FileOutcome(FileStatus.done));
+    auto replaced = writeWhole("NUL", cast(const(ubyte)[]) "x", false);
+    assert(replaced.status == FileStatus.done, replaced.text);
 }
