@@ -1,0 +1,71 @@
+// A function over a sum, beside the imported functions of the same name for its members: a call
+// with a member reaches the member's, which takes it in fewer steps.
+
+import overloading_sum_support.store
+
+type Null
+type Json = :String | :Int | :Null | :[Json] | :[String: Json] | :Store
+
+type IndexError(message: String)
+
+def opIndex(value: Json, key: String): Json ! IndexError {
+    match value {
+        members: [String: Json] => members[key] ?? fail IndexError("no key {key}")
+        store: Store => match store[key] {
+            Some(n) => n
+            None => fail IndexError("nothing stored as {key}")
+        }
+        _ => fail IndexError("not an object")
+    }
+}
+
+def length(value: Json): Int {
+    match value {
+        items: [Json] => length(items)
+        members: [String: Json] => length(members)
+        _ => 0
+    }
+}
+
+def size(value: Json): Int {
+    match value {
+        store: Store => size(store) + store.size()
+        _ => -1
+    }
+}
+
+def nested(value: Json): Json ! IndexError => value["inner"]?["b"]
+
+def describe(value: Json?): String => "a Json?"
+
+def main(): Unit {
+    val inner: [String: Json] = ["b": 2]
+    val members: [String: Json] = ["a": 1, "inner": inner]
+    val json: Json = members
+    printl(json["a"])
+    printl(nested(json))
+    printl(json["missing"])
+    printl(members["a"])
+
+    val items: [Json] = [1, "two", Null]
+    val array: Json = items
+    printl(length(array))
+    printl(length(json))
+    printl(length(items))
+    printl(array["a"])
+
+    val store = Store([7, 8])
+    val stored: Json = store
+    printl(size(stored))
+    printl(size(store))
+    printl(stored["first"])
+    printl(stored["last"])
+    printl(store["first"])
+
+    // The imported `describe(Int)` takes an `Int` as it is.
+    val n = 1
+    printl(describe(n))
+    printl(describe(1))
+    printl(describe("a"))
+    printl(describe(json))
+}

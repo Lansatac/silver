@@ -158,7 +158,11 @@ A call chooses among the functions of its name like this:
 5. If no candidate fits, or more than one fits better than all the others, the call is an error. When nothing fits only because of what the expected type bound, the choice is made again without it, and the argument is then an error against the one chosen, as it would be with no overloads.
 6. The bounds of the function chosen are checked. A lambda is typed before that, so a bound on its result is checked like any other.
 
-The current module's functions come first. Imported functions are only tried when none of the current module's fits, and then every imported function of the name is ranked together, by step 4, whichever import brings it. If two fit equally well, the call is ambiguous, and qualifying it resolves that. A function is the same function however it's reached, so one that arrives through two imports counts once.
+The current module's functions come first, unless an imported function takes the arguments in fewer steps. The imported functions are ranked instead when none of the current module's fits, or when one of them costs no more than each of the current module's that fit for every argument, and less for one. Every imported function of the name is then ranked together, by step 4, whichever import brings it. If two fit equally well, the call is ambiguous, and qualifying it resolves that. A function is the same function however it's reached, so one that arrives through two imports counts once.
+
+A parameter that is only a type parameter, as in `first<C>(c: C)`, takes any argument as it is, so it never makes an imported function the nearer one: the module's `first(x: Int?)` keeps `first(1)`. A parameter that has a shape, as `[T]` or `Dictionary<K, V>` has, counts like any other.
+
+Fitting equally well isn't enough for an imported function: the tie-breaks of step 4 are never weighed between the current module and an import, so the module's generic function is called before an imported one that isn't generic.
 
 ```silver
 import shapes    // def encode(s: Square): String
@@ -168,7 +172,27 @@ encode(Square(2))  // shapes.encode, which fits exactly
 encode(Circle(1))  // encoding.encode, the only one that fits
 ```
 
-So an import, or a new overload in a library, never changes which of the current module's own functions a call means. Among imported functions, a new overload that fits a call better than the one it reached takes the call, as it would if one module declared both, and one that fits equally well makes the call ambiguous. It also means a module can declare its own `printl(p: Point)` and still call `lang`'s `printl` with anything else.
+A function over a sum therefore leaves each member's own functions alone, in the module that declares it too:
+
+```silver
+type Json = :String | :Int | :[Json] | :[String: Json]
+
+def opIndex(value: Json, key: String): Json? {
+    match value {
+        members: [String: Json] => members[key]  // lang's opIndex: a dictionary as it is
+        _ => None
+    }
+}
+
+def length(value: Json): Int {
+    match value {
+        items: [Json] => length(items)           // lang's length, not this one again
+        _ => 0
+    }
+}
+```
+
+So an import, or a new overload in a library, changes which of the current module's own functions a call means only for a call that reached its function by promoting or injecting an argument, and only by taking that argument in fewer steps. A call whose arguments are exactly its function's parameters never moves. Among imported functions, a new overload that fits a call better than the one it reached takes the call, as it would if one module declared both, and one that fits equally well makes the call ambiguous. It also means a module can declare its own `printl(p: Point)` and still call `lang`'s `printl` with anything else.
 
 An overloaded function used as a value is the one whose type is exactly the expected type, so it needs one:
 

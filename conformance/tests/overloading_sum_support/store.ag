@@ -1,0 +1,8 @@
+module overloading_sum_support.store
+
+type Store(items: [Int])
+
+def size(s: Store): Int => length(s.items)
+def opIndex(s: Store, key: String): Int? => if key == "first" && length(s.items) > 0 => s.items[0] else None
+
+def describe(n: Int): String => "an Int"

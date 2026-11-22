@@ -3591,11 +3591,14 @@ private final class TypeChecker
         if (!tried.joiner.any!(t => t.fitsAll) && tried.joiner.any!(t => t.againstExpected)) tried = fitAll(Type.init);
         groups = tried;
         auto own = groups[0].filter!(t => t.fitsAll).array;
-        auto imported = own.length > 0 ? null : mergedImports(groups[1 .. $]);
+        auto imported = mergedImports(groups[1 .. $]);
         // An argument whose type is already an error fits anything, so it would only add to it.
         auto reportable = !typed.any!(t => t != Type.init && _types.mentionsError(t));
 
-        if (own.length > 0) return bestTrial(own, name.span, spelled, reportable);
+        // The module's own come first, unless an imported one takes the arguments in fewer steps
+        // than each of them.
+        auto nearer = imported.any!(t => own.all!(u => fitsNearer(t, u)));
+        if (own.length > 0 && !nearer) return bestTrial(own, name.span, spelled, reportable);
         if (imported.length > 0) return bestTrial(imported, name.span, spelled, reportable);
         if (reportable) reportNoOverload(name.span, spelled, groups);
         return Id!FunctionDecl.init;
@@ -4032,18 +4035,41 @@ private final class TypeChecker
     /// one, or, when they fit every argument alike, by being the more specific function.
     private bool beats(const Trial a, const Trial b)
     {
+        if (fitsBetter(a, b)) return true;
+        if (a.fits != b.fits) return false;
+        auto aGeneric = isGenericFunction(a.func), bGeneric = isGenericFunction(b.func);
+        if (aGeneric != bGeneric) return bGeneric;
+        if (!aGeneric) return false;
+        auto aTakes = accepts(a.func, b.func), bTakes = accepts(b.func, a.func);
+        return bTakes && !aTakes;
+    }
+
+    /// Whether `a` fits every argument at least as well as `b` and one of them better.
+    private static bool fitsBetter(const Trial a, const Trial b)
+    {
         bool better, worse;
         foreach (i; 0 .. a.fits.length)
         {
             if (a.fits[i] > b.fits[i]) better = true;
             if (a.fits[i] < b.fits[i]) worse = true;
         }
-        if (better || worse) return better && !worse;
-        auto aGeneric = isGenericFunction(a.func), bGeneric = isGenericFunction(b.func);
-        if (aGeneric != bGeneric) return bGeneric;
-        if (!aGeneric) return false;
-        auto aTakes = accepts(a.func, b.func), bTakes = accepts(b.func, a.func);
-        return bTakes && !aTakes;
+        return better && !worse;
+    }
+
+    /// Whether the imported `a` takes the arguments in fewer steps than the module's own `b`. A
+    /// parameter that is only a type parameter takes anything, so it's never the nearer one.
+    private bool fitsNearer(const Trial a, const Trial b)
+    {
+        auto params = signatureOf(a.func).params;
+        auto typeParams = _resolutions.typeParamsOf(a.func);
+        bool better, worse;
+        foreach (i; 0 .. a.fits.length)
+        {
+            auto bare = _types[params[i]].match!((const TypeParamData p) => typeParams.canFind!(q => q.id == p.param), _ => false);
+            if (a.fits[i] > b.fits[i] && !bare) better = true;
+            if (a.fits[i] < b.fits[i]) worse = true;
+        }
+        return better && !worse;
     }
 
     /// Whether `a` is the more specific of two functions that fit alike: it isn't generic and `b`

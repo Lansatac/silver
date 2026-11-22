@@ -163,7 +163,7 @@ import graphics : scale       // declares `scale(x: Float)` and `scale(x: Int)`
 def scale(x: Float): Float => x * 2.0   // error: graphics's `scale(Float)` is listed too
 ```
 
-A call then [chooses](functions.md#overloading) among the module's own functions first, and among imported ones only when none of its own fits, ranked together whichever import brings them, so adding an import never changes which of the module's own functions a call means. A [conformance](interfaces.md#conformance) finds its functions as a call where it's declared would.
+A call then [chooses](functions.md#overloading) among the module's own functions first, and among imported ones when none of its own fits or one of them takes the arguments in fewer steps, ranked together whichever import brings them, so adding an import never changes a call whose arguments are exactly the parameters of the module's own function. A [conformance](interfaces.md#conformance) finds its functions as a call where it's declared would.
 
 A name that's a constant or type at its nearest level hides functions of that name at farther ones, and functions at the nearest level hide farther constants and types.
 
@@ -205,7 +205,7 @@ The same-level rules apply to what a module forwards. A forward that lists a nam
 
 Forwarding doesn't change how a call chooses. Imported functions are ranked together whichever import brings them, so with `std.array.first<T>(xs: [T])` and `std.range.first<R: Range<T>, T>(range: R)`, `first([1, 2, 3])` is the array's whether the two arrive through the prelude, through two imports, or both. Importing `std.range` beside the prelude changes nothing, since a function reached twice is one function. A facade whose own `f(Int)` replaces a forwarded one gives a different `f(Int)` than the original module does, and importing both makes a call that fits them ambiguous.
 
-Inside the forwarding module, its own functions come first, and what it forwards is ranked with its other imports.
+Inside the forwarding module, its own functions come first as in any module, and what it forwards is ranked with its other imports.
 
 ## Open questions
 

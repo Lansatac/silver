@@ -351,16 +351,47 @@ unittest
         .shouldHaveNoDiagnostics();
 }
 
-@("this module's functions come first, and imported ones are tried when none of them fits")
+@("this module's functions come first, unless an imported one takes the arguments in fewer steps")
 unittest
 {
-    auto a = analyzed("import a\nimport b\ndef only(x: String): Unit => ()\ndef shared(x: Int?): Unit => ()\ndef main(): Unit {\n"
-        ~ "    only(\"a\")\n    only(1)\n    shared(1)\n}", ["a.ag": libraries["a.ag"], "b.ag": "module b"]);
+    auto files = ["a.ag": libraries["a.ag"] ~ "\ndef tied(x: Int?): Unit => ()\ndef wide<T>(x: T): Unit => ()\ndef bare<T>(x: T): Unit => ()\ndef boxed<T>(xs: [T]): Unit => ()"
+        ~ "\ndef mixed(x: Int, y: Int?): Unit => ()", "b.ag": "module b"];
+    auto a = analyzed("import a\nimport b\ndef only(x: String): Unit => ()\ndef shared(x: Int?): Unit => ()\n"
+        ~ "def tied<T>(x: T?): Unit => ()\ndef wide(x: Int): Unit => ()\ndef mixed(x: Int?, y: Int): Unit => ()\n"
+        ~ "def bare(x: Int?): Unit => ()\ndef boxed(xs: [Int]?): Unit => ()\n"
+        ~ "def main(): Unit {\n    val n = 1\n    val o: Int? = n\n"
+        ~ "    only(\"a\")\n    only(1)\n    shared(1)\n    shared(n)\n    n.shared()\n    shared(o)\n"
+        ~ "    tied(o)\n    wide(n)\n    mixed(n, n)\n    bare(n)\n    boxed([n])\n}", files);
     a.shouldHaveNoDiagnostics();
     a.shouldCall(At("only", 2), At("only", 1));
     a.shouldCall(At("only", 3), At("only", 1, "a"));
-    // This module's `shared(Int?)` fits, so `a.shared(Int)`, which would fit better, isn't tried.
-    a.shouldCall(At("shared", 2), At("shared", 1));
+    // `a.shared(Int)` takes an `Int` as it is, and this module's `shared(Int?)` promotes it.
+    a.shouldCall(At("shared", 2), At("shared", 1, "a"));
+    a.shouldCall(At("shared", 3), At("shared", 1, "a"));
+    a.shouldCall(At("shared", 4), At("shared", 1, "a"));
+    a.shouldCall(At("shared", 5), At("shared", 1));
+    // Fitting alike, this module's is called, though the imported one is the more specific.
+    a.shouldCall(At("tied", 2), At("tied", 1));
+    a.shouldCall(At("wide", 2), At("wide", 1));
+    // Better for one argument and worse for another isn't fewer steps.
+    a.shouldCall(At("mixed", 2), At("mixed", 1));
+    // A parameter that's only a type parameter takes anything, so it's never the nearer one.
+    a.shouldCall(At("bare", 2), At("bare", 1));
+    a.shouldCall(At("boxed", 2), At("boxed", 1, "a"));
+}
+
+@("a function over a sum leaves a member's own imported function to a call with the member")
+unittest
+{
+    auto files = ["store.ag": "module store\ntype Store(items: [Int])\ndef size(s: Store): Int => 1\n"
+        ~ "def opIndex(s: Store, key: String): Int => 2"];
+    auto a = analyzed("import store\ntype Value = :Int | :Store\n"
+        ~ "def size(v: Value): Int => match v {\n    s: Store => size(s)\n    _ => 0\n}\n"
+        ~ "def opIndex(v: Value, key: String): Int => match v {\n    s: Store => s[key]\n    _ => 0\n}\n"
+        ~ "def main(): Unit {\n    val v: Value = Store([])\n    print(size(v))\n    print(v[\"a\"])\n}", files);
+    a.shouldHaveNoDiagnostics();
+    a.shouldCall(At("size", 2), At("size", 1, "store"));
+    a.shouldCall(At("size", 3), At("size", 1));
 }
 
 @("this module's function of a name can call the prelude's")

@@ -1,0 +1,17 @@
+Ok(1)
+Ok(2)
+Error(IndexError(no key missing))
+Some(1)
+3
+2
+3
+Error(IndexError(not an object))
+4
+2
+Ok(7)
+Error(IndexError(nothing stored as last))
+Some(7)
+an Int
+an Int
+a Json?
+a Json?
