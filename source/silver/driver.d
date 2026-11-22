@@ -224,7 +224,7 @@ int build(string programFile, const Packages packages, string outputPath, bool e
 int compileAndRun(string programFile, const Packages packages, Optimization optimization, string[] arguments = null)
 {
     import silver.interpreter : argumentsMistake;
-    import std.process : spawnProcess, wait;
+    import std.process : ProcessException, spawnProcess, wait;
 
     auto exePath = executablePath(temporaryPath(programFile, ""));
     if (!compileToExecutable(programFile, packages, exePath, optimization))
@@ -238,7 +238,13 @@ int compileAndRun(string programFile, const Packages packages, Optimization opti
         stderr.writeln("error: ", mistake);
         return 1;
     }
-    return wait(spawnProcess([exePath] ~ arguments));
+    try return wait(spawnProcess([exePath] ~ arguments));
+    catch (ProcessException e)
+    {
+        // As when the arguments are longer than the system takes.
+        stderr.writeln("The compiled program couldn't be started: ", e.msg);
+        return 1;
+    }
 }
 
 /// How `silver test` reports.
@@ -851,6 +857,28 @@ unittest
         .canFind("The program's arguments follow `--`."));
 }
 
+@("arguments too long for the system to start the compiled program with are reported, not thrown")
+unittest
+{
+    import std.array : replicate;
+
+    Toolchain toolchain;
+    if (findToolchain(toolchain) !is null) return;
+    auto directory = testDirectory("arguments-too-long", ["show.ag": "def main(args: [String]): Unit {\n    printl(length(args))\n}"]);
+    scope (exit) rmdirRecurse(directory);
+    auto savedErr = stderr;
+    auto errPath = buildPath(directory, "stderr.txt");
+    stderr = File(errPath, "w");
+    scope (exit) stderr = savedErr;
+    // Longer than a Windows command line (32,767 characters) and than one argument on Linux (131,072 bytes).
+    int status;
+    try status = run(["silverc", "-b", "llvm", buildPath(directory, "show.ag"), "a".replicate(200_000)]);
+    catch (Exception e) assert(0, "a D exception reached the user: " ~ e.msg);
+    stderr.close();
+    // Where the system takes them, the program runs; where it doesn't, that's said and the status is 1.
+    assert(status == 0 || (status == 1 && readText(errPath).length > 0));
+}
+
 @("a program is given what follows its file, or `--` after --program, on both backends, and refuses an argument that isn't UTF-8")
 unittest
 {
@@ -1086,8 +1114,7 @@ string[] exactArguments(string[] given)
         auto wide = CommandLineToArgvW(GetCommandLineW(), &count);
         if (wide is null) return given;
         scope (exit) LocalFree(wide);
-        if (count != given.length) return given;
-        auto exact = given.dup;
+        auto exact = new string[](count);
         foreach (i; 0 .. count) exact[i] = wtf8(wide[i][0 .. wcslen(wide[i])]);
         return exact;
     }

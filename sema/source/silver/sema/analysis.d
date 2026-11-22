@@ -645,6 +645,8 @@ unittest
         collector.diagnostics[0].code.should.equal(DiagnosticCode.MainInvalidDefinition);
     }
     analyzeSource("alias Words = [String]\ndef main(words: Words): Unit {}").diagnostics.length.should.equal(0);
+    // A generic main is told it can't be generic, and nothing about its parameter's type.
+    analyzeSource("def main<T>(args: [T]): Unit {}").diagnostics.length.should.equal(1);
     auto unknown = analyzeSource("def main(args: [Nope]): Unit {}");
     unknown.diagnostics.length.should.equal(1);
     unknown.diagnostics[0].code.should.equal(DiagnosticCode.UnknownType);

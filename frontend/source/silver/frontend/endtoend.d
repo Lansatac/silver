@@ -465,6 +465,38 @@ unittest
     }
 }
 
+@("an argument that starts with --DRT- is the program's, as any other is, and the D runtime under silver, silverc and a compiled program doesn't take it")
+unittest
+{
+    auto echo = buildPath(fixtures, "arguments");
+    auto directory = makeTree("frontend-drt", null);
+    scope (exit) rmdirRecurse(directory);
+    auto output = buildPath(directory, "show" ~ exe);
+    expectRan(silver(["build", "-o", output, "show.ag"], echo), "");
+    foreach (command; [[built("silver"), "show.ag"], [built("silver"), "-b", "llvm", "show.ag"], [built("silverc"), "show.ag"],
+        [built("silverc"), "-b", "llvm", "show.ag"], [output]])
+    {
+        expectRan(runIn(command ~ ["--DRT-gcopt=profile:0", "x"], echo), "show [--DRT-gcopt=profile:0, x]\n");
+        // Nothing of the D runtime's is said about a word it doesn't know, either.
+        expectRan(runIn(command ~ ["--DRT-gcopt=nonsense:1"], echo), "show [--DRT-gcopt=nonsense:1]\n");
+    }
+    expectRan(silver(["run", "--", "--DRT-gcopt=profile:0"], echo), "echo [--DRT-gcopt=profile:0]\n");
+    // The words are counted as given, so the one that isn't UTF-8 is still found and is the second.
+    foreach (command; [[built("silver"), "show.ag"], [built("silverc"), "show.ag"], [output]])
+    {
+        expectRan(withBadArgument(command ~ "--DRT-gcopt=profile:0", echo), "error: argument 2 isn't UTF-8\n", 1);
+    }
+}
+
+@("silver build says a program isn't given arguments when it's built, whatever the argument is")
+unittest
+{
+    auto echo = buildPath(fixtures, "arguments");
+    auto ran = withBadArgument([built("silver"), "build", "show.ag"], echo);
+    assert(ran.status == 1 && ran.output.canFind("a program is given its arguments when it's run, not when it's built"),
+        ran.output);
+}
+
 /// Runs `words` followed by an argument that isn't UTF-8, from `workingDirectory`. On Windows that's
 /// an unpaired surrogate, the only such argument there, which std.process can't pass, so the process is
 /// started with CreateProcessW; elsewhere it's the byte 0xFF.

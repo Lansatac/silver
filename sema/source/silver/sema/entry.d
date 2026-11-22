@@ -86,7 +86,8 @@ package void checkEntryPointSignature(Id!FunctionDecl entryPoint, const ref Reso
         _ => FunctionData(null, types.error),
     );
     auto decl = resolution.declarations.functions[entryPoint];
-    if (signature.params.length == 1)
+    // A generic `main` is reported already, and its parameter's type would only repeat that.
+    if (signature.params.length == 1 && decl.typeParams.length == 0)
     {
         auto param = signature.params[0];
         immutable arguments = types.isArray(param) && types.arrayElement(param) == types.string_;

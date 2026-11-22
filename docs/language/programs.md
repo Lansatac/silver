@@ -152,7 +152,8 @@ The errors are members of `lang`'s [`IoError`](errors.md#ioerror), so `?` widens
 
 - `main` takes no parameters or one of type `[String]`, written directly or through an alias. Two parameters, a `mutable` one, or one of another type is `S0009`.
 - `silver` and `silverc` pass what follows the file to the program untouched, options included. With no file or with a package's directory, `silver run` takes them after `--`.
-- An argument that isn't UTF-8 ends the program whether `main` takes the arguments or not. On Windows the arguments are read as UTF-16, so only an unpaired surrogate does. `silverc` and a compiled program check once the program is compiled, but `silver` checks before it calls the compiler, so through `silver` that message comes before any about the program's source.
+- An argument that isn't UTF-8 ends the program whether `main` takes the arguments or not. On Windows the arguments are read as UTF-16, so only an unpaired surrogate does. `silverc` and a compiled program check once the program is compiled. On Windows, where such an argument can't be passed on, `silver run` checks before it calls the compiler, so there that message comes before any about the program's source.
+- A word starting `--DRT-`, which a D program's runtime would take as its own option, is the program's like any other, for `silver`, `silverc` and a compiled program.
 
 The rest of this document's additions aren't built:
 

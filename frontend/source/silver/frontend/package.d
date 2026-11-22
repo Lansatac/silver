@@ -248,8 +248,7 @@ string[] exactArguments(string[] given)
         auto wide = CommandLineToArgvW(GetCommandLineW(), &count);
         if (wide is null) return given;
         scope (exit) LocalFree(wide);
-        if (count != given.length) return given;
-        auto exact = given.dup;
+        auto exact = new string[](count);
         foreach (i; 0 .. count) exact[i] = wtf8(wide[i][0 .. wcslen(wide[i])]);
         return exact;
     }
@@ -291,6 +290,32 @@ unittest
     assert(notUtf8(["x", wtf8(lone)]) == "argument 2 isn't UTF-8");
     wchar[] reversed = [cast(wchar) 0xDC00, cast(wchar) 0xD800];
     assert(notUtf8([wtf8(reversed)]) == "argument 1 isn't UTF-8");
+}
+
+@("the copies of the compiler's functions for reading the command line match the compiler's own")
+unittest
+{
+    import std.file : readText;
+    import std.path : buildNormalizedPath, dirName;
+    import std.string : indexOf;
+
+    auto source = (string[] path...) => readText(buildNormalizedPath([dirName(__FILE_FULL_PATH__), "..", "..", "..", ".."]
+        ~ path));
+    // From the body's opening brace to its closing one at the start of a line.
+    string body(string text, string signature)
+    {
+        auto start = text.indexOf(signature);
+        assert(start >= 0, "no " ~ signature);
+        auto open = text.indexOf("\n{\n", start);
+        return text[open .. text.indexOf("\n}\n", open) + 3];
+    }
+    auto ours = readText(__FILE_FULL_PATH__);
+    auto driver = source("source", "silver", "driver.d");
+    auto errors = source("interpreter", "source", "silver", "interpreter", "errors.d");
+    foreach (signature; ["string[] exactArguments(string[] given)", "string wtf8(const(wchar)[] text)"])
+        assert(body(ours, signature) == body(driver, signature), signature ~ " differs from the driver's");
+    assert(body(ours, "string notUtf8(const string[] arguments)")
+        == body(errors, "string argumentsMistake(const string[] arguments)"), "notUtf8 differs from argumentsMistake");
 }
 
 /// Where the compiler is: where `SILVERC` says, or beside this program.
@@ -367,6 +392,17 @@ Plan plan(string compiler, Request request, string workingDirectory)
         result.mistake = "`silver test` runs tests, which aren't given arguments, so nothing follows `--`.";
         return result;
     }
+    // Windows passes a command line as UTF-16, so a word that isn't UTF-8 can't reach silverc. Only `run`
+    // gives a program its arguments, so it says what the program would; for `build` and `test`, which refuse
+    // them, the word is passed on with U+FFFD in its place, so silverc says that.
+    version (Windows)
+    {
+        import std.encoding : sanitize;
+
+        immutable checkHere = request.command == "run";
+        if (!checkHere) arguments.after = arguments.after.map!(a => sanitize(a)).array;
+    }
+    else immutable checkHere = false;
     // After a file, every word is the program's; after a directory, they follow `--`, as with no file.
     auto programArguments = arguments.after;
     if (byDirectory && programArguments.length > 0)
@@ -380,7 +416,8 @@ Plan plan(string compiler, Request request, string workingDirectory)
         }
         programArguments = programArguments[1 .. $];
     }
-    if (!testing)
+    // Elsewhere silverc checks them once the program is compiled, as it does when run by hand.
+    if (checkHere)
     {
         if (auto wrong = notUtf8(programArguments))
         {

@@ -26,6 +26,10 @@ private enum stackSize = 256 * 1024 * 1024;
 /// Room for the runtime's own frames below the deepest Silver one.
 private enum margin = 1024 * 1024;
 
+/// Every word after the program's name is the program's, so druntime doesn't take `--DRT-` options from
+/// the command line. Its options from the environment are off unless a program turns them on.
+extern (C) __gshared bool rt_cmdline_enabled = false;
+
 /// The lowest address a Silver function may start at. Generated code checks it on entry,
 /// and panics rather than running off the end of the stack.
 extern (C) __gshared void* silver_stack_limit;
