@@ -1,0 +1,33 @@
+// Each member of IoError prints as a message, however it's held: on its own, as IoError, in a
+// narrower list of errors, through String(...) and a string hole, and inside other values.
+import std.file
+
+def wide(error: IoError): IoError => error
+
+def main(): Unit {
+    printl(NotUtf8)
+    printl(NotFound("a.txt"))
+    printl(ReadFailed("a.txt", "Access is denied."))
+    printl(WriteFailed("b.txt", "Is a directory"))
+    printl(InputFailed("Bad file descriptor"))
+
+    printl(wide(NotUtf8))
+    printl(wide(NotFound("a.txt")))
+    printl(wide(ReadFailed("a.txt", "why")))
+    printl(wide(WriteFailed("b.txt", "why")))
+    printl(wide(InputFailed("why")))
+
+    val narrow = readFile("gone.txt")
+    printl(narrow)
+    match narrow {
+        Error(error) => {
+            printl(String(error))
+            printl("hole: {error}")
+            printl([error])
+            printl(Some(error))
+        }
+        Ok(_) => printl("read")
+    }
+    printl(String(wide(WriteFailed("c.txt", "why"))))
+    printl("{InputFailed("why")}!")
+}

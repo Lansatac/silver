@@ -171,7 +171,7 @@ unittest
         if (!compileAndRun("def main(): Unit {\n    printl(read())\n}", run, Optimization.none, tempDir)) return;
 
         run.status.should.equal(0);
-        run.output.should.equal("Error(InputFailed(Is a directory))\n");
+        run.output.should.equal("Error(couldn't read input: Is a directory)\n");
     }
 }
 

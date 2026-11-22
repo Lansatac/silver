@@ -11,6 +11,13 @@ def printl(): Unit {
 type IoError = NotUtf8 | NotFound(path: String) | ReadFailed(path: String, reason: String)
     | WriteFailed(path: String, reason: String) | InputFailed(reason: String)
 
+// Each member prints as a message, whatever it's held as: itself, IoError, or a list of errors.
+def opString(error: NotUtf8): String => "the text isn't UTF-8"
+def opString(error: NotFound): String => "{error.path} wasn't found"
+def opString(error: ReadFailed): String => "couldn't read {error.path}: {error.reason}"
+def opString(error: WriteFailed): String => "couldn't write {error.path}: {error.reason}"
+def opString(error: InputFailed): String => "couldn't read input: {error.reason}"
+
 // Reads a line from input without its `\n` or `\r\n`, or `None` at the end of input. A line that
 // isn't UTF-8 is consumed, so the next read continues after it.
 def read(): String? ! NotUtf8 | InputFailed {

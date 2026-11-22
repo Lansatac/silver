@@ -1,5 +1,5 @@
-Error(ReadFailed(notes.txt/, A path ending in a separator names a directory, not a file))
-Error(ReadFailed(notes.txt/, A path ending in a separator names a directory, not a file))
+Error(couldn't read notes.txt/: A path ending in a separator names a directory, not a file)
+Error(couldn't read notes.txt/: A path ending in a separator names a directory, not a file)
 false
 true
 true

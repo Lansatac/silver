@@ -74,7 +74,7 @@ unittest
         auto original = stdin;
         stdin = File(tempDir, "rb");
         scope (exit) stdin = original;
-        runMain("printl(read())").should.equal("Error(InputFailed(Is a directory))\n");
+        runMain("printl(read())").should.equal("Error(couldn't read input: Is a directory)\n");
     }
 }
 

@@ -6,4 +6,4 @@ false
 not text
 can't write .: Is a directory
 can't read .: Is a directory
-Error(NotFound(nothing.txt))
+Error(nothing.txt wasn't found)

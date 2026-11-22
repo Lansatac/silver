@@ -1,6 +1,6 @@
 true
 [13, 10, 10, 13, 0, 255, 254, 128, 65, 195]
-Error(NotUtf8)
+Error(the text isn't UTF-8)
 true
 [195, 169, 13, 10]
 café

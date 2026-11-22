@@ -1,0 +1,17 @@
+the text isn't UTF-8
+a.txt wasn't found
+couldn't read a.txt: Access is denied.
+couldn't write b.txt: Is a directory
+couldn't read input: Bad file descriptor
+the text isn't UTF-8
+a.txt wasn't found
+couldn't read a.txt: why
+couldn't write b.txt: why
+couldn't read input: why
+Error(gone.txt wasn't found)
+gone.txt wasn't found
+hole: gone.txt wasn't found
+[gone.txt wasn't found]
+Some(gone.txt wasn't found)
+couldn't write c.txt: why
+couldn't read input: why!
