@@ -1,0 +1,10 @@
+// IoError grows, so a function taking the whole of it needs every member, or a `_` arm.
+def describe(e: IoError): String => match e {
+    NotUtf8 => "not text"
+    NotFound(path) => "no {path}"
+    ReadFailed(path, reason) => "{path}: {reason}"
+}
+
+def main(): Unit {
+    printl(describe(NotUtf8))
+}

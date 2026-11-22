@@ -161,7 +161,7 @@ unittest
     run.output.should.equal("42\n");
 }
 
-@("codegen's read reports input it can't read as ReadFailed, with the OS's message")
+@("codegen's read reports input it can't read as InputFailed, with the OS's message")
 unittest
 {
     // Windows can't make a directory a program's standard input.
@@ -171,7 +171,7 @@ unittest
         if (!compileAndRun("def main(): Unit {\n    printl(read())\n}", run, Optimization.none, tempDir)) return;
 
         run.status.should.equal(0);
-        run.output.should.equal("Error(ReadFailed(Is a directory))\n");
+        run.output.should.equal("Error(InputFailed(Is a directory))\n");
     }
 }
 

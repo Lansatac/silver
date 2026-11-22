@@ -10,9 +10,10 @@ def size(path: String): Int ! IoError => length(readBytes(path)?)
 def describe(result: Unit ! IoError): String => match result {
     Ok(_) => "done"
     Error(NotUtf8) => "not text"
+    Error(InputFailed(reason)) => "can't read input: {reason}"
     Error(NotFound(path)) => "no {path}"
-    Error(ReadFailed(reason)) => "can't read: {reason}"
-    Error(WriteFailed(reason)) => "can't write: {reason}"
+    Error(ReadFailed(path, reason)) => "can't read {path}: {reason}"
+    Error(WriteFailed(path, reason)) => "can't write {path}: {reason}"
 }
 
 def main(): Unit ! IoError {

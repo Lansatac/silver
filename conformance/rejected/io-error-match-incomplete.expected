@@ -1,0 +1,1 @@
+T0024: This `match` doesn't cover `WriteFailed(_, _)`, `InputFailed(_)`; add them, or a `_` arm

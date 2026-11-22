@@ -8,16 +8,17 @@ def printl(): Unit {
 
 // What can go wrong reading or writing outside the program. A function returns only the members
 // it can produce, which `?` widens into this.
-type IoError = NotUtf8 | NotFound(path: String) | ReadFailed(reason: String) | WriteFailed(reason: String)
+type IoError = NotUtf8 | NotFound(path: String) | ReadFailed(path: String, reason: String)
+    | WriteFailed(path: String, reason: String) | InputFailed(reason: String)
 
 // Reads a line from input without its `\n` or `\r\n`, or `None` at the end of input. A line that
 // isn't UTF-8 is consumed, so the next read continues after it.
-def read(): String? ! NotUtf8 | ReadFailed {
+def read(): String? ! NotUtf8 | InputFailed {
     val (status, text) = readLine()
     if status == 0 => Some(text)
     else if status == 1 => None
     else if status == 2 => Error(NotUtf8)
-    else Error(ReadFailed(text))
+    else Error(InputFailed(text))
 }
 
 // 0 and the line, 1 at the end of input, 2 for a line that isn't UTF-8, or 3 and the OS's message.

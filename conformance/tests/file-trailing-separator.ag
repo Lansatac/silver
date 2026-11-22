@@ -1,0 +1,23 @@
+// A path that ends in `/` names a directory, so it's never a file to read, write or find, on any
+// system.
+import std.file
+
+def refused(result: Unit ! WriteFailed): Bool => match result {
+    Ok(_) => false
+    Error(_) => true
+}
+
+def main(): Unit ! IoError {
+    writeFile("notes.txt", "kept")?
+    printl(readFile("notes.txt/"))
+    printl(readBytes("notes.txt/"))
+    printl(exists("notes.txt/"))
+    printl(refused(writeFile("notes.txt/", "lost")))
+    printl(refused(appendFile("notes.txt/", "lost")))
+    printl(readFile("notes.txt")?)
+
+    printl(refused(writeFile("new/", "x")))
+    printl(refused(appendFile("new/", "x")))
+    printl(exists("new"))
+    printl(exists("./"))
+}

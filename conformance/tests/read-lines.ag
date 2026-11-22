@@ -7,7 +7,7 @@ def main(): Unit {
             Ok(Some(line)) => printl("[{line}]")
             Ok(None) => { going = false }
             Error(NotUtf8) => printl("not UTF-8")
-            Error(ReadFailed(reason)) => panic(reason)
+            Error(InputFailed(reason)) => panic(reason)
         }
     }
 }

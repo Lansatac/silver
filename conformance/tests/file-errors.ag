@@ -1,38 +1,48 @@
-// Each function returns only the members of IoError it can produce. NotFound carries the path as
-// it was given, and the others the system's message, which differs between systems except where
-// Silver writes its own, as for a directory.
+// Each function returns only the members of IoError it can produce, each naming the path as it was
+// given. The reason is the system's words, which differ between systems, except where Silver writes
+// its own, as for a directory; it never holds the path.
 import std.file
+import std.string
 
 def main(): Unit {
     printl(readFile("missing.txt"))
     printl(readBytes("missing.txt"))
     printl(readFile("missing/nested.txt"))
     printl(readFile(""))
+    printl(readBytes(""))
     printl(readFile("."))
     printl(readBytes("."))
     printl(writeFile(".", "x"))
     printl(writeBytes(".", []))
     printl(appendFile(".", "x"))
-    printl(readFile("a\u{0}b"))
-    printl(writeFile("a\u{0}b", "x"))
+    printl(writeFile("", "x"))
+    printl(appendFile("", "x"))
 
+    match readFile("a\u{0}b") {
+        Error(ReadFailed(path, reason)) => printl("{length(bytes(path))}: {reason}")
+        _ => printl("read")
+    }
+    match writeFile("a\u{0}b", "x") {
+        Error(WriteFailed(path, reason)) => printl("{length(bytes(path))}: {reason}")
+        _ => printl("written")
+    }
     match writeFile("missing/new.txt", "x") {
         Ok(_) => printl("written")
-        Error(WriteFailed(reason)) => printl("not written: {reason != ""}")
+        Error(WriteFailed(path, reason)) => printl("not written to {path}: {reason != "" && !contains(reason, "missing")}")
     }
     match appendFile("missing/new.txt", "x") {
         Ok(_) => printl("appended")
-        Error(WriteFailed(reason)) => printl("not appended: {reason != ""}")
+        Error(WriteFailed(path, reason)) => printl("not appended to {path}: {reason != "" && !contains(reason, "new.txt")}")
     }
     match readBytes("missing.txt") {
         Ok(_) => printl("read")
         Error(NotFound(path)) => printl("no {path}")
-        Error(ReadFailed(reason)) => printl(reason)
+        Error(ReadFailed(path, reason)) => printl("{path}: {reason}")
     }
     match readFile("missing.txt") {
         Ok(_) => printl("read")
         Error(NotFound(path)) => printl("no {path}")
         Error(NotUtf8) => printl("not text")
-        Error(ReadFailed(reason)) => printl(reason)
+        Error(ReadFailed(path, reason)) => printl("{path}: {reason}")
     }
 }

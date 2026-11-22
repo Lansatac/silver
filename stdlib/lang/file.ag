@@ -6,7 +6,7 @@ def readFile(path: String): String ! NotFound | NotUtf8 | ReadFailed {
     if status == 0 => text
     else if status == 1 => fail NotFound(path)
     else if status == 2 => fail NotUtf8
-    else fail ReadFailed(text)
+    else fail ReadFailed(path, text)
 }
 
 // The bytes of the file at `path`, whole.
@@ -14,25 +14,25 @@ def readBytes(path: String): [UInt8] ! NotFound | ReadFailed {
     val (status, data) = readWhole(path, false)
     if status == 0 => bytes(data)
     else if status == 1 => fail NotFound(path)
-    else fail ReadFailed(data)
+    else fail ReadFailed(path, data)
 }
 
 // Replaces the file at `path` with `text`, or creates it. A directory isn't created.
-def writeFile(path: String, text: String): Unit ! WriteFailed => written(writeWhole(path, bytes(text), false))
+def writeFile(path: String, text: String): Unit ! WriteFailed => written(path, writeWhole(path, bytes(text), false))
 
 // Replaces the file at `path` with `data`, or creates it. A directory isn't created.
-def writeBytes(path: String, data: [UInt8]): Unit ! WriteFailed => written(writeWhole(path, data, false))
+def writeBytes(path: String, data: [UInt8]): Unit ! WriteFailed => written(path, writeWhole(path, data, false))
 
 // Adds `text` to the end of the file at `path`, or creates it. A directory isn't created.
-def appendFile(path: String, text: String): Unit ! WriteFailed => written(writeWhole(path, bytes(text), true))
+def appendFile(path: String, text: String): Unit ! WriteFailed => written(path, writeWhole(path, bytes(text), true))
 
 // Whether there's a file or a directory at `path`.
 intrinsic def exists(path: String): Bool
 
-private def written(outcome: (Int32, String)): Unit ! WriteFailed {
+private def written(path: String, outcome: (Int32, String)): Unit ! WriteFailed {
     val (status, reason) = outcome
     if status != 0 {
-        fail WriteFailed(reason)
+        fail WriteFailed(path, reason)
     }
 }
 
