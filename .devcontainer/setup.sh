@@ -42,7 +42,17 @@ if [ -f "$windows/.claude/settings.json" ] && [ ! -e "$code/.claude/settings.jso
     cp "$windows/.claude/settings.json" "$code/.claude/settings.json"
 fi
 
+# Each clone has its own issue database, synced with `bd sync` through the Dolt remote that the
+# Windows clone's config.yaml names. Without one, bootstrap would make an empty database that
+# never meets the real one, so it's left for later.
+beads_config="$windows/.beads/config.yaml"
 if [ ! -d "$code/.beads" ]; then
-    (cd "$code" && bd bootstrap --non-interactive) \
-        || echo "setup: bd bootstrap failed; run it in /code once origin can be fetched"
+    if [ -f "$beads_config" ] && grep -qE '^sync:|^\s+remote:' "$beads_config"; then
+        mkdir -m 700 "$code/.beads"
+        cp "$beads_config" "$code/.beads/config.yaml"
+        (cd "$code" && bd bootstrap --non-interactive) \
+            || echo "setup: bd bootstrap failed; run it in /code"
+    else
+        echo "setup: the Windows clone's beads has no sync remote, so this clone has no issues yet"
+    fi
 fi
