@@ -4,7 +4,7 @@ import core.exception : OutOfMemoryError;
 import std.conv : to;
 import std.format : format;
 import std.meta : AliasSeq;
-import std.sumtype : has, match;
+import std.sumtype : match;
 import std.traits : isSigned;
 
 import silver.ast : Diagnostic, DiagnosticCode, Span;
@@ -68,7 +68,7 @@ final class Evaluator
         TestRun run;
         try
         {
-            invoke(test.function_, [], null, null);
+            invoke(test.function_, [], null);
         }
         catch (CodedException error)
         {
@@ -100,7 +100,7 @@ final class Evaluator
     {
         try
         {
-            invoke(_program.entryPoint, [], null, null);
+            invoke(_program.entryPoint, [], null);
         }
         catch (CodedException error)
         {
@@ -112,78 +112,72 @@ final class Evaluator
         }
     }
 
-    /// Runs function `target` with `args` and, for a lambda, `captures`. When `frame` is given,
-    /// it's set to the callee's locals once the call ends, so mutable params can be written back.
-    private Value invoke(size_t target, Value[] args, Value[] captures, Frame* frame)
+    /// Runs function `target` with `args` and, for a lambda, `captures`.
+    private Value invoke(size_t target, Value[] args, Value[] captures)
     {
         auto func = &_program.functions[target];
+        auto frame = newFrame(*func);
+        frame[0 .. args.length] = args[];
+        return enter(*func, frame, captures);
+    }
+
+    /// A call's locals, each at its `Local.slot`, and after them the value a `Return` leaves with.
+    private static Value[] newFrame(ref const Function func)
+    {
+        return new Value[func.localCount + 1];
+    }
+
+    /// Runs `func` in `frame`, which already holds its arguments.
+    private Value enter(ref const Function func, Value[] frame, Value[] captures)
+    {
         // At the function being entered, as compiled code checks on entry.
         try checkStack();
         catch (CodedException error) throw new RuntimeError(Diagnostic(error.code, func.body.span, error.msg));
-        auto locals = new Frame;
-        foreach (i, param; func.params)
-        {
-            locals.values[param] = args[i];
-        }
-        foreach (i, capture; func.captures)
-        {
-            locals.values[capture] = captures[i];
-        }
-        Value result;
-        try
-        {
-            result = evaluate(func.body, locals);
-        }
-        catch (ReturnSignal signal)
-        {
-            result = signal.value;
-        }
-        if (frame !is null) *frame = locals;
-        return result;
+        foreach (i, capture; func.captures) frame[capture.slot] = captures[i];
+        auto result = evaluate(func.body, frame);
+        return result.has!Jump ? frame[$ - 1] : result;
     }
 
+    /// The value of `e`, or the `Jump` that leaves it, which whatever evaluated `e` gives in turn
+    /// until the loop or call it's for takes it.
     /// Throws: RuntimeError, located at the innermost node being evaluated, when a primitive fails.
-    private Value evaluate(const Expr e, Frame frame)
+    private Value evaluate(ref const Expr e, Value[] frame)
     {
         try
         {
             return e.kind.match!(
-                (const UnitLit _) => Value(Unit()),
-                (const BoolLit literal) => Value(literal.value),
-                (const IntLit literal) => Value(cast(long) literal.value),
-                (const FloatLit literal) => Value(literal.value),
-                (const StringLit literal) => Value(literal.value),
-                (const LocalRef use) => frame.values[use.local],
-                (const Block block) => evaluate(block, frame),
-                (const Call call) => evaluate(call, frame),
-                (const CallClosure call) => evaluate(call, frame),
-                (const MakeClosure closure) => Value(Closure(closure.target, all(closure.captures, frame))),
-                (const ForeignCall call) => evaluate(e, call, frame),
-                (const IntrinsicCall call) => evaluate(e, call, frame),
-                (const Prim prim) => evaluate(prim, frame),
-                (const Convert convert) => this.convert(evaluate(*convert.value, frame), convert.value.type, e.type),
-                (const If if_) => evaluate(if_, frame),
-                (const Loop loop) => evaluate(loop, frame),
-                (const Break jump) => this.jump!BreakSignal(jump.label),
-                (const Continue jump) => this.jump!ContinueSignal(jump.label),
-                (const Return return_) => leave(evaluate(*return_.value, frame)),
-                (const Construct construct) => Value(Record(0, all(construct.fields, frame))),
-                (const Field field) => evaluate(*field.object, frame).as!Record.fields[field.index],
-                (const Update update) => evaluate(update, frame),
-                (const Inject inject) => evaluate(inject, frame),
-                (const IsMember test) => Value(evaluate(*test.subject, frame).as!Record.tag == test.member),
-                (const Payload payload) => evaluate(*payload.subject, frame).as!Record.fields[0],
-                (const ArrayLit literal) => arrayOf(all(literal.elements, frame), e.type),
-                (const Index index) => evaluate(index, frame),
-                (const Slice slice) => evaluate(slice, frame),
-                (const Length length) => evaluate(*length.array, frame).match!(
-                    (string bytes) => Value(cast(long) bytes.length),
-                    (ArrayValue array) => Value(cast(long) array.elements.length),
-                    (_) => assert(0, "Core's types say this is an array"),
-                ),
-                (const Cell cell) => evaluate(cell, frame),
-                (const Capture capture) => evaluate(*capture.closure, frame).as!Closure.captures[capture.index],
-                (const TestFailure failure) => fail(evaluate(*failure.message, frame).as!string, failure.ends),
+                (ref const UnitLit _) => Value(Unit()),
+                (ref const BoolLit literal) => Value(literal.value),
+                (ref const IntLit literal) => Value(cast(long) literal.value),
+                (ref const FloatLit literal) => Value(literal.value),
+                (ref const StringLit literal) => Value(literal.value),
+                (ref const LocalRef use) => frame[use.local.slot],
+                (ref const Block block) => evaluate(block, frame),
+                (ref const Call call) => callWith(call.target, null, call.args, frame),
+                (ref const CallClosure call) => evaluate(call, frame),
+                (ref const MakeClosure closure) => evaluate(closure, frame),
+                (ref const ForeignCall call) => evaluate(e, call, frame),
+                (ref const IntrinsicCall call) => evaluate(e, call, frame),
+                (ref const Prim prim) => evaluate(prim, frame),
+                (ref const Convert convert) => evaluate(e, convert, frame),
+                (ref const If if_) => evaluate(if_, frame),
+                (ref const Loop loop) => evaluate(loop, frame),
+                (ref const Break jump) => Value(Jump(Jump.Kind.break_, jump.label)),
+                (ref const Continue jump) => Value(Jump(Jump.Kind.continue_, jump.label)),
+                (ref const Return return_) => evaluate(return_, frame),
+                (ref const Construct construct) => evaluate(construct, frame),
+                (ref const Field field) => evaluate(field, frame),
+                (ref const Update update) => evaluate(update, frame),
+                (ref const Inject inject) => evaluate(inject, frame),
+                (ref const IsMember test) => evaluate(test, frame),
+                (ref const Payload payload) => evaluate(payload, frame),
+                (ref const ArrayLit literal) => evaluate(e, literal, frame),
+                (ref const Index index) => evaluate(index, frame),
+                (ref const Slice slice) => evaluate(slice, frame),
+                (ref const Length length) => evaluate(length, frame),
+                (ref const Cell cell) => evaluate(cell, frame),
+                (ref const Capture capture) => evaluate(capture, frame),
+                (ref const TestFailure failure) => evaluate(failure, frame),
             );
         }
         catch (CodedException error)
@@ -192,20 +186,17 @@ final class Evaluator
         }
     }
 
-    /// Each of `exprs`, in order.
-    private Value[] all(const Expr[] exprs, Frame frame)
+    /// Each of `exprs`, in order, as `values`. Gives the `Jump` one of them left with, which ends
+    /// it, and Unit otherwise.
+    private Value all(const Expr[] exprs, Value[] frame, out Value[] values)
     {
-        auto values = new Value[exprs.length];
+        values = new Value[exprs.length];
         foreach (i, ref expr; exprs)
         {
             values[i] = evaluate(expr, frame);
+            if (values[i].has!Jump) return values[i];
         }
-        return values;
-    }
-
-    private Value jump(Signal)(size_t label)
-    {
-        throw new Signal(label);
+        return Value(Unit());
     }
 
     private Value fail(string message, bool ends)
@@ -215,97 +206,176 @@ final class Evaluator
         return Value(Unit());
     }
 
-    private Value leave(Value value)
+    private Value evaluate(ref const TestFailure failure, Value[] frame)
     {
-        throw new ReturnSignal(value);
+        auto message = evaluate(*failure.message, frame);
+        if (message.has!Jump) return message;
+        return fail(message.as!string, failure.ends);
     }
 
-    private Value evaluate(const Call call, Frame frame)
+    private Value evaluate(ref const Return return_, Value[] frame)
     {
-        return callWith(call.target, null, call.args, frame);
+        auto value = evaluate(*return_.value, frame);
+        if (value.has!Jump) return value;
+        frame[$ - 1] = value;
+        return Value(Jump(Jump.Kind.return_));
+    }
+
+    private Value evaluate(ref const MakeClosure closure, Value[] frame)
+    {
+        Value[] captures;
+        auto jump = all(closure.captures, frame, captures);
+        if (jump.has!Jump) return jump;
+        return Value(Closure(closure.target, captures));
     }
 
     /// The callee is evaluated before the arguments.
-    private Value evaluate(const CallClosure call, Frame frame)
+    private Value evaluate(ref const CallClosure call, Value[] frame)
     {
-        auto closure = evaluate(*call.callee, frame).as!Closure;
+        auto callee = evaluate(*call.callee, frame);
+        if (callee.has!Jump) return callee;
+        auto closure = callee.as!Closure;
         return callWith(closure.target, closure.captures, call.args, frame);
     }
 
-    /// Calls `target` with `args`. An argument for a mutable param is read once the others have
-    /// been evaluated, and gets the param's final value when the call ends.
-    private Value callWith(size_t target, Value[] captures, const Expr[] args, Frame frame)
+    /// Calls `target` with `args`, each evaluated into the callee's frame. An argument for a
+    /// mutable param is read once the others have been evaluated, and gets the param's final
+    /// value when the call ends.
+    private Value callWith(size_t target, Value[] captures, const Expr[] args, Value[] frame)
     {
-        auto params = _program.functions[target].params;
-        auto values = new Value[args.length];
+        auto func = &_program.functions[target];
+        auto params = func.params;
+        auto callee = newFrame(*func);
         auto anyMutable = false;
         foreach (i, ref arg; args)
         {
-            if (params[i].mutable) anyMutable = true;
-            else values[i] = evaluate(arg, frame);
+            if (params[i].mutable)
+            {
+                anyMutable = true;
+                continue;
+            }
+            auto value = evaluate(arg, frame);
+            if (value.has!Jump) return value;
+            callee[params[i].slot] = value;
         }
-        if (!anyMutable) return invoke(target, values, captures, null);
+        if (!anyMutable) return enter(*func, callee, captures);
 
         foreach (i, ref arg; args)
         {
-            if (params[i].mutable) values[i] = frame.values[mutableLocal(arg)];
+            if (params[i].mutable) callee[params[i].slot] = frame[mutableLocal(arg).slot];
         }
-        Frame callee;
-        auto result = invoke(target, values, captures, &callee);
+        auto result = enter(*func, callee, captures);
         foreach (i, ref arg; args)
         {
-            if (params[i].mutable) frame.values[mutableLocal(arg)] = callee.values[params[i]];
+            if (params[i].mutable) frame[mutableLocal(arg).slot] = callee[params[i].slot];
         }
         return result;
     }
 
-    private static const(Local) mutableLocal(const Expr arg)
+    private static const(Local) mutableLocal(ref const Expr arg)
     {
         return arg.kind.match!(
-            (const LocalRef use) => use.local,
-            (_) => assert(0, "lowering passes a local to a mutable param"),
+            (ref const LocalRef use) => use.local,
+            (ref const _) => assert(0, "lowering passes a local to a mutable param"),
         );
     }
 
-    private Value evaluate(const If if_, Frame frame)
+    private Value evaluate(ref const If if_, Value[] frame)
     {
-        if (evaluate(*if_.condition, frame).as!bool) return evaluate(*if_.trueBody, frame);
-        return evaluate(*if_.falseBody, frame);
+        auto condition = evaluate(*if_.condition, frame);
+        if (condition.has!Jump) return condition;
+        return evaluate(condition.as!bool ? *if_.trueBody : *if_.falseBody, frame);
     }
 
-    private Value evaluate(const Loop loop, Frame frame)
+    private Value evaluate(ref const Loop loop, Value[] frame)
     {
         while (true)
         {
-            try
-            {
-                evaluate(*loop.body, frame);
-            }
-            catch (ContinueSignal signal)
-            {
-                if (signal.label != loop.label) throw signal;
-            }
-            catch (BreakSignal signal)
-            {
-                if (signal.label != loop.label) throw signal;
-                break;
-            }
+            auto left = evaluate(*loop.body, frame);
+            if (!left.has!Jump) continue;
+            auto jump = left.as!Jump;
+            if (jump.kind == Jump.Kind.return_ || jump.label != loop.label) return left;
+            if (jump.kind == Jump.Kind.break_) return Value(Unit());
         }
-        return Value(Unit());
     }
 
-    private Value evaluate(const Update update, Frame frame)
+    private Value evaluate(ref const Construct construct, Value[] frame)
     {
-        auto record = evaluate(*update.object, frame).as!Record;
+        Value[] fields;
+        auto jump = all(construct.fields, frame, fields);
+        if (jump.has!Jump) return jump;
+        return Value(Record(0, fields));
+    }
+
+    private Value evaluate(ref const Field field, Value[] frame)
+    {
+        auto object = evaluate(*field.object, frame);
+        if (object.has!Jump) return object;
+        return object.as!Record.fields[field.index];
+    }
+
+    private Value evaluate(ref const Update update, Value[] frame)
+    {
+        auto object = evaluate(*update.object, frame);
+        if (object.has!Jump) return object;
+        auto value = evaluate(*update.value, frame);
+        if (value.has!Jump) return value;
+        auto record = object.as!Record;
         auto fields = record.fields.dup;
-        fields[update.index] = evaluate(*update.value, frame);
+        fields[update.index] = value;
         return Value(Record(record.tag, fields));
     }
 
-    private Value evaluate(const Inject inject, Frame frame)
+    private Value evaluate(ref const Inject inject, Value[] frame)
     {
         if (inject.payload is null) return Value(Record(inject.member, null));
-        return Value(Record(inject.member, [evaluate(*inject.payload, frame)]));
+        auto payload = evaluate(*inject.payload, frame);
+        if (payload.has!Jump) return payload;
+        return Value(Record(inject.member, [payload]));
+    }
+
+    private Value evaluate(ref const IsMember test, Value[] frame)
+    {
+        auto subject = evaluate(*test.subject, frame);
+        if (subject.has!Jump) return subject;
+        return Value(subject.as!Record.tag == test.member);
+    }
+
+    private Value evaluate(ref const Payload payload, Value[] frame)
+    {
+        auto subject = evaluate(*payload.subject, frame);
+        if (subject.has!Jump) return subject;
+        return subject.as!Record.fields[0];
+    }
+
+    private Value evaluate(ref const Capture capture, Value[] frame)
+    {
+        auto closure = evaluate(*capture.closure, frame);
+        if (closure.has!Jump) return closure;
+        return closure.as!Closure.captures[capture.index];
+    }
+
+    private Value evaluate(ref const Expr e, ref const Convert convert, Value[] frame)
+    {
+        auto value = evaluate(*convert.value, frame);
+        if (value.has!Jump) return value;
+        return this.convert(value, convert.value.type, e.type);
+    }
+
+    private Value evaluate(ref const Expr e, ref const ArrayLit literal, Value[] frame)
+    {
+        Value[] elements;
+        auto jump = all(literal.elements, frame, elements);
+        if (jump.has!Jump) return jump;
+        return arrayOf(elements, e.type);
+    }
+
+    private Value evaluate(ref const Length length, Value[] frame)
+    {
+        auto array = evaluate(*length.array, frame);
+        if (array.has!Jump) return array;
+        if (array.has!string) return Value(cast(long) array.as!string.length);
+        return Value(cast(long) array.as!ArrayValue.elements.length);
     }
 
     /// An index of any integer type, as unsigned, so a negative one is too large.
@@ -314,10 +384,13 @@ final class Evaluator
         return cast(ulong) index.as!long;
     }
 
-    private Value evaluate(const Index index, Frame frame)
+    private Value evaluate(ref const Index index, Value[] frame)
     {
         auto array = evaluate(*index.array, frame);
-        auto at = position(evaluate(*index.index, frame));
+        if (array.has!Jump) return array;
+        auto place = evaluate(*index.index, frame);
+        if (place.has!Jump) return place;
+        auto at = position(place);
         if (array.has!string)
         {
             auto bytes = array.as!string;
@@ -347,11 +420,16 @@ final class Evaluator
         return array.has!string ? array.as!string : null;
     }
 
-    private Value evaluate(const Slice slice, Frame frame)
+    private Value evaluate(ref const Slice slice, Value[] frame)
     {
         auto array = evaluate(*slice.array, frame);
-        auto start = position(evaluate(*slice.start, frame));
-        auto end = position(evaluate(*slice.end, frame));
+        if (array.has!Jump) return array;
+        auto from = evaluate(*slice.start, frame);
+        if (from.has!Jump) return from;
+        auto to = evaluate(*slice.end, frame);
+        if (to.has!Jump) return to;
+        auto start = position(from);
+        auto end = position(to);
         auto length = array.has!string ? array.as!string.length : array.as!ArrayValue.elements.length;
         if (start > end || end > length)
         {
@@ -361,14 +439,21 @@ final class Evaluator
         return Value(ArrayValue(array.as!ArrayValue.elements[cast(size_t) start .. cast(size_t) end]));
     }
 
-    private Value evaluate(const Cell cell, Frame frame)
+    private Value evaluate(ref const Cell cell, Value[] frame)
     {
-        auto args = all(cell.args, frame);
-        if (cell.op == CellOp.New) return Value(new CellValue(args[0]));
-        auto target = args[0].as!CellValue;
+        auto first = evaluate(cell.args[0], frame);
+        if (first.has!Jump) return first;
+        if (cell.op == CellOp.New) return Value(new CellValue(first));
+        Value second;
+        if (cell.args.length > 1)
+        {
+            second = evaluate(cell.args[1], frame);
+            if (second.has!Jump) return second;
+        }
+        auto target = first.as!CellValue;
         if (cell.op == CellOp.Fill)
         {
-            target.contents = args[1];
+            target.contents = second;
             target.full = true;
             return Value(Unit());
         }
@@ -378,7 +463,7 @@ final class Evaluator
             case CellOp.Get:
                 return target.contents;
             case CellOp.Set:
-                target.contents = args[1];
+                target.contents = second;
                 return Value(Unit());
             case CellOp.Take:
                 target.full = false;
@@ -392,51 +477,66 @@ final class Evaluator
 
     /// A Prim's operands share one type, except a shift's amount, so the first one's type says
     /// how to read them all.
-    private Value evaluate(const Prim prim, Frame frame)
+    private Value evaluate(ref const Prim prim, Value[] frame)
     {
-        auto args = all(prim.args, frame);
+        if (prim.op == PrimOp.Concat)
+        {
+            Value[] parts;
+            auto jump = all(prim.args, frame, parts);
+            return jump.has!Jump ? jump : concat(parts);
+        }
+        auto lhs = evaluate(prim.args[0], frame);
+        if (lhs.has!Jump) return lhs;
+        Value rhs;
+        if (prim.args.length > 1)
+        {
+            rhs = evaluate(prim.args[1], frame);
+            if (rhs.has!Jump) return rhs;
+        }
         switch (prim.op)
         {
-            case PrimOp.Concat:
-                return concat(args);
             case PrimOp.Append:
-                return append(args[0], args[1]);
+                return append(lhs, rhs);
             case PrimOp.Not:
-                return Value(!args[0].as!bool);
+                return Value(!lhs.as!bool);
             case PrimOp.Format:
-                return Value(formatted(args[0], prim.args[0].type));
+                return Value(formatted(lhs, prim.args[0].type));
             case PrimOp.Hash:
-                return Value(cast(long) hashed(args[0]));
+                return Value(cast(long) hashed(lhs));
             case PrimOp.CountOnes:
                 import core.bitop : popcnt;
 
-                return Value(cast(long) popcnt(cast(ulong) args[0].as!long));
+                return Value(cast(long) popcnt(cast(ulong) lhs.as!long));
             default:
                 break;
         }
 
         auto types = _program.types;
         auto operandType = prim.args[0].type;
-        if (operandType == types.char_) return compare(prim.op, args[0].as!long, args[1].as!long);
+        // Most arithmetic is on `Int`, and asking the table about a type costs a lookup.
+        if (operandType == types.int_) return integerPrim!long(prim.op, lhs, rhs);
+        if (operandType == types.char_) return compare(prim.op, lhs.as!long, rhs.as!long);
         if (types.isInteger(operandType))
         {
             auto info = types.integerOf(operandType);
-            foreach (T; IntegerTypes)
+            switch (info.bits)
             {
-                if (info.bits == T.sizeof * 8 && info.signed == isSigned!T) return integerPrim!T(prim.op, args);
+                case 8: return info.signed ? integerPrim!byte(prim.op, lhs, rhs) : integerPrim!ubyte(prim.op, lhs, rhs);
+                case 16: return info.signed ? integerPrim!short(prim.op, lhs, rhs) : integerPrim!ushort(prim.op, lhs, rhs);
+                case 32: return info.signed ? integerPrim!int(prim.op, lhs, rhs) : integerPrim!uint(prim.op, lhs, rhs);
+                case 64: return info.signed ? integerPrim!long(prim.op, lhs, rhs) : integerPrim!ulong(prim.op, lhs, rhs);
+                default: assert(0, "an integer type with no D type of its width");
             }
-            assert(0, "an integer type with no D type of its width");
         }
-        auto lhs = args[0];
         if (lhs.has!Closure || lhs.has!CellValue)
         {
             assert(prim.op == PrimOp.Equal || prim.op == PrimOp.NotEqual, "function values and Refs are only compared for equality");
-            auto same = lhs.has!Closure ? sameFunction(lhs.as!Closure, args[1].as!Closure) : lhs.as!CellValue is args[1].as!CellValue;
+            auto same = lhs.has!Closure ? sameFunction(lhs.as!Closure, rhs.as!Closure) : lhs.as!CellValue is rhs.as!CellValue;
             return Value(prim.op == PrimOp.Equal ? same : !same);
         }
-        if (lhs.has!double) return floatPrim(prim.op, lhs.as!double, args);
-        if (lhs.has!bool) return compare(prim.op, lhs.as!bool, args[1].as!bool);
-        if (lhs.has!string) return compare(prim.op, lhs.as!string, args[1].as!string);
+        if (lhs.has!double) return floatPrim(prim.op, lhs.as!double, rhs);
+        if (lhs.has!bool) return compare(prim.op, lhs.as!bool, rhs.as!bool);
+        if (lhs.has!string) return compare(prim.op, lhs.as!string, rhs.as!string);
         if (lhs.has!Unit) return compare(prim.op, 0, 0);
         assert(0, "lowering only makes a Prim of primitives, arrays aside");
     }
@@ -447,28 +547,28 @@ final class Evaluator
         if (a.target != b.target) return false;
         auto compare = _program.functions[a.target].captureEquality;
         if (compare == noFunction) return true;
-        return invoke(compare, [Value(a), Value(b)], null, null).as!bool;
+        return invoke(compare, [Value(a), Value(b)], null).as!bool;
     }
 
     /// `PrimOp.Hash`, computed as the runtime does for everything but a `Ref` and a function
     /// value, whose identities differ between the backends.
     private ulong hashed(Value value)
     {
-        return value.match!(
-            (bool b) => mixHash(b),
-            (long n) => mixHash(n),
+        if (value.has!bool) return mixHash(value.as!bool);
+        if (value.has!long) return mixHash(value.as!long);
+        if (value.has!double)
+        {
             // `0.0 == -0.0`, so both hash as `0.0`.
-            (double x) => mixHash(x == 0.0 ? 0 : *cast(ulong*) &x),
-            (string text) => hashBytes(cast(const(ubyte)[]) text),
-            (CellValue cell) => mixHash(cast(size_t) cast(void*) cell),
-            (Closure closure) {
-                auto captures = _program.functions[closure.target].captureHash;
-                auto hash = captures == noFunction ? 0
-                    : cast(ulong) invoke(captures, [Value(closure)], null, null).as!long;
-                return mixHash(closure.target ^ hash);
-            },
-            (_) => assert(0, "lowering hashes only primitives, Refs and function values with `Hash`"),
-        );
+            auto x = value.as!double;
+            return mixHash(x == 0.0 ? 0 : *cast(ulong*) &x);
+        }
+        if (value.has!string) return hashBytes(cast(const(ubyte)[]) value.as!string);
+        if (value.has!CellValue) return mixHash(cast(size_t) cast(void*) value.as!CellValue);
+        assert(value.has!Closure, "lowering hashes only primitives, Refs and function values with `Hash`");
+        auto closure = value.as!Closure;
+        auto captures = _program.functions[closure.target].captureHash;
+        auto hash = captures == noFunction ? 0 : cast(ulong) invoke(captures, [value], null).as!long;
+        return mixHash(closure.target ^ hash);
     }
 
     private static Value concat(Value[] parts)
@@ -497,10 +597,10 @@ final class Evaluator
         return Value(ArrayValue(elements));
     }
 
-    private static Value floatPrim(PrimOp op, double lhs, Value[] args)
+    private static Value floatPrim(PrimOp op, double lhs, Value second)
     {
         if (op == PrimOp.Negate) return Value(-lhs);
-        auto rhs = args[1].as!double;
+        auto rhs = second.as!double;
         switch (op)
         {
             case PrimOp.Add: return Value(lhs + rhs);
@@ -515,14 +615,14 @@ final class Evaluator
     /// `T` is the D type of the operands' width and signedness. A `Value` holds every integer as
     /// a `long`, so each is cast to `T`, computed there, and cast back, which sign- or
     /// zero-extends it as the type requires.
-    private static Value integerPrim(T)(PrimOp op, Value[] args)
+    private static Value integerPrim(T)(PrimOp op, Value first, Value second)
     {
         static Value integer(T value)
         {
             return Value(cast(long) value);
         }
 
-        auto lhs = cast(T) args[0].as!long;
+        auto lhs = cast(T) first.as!long;
         switch (op)
         {
             case PrimOp.Negate:
@@ -537,7 +637,7 @@ final class Evaluator
             // The amount can be of any integer type. Read as a `ulong`, a negative one is huge, so
             // one range check rejects it along with every amount too large.
             case PrimOp.ShiftLeft, PrimOp.ShiftRight:
-                auto amount = cast(ulong) args[1].as!long;
+                auto amount = cast(ulong) second.as!long;
                 if (amount >= T.sizeof * 8)
                 {
                     throw new CodedException(DiagnosticCode.InvalidShift, "Shift amount is out of range");
@@ -548,7 +648,7 @@ final class Evaluator
                 break;
         }
 
-        auto rhs = cast(T) args[1].as!long;
+        auto rhs = cast(T) second.as!long;
         switch (op)
         {
             case PrimOp.Add: return integer(checked!"+"(lhs, rhs));
@@ -742,9 +842,11 @@ final class Evaluator
         return result(0, line);
     }
 
-    private Value evaluate(const Expr e, const IntrinsicCall call, Frame frame)
+    private Value evaluate(ref const Expr e, ref const IntrinsicCall call, Value[] frame)
     {
-        auto args = all(call.args, frame);
+        Value[] args;
+        auto jump = all(call.args, frame, args);
+        if (jump.has!Jump) return jump;
         final switch (call.intrinsic)
         {
             case Intrinsic.print:
@@ -772,7 +874,7 @@ final class Evaluator
                 assert(0, "lowering expands `derivedCompare` into calls of `compare`");
             case Intrinsic.panics:
                 auto work = args[0].as!Closure;
-                try invoke(work.target, [], work.captures, null);
+                try invoke(work.target, [], work.captures);
                 catch (RuntimeError error) return Value(Record(1, [Value(error.diagnostic.message)]));
                 return Value(Record(0, null));
         }
@@ -780,7 +882,7 @@ final class Evaluator
 
     /// A call to a C function, which only the standard library's natives can reach for now: the
     /// interpreter has each of them built in.
-    private Value evaluate(const Expr e, const ForeignCall call, Frame frame)
+    private Value evaluate(ref const Expr e, ref const ForeignCall call, Value[] frame)
     {
         auto native = call.symbol in foreignFunctions;
         if (native is null)
@@ -789,7 +891,10 @@ final class Evaluator
                 "`%s` can't be called when interpreting: only the standard library's natives can be, for now"
                     .format(call.symbol)));
         }
-        return (*native)(all(call.args, frame));
+        Value[] args;
+        auto jump = all(call.args, frame, args);
+        if (jump.has!Jump) return jump;
+        return (*native)(args);
     }
 
     /// A primitive or function `value` of `type`, as `print` shows it.
@@ -804,58 +909,76 @@ final class Evaluator
             auto bits = value.as!long;
             return types.integerOf(type).signed ? bits.to!string : (cast(ulong) bits).to!string;
         }
-        return value.match!(
-            (Unit _) => "()",
-            (bool b) => b.to!string,
-            (double d) => d != d ? "nan" : d.to!string,
-            (string s) => s,
-            (Closure c) => _program.functions[c.target].printedName,
-            (_) => assert(0, "lowering formats anything else itself"),
-        );
+        if (value.has!Unit) return "()";
+        if (value.has!bool) return value.as!bool.to!string;
+        if (value.has!double)
+        {
+            auto d = value.as!double;
+            return d != d ? "nan" : d.to!string;
+        }
+        if (value.has!string) return value.as!string;
+        assert(value.has!Closure, "lowering formats anything else itself");
+        return _program.functions[value.as!Closure.target].printedName;
     }
 
-    private Value evaluate(const Block block, Frame frame)
+    private Value evaluate(ref const Block block, Value[] frame)
     {
         foreach (ref statement; block.statements)
         {
-            execute(statement, frame);
+            auto jump = execute(statement, frame);
+            if (jump.has!Jump) return jump;
         }
         if (block.result is null) return Value(Unit());
         return evaluate(*block.result, frame);
     }
 
-    private void execute(const Stmt s, Frame frame)
+    /// Unit, or the `Jump` that leaves the statement.
+    private Value execute(ref const Stmt s, Value[] frame)
     {
-        s.kind.match!(
-            (const Let let) { frame.values[let.local] = evaluate(let.value, frame); },
-            (const Assign assign) { frame.values[assign.local] = evaluate(assign.value, frame); },
-            (const AssignElement assign) {
-                auto at = position(evaluate(assign.index, frame));
-                auto value = evaluate(assign.value, frame);
-                if (frame.values[assign.local].has!string)
-                {
-                    auto bytes = frame.values[assign.local].as!string;
-                    if (at >= bytes.length)
-                    {
-                        throw new RuntimeError(Diagnostic(DiagnosticCode.IndexOutOfRange, s.span, "Index is out of range"));
-                    }
-                    auto changed = bytes.dup;
-                    changed[cast(size_t) at] = cast(char) value.as!long;
-                    frame.values[assign.local] = Value(cast(string) changed);
-                    return;
-                }
-                auto elements = frame.values[assign.local].as!ArrayValue.elements;
-                if (at >= elements.length)
-                {
-                    // A statement has no expression around it of its own to give the panic its place.
-                    throw new RuntimeError(Diagnostic(DiagnosticCode.IndexOutOfRange, s.span, "Index is out of range"));
-                }
-                auto replaced = elements.dup;
-                replaced[cast(size_t) at] = value;
-                frame.values[assign.local] = Value(ArrayValue(replaced));
+        return s.kind.match!(
+            (ref const Let let) => store(let.local, let.value, frame),
+            (ref const Assign assign) => store(assign.local, assign.value, frame),
+            (ref const AssignElement assign) => execute(s, assign, frame),
+            (ref const Eval eval) {
+                auto value = evaluate(eval.expr, frame);
+                return value.has!Jump ? value : Value(Unit());
             },
-            (const Eval eval) { evaluate(eval.expr, frame); },
         );
+    }
+
+    private Value store(const Local local, ref const Expr value, Value[] frame)
+    {
+        auto stored = evaluate(value, frame);
+        if (stored.has!Jump) return stored;
+        frame[local.slot] = stored;
+        return Value(Unit());
+    }
+
+    private Value execute(ref const Stmt s, ref const AssignElement assign, Value[] frame)
+    {
+        auto place = evaluate(assign.index, frame);
+        if (place.has!Jump) return place;
+        auto at = position(place);
+        auto value = evaluate(assign.value, frame);
+        if (value.has!Jump) return value;
+        auto slot = assign.local.slot;
+        // A statement has no expression around it of its own to give the panic its place.
+        RuntimeError outOfRange() => new RuntimeError(Diagnostic(DiagnosticCode.IndexOutOfRange, s.span, "Index is out of range"));
+        if (frame[slot].has!string)
+        {
+            auto bytes = frame[slot].as!string;
+            if (at >= bytes.length) throw outOfRange();
+            auto changed = bytes.dup;
+            changed[cast(size_t) at] = cast(char) value.as!long;
+            frame[slot] = Value(cast(string) changed);
+            return Value(Unit());
+        }
+        auto elements = frame[slot].as!ArrayValue.elements;
+        if (at >= elements.length) throw outOfRange();
+        auto replaced = elements.dup;
+        replaced[cast(size_t) at] = value;
+        frame[slot] = Value(ArrayValue(replaced));
+        return Value(Unit());
     }
 
     /// What the program prints, for the intrinsics that print.
@@ -894,52 +1017,6 @@ struct TestRun
     string output;
 }
 
-/// The locals of one call. Core's locals are objects, so a nested block needs no scope of its own.
-private final class Frame
-{
-    Value[const Local] values;
-}
-
-/// Thrown by `Break`, `Continue` and `Return`, and caught by the loop or call they leave. They're
-/// Throwables rather than Exceptions, so nothing that handles errors catches them by accident.
-private class BreakSignal : Throwable
-{
-    size_t label;
-
-    this(size_t label)
-    {
-        super("break outside of a loop");
-        this.label = label;
-        info = noTrace;
-    }
-}
-
-/// ditto
-private class ContinueSignal : Throwable
-{
-    size_t label;
-
-    this(size_t label)
-    {
-        super("continue outside of a loop");
-        this.label = label;
-        info = noTrace;
-    }
-}
-
-/// ditto
-private class ReturnSignal : Throwable
-{
-    Value value;
-
-    this(Value value)
-    {
-        super("return outside of a function");
-        this.value = value;
-        info = noTrace;
-    }
-}
-
 /// Thrown when a test stops, as `?` on `None` stops it, and caught by the test runner.
 private class TestStop : Throwable
 {
@@ -950,8 +1027,8 @@ private class TestStop : Throwable
     }
 }
 
-/// A signal with `info` already set isn't given a stack trace when it's thrown. Capturing one
-/// costs milliseconds on Windows, which a Silver `return` would otherwise pay every time.
+/// A `TestStop` with `info` already set isn't given a stack trace when it's thrown. Capturing one
+/// costs milliseconds on Windows.
 private class NoTrace : Throwable.TraceInfo
 {
     int opApply(scope int delegate(ref const(char[])) _) const => 0;

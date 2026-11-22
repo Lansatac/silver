@@ -10,6 +10,7 @@ import std.typecons : Rebindable, rebindable;
 import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
 import silver.core.nodes;
+import silver.core.slots : numberLocals;
 import silver.sema : Analysis, DerivedOrder, DerivedPart, DictionaryFunctions, FunctionUse, IndexFunctions, LoopFunctions, ConstChar, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
     Bound, Substitution, SymbolId, Type, TypeTable, Witness;
 
@@ -39,6 +40,7 @@ Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis, const ast
     entry = lowering.entryFor(entry, isMain);
     auto program = Program(rebindable(analysis.types), lowering.functions, entry, lowering.libraries);
     lowering.describeTypes(program);
+    numberLocals(program);
     return program;
 }
 
@@ -66,6 +68,7 @@ Program lowerTests(const ref ast.Program program, const Analysis analysis)
     auto lowered = Program(rebindable(analysis.types), lowering.functions, size_t.max, lowering.libraries);
     lowered.tests = tests;
     lowering.describeTypes(lowered);
+    numberLocals(lowered);
     return lowered;
 }
 

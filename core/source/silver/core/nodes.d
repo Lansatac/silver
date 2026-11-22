@@ -44,6 +44,9 @@ final class Local
     string name;
     Type type;
     bool mutable;
+    /// Which of its function's locals it is, counting params, then captures, then each `Let`: a
+    /// backend can keep a call's locals in an array of the function's `localCount`.
+    size_t slot;
 
     this(string name, Type type, bool mutable = false)
     {
@@ -74,6 +77,8 @@ struct Function
     /// Likewise, the derived function hashing a closure's captures, as `(f: F): UInt` reading them
     /// with `Capture`. `noFunction` when nothing is captured, or the program hashes no function values.
     size_t captureHash = noFunction;
+    /// How many locals it has, each with its own `Local.slot` below this.
+    size_t localCount;
 }
 
 /// A `Function.captureEquality` or `captureHash` that there isn't.
