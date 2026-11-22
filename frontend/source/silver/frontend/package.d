@@ -39,7 +39,7 @@ shared static this()
         "run": "Usage: silver run [OPTION]... <file> [ARGUMENT]...              run <file>\n"
             ~ "       silver run [OPTION]... [-- ARGUMENT...]               run the program of the package silver is started in\n"
             ~ "       silver run [OPTION]... <directory> [-- ARGUMENT...]   run the program of the package at <directory>\n\n"
-            ~ "What follows the file, or `--`, is the program's arguments, untouched.\n"
+            ~ "What follows the file, the directory or nothing is the program's arguments, but a first `--`, which is dropped.\n"
             ~ startedIn ~ "\nA package's program is its module that declares `main`, or the one package it describes\n"
             ~ "that's a program. When several are programs, silver lists them, and one is run by its\n"
             ~ "directory, as `silver run compiler`. A package with a silver.toml of its own is run from its\n"
@@ -228,9 +228,42 @@ string notUtf8(const string[] arguments)
     foreach (i, argument; arguments)
     {
         try validate(argument);
-        catch (UTFException) return "argument %s isn't UTF-8".format(i + 1);
+        catch (UTFException) return "argument %s isn't UTF-8: %s".format(i + 1, lossy(argument));
     }
     return null;
+}
+
+/// `text` as it can be shown: what's UTF-8 as it is, each other byte as `\xHH`, and an unpaired
+/// surrogate, as WTF-8 writes one, as `\u{D800}`. A copy of `lossy` in interpreter/errors.d.
+string lossy(const(char)[] text)
+{
+    import std.format : format;
+    import std.utf : decode, UTFException;
+
+    string shown;
+    size_t i = 0;
+    while (i < text.length)
+    {
+        if (i + 2 < text.length && text[i] == 0xED && text[i + 1] >= 0xA0 && text[i + 1] <= 0xBF
+            && (text[i + 2] & 0xC0) == 0x80)
+        {
+            shown ~= format("\\u{%X}", 0xD000 | (text[i + 1] & 0x3F) << 6 | (text[i + 2] & 0x3F));
+            i += 3;
+            continue;
+        }
+        immutable start = i;
+        try
+        {
+            decode(text, i);
+            shown ~= text[start .. i];
+        }
+        catch (UTFException)
+        {
+            shown ~= format("\\x%02X", text[start]);
+            i = start + 1;
+        }
+    }
+    return shown;
 }
 
 /// The command line as it was given. On Windows druntime turns an unpaired surrogate into U+FFFD, which
@@ -287,9 +320,9 @@ unittest
     assert(wtf8("héllo 😀"w) == "héllo 😀");
     wchar[] lone = ['a', cast(wchar) 0xD800, 'b'];
     assert(wtf8(lone) == "a\xed\xa0\x80b");
-    assert(notUtf8(["x", wtf8(lone)]) == "argument 2 isn't UTF-8");
+    assert(notUtf8(["x", wtf8(lone)]) == `argument 2 isn't UTF-8: a\u{D800}b`);
     wchar[] reversed = [cast(wchar) 0xDC00, cast(wchar) 0xD800];
-    assert(notUtf8([wtf8(reversed)]) == "argument 1 isn't UTF-8");
+    assert(notUtf8([wtf8(reversed)]) == `argument 1 isn't UTF-8: \u{DC00}\u{D800}`);
 }
 
 @("the copies of the compiler's functions for reading the command line match the compiler's own")
@@ -312,10 +345,16 @@ unittest
     auto ours = readText(__FILE_FULL_PATH__);
     auto driver = source("source", "silver", "driver.d");
     auto errors = source("interpreter", "source", "silver", "interpreter", "errors.d");
+    auto runtime = source("runtime", "source", "silver", "runtime", "arguments.d");
     foreach (signature; ["string[] exactArguments(string[] given)", "string wtf8(const(wchar)[] text)"])
         assert(body(ours, signature) == body(driver, signature), signature ~ " differs from the driver's");
-    assert(body(ours, "string notUtf8(const string[] arguments)")
-        == body(errors, "string argumentsMistake(const string[] arguments)"), "notUtf8 differs from argumentsMistake");
+    assert(body(runtime, "string wtf8(") == body(driver, "string wtf8("), "the runtime's wtf8 differs from the driver's");
+    immutable mistake = "string argumentsMistake(const string[] arguments)";
+    assert(body(ours, "string notUtf8(const string[] arguments)") == body(errors, mistake),
+        "notUtf8 differs from argumentsMistake");
+    assert(body(runtime, mistake) == body(errors, mistake), "the runtime's argumentsMistake differs");
+    foreach (copy; [ours, runtime])
+        assert(body(copy, "string lossy(") == body(errors, "string lossy("), "a copy of lossy differs");
 }
 
 /// Where the compiler is: where `SILVERC` says, or beside this program.
@@ -403,19 +442,18 @@ Plan plan(string compiler, Request request, string workingDirectory)
         if (!checkHere) arguments.after = arguments.after.map!(a => sanitize(a)).array;
     }
     else immutable checkHere = false;
-    // After a file, every word is the program's; after a directory, they follow `--`, as with no file.
+    // After a file, every word is the program's but a first `--`; after a directory, they follow `--`, as with
+    // no file. After a file they're passed on as given, and silverc drops the `--` by the same rule.
     auto programArguments = arguments.after;
-    if (byDirectory && programArguments.length > 0)
+    if (byDirectory && programArguments.length > 0 && programArguments[0] != "--")
     {
-        if (programArguments[0] != "--")
-        {
-            result.mistake = "`" ~ programArguments[0] ~ "` follows the directory " ~ arguments.file ~ ", and there "
-                ~ "the program's arguments follow `--`, as `silver " ~ request.command ~ " " ~ arguments.file ~ " -- "
-                ~ programArguments[0] ~ "`.";
-            return result;
-        }
-        programArguments = programArguments[1 .. $];
+        result.mistake = "`" ~ programArguments[0] ~ "` follows the directory " ~ arguments.file ~ ", and there "
+            ~ "the program's arguments follow `--`, as `silver " ~ request.command ~ " " ~ arguments.file ~ " -- "
+            ~ programArguments[0] ~ "`.";
+        return result;
     }
+    if (!arguments.dashed && programArguments.length > 0 && programArguments[0] == "--")
+        programArguments = programArguments[1 .. $];
     // Elsewhere silverc checks them once the program is compiled, as it does when run by hand.
     if (checkHere)
     {

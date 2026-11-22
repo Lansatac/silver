@@ -35,7 +35,7 @@ class ProgramFailed : Exception
 
 /// What ends a program given `arguments` before its `main` starts, as an error from `main` would be
 /// reported, or null when every argument is UTF-8. On Windows, an argument with an unpaired surrogate
-/// arrives here as invalid UTF-8 too.
+/// arrives here as invalid UTF-8 too. The front end and the runtime keep copies, which a test compares.
 string argumentsMistake(const string[] arguments)
 {
     import std.format : format;
@@ -44,18 +44,53 @@ string argumentsMistake(const string[] arguments)
     foreach (i, argument; arguments)
     {
         try validate(argument);
-        catch (UTFException) return "argument %s isn't UTF-8".format(i + 1);
+        catch (UTFException) return "argument %s isn't UTF-8: %s".format(i + 1, lossy(argument));
     }
     return null;
 }
 
-@("an argument that isn't UTF-8 is named by its place, counting from 1")
+/// `text` as it can be shown: what's UTF-8 as it is, each other byte as `\xHH`, and an unpaired
+/// surrogate, as WTF-8 writes one, as `\u{D800}`.
+string lossy(const(char)[] text)
+{
+    import std.format : format;
+    import std.utf : decode, UTFException;
+
+    string shown;
+    size_t i = 0;
+    while (i < text.length)
+    {
+        if (i + 2 < text.length && text[i] == 0xED && text[i + 1] >= 0xA0 && text[i + 1] <= 0xBF
+            && (text[i + 2] & 0xC0) == 0x80)
+        {
+            shown ~= format("\\u{%X}", 0xD000 | (text[i + 1] & 0x3F) << 6 | (text[i + 2] & 0x3F));
+            i += 3;
+            continue;
+        }
+        immutable start = i;
+        try
+        {
+            decode(text, i);
+            shown ~= text[start .. i];
+        }
+        catch (UTFException)
+        {
+            shown ~= format("\\x%02X", text[start]);
+            i = start + 1;
+        }
+    }
+    return shown;
+}
+
+@("an argument that isn't UTF-8 is named by its place, counting from 1, and shown with what isn't UTF-8 escaped")
 unittest
 {
     assert(argumentsMistake(["a", "é", ""]) is null);
-    assert(argumentsMistake(["a", "b\xff"]) == "argument 2 isn't UTF-8");
+    assert(argumentsMistake(["a", "caf\xe9.txt"]) == `argument 2 isn't UTF-8: caf\xE9.txt`);
     // An unpaired surrogate, as WTF-8 writes one.
-    assert(argumentsMistake(["\xed\xa0\x80"]) == "argument 1 isn't UTF-8");
+    assert(argumentsMistake(["x\xed\xa0\x80y"]) == `argument 1 isn't UTF-8: x\u{D800}y`);
+    assert(lossy("é\xff\xfe😀\xed\xbf\xbf") == `é\xFF\xFE😀\u{DFFF}`);
+    assert(lossy("\xe2\x82") == `\xE2\x82`);
 }
 
 /// The exit status of a program that panics, on both backends: the driver exits with it, and the

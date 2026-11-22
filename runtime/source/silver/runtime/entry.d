@@ -48,9 +48,9 @@ int main(string[] args)
     import silver.runtime.arguments : takeArguments;
 
     // As an error returned from `main` is reported.
-    if (auto wrong = takeArguments(args))
+    if (auto mistake = takeArguments(args))
     {
-        fprintf(stderr, "error: argument %llu isn't UTF-8\n", cast(ulong) wrong);
+        fprintf(stderr, "error: %.*s\n", cast(int) mistake.length, mistake.ptr);
         return 1;
     }
     auto thread = new Thread(&runProgram, stackSize);

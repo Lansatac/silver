@@ -432,6 +432,13 @@ unittest
         expectRan(silver(["run"] ~ backend, echo), "echo []\n");
         expectRan(silver(["run"] ~ backend ~ ["arguments", "--", "naïve", "--show-command"], fixtures),
             "echo [naïve, --show-command]\n");
+        // The first `--` after the file, the directory or nothing is dropped, and only that one.
+        expectRan(silver(["run"] ~ backend ~ ["show.ag", "--", "x"], echo), "show [x]\n");
+        expectRan(silver(["run"] ~ backend ~ ["show.ag", "--", "--", "x"], echo), "show [--, x]\n");
+        expectRan(silver(["run"] ~ backend ~ ["show.ag", "a", "--", "b"], echo), "show [a, --, b]\n");
+        expectRan(silver(["run"] ~ backend ~ ["--", "--", "x"], echo), "echo [--, x]\n");
+        expectRan(silver(["run"] ~ backend ~ ["arguments", "--", "--"], fixtures), "echo [--]\n");
+        expectRan(runIn([built("silverc")] ~ backend ~ ["show.ag", "--", "--", "x"], echo), "show [--, x]\n");
     }
     expectRan(silver(["run", "--", "a"], fixtures), "Error F0033: There's no silver.toml in " ~ fixtures ~ " or any "
         ~ "directory above it, so there's no project here to run: name a file, as `silver run hello.ag`\n", 1);
@@ -461,7 +468,7 @@ unittest
     foreach (command; [[built("silver"), "show.ag"], [built("silver"), "-b", "llvm", "show.ag"], [built("silver"), "run", "--"],
         [built("silverc"), "show.ag"], [built("silverc"), "-b", "llvm", "show.ag"], [output]])
     {
-        expectRan(withBadArgument(command ~ "ok", echo), "error: argument 2 isn't UTF-8\n", 1);
+        expectRan(withBadArgument(command ~ "ok", echo), "error: argument 2 isn't UTF-8: " ~ badShown ~ "\n", 1);
     }
 }
 
@@ -484,7 +491,8 @@ unittest
     // The words are counted as given, so the one that isn't UTF-8 is still found and is the second.
     foreach (command; [[built("silver"), "show.ag"], [built("silverc"), "show.ag"], [output]])
     {
-        expectRan(withBadArgument(command ~ "--DRT-gcopt=profile:0", echo), "error: argument 2 isn't UTF-8\n", 1);
+        expectRan(withBadArgument(command ~ "--DRT-gcopt=profile:0", echo), "error: argument 2 isn't UTF-8: " ~ badShown
+            ~ "\n", 1);
     }
 }
 
@@ -497,9 +505,13 @@ unittest
         ran.output);
 }
 
-/// Runs `words` followed by an argument that isn't UTF-8, from `workingDirectory`. On Windows that's
+/// The argument `withBadArgument` adds, as the message shows it.
+version (Windows) enum badShown = `caf\u{D800}.txt`;
+else enum badShown = `caf\xFF.txt`;
+
+/// Runs `words` followed by an argument that isn't UTF-8, from `workingDirectory`. On Windows that has
 /// an unpaired surrogate, the only such argument there, which std.process can't pass, so the process is
-/// started with CreateProcessW; elsewhere it's the byte 0xFF.
+/// started with CreateProcessW; elsewhere it has the byte 0xFF.
 Ran withBadArgument(string[] words, string workingDirectory)
 {
     version (Windows)
@@ -511,7 +523,7 @@ Ran withBadArgument(string[] words, string workingDirectory)
 
         wstring wide;
         foreach (word; words) wide ~= escapeWindowsArgument(word).toUTF16 ~ " ";
-        auto line = (wide ~ cast(wchar) 0xD800 ~ "\0"w).dup;
+        auto line = (wide ~ "caf"w ~ cast(wchar) 0xD800 ~ ".txt\0"w).dup;
         auto outputPath = buildPath(tempDir, "silver-wide-output.txt");
         SECURITY_ATTRIBUTES inherit = {SECURITY_ATTRIBUTES.sizeof, null, TRUE};
         auto file = CreateFileW((outputPath.toUTF16 ~ "\0").ptr, GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS,
@@ -538,7 +550,7 @@ Ran withBadArgument(string[] words, string workingDirectory)
     }
     else
     {
-        return runIn(words ~ "\xFF", workingDirectory);
+        return runIn(words ~ "caf\xFF.txt", workingDirectory);
     }
 }
 

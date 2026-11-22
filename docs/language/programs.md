@@ -32,16 +32,15 @@ silver count.ag notes.txt --lines
 - `args` is what follows the file on the command line, in order: here `["notes.txt", "--lines"]`. A compiled program gets what follows its own name.
 - The program's own name isn't among them. It would be the script's path when interpreted and the executable's when compiled.
 - Nothing else reads the arguments. A function that needs them is passed them, so it can be called with any array, in a test as well.
-- Silver doesn't interpret them. What's an option and what's a file is the program's to say.
-- Every `String` is UTF-8, so an argument that isn't stops the program before `main`, as an error returned from `main` would:
+- Silver doesn't interpret them. What's an option and what's a file is the program's to say, so an option written after the file is the program's too: `silver run prog.ag -b llvm` gives it `["-b", "llvm"]`, and runs it interpreted.
+- The first `--` after the file is dropped, as it is after a package's directory or where the file would be, so `silver run tool.ag -- x`, `silver run tool -- x` and `silver run -- x` all give `["x"]`. Only that first one is: `silver run tool.ag -- -- x` gives `["--", "x"]`, and `silver run tool.ag a -- b` gives `["a", "--", "b"]`. See [The `silver` tool](../silver.md#commands).
+- Every `String` is UTF-8, so an argument that isn't stops the program before `main`, as an error returned from `main` would. The message shows it, with each byte that isn't part of UTF-8 written `\xHH`:
 
 ```
-error: argument 2 isn't UTF-8
+error: argument 2 isn't UTF-8: caf\xE9.txt
 ```
 
-A program whose `main` takes no parameters can still be given arguments, and ignores them.
-
-With no file, or with a package's directory, `silver run` takes the program's arguments after `--`: see [The `silver` tool](../silver.md#commands).
+A program whose `main` takes no parameters can still be given arguments, and ignores them, without a word.
 
 ## Exit status
 
@@ -103,6 +102,8 @@ val home = environment("HOME") ?? "."
 
 `environment(name: String): String?` is the value of an environment variable, or `None` when it isn't set or its value isn't UTF-8.
 
+The environment is read where it's needed, unlike the arguments, which are a parameter of `main`: a program reads a variable rarely and by its name, where it reads its arguments as a whole.
+
 ## Files
 
 `std.file` reads and writes a file whole:
@@ -143,6 +144,8 @@ The errors are members of `lang`'s [`IoError`](errors.md#ioerror), so `?` widens
 - Whether an error type can choose the status its program exits with, in place of `exit`.
 - A status wider than a byte on Windows, where it's 32 bits and a program may want to exit with an `HRESULT`. `exit` stays the form that means the same everywhere, and a Windows module would have its own, taking a `UInt32`.
 - Arguments and environment values that aren't UTF-8, for a program that must handle any file name.
+- A way to get the program's own name, for a usage message or a tool that does different things under different names.
+- A pattern such as `*.txt` arrives unexpanded on Windows, where nothing expands it, and as the files it names elsewhere, where the shell does. To settle when directories are designed.
 - Standard input as bytes, and reading all of it at once.
 - Starting another program.
 
@@ -151,8 +154,8 @@ The errors are members of `lang`'s [`IoError`](errors.md#ioerror), so `?` widens
 [main](#main) and [Arguments](#arguments) are built, on both backends:
 
 - `main` takes no parameters or one of type `[String]`, written directly or through an alias. Two parameters, a `mutable` one, or one of another type is `S0009`.
-- `silver` and `silverc` pass what follows the file to the program untouched, options included. With no file or with a package's directory, `silver run` takes them after `--`.
-- An argument that isn't UTF-8 ends the program whether `main` takes the arguments or not. On Windows the arguments are read as UTF-16, so only an unpaired surrogate does. `silverc` and a compiled program check once the program is compiled. On Windows, where such an argument can't be passed on, `silver run` checks before it calls the compiler, so there that message comes before any about the program's source.
+- `silver` and `silverc` give the program what follows the file, options included, with the first `--` dropped by the rule above.
+- An argument that isn't UTF-8 ends the program whether `main` takes the arguments or not. On Windows the arguments are read as UTF-16, so only an unpaired surrogate does, and the message shows it as `\u{D800}`. `silverc` and a compiled program check once the program is compiled. On Windows, where such an argument can't be passed on, `silver run` checks before it calls the compiler, so there that message comes before any about the program's source.
 - A word starting `--DRT-`, which a D program's runtime would take as its own option, is the program's like any other, for `silver`, `silverc` and a compiled program.
 
 The rest of this document's additions aren't built:

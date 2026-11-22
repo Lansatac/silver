@@ -406,19 +406,18 @@ unittest
 immutable optionsWithValues = ["--package", "--uses", "--project", "--package-file", "--scripts-in", "--program",
     "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip", "--also"];
 
-/// Takes what follows the file off `args` and returns it. The file is the first word that isn't an
-/// option or an option's value, and options stop there: what follows is for the program. With
-/// `--program` there's no file, and the program's words follow `--`. getopt's own
-/// `stopOnFirstNonOption` can't do this, since it takes an option's value for the first non-option.
+/// Takes the program's words off `args` and returns them. The file is the first word that isn't an
+/// option or an option's value, and options stop there: what follows is the program's, except a first
+/// `--`, which is dropped. `--` where the file would be ends the options too, so with `--program`, which
+/// is given in place of a file, the program's words follow it. getopt's own `stopOnFirstNonOption` can't
+/// do this, since it takes an option's value for the first non-option.
 string[] takeAfterFile(ref string[] args)
 {
     import std.algorithm : canFind, startsWith;
 
-    auto program = false;
     for (size_t i = 1; i < args.length; i++)
     {
-        if (args[i] == "--program" || args[i].startsWith("--program=")) program = true;
-        if (args[i] == "--" && program)
+        if (args[i] == "--")
         {
             auto after = args[i + 1 .. $];
             args = args[0 .. i];
@@ -429,7 +428,7 @@ string[] takeAfterFile(ref string[] args)
         {
             auto after = args[i + 1 .. $];
             args = args[0 .. i + 1];
-            return after;
+            return after.length > 0 && after[0] == "--" ? after[1 .. $] : after;
         }
     }
     return null;
@@ -452,8 +451,18 @@ unittest
     assert(takeAfterFile(args) == ["-b", "x"] && args == ["silverc", "--program", "app"]);
     args = ["silverc", "--program=app", "--"];
     assert(takeAfterFile(args) == [] && args == ["silverc", "--program=app"]);
+    // The first `--` after the file is dropped, and only that one.
     args = ["silverc", "f.ag", "--", "x"];
-    assert(takeAfterFile(args) == ["--", "x"] && args == ["silverc", "f.ag"]);
+    assert(takeAfterFile(args) == ["x"] && args == ["silverc", "f.ag"]);
+    args = ["silverc", "f.ag", "--", "--", "x"];
+    assert(takeAfterFile(args) == ["--", "x"]);
+    args = ["silverc", "f.ag", "a", "--", "b"];
+    assert(takeAfterFile(args) == ["a", "--", "b"]);
+    args = ["silverc", "--program", "app", "--", "--"];
+    assert(takeAfterFile(args) == ["--"]);
+    // Where the file would be, `--` ends the options, so without --program there's no file.
+    args = ["silverc", "-b", "llvm", "--", "f.ag", "x"];
+    assert(takeAfterFile(args) == ["f.ag", "x"] && args == ["silverc", "-b", "llvm"]);
 }
 
 @("--package-file names a declared package and its file, and anything else is refused before loading")
@@ -618,6 +627,8 @@ string commandLineMistake(string command, const string[] files, string outputPat
         // `-o f.ag` takes the file as its value.
         return (files.length == 0 && !outputPath.empty
             ? "-o needs a value, and took `" ~ outputPath ~ "`, which leaves no file to compile."
+            : files.length == 0 && arguments.length > 0 ? "No file was given: `--` ends the options, and what follows it "
+                ~ "is the program's, so the file goes before it."
             : files.length == 0 ? "No file was given."
             : "Too many arguments: `" ~ files[1] ~ "` follows `" ~ files[0] ~ "`.") ~ help;
     }
@@ -920,7 +931,7 @@ unittest
             "app", "--", "x", "--", "y"], status, errors);
         assert(status == 0 && text == "[x, --, y]\n", text ~ errors);
         text = written(["silverc", "-b", backend, show, "ok", "b\xff"], status, errors);
-        assert(status == 1 && text == "" && errors.canFind("error: argument 2 isn't UTF-8"), text ~ errors);
+        assert(status == 1 && text == "" && errors.canFind(`error: argument 2 isn't UTF-8: b\xFF`), text ~ errors);
     }
 }
 
@@ -1155,9 +1166,9 @@ unittest
     assert(wtf8("héllo 😀"w) == "héllo 😀");
     wchar[] lone = ['a', cast(wchar) 0xD800, 'b'];
     assert(wtf8(lone) == "a\xed\xa0\x80b");
-    assert(argumentsMistake(["x", wtf8(lone)]) == "argument 2 isn't UTF-8");
+    assert(argumentsMistake(["x", wtf8(lone)]) == `argument 2 isn't UTF-8: a\u{D800}b`);
     wchar[] reversed = [cast(wchar) 0xDC00, cast(wchar) 0xD800];
-    assert(argumentsMistake([wtf8(reversed)]) == "argument 1 isn't UTF-8");
+    assert(argumentsMistake([wtf8(reversed)]) == `argument 1 isn't UTF-8: \u{DC00}\u{D800}`);
 }
 
 /// Runs the driver with the command line `args`, returning the exit status.
