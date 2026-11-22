@@ -108,7 +108,7 @@ Operations that can fail return an option under their own names, and aren't spel
 
 ## Input
 
-`read()` returns the next line of input without its `\n` or `\r\n`, or `None` at the end of input. Its type is `String? ! NotUtf8 | ReadFailed`, with the errors of [`IoError`](errors.md#ioerror).
+`read()` returns the next line of input without its `\n` or `\r\n`, or `None` at the end of input. Its type is `String? ! NotUtf8 | InputFailed`, with the errors of [`IoError`](errors.md#ioerror).
 
 ```silver
 def main(): Unit ! IoError {

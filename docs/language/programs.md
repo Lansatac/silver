@@ -127,14 +127,32 @@ def main(args: [String]): Unit ! IoError {
 ```
 
 - A path is a `String`, relative to the directory the program was started in unless it's absolute, with `/` between its parts on every system.
-- `readFile` returns the file's bytes as text when they're UTF-8, and nothing is translated: a `\r\n` stays one. `readBytes` is for everything else.
-- `writeFile` and `writeBytes` replace the file, creating it when it isn't there. `appendFile` adds to its end, creating it too. None creates a directory.
+- A path ending in a separator names a directory, so it's never a file: `readFile("notes.txt/")` is `ReadFailed`, and `writeFile("new/", text)` is `WriteFailed` rather than creating a file `new`. `exists("logs/")` is `true` only when `logs` is a directory.
+- Nothing else about a path is Silver's: the system decides the rest. On Windows `\` separates parts too, a name's case doesn't matter, and `NUL` is a device, where on Linux each is an ordinary character or name.
+- `readFile` returns the file's bytes as text when they're UTF-8, and nothing is translated: a `\r\n` stays one, and a byte-order mark at the start stays a `\u{feff}`. `readBytes` is for everything else.
+- `writeFile` and `writeBytes` replace the file, creating it when it isn't there. `appendFile` adds to its end, creating it too, and two programs appending to one file don't overwrite each other. None creates a directory.
+- A write isn't all or nothing: one that fails part way, as on a full disk, can leave part of the file.
+- A file too large to hold in memory ends the program as running out of memory does anywhere, with a panic.
 - `exists` is `true` for a file or a directory. It's a question about one moment, so a `readFile` after it can still be `NotFound`.
 
-The errors are members of `lang`'s [`IoError`](errors.md#ioerror), so `?` widens each into it:
+The errors are members of `lang`'s [`IoError`](errors.md#ioerror), so `?` widens each into it. Each names the path as the program gave it:
 
 - `NotFound(path)` is a file that isn't there. It's a member of its own because it's the failure a program most often answers itself, as by using its defaults.
-- `ReadFailed(reason)` and `WriteFailed(reason)` carry the system's message, such as `Permission denied` or `Is a directory`.
+- `ReadFailed(path, reason)` and `WriteFailed(path, reason)` are every other failure, with the system's words for it, in the system's language. A reason is for showing to a person, not for comparing: it differs between systems, so a program that needs to tell two failures apart needs a member of `IoError` for it.
+
+```silver
+def main(): Unit ! IoError {
+    writeFile("out/report.txt", readFile("in.txt")?)?
+}
+```
+
+With `in.txt` there and no directory `out`, on Linux:
+
+```
+error: WriteFailed(out/report.txt, No such file or directory)
+```
+
+On Windows the reason reads `The system cannot find the path specified.` instead.
 
 ## Open questions
 
@@ -148,6 +166,8 @@ The errors are members of `lang`'s [`IoError`](errors.md#ioerror), so `?` widens
 - A pattern such as `*.txt` arrives unexpanded on Windows, where nothing expands it, and as the files it names elsewhere, where the shell does. To settle when directories are designed.
 - Standard input as bytes, and reading all of it at once.
 - Starting another program.
+- Whether each test starts in an empty directory of its own. A `test` that writes a file today writes it into the directory `silver test` was run from, and two tests using one name see each other's file.
+- `exists` doesn't say whether it found a file or a directory, and is `false` for a directory it isn't allowed to look in. Functions that ask which, such as `isFile` and `isDirectory`, belong with the directory functions, rather than a second meaning for `exists`.
 
 ## Current implementation
 
@@ -157,10 +177,10 @@ The errors are members of `lang`'s [`IoError`](errors.md#ioerror), so `?` widens
 - `silver` and `silverc` give the program what follows the file, options included, with the first `--` dropped by the rule above.
 - An argument that isn't UTF-8 ends the program whether `main` takes the arguments or not. On Windows the arguments are read as UTF-16, so only an unpaired surrogate does, and the message shows it as `\u{D800}`. `silverc` and a compiled program check once the program is compiled. On Windows, where such an argument can't be passed on, `silver run` checks before it calls the compiler, so there that message comes before any about the program's source.
 - A word starting `--DRT-`, which a D program's runtime would take as its own option, is the program's like any other, for `silver`, `silverc` and a compiled program.
-- `std.file` is as described. A path is opened through the system's UTF-16 functions on Windows, so a name that isn't ASCII works there too.
-- `NotFound` is a file that isn't there, or a path through a directory that isn't, or through a file. On Windows a name the system can't take, such as one holding `?`, is `NotFound` when read.
-- A directory given as a file is `ReadFailed(Is a directory)` or `WriteFailed(Is a directory)` on every system, where Windows would say `Access is denied.`. A path holding the character `\u{0}`, which no system can take, fails with `The path contains a NUL character`, and `exists` is `false` for it.
-- Any other reason is the system's own words, so it differs between Windows and Linux: writing into a directory that isn't there is `No such file or directory` on Linux and `The system cannot find the path specified.` on Windows.
+- `std.file` is as described. On Windows a path is opened through the system's UTF-16 functions, so a name that isn't ASCII works, and one longer than 260 characters reaches its file. A file another program has open can still be read, replaced and added to, unless that program forbade it.
+- `NotFound` is a file that isn't there, a path through a directory that isn't or through a file, and the empty path. On Windows a name the system can't take, such as one holding `?`, is `NotFound` when read.
+- Some reasons are Silver's own words, the same on every system: a directory given as a file is `Is a directory` (where Windows would say `Access is denied.`), a path ending in a separator is `A path ending in a separator names a directory, not a file`, writing to the empty path is `The path is empty`, and a path holding the character `\u{0}`, which no system can take, is `The path contains a NUL character`, with `exists` `false` for it.
+- Every other reason is the system's: on Windows in the language it's set to.
 
 The rest of this document's additions aren't built:
 

@@ -220,23 +220,25 @@ The exceptions are the operations the language itself defines as panicking. An a
 `lang`'s `IoError` is what can go wrong between the program and the outside world:
 
 ```silver
-type IoError = NotUtf8 | NotFound(path: String) | ReadFailed(reason: String) | WriteFailed(reason: String)
+type IoError = NotUtf8 | NotFound(path: String) | ReadFailed(path: String, reason: String)
+    | WriteFailed(path: String, reason: String) | InputFailed(reason: String)
 ```
 
 - `NotUtf8` is input that isn't UTF-8. It carries nothing, as `decode` returns a bare `None`.
 - `NotFound` is a [file](programs.md#files) that isn't there.
-- `ReadFailed` and `WriteFailed` carry the system's message, such as `Is a directory`, and no error number, since those differ between systems. A kind of failure that programs want to tell apart becomes a member of its own, as `NotFound` is.
+- `ReadFailed` and `WriteFailed` are any other failure to read or write a file, with its path as the program gave it and the system's words for what went wrong. `InputFailed` is a failure to read standard input, which has no path.
+- A reason is the system's text in the system's language, for showing to a person, and carries no error number, since those differ between systems. A program mustn't compare it with anything: a kind of failure that programs want to tell apart becomes a member of its own, as `NotFound` is.
 
-A function returns only the members it can produce, so a `match` on its result lists only those, and stays complete as `IoError` grows. `?` widens them into `IoError`, or into any list that holds them.
+A function returns only the members it can produce, so a `match` on its result lists only those, and stays complete as `IoError` grows. `?` widens them into `IoError`, or into any list that holds them. A function that takes the whole of `IoError` sees it grow, so its `match` wants a `_` arm.
 
 ```silver
-def read(): String? ! NotUtf8 | ReadFailed
+def read(): String? ! NotUtf8 | InputFailed
 
 match read() {
     Ok(Some(line)) => printl(line)
     Ok(None) => printl("the end")
     Error(NotUtf8) => printl("that line wasn't text")
-    Error(ReadFailed(reason)) => printl("can't read: {reason}")
+    Error(InputFailed(reason)) => printl("can't read input: {reason}")
 }
 ```
 
