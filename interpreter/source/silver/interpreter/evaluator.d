@@ -14,6 +14,7 @@ import silver.interpreter.errors;
 import silver.interpreter.stack : checkStack, runOnLargeStack;
 import silver.interpreter.foreign : foreignFunctions;
 import silver.interpreter.values;
+import silver.runtime.files : pathExists, readWhole, writeWhole;
 
 private alias IntegerTypes = AliasSeq!(byte, short, int, long, ubyte, ushort, uint, ulong);
 
@@ -28,13 +29,18 @@ final class Evaluator
     private string[] _failures;
     /// The program's arguments, each already known to be UTF-8.
     private string[] _arguments;
+    /// What a relative path is relative to, or null for the process's working directory.
+    private string _directory;
 
     /// With `useStdOut`, output goes straight to standard output; otherwise it's kept for `output`.
-    this(Program program, bool useStdOut = false, string[] arguments = null)
+    /// `directory` stands in for the directory the program was started in, so programs in one process
+    /// can each have their own.
+    this(Program program, bool useStdOut = false, string[] arguments = null, string directory = null)
     {
         _program = program;
         _useStdOut = useStdOut;
         _arguments = arguments;
+        _directory = directory;
     }
 
     /// Everything the program has printed so far.
@@ -842,6 +848,19 @@ final class Evaluator
         return result(0, line);
     }
 
+    /// `path` as the program means it, relative to the directory it was started in.
+    private string located(string path)
+    {
+        import std.path : buildPath, isRooted;
+
+        return _directory is null || path.length == 0 || isRooted(path) ? path : buildPath(_directory, path);
+    }
+
+    private static Value withStatus(int status, const(char)[] text)
+    {
+        return Value(Record(0, [Value(long(status)), Value(cast(string) text)]));
+    }
+
     private Value evaluate(ref const Expr e, ref const IntrinsicCall call, Value[] frame)
     {
         Value[] args;
@@ -857,6 +876,15 @@ final class Evaluator
                 return Value(Unit());
             case Intrinsic.readLine:
                 return readLine();
+            case Intrinsic.readWhole:
+                auto read = readWhole(located(args[0].as!string), args[1].as!bool);
+                return withStatus(read.status, read.text);
+            case Intrinsic.writeWhole:
+                auto written = writeWhole(located(args[0].as!string), cast(const(ubyte)[]) byteString(args[1]),
+                    args[2].as!bool);
+                return withStatus(written.status, written.text);
+            case Intrinsic.exists:
+                return Value(pathExists(located(args[0].as!string)));
             case Intrinsic.panic:
                 throw new CodedException(DiagnosticCode.ExplicitPanic, args[0].as!string);
             case Intrinsic.exitWithError:

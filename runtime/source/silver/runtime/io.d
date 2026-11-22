@@ -1,4 +1,4 @@
-/// The prelude's `print` and `printl`, and the `readLine` under `read`. `print` and `printl` take
+/// The prelude's `print` and `printl`, the `readLine` under `read`, and `lang.file`'s intrinsics. `print` and `printl` take
 /// `Any`, so there's one function per argument type, named `silver_<intrinsic>_<type>`. Values are
 /// formatted with `to!string`, as the interpreter does, so both backends print the same thing.
 /// Every integer type widens to `int` or `uint` first.
@@ -84,6 +84,62 @@ int silver_readLine(const(char)** data, size_t* length)
         panic("couldn't read input: " ~ e.msg);
     }
     return failed;
+}
+
+/// `readWhole` in `lang.file`: a `FileStatus`, with the file or the system's message through the
+/// out slots.
+int silver_readWhole(const(char)* path, size_t pathLength, bool text, const(char)** data, size_t* length)
+{
+    import core.memory : GC;
+    import silver.runtime.files : FileStatus, readWhole;
+
+    SavedRegisters saved = void;
+    silver_save_registers(&saved);
+    *data = null;
+    *length = 0;
+    try
+    {
+        auto outcome = readWhole(path[0 .. pathLength], text);
+        newString(outcome.text, data, length);
+        if (outcome.status == FileStatus.done) GC.free(cast(void*) outcome.text.ptr);
+        return outcome.status;
+    }
+    catch (OutOfMemoryError)
+    {
+        outOfMemory();
+    }
+    return FileStatus.failed;
+}
+
+/// `writeWhole` in `lang.file`: a `FileStatus`, with the system's message through the out slots
+/// when it failed.
+int silver_writeWhole(const(char)* path, size_t pathLength, const(ubyte)* data, size_t dataLength, bool append,
+    const(char)** message, size_t* messageLength)
+{
+    import silver.runtime.files : FileStatus, writeWhole;
+
+    SavedRegisters saved = void;
+    silver_save_registers(&saved);
+    *message = null;
+    *messageLength = 0;
+    try
+    {
+        auto outcome = writeWhole(path[0 .. pathLength], data[0 .. dataLength], append);
+        newString(outcome.text, message, messageLength);
+        return outcome.status;
+    }
+    catch (OutOfMemoryError)
+    {
+        outOfMemory();
+    }
+    return FileStatus.failed;
+}
+
+bool silver_exists(const(char)* path, size_t length)
+{
+    import silver.runtime.files : pathExists;
+
+    return pathExists(path[0 .. length]);
 }
 
 /// `text` without the `\n` or `\r\n` that ends it.

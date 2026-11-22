@@ -1,0 +1,21 @@
+// exists is true for a file or a directory, and false for nothing, including where a write failed.
+import std.file
+
+def main(): Unit ! IoError {
+    printl(exists("here.txt"))
+    writeFile("here.txt", "")?
+    printl(exists("here.txt"))
+    printl(exists("."))
+    printl(exists("./here.txt"))
+    printl(exists("missing"))
+    printl(exists("missing/here.txt"))
+    printl(exists(""))
+    printl(exists("a\u{0}b"))
+    printl(isError(writeFile("missing/here.txt", "x")))
+    printl(exists("missing"))
+}
+
+def isError(result: Unit ! WriteFailed): Bool => match result {
+    Ok(_) => false
+    Error(_) => true
+}

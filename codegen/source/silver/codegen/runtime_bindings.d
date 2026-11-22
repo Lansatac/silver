@@ -26,6 +26,9 @@ static immutable RuntimeFunction[string] runtime = [
 
     "silver_readLine":    RuntimeFunction("i32", ["ptr", "ptr"]),
     "silver_arguments":   RuntimeFunction("void", ["ptr", "ptr"]),
+    "silver_readWhole":   RuntimeFunction("i32", ["ptr", "i64", "i1 zeroext", "ptr", "ptr"]),
+    "silver_writeWhole":  RuntimeFunction("i32", ["ptr", "i64", "ptr", "i64", "i1 zeroext", "ptr", "ptr"]),
+    "silver_exists":      RuntimeFunction("i1", ["ptr", "i64"]),
     // What lets LLVM drop an allocation nothing reads, and know a new object aliases nothing.
     "silver_alloc":       RuntimeFunction("ptr",  ["i64"],
         `allockind("alloc,uninitialized") allocsize(0) "alloc-family"="silver"`, "noalias "),

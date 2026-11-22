@@ -1,0 +1,43 @@
+module lang.file
+
+// The file at `path`, whole, when it's UTF-8. Nothing is translated, so a `\r\n` stays one.
+def readFile(path: String): String ! NotFound | NotUtf8 | ReadFailed {
+    val (status, text) = readWhole(path, true)
+    if status == 0 => text
+    else if status == 1 => fail NotFound(path)
+    else if status == 2 => fail NotUtf8
+    else fail ReadFailed(text)
+}
+
+// The bytes of the file at `path`, whole.
+def readBytes(path: String): [UInt8] ! NotFound | ReadFailed {
+    val (status, data) = readWhole(path, false)
+    if status == 0 => bytes(data)
+    else if status == 1 => fail NotFound(path)
+    else fail ReadFailed(data)
+}
+
+// Replaces the file at `path` with `text`, or creates it. A directory isn't created.
+def writeFile(path: String, text: String): Unit ! WriteFailed => written(writeWhole(path, bytes(text), false))
+
+// Replaces the file at `path` with `data`, or creates it. A directory isn't created.
+def writeBytes(path: String, data: [UInt8]): Unit ! WriteFailed => written(writeWhole(path, data, false))
+
+// Adds `text` to the end of the file at `path`, or creates it. A directory isn't created.
+def appendFile(path: String, text: String): Unit ! WriteFailed => written(writeWhole(path, bytes(text), true))
+
+// Whether there's a file or a directory at `path`.
+intrinsic def exists(path: String): Bool
+
+private def written(outcome: (Int32, String)): Unit ! WriteFailed {
+    val (status, reason) = outcome
+    if status != 0 {
+        fail WriteFailed(reason)
+    }
+}
+
+// 0 and the file, 1 when there's nothing at `path`, 2 when `text` asks for UTF-8 and the file isn't,
+// or 3 and the system's message. Without `text`, the String is only the file's bytes.
+private intrinsic def readWhole(path: String, text: Bool): (Int32, String)
+// 0, or 3 and the system's message.
+private intrinsic def writeWhole(path: String, data: [UInt8], append: Bool): (Int32, String)

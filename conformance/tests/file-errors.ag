@@ -1,0 +1,38 @@
+// Each function returns only the members of IoError it can produce. NotFound carries the path as
+// it was given, and the others the system's message, which differs between systems except where
+// Silver writes its own, as for a directory.
+import std.file
+
+def main(): Unit {
+    printl(readFile("missing.txt"))
+    printl(readBytes("missing.txt"))
+    printl(readFile("missing/nested.txt"))
+    printl(readFile(""))
+    printl(readFile("."))
+    printl(readBytes("."))
+    printl(writeFile(".", "x"))
+    printl(writeBytes(".", []))
+    printl(appendFile(".", "x"))
+    printl(readFile("a\u{0}b"))
+    printl(writeFile("a\u{0}b", "x"))
+
+    match writeFile("missing/new.txt", "x") {
+        Ok(_) => printl("written")
+        Error(WriteFailed(reason)) => printl("not written: {reason != ""}")
+    }
+    match appendFile("missing/new.txt", "x") {
+        Ok(_) => printl("appended")
+        Error(WriteFailed(reason)) => printl("not appended: {reason != ""}")
+    }
+    match readBytes("missing.txt") {
+        Ok(_) => printl("read")
+        Error(NotFound(path)) => printl("no {path}")
+        Error(ReadFailed(reason)) => printl(reason)
+    }
+    match readFile("missing.txt") {
+        Ok(_) => printl("read")
+        Error(NotFound(path)) => printl("no {path}")
+        Error(NotUtf8) => printl("not text")
+        Error(ReadFailed(reason)) => printl(reason)
+    }
+}

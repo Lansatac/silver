@@ -8,7 +8,7 @@ version (unittest)
     import std.file : dirEntries, exists, mkdirRecurse, readBytes = read, readText, rmdirRecurse, SpanMode, tempDir, write;
     import std.parallelism : taskPool;
     import std.path : baseName, buildNormalizedPath, buildPath, dirName, dirSeparator, stripExtension;
-    import std.process : environment, pipeProcess, Redirect, thisProcessID, wait;
+    import std.process : Config, environment, pipeProcess, Redirect, thisProcessID, wait;
     import std.range : chunks, front;
     import std.stdio : File, stdin, writeln;
     import std.string : lineSplitter, replace, startsWith, strip;
@@ -336,7 +336,11 @@ version (unittest)
             return "linking failed (IR kept at " ~ irPath ~ "):\n" ~ linked.output;
         }
 
-        auto process = pipeProcess([exePath] ~ c.arguments, Redirect.stdin | Redirect.stdout | Redirect.stderrToStdout);
+        auto runDirectory = buildPath(workDirectory, c.name ~ ".run");
+        if (exists(runDirectory)) rmdirRecurse(runDirectory);
+        mkdirRecurse(runDirectory);
+        auto process = pipeProcess([exePath] ~ c.arguments, Redirect.stdin | Redirect.stdout | Redirect.stderrToStdout,
+            null, Config.none, runDirectory);
         if (c.inputPath !is null)
         {
             process.stdin.rawWrite(readBytes(c.inputPath));
@@ -346,6 +350,21 @@ version (unittest)
         auto status = wait(process.pid);
         run = CompiledRun(status, (cast(string) output).normalizeNewlines);
         return null;
+    }
+
+    shared size_t interpretedRuns;
+
+    /// A new, empty directory for an interpreted program to start in, since the cases share the
+    /// process's own. A compiled one starts in a directory of its own beside its executable.
+    string newRunDirectory()
+    {
+        import core.atomic : atomicOp;
+
+        auto directory = buildPath(tempDir, "silver-conformance-run-" ~ thisProcessID.to!string ~ "-"
+            ~ atomicOp!"+="(interpretedRuns, 1).to!string);
+        if (exists(directory)) rmdirRecurse(directory);
+        mkdirRecurse(directory);
+        return directory;
     }
 
     /// Runs `evaluator` with `c`'s input as standard input.
@@ -406,6 +425,11 @@ version (unittest)
             return false;
         }
         auto text = readText(c.sourcePath);
+        // Each needs an empty directory to start in.
+        if (text.canFind("import std.file"))
+        {
+            return false;
+        }
         // A shebang has to stay at the very start, where a bundle member's module line goes.
         if (text.startsWith("#!"))
         {
@@ -545,9 +569,11 @@ version (unittest)
         Program program;
         CoreProgram lowered;
         if (prepare(c, context, program, lowered) !is null) return null;
+        auto directory = newRunDirectory();
+        scope (exit) rmdirRecurse(directory);
         try
         {
-            runWithInput(c, new Evaluator(lowered, false, c.arguments));
+            runWithInput(c, new Evaluator(lowered, false, c.arguments, directory));
         }
         catch (DiagnosticException e)
         {
@@ -582,7 +608,9 @@ version (unittest)
             return failure;
         }
 
-        auto evaluator = new Evaluator(lowered, false, c.arguments);
+        auto directory = newRunDirectory();
+        scope (exit) rmdirRecurse(directory);
+        auto evaluator = new Evaluator(lowered, false, c.arguments, directory);
         try
         {
             runWithInput(c, evaluator);
@@ -613,7 +641,9 @@ version (unittest)
             return failure;
         }
 
-        auto evaluator = new Evaluator(lowered, false, c.arguments);
+        auto directory = newRunDirectory();
+        scope (exit) rmdirRecurse(directory);
+        auto evaluator = new Evaluator(lowered, false, c.arguments, directory);
         try
         {
             runWithInput(c, evaluator);
@@ -640,7 +670,9 @@ version (unittest)
             return failure;
         }
 
-        auto evaluator = new Evaluator(lowered, false, c.arguments);
+        auto directory = newRunDirectory();
+        scope (exit) rmdirRecurse(directory);
+        auto evaluator = new Evaluator(lowered, false, c.arguments, directory);
         try
         {
             runWithInput(c, evaluator);

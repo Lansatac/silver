@@ -1,0 +1,8 @@
+// A file that isn't UTF-8, read as text, reaches main through `?`.
+import std.file
+
+def main(): Unit ! IoError {
+    writeBytes("latin1.txt", [0x63, 0x61, 0x66, 0xE9])?
+    printl(length(readBytes("latin1.txt")?))
+    printl(readFile("latin1.txt")?)
+}

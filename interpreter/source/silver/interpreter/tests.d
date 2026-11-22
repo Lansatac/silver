@@ -10,8 +10,9 @@ version (unittest)
     import silver.loader : load, Packages, standardPrelude, withStandardLibrary;
     import silver.sema : analyze;
 
-    /// Runs `source` as the driver does, failing on anything the loader or sema reports.
-    private string run(string source)
+    /// Runs `source` as the driver does, failing on anything the loader or sema reports, started in
+    /// `directory` when there is one.
+    private string run(string source, string directory = null)
     {
         import std.algorithm : map;
         import std.array : join;
@@ -23,7 +24,7 @@ version (unittest)
         auto analysis = analyze(program, context.collector);
         assert(!context.collector.hasErrors, context.collector.errors
                 .map!(d => formatDiagnostic(d, context.sources)).join("\n"));
-        auto evaluator = new Evaluator(lowerProgram(program, analysis));
+        auto evaluator = new Evaluator(lowerProgram(program, analysis), false, null, directory);
         evaluator.run();
         return evaluator.output;
     }
@@ -75,6 +76,28 @@ unittest
         scope (exit) stdin = original;
         runMain("printl(read())").should.equal("Error(ReadFailed(Is a directory))\n");
     }
+}
+
+@("a relative path is relative to the directory the program is given, and an absolute one isn't")
+unittest
+{
+    import std.array : replace;
+    import std.conv : to;
+    import std.file : mkdirRecurse, readText, rmdirRecurse, tempDir;
+    import std.path : buildPath;
+    import std.process : thisProcessID;
+
+    auto directory = buildPath(tempDir, "silver-interpreter-directory-" ~ thisProcessID.to!string);
+    mkdirRecurse(directory);
+    scope (exit) rmdirRecurse(directory);
+    // An absolute path, with `/` so it needs no escaping in Silver.
+    auto elsewhere = buildPath(directory, "elsewhere.txt").replace("\\", "/");
+    auto source = "import std.file\ndef main(): Unit ! IoError {\n    writeFile(\"here.txt\", \"near\")?\n"
+        ~ "    writeFile(\"" ~ elsewhere ~ "\", \"far\")?\n"
+        ~ "    printl(readFile(\"here.txt\")?)\n    printl(exists(\"here.txt\"))\n}";
+    run(source, directory).should.equal("near\ntrue\n");
+    readText(buildPath(directory, "here.txt")).should.equal("near");
+    readText(elsewhere).should.equal("far");
 }
 
 @("calling a native the interpreter doesn't have is a diagnostic, not a crash")

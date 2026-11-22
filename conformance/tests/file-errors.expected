@@ -1,0 +1,15 @@
+Error(NotFound(missing.txt))
+Error(NotFound(missing.txt))
+Error(NotFound(missing/nested.txt))
+Error(NotFound())
+Error(ReadFailed(Is a directory))
+Error(ReadFailed(Is a directory))
+Error(WriteFailed(Is a directory))
+Error(WriteFailed(Is a directory))
+Error(WriteFailed(Is a directory))
+Error(ReadFailed(The path contains a NUL character))
+Error(WriteFailed(The path contains a NUL character))
+not written: true
+not appended: true
+no missing.txt
+no missing.txt

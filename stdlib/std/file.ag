@@ -1,0 +1,3 @@
+module std.file
+
+forward import lang.file

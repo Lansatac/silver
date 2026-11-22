@@ -1,0 +1,9 @@
+done
+hello
+5
+no nothing.txt
+false
+not text
+can't write: Is a directory
+can't read: Is a directory
+Error(NotFound(nothing.txt))

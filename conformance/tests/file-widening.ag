@@ -1,0 +1,30 @@
+// `?` widens each function's errors into IoError, whose members a match lists in full.
+import std.file
+
+def copy(from: String, to: String): Unit ! IoError {
+    writeFile(to, readFile(from)?)?
+}
+
+def size(path: String): Int ! IoError => length(readBytes(path)?)
+
+def describe(result: Unit ! IoError): String => match result {
+    Ok(_) => "done"
+    Error(NotUtf8) => "not text"
+    Error(NotFound(path)) => "no {path}"
+    Error(ReadFailed(reason)) => "can't read: {reason}"
+    Error(WriteFailed(reason)) => "can't write: {reason}"
+}
+
+def main(): Unit ! IoError {
+    writeFile("a.txt", "hello")?
+    printl(describe(copy("a.txt", "b.txt")))
+    printl(readFile("b.txt")?)
+    printl(size("b.txt")?)
+    printl(describe(copy("nothing.txt", "c.txt")))
+    printl(exists("c.txt"))
+    writeBytes("bad.bin", [0xFF])?
+    printl(describe(copy("bad.bin", "d.txt")))
+    printl(describe(copy("a.txt", ".")))
+    printl(describe(copy(".", "e.txt")))
+    printl(size("nothing.txt"))
+}

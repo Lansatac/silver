@@ -1,0 +1,30 @@
+// Bytes go out and come back untouched: line endings, a NUL and bytes that aren't UTF-8. readFile
+// refuses what isn't UTF-8.
+import std.file
+
+def main(): Unit ! IoError {
+    val data: [UInt8] = [0x0D, 0x0A, 0x0A, 0x0D, 0x00, 0xFF, 0xFE, 0x80, 0x41, 0xC3]
+    writeBytes("data.bin", data)?
+    val back = readBytes("data.bin")?
+    printl(back == data)
+    printl(back)
+    printl(readFile("data.bin"))
+
+    mutable val every: [UInt8] = []
+    mutable val i = 0
+    while i < 256 {
+        every ~= [UInt8(i)]
+        i += 1
+    }
+    writeBytes("every.bin", every)?
+    printl(readBytes("every.bin")? == every)
+
+    writeFile("text.txt", "\u{e9}\r\n")?
+    printl(readBytes("text.txt")?)
+
+    writeBytes("text.txt", bytes("caf\u{e9}"))?
+    printl(readFile("text.txt")?)
+
+    writeBytes("empty.bin", [])?
+    printl(readBytes("empty.bin")?)
+}

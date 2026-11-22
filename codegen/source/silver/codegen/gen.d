@@ -1427,7 +1427,14 @@ private final class Generator
             case Intrinsic.print, Intrinsic.printl:
                 return emitPrint(call);
             case Intrinsic.readLine:
-                return emitReadLine();
+                return emitWithStatus("silver_readLine", call);
+            case Intrinsic.readWhole:
+                return emitWithStatus("silver_readWhole", call);
+            case Intrinsic.writeWhole:
+                return emitWithStatus("silver_writeWhole", call);
+            case Intrinsic.exists:
+                auto path = emitExpr(call.args[0]);
+                return path.then(callRuntime("silver_exists", operandsOf(call.args[0], path.operands, 2)));
             case Intrinsic.panic:
                 return emitExplicitPanic(call.args[0], e.span);
             case Intrinsic.exitWithError:
@@ -1475,14 +1482,22 @@ private final class Generator
         assert(0, "lowering only passes primitives to an intrinsic's Any");
     }
 
-    /// A line of input, as the `(Int32, String)` of a status and the line or the OS's message: the
-    /// runtime returns the status and hands the String back through the out slots.
-    private Fragment emitReadLine()
+    /// A call of the runtime's `name` with `call`'s arguments, as the `(Int32, String)` of the status it
+    /// returns and the String it hands back through the out slots.
+    private Fragment emitWithStatus(string name, const IntrinsicCall call)
     {
+        Fragment arguments;
+        string[] operands;
+        foreach (arg; call.args)
+        {
+            auto value = emitExpr(arg);
+            arguments = arguments.then(value);
+            operands ~= operandsOf(arg, value.operands, scalarsOf(arg.type, arg.span).length);
+        }
         _function.usesOutSlots = true;
-        auto status = callRuntime("silver_readLine", [FunctionState.outData, FunctionState.outLength]);
+        auto status = callRuntime(name, operands ~ [FunctionState.outData, FunctionState.outLength]);
         auto text = loadOutSlice();
-        return status.then(text).withOperands(status.value ~ text.operands);
+        return arguments.then(status).then(text).withOperands(status.value ~ text.operands);
     }
 
     /// The String or array a runtime call has just written to the out slots.

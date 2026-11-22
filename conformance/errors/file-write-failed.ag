@@ -1,0 +1,9 @@
+// A failed write reaches main through `?`.
+import std.file
+
+def main(): Unit ! IoError {
+    writeFile("out.txt", "kept")?
+    printl(readFile("out.txt")?)
+    writeFile(".", "lost")?
+    printl("not reached")
+}

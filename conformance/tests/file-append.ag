@@ -1,0 +1,16 @@
+// appendFile creates a file that isn't there and adds to the end of one that is.
+import std.file
+
+def main(): Unit ! IoError {
+    printl(exists("log.txt"))
+    appendFile("log.txt", "first\n")?
+    printl(exists("log.txt"))
+    appendFile("log.txt", "second\r\n")?
+    appendFile("log.txt", "")?
+    appendFile("log.txt", "third")?
+    printl(readFile("log.txt")? == "first\nsecond\r\nthird")
+
+    writeFile("log.txt", "again")?
+    appendFile("log.txt", "!")?
+    printl(readFile("log.txt")?)
+}

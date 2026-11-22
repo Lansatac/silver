@@ -1,6 +1,8 @@
 {
 	"name": "interpreter",
 	"targetType": "library",
+	"importPaths": ["source", "../runtime/source"],
+	"sourceFiles": ["../runtime/source/silver/runtime/files.d"],
 	"dependencies": {
 		"silver:ast": "*",
 		"silver:core": "*",

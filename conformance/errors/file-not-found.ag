@@ -1,0 +1,9 @@
+// A file that isn't there reaches main through `?`, which reports the path.
+import std.file
+
+def main(): Unit ! IoError {
+    val text = readFile("notes.txt") ?? "defaults"
+    printl(text)
+    writeFile("notes.bak", readFile("settings.conf")?)?
+    printl("not reached")
+}

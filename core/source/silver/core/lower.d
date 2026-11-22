@@ -2284,6 +2284,7 @@ private final class Lowering
             case Intrinsic.exitWithError, Intrinsic.programArguments:
                 assert(0, "only the wrapper lowering makes for `main` calls `exitWithError` and `programArguments`");
             case Intrinsic.print, Intrinsic.printl, Intrinsic.readLine, Intrinsic.panic, Intrinsic.panics:
+            case Intrinsic.readWhole, Intrinsic.writeWhole, Intrinsic.exists:
             case Intrinsic.bytes, Intrinsic.uncheckedString:
                 break;
         }

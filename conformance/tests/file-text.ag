@@ -1,0 +1,22 @@
+// writeFile replaces or creates, readFile gives the bytes back as they were written, `\r\n` and
+// all, an empty file is an empty String, and a path can be any text.
+import std.file
+
+def main(): Unit ! IoError {
+    writeFile("notes.txt", "one\r\ntwo\nthree")?
+    val text = readFile("notes.txt")?
+    printl(text == "one\r\ntwo\nthree")
+    printl(length(bytes(text)))
+
+    writeFile("notes.txt", "short")?
+    printl(readFile("notes.txt")?)
+
+    writeFile("empty.txt", "")?
+    printl(readFile("empty.txt") == Ok(""))
+    printl(readBytes("empty.txt")?)
+
+    writeFile("caf\u{e9} \u{1f600}.txt", "na\u{ef}ve")?
+    printl(readFile("caf\u{e9} \u{1f600}.txt")?)
+    printl(exists("caf\u{e9} \u{1f600}.txt"))
+    printl(exists("cafe \u{1f600}.txt"))
+}
