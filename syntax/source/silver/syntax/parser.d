@@ -58,6 +58,7 @@ private final class Parser
     private Diagnostic[] errors;
     /// How many `for` loops so far take their element apart, for naming the element's local.
     private size_t forPatterns;
+    private size_t parameterPatterns;
     /// The type of each bare sum member, which declares a marker.
     private bool[Id!TypeExpr] markerMembers;
     /// The tokens the last postfix expression to finish spanned, so an assignment can tell whether
@@ -404,14 +405,21 @@ private final class Parser
         }
         skipNewlineBefore(TokenKind.leftParen);
         expect(TokenKind.leftParen, "`(`");
-        auto params = parseParams();
+        Stmt[] unpacks;
+        auto params = parseParams(unpacks);
         expect(TokenKind.rightParen, "`)` or `,`");
         auto returnType = parseTypeAnnotation();
+        if (unpacks.length > 0 && kind != FunctionKind.ordinary)
+        {
+            throw error(unpacks[0].span, kind == FunctionKind.required
+                ? "A function of an interface says what a type has to have, so its parameters are names, not patterns"
+                : "A `native def` or an `intrinsic def` has no body to take a parameter apart in, so its parameters are names");
+        }
 
         Expr* body;
         if (kind == FunctionKind.ordinary)
         {
-            body = boxed(parseBody());
+            body = boxed(takingApart(unpacks, parseBody()));
         }
         else if (kind == FunctionKind.required && (at(TokenKind.fatArrow) || at(TokenKind.leftBrace)))
         {
@@ -432,19 +440,112 @@ private final class Parser
         throw failure("`=>` or a block");
     }
 
-    private Param[] parseParams()
+    /// A function's parameters. One written as a tuple pattern, as in `(w, h): (Int, Int)`, is a
+    /// parameter no name can reach, with a declaration added to `unpacks` that takes it apart.
+    private Param[] parseParams(ref Stmt[] unpacks)
     {
         Param[] params;
         if (at(TokenKind.rightParen)) return params;
         do
         {
+            auto start = here;
             auto mutable = accept(TokenKind.kwMutable);
+            if (at(TokenKind.leftParen))
+            {
+                params ~= parsePatternParam(start, mutable, true, unpacks);
+                continue;
+            }
             auto nameToken = expectBindingName();
             auto type = parseTypeAnnotation();
             params ~= Param(ids.next!Param, text(nameToken), spanOf(nameToken), type, mutable);
         }
         while (accept(TokenKind.comma));
         return params;
+    }
+
+    /// A parameter written as a tuple pattern, which starts here, with `mutable` before it from
+    /// `start` if that was written. A `def`'s has its type after it, and a lambda's may.
+    private Param parsePatternParam(size_t start, bool mutable, bool typed, ref Stmt[] unpacks)
+    {
+        auto patternStart = here;
+        if (mutable)
+        {
+            throw error(spanFrom(start), "A parameter that's taken apart can't be `mutable`: there'd be nothing to write back "
+                ~ "to. Take it as a name, and take it apart in the body");
+        }
+        auto pattern = parseTuplePattern(false);
+        auto span = spanFrom(patternStart);
+        auto annotated = typed || at(TokenKind.colon);
+        auto type = annotated ? parseTypeAnnotation() : TypeExpr.init;
+        // With a type on every part and none on the whole, the parts' types are the whole's.
+        if (!annotated) annotated = typeOfParts(pattern, type);
+        auto name = "parameter.%s".format(parameterPatterns++);
+        auto whole = Expr(ids.next!Expr, span, ExprKind(Identifier(name)));
+        unpacks ~= Stmt(span, StmtKind(PatternDecl(pattern, whole)));
+        return Param(ids.next!Param, name, span, type, false, annotated, true);
+    }
+
+    /// The tuple type `pattern`'s annotations spell, when every name in it has one.
+    private bool typeOfParts(ref Pattern pattern, out TypeExpr type)
+    {
+        TypeExpr[] elements;
+        bool whole = true;
+        bool binding;
+        pattern.kind.match!(
+            (ref TuplePattern tuple) {
+                foreach (ref element; tuple.elements)
+                {
+                    TypeExpr part;
+                    if (typeOfParts(element, part)) elements ~= part;
+                    else whole = false;
+                }
+            },
+            (ref VarDecl v) {
+                binding = true;
+                if (v.type is null) whole = false;
+                else type = copyOf(*v.type);
+            },
+            (ref _) { whole = false; },
+        );
+        if (!whole) return false;
+        if (!binding) type = TypeExpr(ids.next!TypeExpr, pattern.span, TypeExprKind(TupleType(elements)));
+        return true;
+    }
+
+    /// `type` again, as if it had been written a second time.
+    private TypeExpr copyOf(ref TypeExpr type)
+    {
+        TypeExpr[] all(TypeExpr[] types)
+        {
+            TypeExpr[] copies;
+            foreach (ref t; types) copies ~= copyOf(t);
+            return copies;
+        }
+        auto kind = type.kind.match!(
+            (ref OptionType o) => TypeExprKind(OptionType(boxed(copyOf(*o.inner)))),
+            (ref ArrayType a) => TypeExprKind(ArrayType(boxed(copyOf(*a.element)))),
+            (ref DictionaryType d) => TypeExprKind(DictionaryType(boxed(copyOf(*d.key)), boxed(copyOf(*d.value)))),
+            (ref NamedType n) => TypeExprKind(NamedType(n.path, all(n.args))),
+            (ref FunctionType f) => TypeExprKind(FunctionType(all(f.params), f.mutableParams, boxed(copyOf(*f.returnType)))),
+            (ref UnitType u) => TypeExprKind(u),
+            (ref TupleType t) => TypeExprKind(TupleType(all(t.elements))),
+            (ref ErrorUnionType u) => TypeExprKind(ErrorUnionType(boxed(copyOf(*u.success)), all(u.errors))),
+            (ref JoinedType j) => TypeExprKind(JoinedType(all(j.parts))),
+        );
+        return TypeExpr(ids.next!TypeExpr, type.span, kind);
+    }
+
+    /// `body` with `unpacks` before it, each taking apart a parameter written as a pattern.
+    private Expr takingApart(Stmt[] unpacks, Expr body)
+    {
+        if (unpacks.length == 0) return body;
+        auto isBlock = body.kind.match!((ref BlockExpr _) => true, (ref _) => false);
+        if (!isBlock) return Expr(ids.next!Expr, body.span, ExprKind(BlockExpr(unpacks, boxed(body))));
+        body.kind.match!(
+            (ref BlockExpr block) { block.statements = unpacks ~ block.statements; },
+            (ref _) {},
+        );
+        return body;
     }
 
     private Token expectBindingName()
@@ -1869,8 +1970,15 @@ private final class Parser
             while (true)
             {
                 if (kindOf(i) == TokenKind.kwMutable) i++;
-                if (kindOf(i) != TokenKind.identifier && kindOf(i) != TokenKind.underscore) return false;
-                i++;
+                if (kindOf(i) == TokenKind.leftParen)
+                {
+                    if (!scanPattern(i)) return false;
+                }
+                else
+                {
+                    if (kindOf(i) != TokenKind.identifier && kindOf(i) != TokenKind.underscore) return false;
+                    i++;
+                }
                 if (kindOf(i) == TokenKind.colon)
                 {
                     i++;
@@ -1890,10 +1998,43 @@ private final class Parser
         return kindOf(i) == TokenKind.fatArrow;
     }
 
+    /// Whether a tuple pattern starts at `i`, which is moved past it: names, `_` and patterns, each
+    /// with an optional type, at least two of them.
+    private bool scanPattern(ref size_t i)
+    {
+        if (kindOf(i) != TokenKind.leftParen) return false;
+        i++;
+        size_t count;
+        while (true)
+        {
+            if (kindOf(i) == TokenKind.leftParen)
+            {
+                if (!scanPattern(i)) return false;
+            }
+            else
+            {
+                if (kindOf(i) != TokenKind.identifier && kindOf(i) != TokenKind.underscore) return false;
+                i++;
+                if (kindOf(i) == TokenKind.colon)
+                {
+                    i++;
+                    if (!scanType(i)) return false;
+                }
+            }
+            count++;
+            if (kindOf(i) != TokenKind.comma) break;
+            i++;
+        }
+        if (kindOf(i) != TokenKind.rightParen || count < 2) return false;
+        i++;
+        return true;
+    }
+
     private Expr parseLambda()
     {
         auto start = here;
         Param[] params;
+        Stmt[] unpacks;
         TypeExpr* returnType;
         if (!at(TokenKind.leftParen))
         {
@@ -1907,7 +2048,13 @@ private final class Parser
             {
                 do
                 {
+                    auto paramStart = here;
                     auto mutable = accept(TokenKind.kwMutable);
+                    if (at(TokenKind.leftParen))
+                    {
+                        params ~= parsePatternParam(paramStart, mutable, false, unpacks);
+                        continue;
+                    }
                     auto nameToken = expectBindingName();
                     auto annotated = at(TokenKind.colon);
                     auto type = annotated ? parseTypeAnnotation() : TypeExpr.init;
@@ -1919,7 +2066,7 @@ private final class Parser
             if (at(TokenKind.colon)) returnType = boxed(parseTypeAnnotation());
         }
         expect(TokenKind.fatArrow, "`=>`");
-        auto body = parseExpression();
+        auto body = takingApart(unpacks, parseExpression());
         return Expr(ids.next!Expr, spanFrom(start), ExprKind(Lambda(params, returnType, boxed(body))));
     }
 

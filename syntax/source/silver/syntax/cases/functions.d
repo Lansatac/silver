@@ -45,6 +45,25 @@ immutable Case[] functions = [
     parsesAs("val f = _ => 1", "(val f (lambda (_) 1))"),
     parsesAs("val f = (_, y: Int, mutable _) => y", "(val f (lambda (_ y _) y))"),
 
+    // A parameter written as a tuple pattern is one no name reaches, taken apart where the body starts.
+    parsesAs("val f = ((a, b)) => a", "(val f (lambda (parameter.0) (block (val (a, b) parameter.0) => a)))"),
+    parsesAs("val f = (t, (_, b)) => b", "(val f (lambda (t parameter.0) (block (val (_, b) parameter.0) => b)))"),
+    parsesAs("val f = (((a, b), c)) => c", "(val f (lambda (parameter.0) (block (val ((a, b), c) parameter.0) => c)))"),
+    parsesAs("val f = ((a: Int, b)) => a", "(val f (lambda (parameter.0) (block (val (a: Int, b) parameter.0) => a)))"),
+    parsesAs("val f = ((a, b): (Int, Int)): Int => a", "(val f (lambda (parameter.0) (block (val (a, b) parameter.0) => a)))"),
+    parsesAs("val f = ((a, b), (c, d)) => { a }",
+        "(val f (lambda (parameter.0 parameter.1) (block (val (a, b) parameter.0) (val (c, d) parameter.1) => a)))"),
+    parsesAs("val f = (a, b) => a", "(val f (lambda (a b) a))"),
+    parsesAs("val f = ((a, b)) + 1", "(val f (Add (tuple a b) 1))"),
+    rejects("val f = (mutable (a, b)) => a"),
+    rejects("val f = ((a)) => a"), // a pattern takes at least two apart
+    declaresAs("def a((w, h): (Int, Int)): Int => w", "(def a (parameter.0: (Int, Int)): Int (block (val (w, h) parameter.0) => w))"),
+    declaresAs("def a(n: Int, (w, _): (Int, Int)): Int { w }",
+        "(def a (n: Int, parameter.0: (Int, Int)): Int (block (val (w, _) parameter.0) => w))"),
+    rejectsDeclaration("def a((w, h)): Int => w"), // a `def`'s parameter has its type written
+    rejectsDeclaration("def a(mutable (w, h): (Int, Int)): Int => w"),
+    rejectsDeclaration("native def f((y, x): (Float, Float)): Float"),
+
     // Neither of these newlines can end a statement.
     parsesAs("val f = x =>\n    x", "(val f (lambda (x) x))"),
     parsesAs("val f = (x)\n    => x", "(val f (lambda (x) x))"),

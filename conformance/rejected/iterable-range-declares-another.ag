@@ -1,0 +1,11 @@
+// Every range is an `Iterable` of itself, so one can't declare another.
+type Both(n: Int)
+def next(b: Both): (Int, Both)? => if b.n == 0 => None else (b.n, Both(b.n - 1))
+def iterate(b: Both): [Int] => [99]
+conform Both: Range<Int> & Iterable<[Int]>
+
+def main(): Unit {
+    for n in Both(3) {
+        printl(n)
+    }
+}

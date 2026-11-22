@@ -1,5 +1,4 @@
-// A type parameter alone isn't a type to conform.
-interface Sized { def size(value: Self): Int }
-conform T: Sized
+// Only the module that declares an interface can conform every type that meets a bound to it.
+conform T: Sized when T: Indexed<Int>
 
 def main(): Unit => ()

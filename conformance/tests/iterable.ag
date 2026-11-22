@@ -26,11 +26,10 @@ conform Entries<K, V>: Range<(K, V)>
 def iterate<K, V>(t: Table<K, V>): Entries<K, V> => Entries(t, 0)
 conform Table<K, V>: Iterable<Entries<K, V>>
 
-// A range that's an `Iterable` too is looped over as it is.
-type Both(n: Int)
-def next(b: Both): (Int, Both)? => if b.n == 0 => None else (b.n, Both(b.n - 1))
-def iterate(b: Both): [Int] => [99]
-conform Both: Range<Int> & Iterable<[Int]>
+// Every range is an `Iterable` of itself.
+type Countdown(from: Int)
+def next(c: Countdown): (Int, Countdown)? => if c.from == 0 => None else (c.from, Countdown(c.from - 1))
+conform Countdown: Range<Int>
 
 def total<C: Iterable<R>, R: Range<Int>>(items: C): Int {
     mutable val sum = 0
@@ -77,10 +76,23 @@ def main(): Unit {
         value + 1
     }).array())
 
-    for n in Both(3) {
+    for n in Countdown(3) {
         print(n)
     }
     printl("")
+    printl(total(Countdown(4)))
+    printl(total([1, 2, 3]))
+    printl(total(1..4))
+    printl(names([("a", 1), ("b", 2)]))
+
+    // So a function over ranges takes a collection as it takes a range.
+    printl(table.map(((key, value)) => "{key}{value}").array())
+    printl(table.filter(((_, value)) => value > 10).count())
+    printl(Shelf(["a", "b", "c"]).drop(1).array())
+    printl(Row([3, 1, 2]).sorted())
+    printl(Row([3, 1, 2]).zip(Shelf(["x", "y"])).array())
+    printl(Row([]).isEmpty())
+    printl(Row([5, 6]).fold(0, (a, b) => a + b))
 
     printl(total(Row([4, 5, 6])))
     printl(names(table))

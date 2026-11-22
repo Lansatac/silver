@@ -12,7 +12,9 @@ import lang.hash
 import lang.panic
 import lang.range
 
-type Dictionary<K, V>(slots: Slot<K, V>, order: Order<K>, shift: Int, count: Int, added: Int)
+// A field comes before a function in `d.name()`, so none is named as a function a dictionary is
+// called with: it's `size`, not `count`.
+type Dictionary<K, V>(slots: Slot<K, V>, order: Order<K>, shift: Int, size: Int, added: Int)
 
 type Held<K, V>(key: K, value: V, number: Int)
 
@@ -215,11 +217,11 @@ def opIndexAssign<K, V>(d: Dictionary<K, V>, key: K, value: V): Dictionary<K, V>
     mutable val order = d.order
     mutable val shift = d.shift
     while shift < 60 && (UInt(number) >> (shift + 5)) != 0 {
-        if d.count > 0 { order = Fork(1, [order]) }
+        if d.size > 0 { order = Fork(1, [order]) }
         shift += 5
     }
     Dictionary(put(d.slots, code, 0, Held(key, value, number)), place(order, shift, number, Spot(code, key)), shift,
-        d.count + 1, number + 1)
+        d.size + 1, number + 1)
 }
 
 def contains<K, V>(d: Dictionary<K, V>, key: K): Bool {
@@ -228,8 +230,8 @@ def contains<K, V>(d: Dictionary<K, V>, key: K): Bool {
 }
 
 // How many keys `d` has.
-def length<K, V>(d: Dictionary<K, V>): Int => d.count
-def isEmpty<K, V>(d: Dictionary<K, V>): Bool => d.count == 0
+def length<K, V>(d: Dictionary<K, V>): Int => d.size
+def isEmpty<K, V>(d: Dictionary<K, V>): Bool => d.size == 0
 
 // `d` without `key`, or `d` itself when it has no such key.
 def without<K, V>(d: Dictionary<K, V>, key: K): Dictionary<K, V> {
@@ -238,7 +240,7 @@ def without<K, V>(d: Dictionary<K, V>, key: K): Dictionary<K, V> {
         val none: [Slot<K, V>] = []
         val forks: [Order<K>] = []
         return Dictionary(take(d.slots, code, 0, key) ?? Many(0, none), unplace(d.order, d.shift, held.number) ?? Fork(0, forks),
-            d.shift, d.count - 1, d.added)
+            d.shift, d.size - 1, d.added)
     }
     d
 }
@@ -248,9 +250,9 @@ def update<K, V>(d: Dictionary<K, V>, key: K, default: V, change: (V) -> V): Dic
     opIndexAssign(d, key, change(d[key] ?? default))
 
 // A dictionary of the pairs `range` gives, a later pair replacing an earlier one of the same key.
-def dictionary<R: Range<(K, V)>, K, V>(range: R): Dictionary<K, V> {
+def dictionary<C: Iterable<R>, R: Range<(K, V)>, K, V>(pairs: C): Dictionary<K, V> {
     mutable val d = empty<K, V>()
-    for (key, value) in range {
+    for (key, value) in iterate(pairs) {
         d = opIndexAssign(d, key, value)
     }
     d
@@ -311,7 +313,7 @@ def values<K, V>(d: Dictionary<K, V>): Values<K, V> => Values(iterate(d))
 
 // Two dictionaries are equal when they have the same keys with equal values, in any order.
 def opEquals<K, V>(a: Dictionary<K, V>, b: Dictionary<K, V>): Bool {
-    if a.count != b.count { return false }
+    if a.size != b.size { return false }
     for (key, value) in a {
         if b[key] != Some(value) { return false }
     }
@@ -327,7 +329,7 @@ def opHash<K, V>(d: Dictionary<K, V>): UInt {
 }
 
 def opString<K, V>(d: Dictionary<K, V>): String {
-    if d.count == 0 { return "[:]" }
+    if d.size == 0 { return "[:]" }
     mutable val text = "["
     mutable val first = true
     for (key, value) in d {

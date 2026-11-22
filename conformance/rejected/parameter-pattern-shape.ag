@@ -1,0 +1,4 @@
+// The pattern has to fit the tuple it takes apart.
+def main(): Unit {
+    printl([(1, 2, 3)].map(((a, b)) => a).array())
+}

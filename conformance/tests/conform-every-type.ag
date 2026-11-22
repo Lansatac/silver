@@ -1,0 +1,33 @@
+// A conformance for every type that meets a bound, which the module that declares the interface writes:
+// here every range is a `Source` of itself, and a type that isn't a range declares its own.
+interface Source<R> {
+    def source(value: Self): R
+}
+def source<R: Range<T>, T>(range: R): R => range
+conform R: Source<R> when R: Range<T>
+
+type Shelf(books: [String])
+def source(shelf: Shelf): [String] => shelf.books
+conform Shelf: Source<[String]>
+
+type Countdown(from: Int)
+def next(c: Countdown): (Int, Countdown)? => if c.from == 0 => None else (c.from, Countdown(c.from - 1))
+conform Countdown: Range<Int>
+
+def tally<C: Source<R>, R: Range<T>, T>(items: C): Int => source(items).count()
+def firstOf<C: Source<R>, R: Range<T>, T>(items: C): T? => source(items).first()
+def viaRange<R: Range<Int>>(r: R): Int => tally(r)
+def doubled<C: Source<R>, R: Range<Int>>(items: C): [Int] => source(items).map(x => x * 2).array()
+
+def main(): Unit {
+    printl(tally([1, 2, 3]))
+    printl(tally(Shelf(["a", "b"])))
+    printl(tally(Countdown(4)))
+    printl(tally("héllo"))
+    printl(tally(0..5))
+    printl(firstOf(Shelf(["a", "b"])))
+    printl(firstOf([9, 8]))
+    printl(viaRange(Countdown(2)))
+    printl(doubled([1, 2]))
+    printl(doubled(Countdown(3).map(x => x + 1)))
+}

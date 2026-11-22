@@ -67,7 +67,7 @@ conform Mapped<R, T, U>: Indexed<U> when R: Indexed<T>
 ```
 
 - It's written at module level. The type is a named type, a built-in one, or one of those with type parameters in its arguments, which the declaration introduces.
-- A type parameter alone isn't a type to conform: `conform T: Sized when T: Indexed<U>` is an error. It can be allowed later without breaking a program.
+- A type parameter alone isn't a type to conform outside the interface's own module: `conform T: Sized when T: Indexed<U>` is an error there. (Allowed in the interface's module since `Iterable`: see [Interfaces](../language/interfaces.md#every-type-that-meets-a-bound).)
 - `when` gives the bounds the type's parameters need. This is conditional conformance: a `Mapped<R, T, U>` is indexed when its source is.
 - For each function of the interface, with `Self` replaced, the function is the one a call of that name with those argument types would choose where the declaration is written. Its result has to be exactly the interface's, and `mutable` has to agree. This is today's rule for a bound, run once at the declaration instead of at every use.
 - A function that isn't found is an error at the declaration, as is one with the wrong result.

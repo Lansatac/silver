@@ -734,6 +734,9 @@ struct Param
     bool mutable;
     /// False for a lambda's parameter that takes its type from the context; `type` is unset then.
     bool annotated = true;
+    /// Whether it was written as a tuple pattern, as in `((a, b)) => a`. Its name is one that
+    /// can't be written, and the function's body starts by taking it apart.
+    bool takenApart;
 }
 
 /// `T` in `def first<T>(...)` or `type Box<T>(...)`, or `T: Json & Sized`.

@@ -17,6 +17,17 @@ When a `Unit` function's body produces a value of another type, the value is dro
 
 A parameter named `_` takes an argument and binds nothing, for a function that has to have a signature but doesn't need every argument: `def onKey(_: Key, mutable state: State): Unit`. Any number of parameters can be `_`, in a `def` or a lambda, and each still has its type, so the function's type is unchanged.
 
+A parameter can be written as a tuple pattern, which takes its argument apart: the names in it are the parts, and the tuple as a whole has no name. Its type is written after the pattern.
+
+```silver
+def area((width, height): (Int, Int)): Int => width * height
+
+area((3, 4))        // 12: one argument, a tuple
+```
+
+- The pattern is what [`val` takes](tuples.md#destructuring): names, `_`, and tuples of those, at least two. The function's type is as if the parameter had a name: `area` is a `((Int, Int)) -> Int`.
+- It can't be `mutable`, since there's no one place to write back to. A function of an interface, a `native def` and an `intrinsic def` take names only.
+
 Functions at the top level of a module can be used before they are declared. A function nested in a block has the same form as a top-level one, and is equivalent to binding a lambda to a local.
 
 `return` exits the innermost function or lambda. A bare `return` returns `()`.
@@ -52,6 +63,8 @@ x => x * 2
 x => { val y = x * 2; y + 1 }
 _ => 0
 (_, y) => y
+((name, age)) => age >= 18
+(total, (_, age)) => total + age
 ```
 
 So a named function is `def name` followed by a lambda, except that a named block body drops the arrow.
@@ -60,6 +73,8 @@ So a named function is `def name` followed by a lambda, except that a named bloc
 - Parameter types can be omitted when the context supplies a function type, such as an annotated binding, a call's parameter, or a field. Otherwise leaving them out is an error.
 - Parentheses can be omitted only for a single untyped parameter.
 - A call checks its non-lambda arguments first, so they can inform a lambda's parameter types.
+- A parameter written as a [tuple pattern](#declarations) takes one tuple apart, and needs its own parentheses: `((name, age)) => ...` takes a pair, where `(name, age) => ...` takes two arguments. It's what a chain over pairs wants, as in `ages.iterate().filter(((_, age)) => age >= 18)`.
+- A pattern's type comes from the context like any parameter's. Where nothing supplies it, a type is written on the whole, `((a, b): (Int, String)) => ...`, or on every part, `((a: Int, b: String)) => ...`. A type on only some parts is checked against those parts, as in a `val`, and doesn't say what the rest are.
 - `x => y => x + y` nests to the right.
 - `return` and postfix `?` exit the lambda. `break` and `continue` can't cross one.
 
@@ -243,7 +258,13 @@ def opHash<K, V>(d: Dictionary<K, V>): UInt => ...    // combines the entries in
   printl([1990].map(Heads).array())              // [Heads(1990)]: the constructor as a function gives a `Heads`
   ```
 - A [pattern](user-types.md) takes a value apart by its members and fields, whatever its `opEquals` says.
-- `hash(x)`, in `lang.hash`, is the hash of any value, through its type's `opHash` when it has one. A type's `opHash` calls it for the parts it hashes.
+- `hash(x)`, from `std.hash`, is the hash of any value, through its type's `opHash` when it has one. A type's `opHash` calls it for the parts it hashes, and several parts are hashed together as a tuple:
+
+  ```silver
+  import std.hash
+
+  def opHash(p: Path): UInt => hash((p.root, p.parts))
+  ```
 
 Structural equality is right for nearly every type. These functions are for a type whose fields can differ for values that mean the same thing, such as a collection whose layout depends on the order it was built in. A comparison that ignores part of a value, such as positions in source or the case of a name, is an ordinary function, passed where it's needed, and not a replacement for `==`.
 
@@ -258,7 +279,6 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 ## Current implementation
 
 - A nested function can call itself and those declared before it, but not one declared after it.
-- `hash` isn't forwarded by `lang` or the standard library yet, so a module that writes an `opHash` imports `lang.hash` for it.
 - An `opEquals`, `opHash` or `opString` for `Ref` isn't used.
 - Only module-level functions can be overloaded. Two nested `def`s of one name in a block are an error.
 - When more than one candidate is left, an `if`, `match` or block is typed before any is chosen, even when its values are all literals, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.

@@ -23,3 +23,12 @@ true
 true
 x1 y2 
 true
+[(ana, 31), (cy, 40)]
+[ana, bo, cy]
+[ana: 31, cy: 40]
+98
+3
+Some(ana)
+[(bo, 27), (ana, 31), (cy, 40)]
+true
+true

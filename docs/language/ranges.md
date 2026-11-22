@@ -1,6 +1,6 @@
 # Ranges
 
-A range is an immutable value that can be stepped: `next` gives its first item and the rest of the range, or `None` at the end. `for` loops over any range, and `std.range`, which the prelude forwards, has lazy adapters such as `map` and `filter`, sources such as `iterate` and `unfold`, and consumers such as `array` that turn a chain back into data.
+A range is an immutable value that can be stepped: `next` gives its first item and the rest of the range, or `None` at the end. `for` loops over any range, or a collection that says which range steps it, and `std.range`, which the prelude forwards, has lazy adapters such as `map` and `filter`, sources such as `iterate` and `unfold`, and consumers such as `array` that turn a chain back into data.
 
 ```silver
 val big = [1, 2, 3].map(x => x * 2).filter(x => x > 2).array()    // [4, 6]
@@ -73,7 +73,7 @@ xs.zip("ab").array()                        // [(10, a), (20, b)]
 [[1], [], [2, 3]].flatMap(x => x).array()   // [1, 2, 3]
 ```
 
-- An adapter's result is its own named type, which a `val` infers. It's a range exactly when its source is, as `conform Mapped<R, T, U>: Range<U> when R: Range<T>` says, and it has a `length` and an `opIndex` when the last column says so, by conformances of the same kind.
+- An adapter's result is its own named type, which a `val` infers. It holds the range its source's `iterate` gave, and is a range since that is, as `conform Mapped<R, T, U>: Range<U> when R: Range<T>` says, and it has a `length` and an `opIndex` when the last column says so, by conformances of the same kind.
 - Indexing an adapter outside its own length panics, even where its source has an item there: `xs.take(2)[3]` and `xs.drop(1)[-1]` are both out of range.
 - `take` and `drop` with a negative count take or drop nothing. `step` with a step below 1 panics.
 - `drop` and `dropWhile` step past the items they skip when they're first stepped, not when they're built.
@@ -115,21 +115,39 @@ busy(Countdown(5))      // 5, by stepping
 
 ## Iterable
 
-A collection that isn't a range itself says which range steps it:
+What a `for` loops over, and what the functions here take, is an `Iterable`: something that says which range steps it.
 
 ```silver
 interface Iterable<R> {
     def iterate(value: Self): R
 }
 
-conform Dictionary<K, V>: Iterable<Entries<K, V>>
+conform R: Iterable<R> when R: Range<T>                 // in `lang`: every range is its own
+conform Dictionary<K, V>: Iterable<Entries<K, V>>       // a collection declares the range that steps it
 ```
 
-- `for x in c`, where `c` isn't a range and is an `Iterable<R>`, calls `iterate(c)` once and loops over what it gives, which has to be a range.
-- A range is looped over as it is, whether or not it's an `Iterable` too.
+- Every range is an `Iterable` of itself, so anything that takes an `Iterable` takes a range.
+- A collection that isn't a range conforms by giving an `iterate` that returns one. Then `for x in c` loops over it, and `c.map(...)`, `c.filter(...)`, `c.count()` and the rest take it as they take a range:
+
+  ```silver
+  for (name, age) in ages { ... }
+  ages.filter(((_, age)) => age >= 18).array()
+  ```
+
+- A range can't declare another `Iterable`: it has the one every range has, and a type has one conformance to an interface.
+- `iterate` is called once, where the loop starts or the chain is built. What an adapter holds is the range it gave.
 - The `iterate` is the one the conformance found, as a loop's `next` is, so a loop means the same wherever it's written. A function named `iterate` without the conformance doesn't make a type loop.
-- A generic function asks for both: `def total<C: Iterable<R>, R: Range<Int>>(items: C): Int`.
-- The adapters and consumers take a range, so a chain starts from `c.iterate()`.
+- A function of your own that should take a collection as well as a range asks for both, and steps what `iterate` gives:
+
+  ```silver
+  def total<C: Iterable<R>, R: Range<Int>>(items: C): Int {
+      mutable val sum = 0
+      for item in items { sum += item }
+      sum
+  }
+  ```
+
+  One that asks only for `R: Range<Int>` takes a range and not a dictionary.
 - `Iterable` is declared in `lang`, beside `Range`.
 
 ## Sources
@@ -147,7 +165,7 @@ unfold(1, n => if n > 100 => None else (n, n * 2)).array()     // [1, 2, 4, 8, 1
 repeat("a").take(3).array()                                     // [a, a, a]
 ```
 
-- `iterate` is how a type that's `Indexed` but isn't a `Range` is looped over or passed to an adapter: `for cell in row.iterate()`.
+- `iterate` here is how a type that's `Indexed` but isn't a `Range` or an `Iterable` is looped over or passed to an adapter: `for cell in row.iterate()`.
 - `repeat`, and an `unfold` whose `produce` never gives `None`, never end. `array()` or `count()` on one never finishes, and nothing in its type says so, so it's used with something that stops, such as `take` or `takeWhile`.
 
 ## The erased form
@@ -232,7 +250,7 @@ These are listed in the [ranges proposal](../proposals/ranges.md#open-questions)
 ## Current implementation
 
 - Everything above is built, in plain Silver in `stdlib/std/range.ag`, with `Iterable` in `lang`.
-- `std.range`'s `iterate` for a type with a `length` and an `opIndex` is a function of the same name, and declares no conformance: a type that's `Indexed` isn't an `Iterable` for that, so `for cell in row` still needs `row.iterate()`.
+- `std.range`'s `iterate` for a type with a `length` and an `opIndex` is a function of the same name as the interface's, and declares no conformance: a type that's `Indexed` isn't an `Iterable` for that, so `for cell in row` still needs `row.iterate()`. Called on an array by name, `xs.iterate()` is this one and gives an `Iterator<[T]>`, while the array's conformance gives the array itself.
 - `array` steps every range. Sizing its result first needs a way to make an array with room for a known number of items, which there isn't yet.
 - Not built yet, as designed in the proposal: `sum`, `Backward` and `reversed`. `sorted` and `sortedBy` are a merge sort written in Silver.
 - An adapter's type can be built with its constructor by a module that imports it, which skips what `take` and `step` check: `Stepped(xs, 0)` divides by zero when asked for its length.

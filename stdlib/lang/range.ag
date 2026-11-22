@@ -9,10 +9,14 @@ interface Range<T> {
     def next(range: Self): (T, Self)?
 }
 
-// A collection that isn't a range itself, and the range that steps it, which `for` loops over.
+// What `for` loops over and a function over ranges takes: something that says which range steps
+// it. A collection that isn't a range itself declares one, and every range is its own.
 interface Iterable<R> {
     def iterate(value: Self): R
 }
+
+private def iterate<R: Range<T>, T>(range: R): R => range
+conform R: Iterable<R> when R: Range<T>
 
 conform [T]: Range<T>
 conform String: Range<Char>

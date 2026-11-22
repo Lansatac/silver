@@ -65,4 +65,15 @@ def main(): Unit {
     }
     printl("")
     printl(dictionary([("a", 1)]) == ["a": 1])
+
+    // The functions over ranges take a dictionary, which is stepped through its entries.
+    printl(older.filter(((_, age)) => age > 30).array())
+    printl(older.map(((name, _)) => name).array())
+    printl(older.filter(((_, age)) => age > 30).dictionary())
+    printl(older.fold(0, (sum, (_, age)) => sum + age))
+    printl(older.count())
+    printl(older.first())
+    printl(older.sortedBy(((_, age)) => age))
+    printl(older.any(((name, _)) => name == "bo"))
+    printl(older.dictionary() == older)
 }

@@ -1,0 +1,58 @@
+// A parameter can be written as a tuple pattern, which takes its argument apart.
+def area((w, h): (Int, Int)): Int => w * h
+
+def label(prefix: String, (name, (x, _)): (String, (Int, Int))): String {
+    val shown = "{prefix}{name}@{x}"
+    shown
+}
+
+def swap<A, B>((a, b): (A, B)): (B, A) => (b, a)
+
+def noisy((a, b): (Int, Int)): Int {
+    if a > b { return a }
+    b
+}
+
+def main(): Unit {
+    printl(area((3, 4)))
+    printl(label("> ", ("a", (1, 2))))
+    printl(swap((1, "x")))
+    printl(noisy((5, 2)))
+    printl(noisy((1, 2)))
+
+    // A lambda's is typed by where the lambda is used.
+    val ages = ["ana": 31, "bo": 17, "cy": 40]
+    printl(ages.iterate().filter(((_, age)) => age >= 18).array())
+    printl(ages.iterate().fold(0, (total, (_, age)) => total + age))
+    printl(ages.iterate().map(((name, age)) => "{name}:{age}").array())
+    val pairs = [(1, "one"), (2, "two")]
+    printl(pairs.map(((n, word)) => {
+        val twice = n * 2
+        "{twice} {word}"
+    }).array())
+    printl([((1, 2), 3), ((4, 5), 6)].map((((a, b), c)) => a + b + c).array())
+    printl([1, 2].zip("ab").enumerate().map(((i, (n, letter))) => "{i}{n}{letter}").array())
+
+    // Or by a type on the whole of it, or on every part.
+    val whole = ((a, b): (Int, String)) => "{b}{a}"
+    printl(whole((1, "x")))
+    val parts = ((name: String, age: Int)) => "{name} {age}"
+    printl(parts(("dee", 9)))
+    val nested = (((a, b), c): ((Int, Int), Int)): Int => a + b + c
+    printl(nested(((1, 2), 3)))
+
+    // A type on one part is checked against that part.
+    printl(pairs.map(((n: Int, word)) => word).array())
+
+    // A nested `def`, a function value, and a closure over what was taken apart.
+    def inner((p, q): (Int, Int)): Int => p - q
+    printl(inner((9, 4)))
+    val f: ((Int, Int)) -> Int = area
+    printl(f((2, 5)))
+    printl(area)
+    val adders = pairs.map(((n, _)) => (x: Int) => x + n).array()
+    printl(adders[1](10))
+
+    // Two parameters are still two parameters.
+    printl([1, 2, 3].fold(0, (a, b) => a + b))
+}

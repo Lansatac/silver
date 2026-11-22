@@ -882,8 +882,13 @@ unittest
     analyzedModule(conformances ~ "conform Int: Json\nconform Box<T>: Json when T: Json").shouldHaveNoDiagnostics();
     analyzedModule(conformances ~ "conform Int: Json\ndef toJson(b: Box<Int>): String => \"\"\nconform Box<Int>: Json")
         .shouldHaveNoDiagnostics();
-    analyzedModule(conformances ~ "conform T: Json").onlyMessage(DiagnosticCode.ConformsTypeParameter)
-        .should.startWith("`T` isn't a type, so this would conform every type");
+    // Every type that meets a bound, which the interface's own module can say and no other.
+    enum everySized = "def toJson<T: Sized>(x: T): String => \"sized\"\nconform T: Json when T: Sized\n";
+    analyzedModule(conformances ~ everySized).shouldHaveNoDiagnostics();
+    analyzedModule(conformances ~ "conform T: Ord").onlyMessage(DiagnosticCode.ConformsTypeParameter)
+        .should.startWith("`T` isn't a type, so this would conform every type that meets its `when` bounds");
+    analyzedModule(conformances ~ everySized ~ "def toJson(g: Grid): String => \"grid\"\nconform Grid: Sized\nconform Grid: Json")
+        .onlyMessage(DiagnosticCode.OverlappingConformance).should.startWith("`Grid` conforms to `Json` already, as every `Sized` does");
     analyzedModule(conformances ~ "conform Int: Json\nconform Box<T>: Json when T: Json, U: Json")
         .shouldReport(DiagnosticCode.UnknownWhenParameter, At("U: Json", 1));
     analyzedModule(conformances ~ "conform Int: Json\nconform Box<Int>: Json when Int: Json").onlyMessage(DiagnosticCode.UnknownWhenParameter)

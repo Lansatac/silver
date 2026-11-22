@@ -69,7 +69,7 @@ conform Mapped<R, T, U>: Indexed<U> when R: Indexed<T>
 
 A conformance is written at module level, in any module. It names a type, then the interfaces it satisfies, joined with `&`.
 
-- The type is a named type, a built-in one, or one of those with type parameters in its arguments, which the declaration introduces: a name in it that isn't a type where the declaration is written is a type parameter, so `T` in `conform [T]: Range<T>` is one and `Int` in `conform Box<Int>: Json` isn't. A type parameter alone isn't a type to conform: `conform T: Sized when T: Indexed<U>` is an error.
+- The type is a named type, a built-in one, or one of those with type parameters in its arguments, which the declaration introduces: a name in it that isn't a type where the declaration is written is a type parameter, so `T` in `conform [T]: Range<T>` is one and `Int` in `conform Box<Int>: Json` isn't. A type parameter alone conforms every type that meets its `when` bounds, which only the module that declares the interface can write: see [Every type that meets a bound](#every-type-that-meets-a-bound).
 - For each function of the interface, with `Self` replaced, the function used is the one a call of that name with those argument types would choose where the declaration is written. So the functions have to be in scope there, as they would for the call.
 - The function is chosen by its arguments alone. Its result then has to be exactly the interface's, with no conversion, and `mutable` has to agree: a function that takes its parameter as `mutable` fits only an interface function that does.
 - A function that isn't found, or has the wrong result, is an error at the declaration, which names it.
@@ -101,6 +101,23 @@ encode(Box("text"))           // error: `Box<String>` is a `Json` only when `Str
 - A `when` bound is on one of the declaration's type parameters, and is written as any bound is.
 - A `when` bound can introduce a type parameter the conforming type doesn't mention, when it's in an argument of the bound's interface that only the interface's results mention, alone or inside another type: `S: Range<(T, Int)>` takes a source that gives pairs whose second part is an `Int`, and decides `T` from the first. In `conform Skipped<S>: Range<T> when S: Range<T>`, `T` is whatever `S`'s conformance says its items are, so an adapter needs no type parameter for them. A name that nothing decides, as in `conform Box<S>: Json when S: Add<T>`, is an error, since `Add`'s `T` is in an argument.
 - The function found for the conformance can have bounds of its own. They have to follow from the `when` clause, which is checked at the declaration.
+
+### Every type that meets a bound
+
+The module that declares an interface can conform every type that meets a bound to it, by conforming a type parameter alone:
+
+```silver
+interface Iterable<R> {
+    def iterate(value: Self): R
+}
+
+private def iterate<R: Range<T>, T>(range: R): R => range
+conform R: Iterable<R> when R: Range<T>          // every range is an `Iterable` of itself
+```
+
+- Only the interface's own module can write one, so every other conformance to the interface is checked against a declaration that's known, and no module can make everyone's types conform to an interface it didn't declare. Anywhere else it's an error.
+- A type that meets the bounds can't declare a conformance of its own to the interface: it has this one, and a type has one. A type that doesn't meet them declares its own as usual.
+- The function is found as for any conformance: the one a call with the type parameter as its argument would choose where the declaration is written.
 
 ### One conformance for a type and an interface
 
@@ -337,7 +354,6 @@ A binding needs no such annotation: the value already has a type, and the bindin
 
 - A value whose type is only an interface, as in `[Json]`, which needs a runtime representation.
 - A bound on a type's own parameter, as in `type Set<T: Ord>`.
-- A conformance for every type that meets a bound, as `conform T: Sized when T: Indexed<U>`, and what wins where it overlaps another.
 - A field a type has only when a type argument conforms.
 - A form of `if type` with several arms, as `match type R { ... }`.
 - An `if type` that narrows an argument its bounds leave open, as `if type R: Range<Int>` where `R` is a `Range<T>`, making `T` an `Int` in the branch; one that names a type of its own, as `if type R: Range<E>`; and one that asks about a type that isn't a bare type parameter, as `if type Box<T>: Sized`.

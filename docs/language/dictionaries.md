@@ -96,7 +96,12 @@ The order means a program prints the same dictionary the same way on every run a
 
 ## Looping
 
-A dictionary isn't a [range](ranges.md) itself, since the rest of one after its first entry would be another dictionary. It's an [`Iterable`](ranges.md#iterable): `iterate(d)` gives a range of its `(K, V)` entries in order, and `for` calls it. An adapter takes the range, so a chain starts from `d.iterate()`, `keys(d)` or `values(d)`, each a range in the same order.
+A dictionary isn't a [range](ranges.md) itself, since the rest of one after its first entry would be another dictionary. It's an [`Iterable`](ranges.md#iterable): `iterate(d)` gives a range of its `(K, V)` entries in order, which is what `for` steps and what the functions over ranges take. `keys(d)` and `values(d)` are ranges in the same order.
+
+```silver
+val adults = ages.filter(((_, age)) => age >= 18).dictionary()
+val total = ages.fold(0, (sum, (_, age)) => sum + age)
+```
 
 ## Keys
 
@@ -121,7 +126,6 @@ Looking up, adding, replacing and removing a key take time that grows with the l
 - A dictionary whose keys are kept sorted, by their `Ord`.
 - Sets.
 - Whether a constant can be a dictionary.
-- Whether the adapters take an `Iterable` directly, as in `d.filter(...)`.
 
 ## Current implementation
 
@@ -131,5 +135,4 @@ Looking up, adding, replacing and removing a key take time that grows with the l
 - `keys`, `values` and `iterate` give the types `Keys<K, V>`, `Values<K, V>` and `Entries<K, V>`, which a `val` infers. Writing one of those names needs `import lang.dictionary`.
 - A dictionary's fields can be read and it can be built with its constructor by a module that imports `lang.dictionary`, which nothing checks.
 - The panic for a key that isn't equal to itself is reported at the line in `lang.dictionary` that panics, not at the caller's.
-- `hash` is in `lang.hash`, which `lang` doesn't forward, so a module that writes an `opHash` imports it.
 - It's slow on the interpreter, where a lookup is tens of microseconds, since it's Silver run by a tree walker. Compiled, 200,000 keys are added, read and stepped through in under a second.

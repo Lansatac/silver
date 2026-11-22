@@ -1092,8 +1092,10 @@ private final class TypeChecker
             }
             else if (!wrongCount)
             {
-                _collector.reportError(DiagnosticCode.UntypedLambdaParameter, param.nameSpan,
-                    "Nothing here says what type `%s` is; write `%s: Type`".format(param.name, param.name));
+                _collector.reportError(DiagnosticCode.UntypedLambdaParameter, param.nameSpan, param.takenApart
+                    ? "Nothing here says what type this parameter is; write a type on each of its parts, or on the whole "
+                        ~ "of it, as in `((a, b): (Int, String)) => ...`"
+                    : "Nothing here says what type `%s` is; write `%s: Type`".format(param.name, param.name));
             }
             _typing.symbolTypes[SymbolId(param.id)] = type;
             params ~= type;
@@ -4409,8 +4411,18 @@ private final class TypeChecker
                     (const ConformDecl c) {
                         auto holder = _resolutions.conformances[c.id];
                         auto self = _declarer.resolveType(c.type);
-                        // Name resolution reported a type it couldn't resolve, and a type parameter alone.
-                        if (_types.mentionsError(self) || _types.isParameter(self)) return;
+                        // Name resolution reported a type it couldn't resolve, and a type parameter alone
+                        // outside the interface's module.
+                        if (_types.mentionsError(self)) return;
+                        bool declaredHere(const TypeExpr written)
+                        {
+                            auto bound = _declarer.resolveBound(written);
+                            if (!bound.valid) return false;
+                            auto local = _resolutions.moduleScopes[mod.name].resolveLocalType(
+                                _resolutions.declarations.interfaces[bound.decl].name);
+                            return local !is null && (*local).match!((const Id!InterfaceDecl d) => d == bound.decl, _ => false);
+                        }
+                        if (_types.isParameter(self) && !c.interfaces.all!(written => declaredHere(written))) return;
                         if (!decidesParameters(holder, self)) return;
                         foreach (written; c.interfaces)
                         {
@@ -4632,6 +4644,8 @@ private final class TypeChecker
                 if (fitting.canFind!(f => f.bound == given.bound)) continue;
                 fitting ~= given;
             }
+            // A conformance for every type that meets a bound can still say so, from what its `when` asks.
+            if (fitting.length == 0 && _typing.conformances.get(goal.decl, null).any!(e => _types.isParameter(e.self))) goto declared;
             if (fitting.length == 0)
             {
                 string[] others;
@@ -4659,12 +4673,18 @@ private final class TypeChecker
             return result;
         }
 
-        // What the type's conformances make it, where they don't make it what's asked.
+    declared:
+        // What the type's conformances make it, where they don't make it what's asked. One for the
+        // type itself comes before one for every type that meets a bound, which can't apply as well.
         string[] instead;
         size_t[] fitting;
         Substitution[] bindings;
-        foreach (i, entry; _typing.conformances.get(goal.decl, null))
+        auto entries = _typing.conformances.get(goal.decl, null);
+        auto order = entries.length.iota.filter!(i => !_types.isParameter(entries[i].self)).array
+            ~ entries.length.iota.filter!(i => _types.isParameter(entries[i].self)).array;
+        foreach (i; order)
         {
+            auto entry = entries[i];
             auto params = _resolutions.typeParamsOf(entry.holder);
             Substitution s;
             bindParams(entry.self, goal.self, params, s);
@@ -4681,6 +4701,8 @@ private final class TypeChecker
                 instead ~= withArticle(_declarer.describe(Bound(goal.decl, entry.bound.args.map!(a => _types.substitute(a, s)).array)));
                 continue;
             }
+            // One for the type itself is the only one that can apply to it.
+            if (_types.isParameter(entry.self) && fitting.length > 0) continue;
             fitting ~= i;
             bindings ~= s;
         }
@@ -4696,6 +4718,12 @@ private final class TypeChecker
             auto params = _resolutions.typeParamsOf(entry.holder);
             auto s = bindings[0];
             auto when = conformanceOf(entry.holder, s, site, depth + 1);
+            if (_types.isParameter(entry.self) && !when.pending && !when.tooDeep && when.failure !is null)
+            {
+                // It's for the types that meet its bounds, and this isn't one of them.
+                result.failure = "no conformance says so" ~ conformHint(goal, open, bound, site);
+                return result;
+            }
             if (when.pending || when.failure !is null || params.any!(p => p.id !in s))
             {
                 result.tooDeep = when.tooDeep;
@@ -4812,6 +4840,30 @@ private final class TypeChecker
     private bool reportOverlap(const Conforming earlier, const Conforming later)
     {
         auto vars = (_resolutions.typeParamsOf(earlier.holder) ~ _resolutions.typeParamsOf(later.holder)).map!(p => cast() p.id).array;
+        // One for every type that meets a bound applies to another's type only if that type could meet it.
+        if (_types.isParameter(earlier.self) != _types.isParameter(later.self))
+        {
+            auto every = _types.isParameter(earlier.self) ? earlier : later;
+            auto other = _types.isParameter(earlier.self) ? later : earlier;
+            auto param = _types[every.self].match!((const TypeParamData p) => p.param, _ => Id!TypeParam.init);
+            foreach (needed; _typing.bounds.get(param, null))
+            {
+                if (!needed.valid) continue;
+                auto meets = _typing.conformances.get(needed.decl, null).any!((e) {
+                    Substitution trial;
+                    auto all = vars ~ _resolutions.typeParamsOf(e.holder).map!(p => cast() p.id).array;
+                    return unify(e.self, other.self, all, trial);
+                });
+                if (!meets) return false;
+            }
+            auto asked = _typing.bounds.get(param, null).filter!(b => b.valid)
+                .map!(b => "`" ~ _resolutions.declarations.interfaces[b.decl].name ~ "`").array;
+            _collector.reportError(DiagnosticCode.OverlappingConformance, other.span,
+                "`%s` conforms to `%s` already, as every %s does; a type has one conformance to an interface".format(
+                    _types.describe(other.self), _resolutions.declarations.interfaces[every.bound.decl].name,
+                    asked.length == 0 ? "type" : asked.join(" & ")));
+            return true;
+        }
         Substitution s;
         if (!unify(earlier.self, later.self, vars, s)) return false;
         // A type argument of the interface that only its results mention is what the conformance

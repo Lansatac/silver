@@ -97,6 +97,7 @@ for i in r { print(i) }     // 2345
 - Slicing is indexing by an interval: `x[a..b]` is `opIndex(x, a..b)`, `x[a..]` is `opIndex(x, a..length(x))`, and `x[..b]` is `opIndex(x, 0..b)`. `x[a..b] = v` is `x = opIndexAssign(x, a..b, v)`, in each form. See [operator functions](functions.md#operator-functions). On an array, `xs[a..b]` written out is built in, and `xs[r]` slices the same way, panicking as that slice would, and a slice can't be assigned to, since it shares the array's elements: assign them one at a time. An interval's own slice counts from its start, so `(10..20)[2..5]` is `12..15`, and panics as an array's slice does.
 - `0..10.f()` calls `f` on `10`, since a method call binds tighter than `..`. Calling one on the range needs parentheses: `(0..10).contains(9)`.
 - An `Interval` prints as any product does, as `Interval(2, 6)`.
+- Two intervals are equal when their bounds are, as for any product. So `0..0 == 5..5` is false though both are empty, since where an empty interval is can matter, as in `x[5..5] = v`. `isEmpty(r)` asks whether one is empty.
 
 A range with a bound left out exists only inside brackets.
 
@@ -115,4 +116,3 @@ Dictionaries share the bracket syntax, with `:` between key and value, as in `["
 - `xs[i] = v` copies the whole array every time, even when nothing else holds it.
 - An `Interval`'s `length`, `opIndex`, `next`, `nextBack` and `contains` are written once per integer type, since a bound can't ask for an integer yet. So an error about one of those calls lists every integer type's, and each name is overloaded, so using one as a value needs a function type, as in `val f: ([Int]) -> Int = length`.
 - A panic in an `Interval`'s `opIndex`, or in slicing an array with one, is reported inside `lang` rather than at the call.
-- `==` on two intervals compares their bounds, as for any product, so two empty intervals with different bounds are unequal. Equality by elements isn't written yet: it needs to compare the bounds, and an `opEquals` is for every instance of its type, with no bound on what the interval is of.

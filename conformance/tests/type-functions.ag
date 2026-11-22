@@ -1,4 +1,4 @@
-import lang.hash
+import std.hash
 import std.ref
 
 // A bag of numbers that's equal to another with the same numbers in any order.

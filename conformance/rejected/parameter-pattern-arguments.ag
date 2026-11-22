@@ -1,0 +1,6 @@
+// A function that takes one tuple isn't called with two arguments.
+def area((w, h): (Int, Int)): Int => w * h
+
+def main(): Unit {
+    printl(area(3, 4))
+}

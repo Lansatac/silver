@@ -1,0 +1,4 @@
+// The hash of any value, which a type's own `opHash` calls for the parts it hashes.
+module std.hash
+
+forward import lang.hash

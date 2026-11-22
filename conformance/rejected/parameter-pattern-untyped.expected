@@ -1,0 +1,1 @@
+T0026: Nothing here says what type this parameter is; write a type on each of its parts, or on the whole of it, as in `((a, b): (Int, String)) => ...`

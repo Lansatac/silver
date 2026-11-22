@@ -1633,11 +1633,19 @@ private final class NameResolver
         }
         auto whole = conform.type.kind.match!((const NamedType n) => n.path.length == 1 && n.args.length == 0 ? n.path[0] : null,
             _ => cast(string) null);
-        if (whole !is null && introduced.canFind!(p => p.name == whole))
+        // Every type that meets the `when` bounds, which only the interface's own module can say.
+        bool declaredHere(const TypeExpr interface_)
+        {
+            auto name = interface_.kind.match!((const NamedType n) => n.path.length == 1 ? n.path[0] : null, _ => cast(string) null);
+            auto local = name is null ? null : moduleScope.resolveLocalType(name);
+            return local !is null && (*local).match!((const Id!InterfaceDecl _) => true, _ => false);
+        }
+        if (whole !is null && introduced.canFind!(p => p.name == whole) && !conform.interfaces.all!(i => declaredHere(i)))
         {
             _collector.reportError(DiagnosticCode.ConformsTypeParameter, conform.type.span,
-                ("`%s` isn't a type, so this would conform every type; conform a named type, a built-in one, "
-                    ~ "or one of those with type parameters in its arguments").format(whole));
+                ("`%s` isn't a type, so this would conform every type that meets its `when` bounds, which only the module that "
+                    ~ "declares the interface can do; conform a named type, a built-in one, or one of those with type parameters "
+                    ~ "in its arguments").format(whole));
         }
 
         auto holder = new FunctionDecl(_ids.next!FunctionDecl, "conform", conform.type.span, null, null, cast() conform.type,

@@ -1,1 +1,1 @@
-S0029: `T` isn't a type, so this would conform every type; conform a named type, a built-in one, or one of those with type parameters in its arguments
+S0029: `T` isn't a type, so this would conform every type that meets its `when` bounds, which only the module that declares the interface can do; conform a named type, a built-in one, or one of those with type parameters in its arguments

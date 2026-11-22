@@ -34,7 +34,7 @@ The element count must match exactly. Patterns here can't fail: they are names, 
 
 Against a tuple literal of the same count, the pattern goes element by element, so each part is checked like its own `val`, and `val (_, x) = (None, 1)` needs no type. Otherwise the whole value is typed first, and an annotation on one part must match that value exactly, since a value doesn't convert.
 
-A `for` takes each element apart the same way: `for (name, count) in pairs { ... }` (see [`for`](control-flow.md#for)).
+A `for` takes each element apart the same way: `for (name, count) in pairs { ... }` (see [`for`](control-flow.md#for)). So does a parameter written as a pattern, in a `def` or a lambda: `pairs.map(((name, count)) => name)` (see [Functions](functions.md#declarations)).
 
 ## Assigning parts
 

@@ -1,5 +1,5 @@
 // Dictionaries, before their literal and type syntax: built with `dictionary` from pairs.
-import lang.hash
+import std.hash
 
 // Every `Clash` has one hash, so they all share a slot.
 type Clash(name: String)

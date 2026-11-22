@@ -1,0 +1,4 @@
+// With nothing to say what the lambda takes, a pattern needs a type on every part or on the whole.
+def main(): Unit {
+    val f = ((name: String, age)) => age
+}
