@@ -73,6 +73,16 @@ jobs:
           echo "dmd=$(sed -n 's/^ARG DMD_VERSION=//p' .devcontainer/Dockerfile)" >> "$GITHUB_OUTPUT"
           echo "redub=$(sed -n 's/^ARG REDUB_COMMIT=//p' .devcontainer/Dockerfile)" >> "$GITHUB_OUTPUT"
 
+      # redub runs several dmd processes at once, each taking gigabytes, and Windows refuses memory past
+      # RAM plus the page file, where Linux overcommits. With the runner's own page file, dmd crashed
+      # with an access violation building the root.
+      - name: Enlarge the page file
+        uses: al-cheb/configure-pagefile-action@v1.5
+        with:
+          minimum-size: 16GB
+          maximum-size: 16GB
+          disk-root: "D:"
+
       - uses: dlang-community/setup-dlang@v2
         with:
           compiler: dmd-${{ steps.pins.outputs.dmd }}
