@@ -30,7 +30,7 @@ import std.string
 
 ## Open questions
 
-- Whether `split` and `lines` become lazy once [ranges](../proposals/ranges.md) are decided.
+- Whether `split` and `lines` become lazy, giving a [range](../language/ranges.md) instead of an array.
 - Whether `parseInt`, `parseFloat` and `parseBool` return an error rather than an option.
 
 ## Current implementation

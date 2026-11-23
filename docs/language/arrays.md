@@ -109,6 +109,8 @@ Dictionaries share the bracket syntax, with `:` between key and value, as in `["
 
 - A form of indexing that returns `T?`, as a second prelude function beside `at`.
 - Whether `mutable` arguments work on an element.
+- `a..` and `..b` as values, an inclusive interval, and a step written in the syntax. `enumerate()` numbers items, and `step(n)` and `reversed()` are library adapters.
+- An interval over a type that isn't an integer, as a range query on a sorted map would need. It would be a value type of its own that isn't a range.
 - Pre-sizing an array before appending, and making one of `n` copies of a value. Leaning towards the range form (a repeating range collected into an array) once ranges exist, rather than an array function now.
 
 ## Current implementation

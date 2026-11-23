@@ -6,7 +6,7 @@ A range is an immutable value that can be stepped: `next` gives its first item a
 val big = [1, 2, 3].map(x => x * 2).filter(x => x > 2).array()    // [4, 6]
 ```
 
-The whole design, including the parts not built yet, is in the [ranges proposal](../proposals/ranges.md).
+What the library has, and what it's designed to have and doesn't yet, is in [`std.range`](../stdlib/range.md).
 
 ## The protocol
 
@@ -72,7 +72,10 @@ conform Dictionary<K, V>: Iterable<Entries<K, V>>       // a collection declares
 
 ## Open questions
 
-These are listed in the [ranges proposal](../proposals/ranges.md#open-questions), with what printing a chain shows and collecting a chain over a `String` back into a `String`.
+- Whether the item type as a parameter of the interface (`Range<T>`) reads well in practice.
+- Whether a single-pass source, such as a range over input, should be told apart in its type.
+- Whether a range over input that fails part way has ended.
+- The library's own are in [`std.range`](../stdlib/range.md#open-questions).
 
 ## Current implementation
 

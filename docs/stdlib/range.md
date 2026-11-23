@@ -53,6 +53,7 @@ xs.zip("ab").array()                        // [(10, a), (20, b)]
 - `take` and `drop` with a negative count take or drop nothing. `step` with a step below 1 panics.
 - `drop` and `dropWhile` step past the items they skip when they're first stepped, not when they're built.
 - Consuming a chain again runs its functions again. `array()` is how a result is kept.
+- An adapter is never turned into an array because one is expected: `val ys: [Int] = xs.map(f)` is a type error, and the message says to add `.array()`.
 - A function passed to an adapter runs where the chain is consumed, so that's where it panics or has its effect.
 - A chain built in one module can be stepped in any other, since its conformance is a fact about its type.
 
@@ -152,6 +153,7 @@ Countdown(5).splitAt(2)                   // ([5, 4], Countdown(3))
 ```
 
 - `count` and `isEmpty` take a `Sized` range's length, and `last` indexes an `Indexed` one. Any other range is stepped.
+- `sum(range)`, the total of a range of numbers, waits for a bound that says a type is a number. Until then it's `fold(0, (a, b) => a + b)`.
 - `first`, `rest`, `isEmpty`, `any`, `all`, `find`, `contains` and `splitAt` stop as soon as they know the answer. The others step to the end.
 - `splitAt` gives back the range after the items it took, so a range that keeps its state, such as a deck, can be consumed in parts.
 
@@ -182,20 +184,42 @@ people.sortedBy(p => (Descending(p.age), p.name))   // Ann, Cy, Bob
 - `Descending<T>` holds a value and orders the other way round. It's an `Ord` when `T` is, so it can be a whole key or part of a tuple key.
 - Sorting needs every item first, so it gives an array, as `array()` does.
 
+## Stepping from the back
+
+A range that can give its last item as well as its first is a `Backward`:
+
+```silver
+interface Backward<T> {
+    def nextBack(range: Self): (T, Self)?
+}
+
+nextBack([10, 20, 30])        // Some((30, [10, 20]))
+[1, 2, 3].reversed().array()  // [3, 2, 1]
+"abc".reversed().array()      // [c, b, a]
+```
+
+- `nextBack` gives the last item and the range without it. Arrays, strings and intervals have one, and an adapter has one when it can give it from its source's: `map` and `filter` do, and so does `reversed`, whose `next` is its source's `nextBack`. `take`, `drop`, `enumerate` and `zip` need a length as well. `takeWhile` and `dropWhile` don't have one.
+- `reversed()` asks for a `Backward<T>`, so it takes a filtered array or a string. Its result keeps `length` and indexing when its source has them.
+- `last` asks for `Backward<T>` too, and steps from the end.
+- A string steps back by `Char`, as it steps forward. A `Char` isn't always what a reader sees as one character, so reversing a string with combining marks moves them to the wrong letter. Grapheme clusters are left to libraries.
+
 ## What the prelude brings
 
 The prelude forwards `std.range`'s functions and the types a program writes: `Sized`, `Indexed`, `Seq`, `Descending` and `ByIndex`. The adapter types such as `Mapped` and `Taken` are inferred, so they come only with `import std.range`, and a module of your own is free to use those names. A library that declares its own `Seq` or `Sized` is ambiguous beside the prelude's, as between any two imports that bring every name, and [listing the name or qualifying it](../language/modules.md#which-declaration-a-name-means) settles it.
 
 ## Open questions
 
-These are listed in the [ranges proposal](../proposals/ranges.md#open-questions), with what printing a chain shows and collecting a chain over a `String` back into a `String`.
+- What printing a chain shows. Today it's the adapter, as in `Mapped([1, 2, 3, 4], lambda)`. Printing the items would use up a single-pass source.
+- Collecting a chain over a `String` back into a `String`.
+- An adapter that remembers the steps it has taken, so that a single-pass source can be stepped more than once.
+- Grouping, chunks, windows and `cycle`, left out of the first version.
 
 ## Current implementation
 
 - Everything above is built, in plain Silver in `stdlib/std/range.ag`, except as listed here.
 - A type that's `Indexed` isn't an `Iterable` for that: it declares one, as above, or is stepped with `byIndex`.
 - `array` steps every range. Sizing its result first needs a way to make an array with room for a known number of items, which there isn't yet.
-- Not built yet, as designed in the proposal: `sum`, `Backward` and `reversed`. `sorted` and `sortedBy` are a merge sort written in Silver.
+- Not built yet, as designed above: `sum`, and `Backward` with `nextBack` on strings, `reversed` and a `last` that steps from the end. `last` indexes an `Indexed` range and walks any other. `nextBack` exists for intervals only. `sorted` and `sortedBy` are a merge sort written in Silver.
 - An adapter's type can be built with its constructor by a module that imports it, which skips what `take` and `step` check: `Stepped(xs, 0)` divides by zero when asked for its length.
 - A panic in an adapter, such as indexing a `Taken` past its length, is reported at the line in `std.range` that panics, not at the caller's index.
 - `byIndex()` on a type that isn't `Indexed` reports the missing `Sized` as well.
