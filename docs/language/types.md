@@ -165,6 +165,7 @@ Jack < Ace        // true
 | --- | --- |
 | `()` | `()` |
 | `"text"` | `text` |
+| `1.0`, `0.1 + 0.2`, `1e300` | `1.0`, `0.30000000000000004`, `1e300`: see [Numbers](numbers.md#printing-floats) |
 | `Some(1)`, `None` | `Some(1)`, `None` |
 | `Ok(1)`, `Error(Empty)` | `Ok(1)`, `Error(Empty)` |
 | `[1, 2]`, `["a"]` | `[1, 2]`, `[a]` |

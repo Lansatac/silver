@@ -15,6 +15,7 @@ import silver.interpreter.stack : checkStack, runOnLargeStack;
 import silver.interpreter.foreign : addressText, CKind, CValue, foreignFunctions, fromCString, toCString;
 import silver.interpreter.values;
 import silver.runtime.files : pathExists, readWhole, writeWhole;
+import silver.runtime.floattext : floatText;
 
 private alias IntegerTypes = AliasSeq!(byte, short, int, long, ubyte, ushort, uint, ulong);
 
@@ -1021,11 +1022,7 @@ final class Evaluator
         }
         if (value.has!Unit) return "()";
         if (value.has!bool) return value.as!bool.to!string;
-        if (value.has!double)
-        {
-            auto d = value.as!double;
-            return d != d ? "nan" : d.to!string;
-        }
+        if (value.has!double) return floatText(value.as!double);
         if (value.has!string) return value.as!string;
         if (value.has!Handle) return addressText(value.as!Handle.address);
         assert(value.has!Closure, "lowering formats anything else itself");

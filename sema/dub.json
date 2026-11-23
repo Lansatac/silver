@@ -2,6 +2,8 @@
 	"name": "sema",
 	"description": "Silver's semantic analysis: name resolution and type checking.",
 	"targetType": "library",
+	"importPaths": ["source", "../runtime/source"],
+	"sourceFiles": ["../runtime/source/silver/runtime/floattext.d"],
 	"dependencies": {
 		"silver:ast": "*"
 	},

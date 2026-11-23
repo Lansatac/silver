@@ -6,6 +6,7 @@ import std.sumtype;
 import std.traits : isSigned;
 
 import silver.ast : BinaryOp, UnaryOp;
+import silver.runtime.floattext : floatText;
 import silver.sema.type : IntegerInfo;
 
 struct ConstInt
@@ -50,7 +51,7 @@ package string formatValue(const ConstValue value)
         (const ConstInt v) => v.value.to!string,
         (const ConstUInt v) => v.value.to!string,
         (const bool v) => v.to!string,
-        (const double v) => v != v ? "nan" : v.to!string,
+        (const double v) => floatText(v),
         (const string v) => v,
         (const ConstUnit _) => "()",
         (const ConstChar v) => [v.value].to!string,

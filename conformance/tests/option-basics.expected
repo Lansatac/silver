@@ -1,6 +1,6 @@
 Some(255)
 Some(-1)
-Some(2)
+Some(2.0)
 Some(Some(7))
 Some(true)
 Some(text)
@@ -11,7 +11,7 @@ Some(Some(1))
 Some(Some(1))
 None
 Some(1)
-Some(2)
+Some(2.0)
 None
 None
 Some(1)

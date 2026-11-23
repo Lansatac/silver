@@ -59,7 +59,7 @@ unittest
 {
     run("native def sqrt(x: Float): Float\nnative def pow(base: Float, exponent: Float): Float\n"
         ~ "native(\"silver_nowNanos\") def nowNanos(): Int\ndef main(): Unit {\n    printl(sqrt(16))\n    printl(pow(2, 10))\n"
-        ~ "    val now = nowNanos()\n    printl(now > 1600000000000000000)\n}").should.equal("4\n1024\ntrue\n");
+        ~ "    val now = nowNanos()\n    printl(now > 1600000000000000000)\n}").should.equal("4.0\n1024.0\ntrue\n");
 }
 
 @("a native type is the real pointer, and an option of one crosses into C as one that may be null")

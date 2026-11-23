@@ -2,7 +2,7 @@
 
 ## Types
 
-The integer types are `Int8`, `Int16`, `Int32`, `Int64`, `UInt8`, `UInt16`, `UInt32` and `UInt64`. `Int` and `UInt` are the same types as `Int64` and `UInt64`. `Float` is a 64-bit floating-point number. Every NaN prints as `nan`, whatever its sign bit.
+The integer types are `Int8`, `Int16`, `Int32`, `Int64`, `UInt8`, `UInt16`, `UInt32` and `UInt64`. `Int` and `UInt` are the same types as `Int64` and `UInt64`. `Float` is a 64-bit floating-point number.
 
 ## Literals
 
@@ -77,9 +77,31 @@ A conversion is written as a call to the target type: `UInt8(x)`, `Float(n)`, `I
 
 A conversion panics when the value doesn't fit, or is NaN. A `Float` is truncated toward zero first. A literal argument is range-checked at compile time. A conversion never reinterprets bits, so `UInt64(-1)` panics.
 
+## Printing floats
+
+A `Float` prints as the shortest text that reads back as the same value, and of those the nearest to it. So printing never loses anything, and a Float never prints like an integer:
+
+```silver
+printl(1.0)           // 1.0
+printl(0.1 + 0.2)     // 0.30000000000000004
+printl(1234567.0)     // 1234567.0
+printl(0.0001)        // 0.0001
+printl(0.00001)       // 1e-5
+printl(1e16)          // 1e16
+printl(-0.0)          // -0.0
+printl(1e300 * 1e300) // inf
+```
+
+- Values from `1e-4` up to below `1e16` are written out with a `.`, ending in `.0` when there's no fraction.
+- Others are written with an exponent, as `1.5e-7` or `1e16`, with no `+` and no leading zeros in the exponent.
+- Infinities print as `inf` and `-inf`, and every NaN as `nan`, whatever its sign bit.
+
+Apart from the infinities and NaN, the text is a Float literal in Silver and a number in JSON. `String(x)` and string holes give the same text. Showing a fixed number of places, as for money, is a job for a formatting function.
+
 ## Open questions
 
 - If a `Float32` is added, float literals would adapt the way integer literals do.
+- A function for formatting a Float with a given number of places or significant digits.
 
 ## Current implementation
 

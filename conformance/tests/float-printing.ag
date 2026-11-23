@@ -1,17 +1,30 @@
-// A Float prints with 6 significant digits, switching to an exponent past them, and a zero shows its sign.
+// A Float prints as the shortest text that reads back as it, with a `.` when it's written out, an
+// exponent below 1e-4 and from 1e16, and a zero's sign.
 def main(): Unit {
     val zero = 0.0
+    val tenth = 0.1
     printl(1.0 / 3 * 4)
     printl(1.4142135623730951)
     printl(0.8414709848078965)
     printl(2.718281828459045)
+    printl(tenth + 0.2)
     printl(0.5)
     printl(1024.0)
     printl(4503599627370495.5)
+    printl(9999999999999998.0)
+    printl(1e16)
+    printl(0.0001)
+    printl(0.00001)
+    printl(1.5e-7)
     printl(1e300)
+    printl(1.7976931348623157e308)
+    printl(5e-324)
     printl(-zero)
     printl(-0.0)
     printl(zero)
     printl(1.0 / zero)
     printl(-1.0 / zero)
+    printl(zero / zero)
+    printl("{tenth * 3} {[1.0, 2.5]} {Some(2.0)}")
+    printl("{0.1 + 0.2} {1e16 * 10}")
 }

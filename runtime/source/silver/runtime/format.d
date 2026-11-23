@@ -1,5 +1,5 @@
 /// `String(x)` and string holes for the primitive types; generated code composes these for the
-/// rest. Values are formatted with `to!string`, as `print` and the interpreter do, and the text is
+/// rest. Values are formatted with `to!string`, and Floats with `floatText`, as `print` and the interpreter do, and the text is
 /// copied into a buffer (see `silver.runtime.buffer`), since every String on the heap must be in one.
 module silver.runtime.format;
 
@@ -10,11 +10,7 @@ import silver.runtime.buffer : newString, silver_array_append;
 import silver.runtime.memory : SavedRegisters, silver_save_registers;
 import silver.runtime.panic : outOfMemory, panic;
 
-/// D would show a NaN's sign bit, which means nothing.
-package string floatText(double value)
-{
-    return value != value ? "nan" : value.to!string;
-}
+public import silver.runtime.floattext : floatText;
 
 extern (C) nothrow:
 

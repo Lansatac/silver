@@ -254,7 +254,7 @@ unittest
 
     Run run;
     if (!compileAndRun(source, run)) return;
-    run.output.should.equal("4\ntrue\n");
+    run.output.should.equal("4.0\ntrue\n");
 }
 
 // C passes `bool` and integers narrower than `int` extended to 32 bits, and LLVM leaves that to
@@ -399,7 +399,7 @@ version (linux)
     unittest
     {
         string[] libraries;
-        auto source = "native library \"m\"\nnative def cbrt(x: Float): Float\ndef main(): Unit {\n    printl(cbrt(27.0))\n}";
+        auto source = "native library \"m\"\nnative def cbrt(x: Float): Float\ndef main(): Unit {\n    printl(Int(cbrt(27.0) + 0.5))\n}";
         generateSource(source, libraries);
         libraries.should.equal(["m"]);
 
@@ -441,7 +441,7 @@ unittest
 
     Run run;
     if (!compileAndRun(source, run)) return;
-    run.output.should.equal("Some(1)\nGreen\nCircle(1)\n");
+    run.output.should.equal("Some(1)\nGreen\nCircle(1.0)\n");
 }
 
 @("codegen passes a lambda its environment after its params, and calls a named function as a value through a thunk")
@@ -727,7 +727,7 @@ unittest
 
     Run plain, optimized;
     if (!compileAndRun(source, plain) || !compileAndRun(source, optimized, Optimization.full)) return;
-    plain.output.should.equal("0\ntrue\n8\n");
+    plain.output.should.equal("0\ntrue\n8.0\n");
     optimized.should.equal(plain);
 }
 

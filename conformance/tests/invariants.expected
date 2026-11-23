@@ -18,14 +18,14 @@ Ok(Line(Point(2, 1), Point(3, 4)))
 Error(x and y are equal)
 Ok(NonEmpty([x]))
 Error(Empty)
-Ok(Circle(2))
-Error(NotPositive(-1))
-circle 2
+Ok(Circle(2.0))
+Error(NotPositive(-1.0))
+circle 2.0
 Ok(Counted(a, 1))
 Error(no count)
 Ok(Span(3, 4))
 Error(Reversed(4, 3))
-3
+3.0
 7
 Ok(Counted(b, 1))
 Error(no count)
