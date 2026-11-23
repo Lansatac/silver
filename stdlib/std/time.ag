@@ -1,3 +1,492 @@
+// Dates, times of day, moments and lengths of time, with the Gregorian calendar extended back
+// before 1582 and no leap seconds. A date runs from 0000-01-01 to 9999-12-31, the years ISO 8601
+// writes in four digits: arithmetic that leaves that range panics, as integer overflow does.
 module std.time
 
-forward import lang.time
+forward import lang.time : nowNanos
+import lang.time : monotonicNanos, localOffsetSeconds
+
+// A day in the calendar, with no time or zone. `month` is 1 to 12 and `day` 1 to the month's length.
+type Date(year: Int, month: Int, day: Int)
+
+// A time of day on a clock, with no date or zone: `nanos` is the fraction of the second.
+type Time(hour: Int, minute: Int, second: Int, nanos: Int)
+
+// A date and a time of day that say nothing about where: 9:00 on a day, wherever it's read.
+type DateTime(date: Date, time: Time)
+
+// A date and time read at `offset` from UTC, which together name one moment.
+type OffsetDateTime(dateTime: DateTime, offset: Duration)
+
+// A moment, as seconds since 1970-01-01T00:00:00Z and the nanoseconds after them, 0 to 999,999,999.
+type Instant(seconds: Int, nanos: Int)
+
+// An exact length of time, which may be negative. Days, months and years aren't one, since their
+// lengths vary; they're steps in the calendar, such as `addMonths`.
+type Duration(nanos: Int)
+
+type Weekday = Monday | Tuesday | Wednesday | Thursday | Friday | Saturday | Sunday
+
+// Where `now` reads the time. A function that takes one can be tested at a moment of its choosing.
+type Clock = SystemClock | FixedClock(at: Instant, offset: Duration)
+
+// Measures elapsed time with a clock that never goes back.
+type Stopwatch(started: Int)
+
+private val minYear: Int = 0
+private val maxYear: Int = 9999
+private val nanosPerSecond: Int = 1000000000
+private val secondsPerDay: Int = 86400
+
+private def floorDiv(a: Int, b: Int): Int {
+    val q = a / b
+    if a % b != 0 && (a < 0) != (b < 0) => q - 1 else q
+}
+
+private def floorMod(a: Int, b: Int): Int => a - floorDiv(a, b) * b
+
+// Durations
+
+def nanoseconds(n: Int): Duration => Duration(n)
+def microseconds(n: Int): Duration => Duration(n * 1000)
+def milliseconds(n: Int): Duration => Duration(n * 1000000)
+def seconds(n: Int): Duration => Duration(n * nanosPerSecond)
+def minutes(n: Int): Duration => Duration(n * 60 * nanosPerSecond)
+def hours(n: Int): Duration => Duration(n * 3600 * nanosPerSecond)
+
+def add(a: Duration, b: Duration): Duration => Duration(a.nanos + b.nanos)
+def subtract(a: Duration, b: Duration): Duration => Duration(a.nanos - b.nanos)
+def negate(d: Duration): Duration => Duration(-d.nanos)
+
+// The duration in seconds, with its fraction.
+def inSeconds(d: Duration): Float => Float(d.nanos) / Float(nanosPerSecond)
+
+def compare(a: Duration, b: Duration): Ordering => derivedCompare(a, b)
+conform Duration: Ord
+
+// Calendar
+
+def isLeapYear(year: Int): Bool => year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+
+// The number of days in `month` of `year`, for a month from 1 to 12.
+def daysInMonth(year: Int, month: Int): Int {
+    if month < 1 || month > 12 {
+        panic("month {month} isn't 1 to 12")
+    }
+    if month == 2 => if isLeapYear(year) => 29 else 28
+    else if month == 4 || month == 6 || month == 9 || month == 11 => 30
+    else 31
+}
+
+// The date, or `None` when there's no such day or the year is outside 0 to 9999.
+def date(year: Int, month: Int, day: Int): Date? {
+    if year < minYear || year > maxYear || month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month) {
+        return None
+    }
+    Date(year, month, day)
+}
+
+// Days since 1970-01-01: Howard Hinnant's days_from_civil.
+private def epochDay(d: Date): Int {
+    val y = if d.month <= 2 => d.year - 1 else d.year
+    val era = floorDiv(y, 400)
+    val yearOfEra = y - era * 400
+    val shifted = if d.month > 2 => d.month - 3 else d.month + 9
+    val dayOfYear = (153 * shifted + 2) / 5 + d.day - 1
+    val dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+    era * 146097 + dayOfEra - 719468
+}
+
+private def fromEpochDay(days: Int): Date {
+    val z = days + 719468
+    val era = floorDiv(z, 146097)
+    val dayOfEra = z - era * 146097
+    val yearOfEra = (dayOfEra - dayOfEra / 1460 + dayOfEra / 36524 - dayOfEra / 146096) / 365
+    val dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
+    val shifted = (5 * dayOfYear + 2) / 153
+    val day = dayOfYear - (153 * shifted + 2) / 5 + 1
+    val month = if shifted < 10 => shifted + 3 else shifted - 9
+    val year = yearOfEra + era * 400 + (if month <= 2 => 1 else 0)
+    inRange(year)
+    Date(year, month, day)
+}
+
+private def inRange(year: Int): Unit {
+    if year < minYear || year > maxYear {
+        panic("year {year} is outside 0000 to 9999")
+    }
+}
+
+def addDays(d: Date, days: Int): Date => fromEpochDay(epochDay(d) + days)
+
+// The same day `months` later, or the month's last day when it's shorter: 2026-01-31 plus one
+// month is 2026-02-28.
+def addMonths(d: Date, months: Int): Date {
+    val total = d.year * 12 + d.month - 1 + months
+    val year = floorDiv(total, 12)
+    val month = floorMod(total, 12) + 1
+    inRange(year)
+    val last = daysInMonth(year, month)
+    Date(year, month, if d.day > last => last else d.day)
+}
+
+// As `addMonths` with twelve months a year, so 2024-02-29 plus a year is 2025-02-28.
+def addYears(d: Date, years: Int): Date => addMonths(d, years * 12)
+
+// The days from `earlier` to `later`, negative when `later` comes first.
+def daysSince(later: Date, earlier: Date): Int => epochDay(later) - epochDay(earlier)
+
+def weekday(d: Date): Weekday {
+    // 1970-01-01 was a Thursday.
+    val days = [Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday]
+    days[floorMod(epochDay(d) + 3, 7)]
+}
+
+// 1 for the first of January.
+def dayOfYear(d: Date): Int => epochDay(d) - epochDay(Date(d.year, 1, 1)) + 1
+
+def compare(a: Date, b: Date): Ordering => derivedCompare(a, b)
+conform Date: Ord
+
+// Times of day
+
+def time(hour: Int, minute: Int, second: Int): Time? => time(hour, minute, second, 0)
+
+// The time, or `None` unless the hour is 0 to 23, the minute and second 0 to 59 and `nanos` 0 to 999,999,999.
+def time(hour: Int, minute: Int, second: Int, nanos: Int): Time? {
+    if hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59 || nanos < 0 || nanos >= nanosPerSecond {
+        return None
+    }
+    Time(hour, minute, second, nanos)
+}
+
+private def secondOfDay(t: Time): Int => (t.hour * 60 + t.minute) * 60 + t.second
+
+private def fromSecondOfDay(seconds: Int, nanos: Int): Time =>
+    Time(seconds / 3600, seconds / 60 % 60, seconds % 60, nanos)
+
+def compare(a: Time, b: Time): Ordering => derivedCompare(a, b)
+conform Time: Ord
+
+// Dates with times
+
+// Seconds since the epoch, reading `dt` as UTC.
+private def epochSeconds(dt: DateTime): Int => epochDay(dt.date) * secondsPerDay + secondOfDay(dt.time)
+
+private def fromEpochSeconds(seconds: Int, nanos: Int): DateTime =>
+    DateTime(fromEpochDay(floorDiv(seconds, secondsPerDay)), fromSecondOfDay(floorMod(seconds, secondsPerDay), nanos))
+
+// `seconds` and `nanos` moved on by `d`, with the nanoseconds back in 0 to 999,999,999.
+private def shifted(seconds: Int, nanos: Int, d: Duration): (Int, Int) {
+    val total = nanos + floorMod(d.nanos, nanosPerSecond)
+    (seconds + floorDiv(d.nanos, nanosPerSecond) + total / nanosPerSecond, total % nanosPerSecond)
+}
+
+def add(dt: DateTime, d: Duration): DateTime {
+    val (seconds, nanos) = shifted(epochSeconds(dt), dt.time.nanos, d)
+    fromEpochSeconds(seconds, nanos)
+}
+
+def subtract(dt: DateTime, d: Duration): DateTime => add(dt, negate(d))
+
+// The time from `earlier` to `later`, reading both on one clock. It panics past about 292 years,
+// the most a Duration holds.
+def since(later: DateTime, earlier: DateTime): Duration =>
+    Duration((epochSeconds(later) - epochSeconds(earlier)) * nanosPerSecond + later.time.nanos - earlier.time.nanos)
+
+def addDays(dt: DateTime, days: Int): DateTime => dt with (date = addDays(dt.date, days))
+def addMonths(dt: DateTime, months: Int): DateTime => dt with (date = addMonths(dt.date, months))
+def addYears(dt: DateTime, years: Int): DateTime => dt with (date = addYears(dt.date, years))
+
+def compare(a: DateTime, b: DateTime): Ordering => derivedCompare(a, b)
+conform DateTime: Ord
+
+// Moments
+
+// An offset from UTC has to be whole seconds, less than a day either way.
+private def checkOffset(offset: Duration): Unit {
+    if offset.nanos % nanosPerSecond != 0 || offset.nanos <= -secondsPerDay * nanosPerSecond || offset.nanos >= secondsPerDay * nanosPerSecond {
+        panic("offset {offset} isn't whole seconds less than a day from UTC")
+    }
+}
+
+def toInstant(o: OffsetDateTime): Instant {
+    checkOffset(o.offset)
+    Instant(epochSeconds(o.dateTime) - o.offset.nanos / nanosPerSecond, o.dateTime.time.nanos)
+}
+
+// The date and time at `i` on a clock `offset` from UTC.
+def atOffset(i: Instant, offset: Duration): OffsetDateTime {
+    checkOffset(offset)
+    OffsetDateTime(fromEpochSeconds(i.seconds + offset.nanos / nanosPerSecond, i.nanos), offset)
+}
+
+// The system's offset from UTC at `i`, from its time zone.
+def localOffset(i: Instant): Duration => seconds(localOffsetSeconds(i.seconds))
+
+// The date and time at `i` in the system's time zone.
+def atLocalOffset(i: Instant): OffsetDateTime => atOffset(i, localOffset(i))
+
+def add(i: Instant, d: Duration): Instant {
+    val (seconds, nanos) = shifted(i.seconds, i.nanos, d)
+    inRange(fromEpochDay(floorDiv(seconds, secondsPerDay)).year)
+    Instant(seconds, nanos)
+}
+
+def subtract(i: Instant, d: Duration): Instant => add(i, negate(d))
+
+// The time from `earlier` to `later`. It panics past about 292 years, the most a Duration holds.
+def since(later: Instant, earlier: Instant): Duration =>
+    Duration((later.seconds - earlier.seconds) * nanosPerSecond + later.nanos - earlier.nanos)
+
+def compare(a: Instant, b: Instant): Ordering => derivedCompare(a, b)
+conform Instant: Ord
+
+def add(o: OffsetDateTime, d: Duration): OffsetDateTime => o with (dateTime = add(o.dateTime, d))
+def subtract(o: OffsetDateTime, d: Duration): OffsetDateTime => o with (dateTime = subtract(o.dateTime, d))
+def since(later: OffsetDateTime, earlier: OffsetDateTime): Duration => since(toInstant(later), toInstant(earlier))
+def addDays(o: OffsetDateTime, days: Int): OffsetDateTime => o with (dateTime = addDays(o.dateTime, days))
+def addMonths(o: OffsetDateTime, months: Int): OffsetDateTime => o with (dateTime = addMonths(o.dateTime, months))
+def addYears(o: OffsetDateTime, years: Int): OffsetDateTime => o with (dateTime = addYears(o.dateTime, years))
+
+// By the moment, then by the date and time, so that two at one moment with different offsets
+// aren't equal, as `==` says.
+def compare(a: OffsetDateTime, b: OffsetDateTime): Ordering {
+    val byMoment = compare(toInstant(a), toInstant(b))
+    if byMoment != Equal => byMoment else compare(a.dateTime, b.dateTime)
+}
+conform OffsetDateTime: Ord
+
+// Clocks
+
+def now(clock: Clock): Instant => match clock {
+    SystemClock => {
+        val n = nowNanos()
+        Instant(floorDiv(n, nanosPerSecond), floorMod(n, nanosPerSecond))
+    }
+    FixedClock(at, _) => at
+}
+
+def now(): Instant => now(SystemClock)
+
+// Now, at the clock's offset: the system's time zone for `SystemClock`.
+def nowWithOffset(clock: Clock): OffsetDateTime => match clock {
+    SystemClock => atLocalOffset(now(clock))
+    FixedClock(at, offset) => atOffset(at, offset)
+}
+
+def nowWithOffset(): OffsetDateTime => nowWithOffset(SystemClock)
+
+def today(clock: Clock): Date => nowWithOffset(clock).dateTime.date
+def today(): Date => today(SystemClock)
+
+def stopwatch(): Stopwatch => Stopwatch(monotonicNanos())
+def elapsed(s: Stopwatch): Duration => Duration(monotonicNanos() - s.started)
+
+// Printing, in ISO 8601's extended form
+
+private def padded(n: Int, width: Int): String {
+    mutable val text = String(n)
+    while length(bytes(text)) < width {
+        text = "0{text}"
+    }
+    text
+}
+
+// `.` and the digits of `nanos` without the zeros at the end, or nothing for none.
+private def fraction(nanos: Int): String {
+    if nanos == 0 {
+        return ""
+    }
+    mutable val digits = nanos
+    mutable val width = 9
+    while digits % 10 == 0 {
+        digits = digits / 10
+        width -= 1
+    }
+    ".{padded(digits, width)}"
+}
+
+def opString(d: Date): String => "{padded(d.year, 4)}-{padded(d.month, 2)}-{padded(d.day, 2)}"
+
+def opString(t: Time): String =>
+    "{padded(t.hour, 2)}:{padded(t.minute, 2)}:{padded(t.second, 2)}{fraction(t.nanos)}"
+
+def opString(dt: DateTime): String => "{dt.date}T{dt.time}"
+
+private def offsetString(offset: Duration): String {
+    val total = offset.nanos / nanosPerSecond
+    if total == 0 {
+        return "Z"
+    }
+    val sign = if total < 0 => "-" else "+"
+    val magnitude = if total < 0 => -total else total
+    val seconds = magnitude % 60
+    val rest = "{padded(magnitude / 3600, 2)}:{padded(magnitude / 60 % 60, 2)}"
+    if seconds == 0 => "{sign}{rest}" else "{sign}{rest}:{padded(seconds, 2)}"
+}
+
+def opString(o: OffsetDateTime): String => "{o.dateTime}{offsetString(o.offset)}"
+
+def opString(i: Instant): String => String(atOffset(i, Duration(0)))
+
+// As Go writes one: `1h2m3.5s`, or below a second `1.5ms`, `20µs` or `300ns`.
+def opString(d: Duration): String {
+    if d.nanos == 0 {
+        return "0s"
+    }
+    val sign = if d.nanos < 0 => "-" else ""
+    // As a UInt64, since the most negative Int has no positive twin.
+    val magnitude = if d.nanos < 0 => UInt64(-(d.nanos + 1)) + 1 else UInt64(d.nanos)
+    if magnitude < 1000 {
+        return "{sign}{magnitude}ns"
+    }
+    if magnitude < 1000000 {
+        return "{sign}{unitString(magnitude, 1000)}µs"
+    }
+    if magnitude < 1000000000 {
+        return "{sign}{unitString(magnitude, 1000000)}ms"
+    }
+    val wholeSeconds = magnitude / 1000000000
+    val secondsPart = "{wholeSeconds % 60}{fraction(Int(magnitude % 1000000000))}s"
+    val totalMinutes = wholeSeconds / 60
+    if totalMinutes == 0 {
+        return "{sign}{secondsPart}"
+    }
+    val totalHours = totalMinutes / 60
+    if totalHours == 0 {
+        return "{sign}{totalMinutes}m{secondsPart}"
+    }
+    "{sign}{totalHours}h{totalMinutes % 60}m{secondsPart}"
+}
+
+// `n` in units of `unit` nanoseconds, with a fraction when it isn't whole.
+private def unitString(n: UInt64, unit: UInt64): String {
+    val rest = n % unit
+    if rest == 0 {
+        return String(n / unit)
+    }
+    // The fraction's digits as nanoseconds of a second, scaled up to nine places.
+    "{n / unit}{fraction(Int(rest * (1000000000 / unit)))}"
+}
+
+// Parsing, in RFC 3339's forms: what printing writes, and also `t` or a space between the date
+// and the time, `z` for UTC, and more than nine digits of a second, which are cut off.
+
+private def digitsAt(data: [UInt8], at: Int, count: Int): Int? {
+    if at + count > length(data) {
+        return None
+    }
+    mutable val value = 0
+    mutable val i = at
+    while i < at + count {
+        val digit = Int(data[i]) - 48
+        if digit < 0 || digit > 9 {
+            return None
+        }
+        value = value * 10 + digit
+        i += 1
+    }
+    value
+}
+
+private def byteIs(data: [UInt8], at: Int, byte: Int): Bool => at < length(data) && Int(data[at]) == byte
+
+private def expectByte(data: [UInt8], at: Int, byte: Int): Unit? {
+    if !byteIs(data, at, byte) {
+        return None
+    }
+    ()
+}
+
+private def dateAt(data: [UInt8], at: Int): (Date, Int)? {
+    val year = digitsAt(data, at, 4)?
+    expectByte(data, at + 4, 45)?
+    val month = digitsAt(data, at + 5, 2)?
+    expectByte(data, at + 7, 45)?
+    val day = digitsAt(data, at + 8, 2)?
+    (date(year, month, day)?, at + 10)
+}
+
+private def timeAt(data: [UInt8], at: Int): (Time, Int)? {
+    val hour = digitsAt(data, at, 2)?
+    expectByte(data, at + 2, 58)?
+    val minute = digitsAt(data, at + 3, 2)?
+    expectByte(data, at + 5, 58)?
+    val second = digitsAt(data, at + 6, 2)?
+    mutable val i = at + 8
+    mutable val nanos = 0
+    if byteIs(data, i, 46) {
+        i += 1
+        val first = i
+        mutable val scale = 100000000
+        while i < length(data) && data[i] >= 48 && data[i] <= 57 {
+            nanos += (Int(data[i]) - 48) * scale
+            scale /= 10
+            i += 1
+        }
+        if i == first {
+            return None
+        }
+    }
+    (time(hour, minute, second, nanos)?, i)
+}
+
+private def dateTimeAt(data: [UInt8], at: Int): (DateTime, Int)? {
+    val (d, next) = dateAt(data, at)?
+    if !byteIs(data, next, 84) && !byteIs(data, next, 116) && !byteIs(data, next, 32) {
+        return None
+    }
+    val (t, end) = timeAt(data, next + 1)?
+    (DateTime(d, t), end)
+}
+
+private def offsetAt(data: [UInt8], at: Int): (Duration, Int)? {
+    if byteIs(data, at, 90) || byteIs(data, at, 122) {
+        return (Duration(0), at + 1)
+    }
+    val negative = byteIs(data, at, 45)
+    if !negative && !byteIs(data, at, 43) {
+        return None
+    }
+    val hour = digitsAt(data, at + 1, 2)?
+    expectByte(data, at + 3, 58)?
+    val minute = digitsAt(data, at + 4, 2)?
+    if hour > 23 || minute > 59 {
+        return None
+    }
+    val offset = minutes(hour * 60 + minute)
+    (if negative => negate(offset) else offset, at + 6)
+}
+
+// `2026-11-23`
+def parseDate(text: String): Date? {
+    val data = bytes(text)
+    val (d, end) = dateAt(data, 0)?
+    if end != length(data) => None else d
+}
+
+// `14:05:00` or `14:05:00.5`
+def parseTime(text: String): Time? {
+    val data = bytes(text)
+    val (t, end) = timeAt(data, 0)?
+    if end != length(data) => None else t
+}
+
+// `2026-11-23T14:05:00`
+def parseDateTime(text: String): DateTime? {
+    val data = bytes(text)
+    val (dt, end) = dateTimeAt(data, 0)?
+    if end != length(data) => None else dt
+}
+
+// `2026-11-23T14:05:00-08:00` or `2026-11-23T22:05:00Z`
+def parseOffsetDateTime(text: String): OffsetDateTime? {
+    val data = bytes(text)
+    val (dt, next) = dateTimeAt(data, 0)?
+    val (offset, end) = offsetAt(data, next)?
+    if end != length(data) => None else OffsetDateTime(dt, offset)
+}
+
+// An offset date and time, as the moment it names.
+def parseInstant(text: String): Instant? => toInstant(parseOffsetDateTime(text)?)

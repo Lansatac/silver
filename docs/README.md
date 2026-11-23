@@ -31,19 +31,35 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
 | [Errors](language/errors.md) | `T ! E`, `fail`, `?` and `!` on errors, what panics, `main` | Implemented |
 | [Arrays](language/arrays.md) | Arrays, slices, concatenation, `a..b` as an `Interval` | Implemented, except that element assignment always copies |
-| [Ranges](language/ranges.md) | `Range`, sources of your own, `std.range` adapters and consumers | Partial: adapters, sources, consumers, ordering, `Sized`, `Indexed` and `Seq`; `sum` and `reversed` aren't built |
+| [Ranges](language/ranges.md) | `Range`, `Iterable`, sources of your own, what `for` steps | Implemented |
 | [Dictionaries](language/dictionaries.md) | `[K: V]`, lookup and update, insertion order, keys | Implemented |
-| [Strings](language/strings.md) | Text, interpolation, characters, cutting, `std.string` | Partial: no raw or multi-line strings |
+| [Strings](language/strings.md) | Text, interpolation, characters, validity, input | Partial: no raw or multi-line strings |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, `match` | Implemented, with `invariant` still to be removed |
 | [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
 | [Interfaces](language/interfaces.md) | Interfaces, declared conformance, bounds, `if type`, interface names as parameter and result types | Partial: every module sees every conformance; no interface types as values |
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
 | [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: ownership shared by the packages of one project isn't enforced yet, and there are no renamed imports; the build can't name another prelude |
-| [Native functions](language/native.md) | Calling C functions, native types, `std.c`, intrinsics | Partial: the interpreter calls only the natives of `lang` and the standard library, and a few of the C library's |
-| [Programs](language/programs.md) | `main`, arguments, exit status, standard error, the environment, files | Partial: `main`, its arguments, the exit statuses and `std.file`; no `exit`, `eprint` or `environment`, and a failed write to standard output panics |
+| [Native functions](language/native.md) | Calling C functions, native types, libraries, intrinsics | Partial: the interpreter calls only the natives of `lang` and the standard library, and a few of the C library's |
+| [Programs](language/programs.md) | `main`, arguments, exit status, standard output and error | Partial: `main`, its arguments and the exit statuses; no `eprint`, and a failed write to standard output panics |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, `panics`, the test runner | Partial: no library hooks |
 | [The `silver` tool](silver.md) | Its commands, `silver.toml`, finding a project, scripts | Partial: no remote packages; a script in no project can't say it needs a package |
+
+## Standard library
+
+The modules of `std` are described in `stdlib/`, one file to a module, in the same form: what it does, then **Open questions** and **Current implementation**. `std.ref`, `std.hash` and `std.of` only forward what the language declares in `lang`, so they're described with it: [`Ref`](language/refs.md), [`hash`](language/functions.md#equality-and-hashing) and [`Of`](language/interfaces.md#a-type-only-in-the-result).
+
+| Document | Covers | Status |
+| --- | --- | --- |
+| [std.string](stdlib/string.md) | Asking about, cutting and parsing strings | Implemented |
+| [std.char](stdlib/char.md) | Questions about characters, ASCII case | Implemented |
+| [std.range](stdlib/range.md) | Adapters, sources, `Sized` and `Indexed`, `Seq`, consumers, ordering | Partial: `sum` and `reversed` aren't built |
+| [std.math](stdlib/math.md) | `Float` functions, `powInt`, `factorial`, `countOnes` | Implemented |
+| [std.random](stdlib/random.md) | A seeded generator, SplitMix64 | Implemented |
+| [std.time](stdlib/time.md) | Dates, times, moments, durations, offsets, clocks, parsing and printing | Implemented, without named time zones |
+| [std.file](stdlib/file.md) | Reading and writing a file whole | Implemented |
+| [std.process](stdlib/process.md) | `exit` and the environment | Not built |
+| [std.c](stdlib/c.md) | C's integer types and strings, for native declarations | Implemented |
 
 ## Not designed yet
 

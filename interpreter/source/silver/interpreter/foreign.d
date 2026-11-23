@@ -66,6 +66,9 @@ shared static this()
         "toupper": ForeignFunction([integer], integer, (CValue[] args) => integerValue(toupper(cast(int) args[0].integer))),
         "tolower": ForeignFunction([integer], integer, (CValue[] args) => integerValue(tolower(cast(int) args[0].integer))),
         "silver_nowNanos": ForeignFunction([], integer, (CValue[] _) => integerValue(nowNanos())),
+        "silver_monotonicNanos": ForeignFunction([], integer, (CValue[] _) => integerValue(monotonicNanos())),
+        "silver_localOffsetSeconds": ForeignFunction([integer], integer,
+            (CValue[] args) => integerValue(localOffsetSeconds(args[0].integer))),
         "strlen": ForeignFunction([pointer], integer, (CValue[] args) => integerValue(cast(long) strlen(text(args[0])))),
         "strcmp": ForeignFunction([pointer, pointer], integer,
             (CValue[] args) => integerValue(strcmp(text(args[0]), text(args[1])))),
@@ -159,6 +162,24 @@ private long nowNanos()
     import std.datetime.systime : Clock;
 
     return (Clock.currStdTime - 621_355_968_000_000_000L) * 100;
+}
+
+/// As the runtime's `silver_monotonicNanos` computes it.
+private long monotonicNanos()
+{
+    import core.time : MonoTime, ticksToNSecs;
+
+    return ticksToNSecs(MonoTime.currTime.ticks);
+}
+
+/// As the runtime's `silver_localOffsetSeconds` computes it.
+private long localOffsetSeconds(long unixSeconds)
+{
+    import std.algorithm.comparison : clamp;
+    import std.datetime.timezone : LocalTime;
+
+    auto seconds = clamp(unixSeconds, -62_167_219_200L, 253_402_300_799L);
+    return LocalTime().utcOffsetAt(seconds * 10_000_000L + 621_355_968_000_000_000L).total!"seconds";
 }
 
 @("the interpreter calls libm for the math natives")

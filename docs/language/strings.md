@@ -61,37 +61,7 @@ A string has no `length` and no indexing. No single unit is privileged for measu
 
 ## Cutting a string
 
-A string is taken apart by value, never by position: no function takes or returns an offset into one, so a piece always begins and ends between characters.
-
-```silver
-import std.string
-
-"key=value".splitOnce("=")       // Some(("key", "value"))
-"v1.2".stripPrefix("v")          // Some("1.2")
-"  hi ".trim()                   // "hi"
-"42abc".splitWhile(isDigit)      // ("42", "abc")
-```
-
-`std.string` provides:
-
-| | |
-| --- | --- |
-| Asking | `contains`, `startsWith`, `endsWith`, `isEmpty` |
-| Cutting | `stripPrefix`, `stripSuffix`, `splitOnce`, `splitWhile`, `trim`, `trimStart`, `trimEnd` |
-| Many pieces | `split(text, separator)` and `lines(text)`, each an array of strings |
-| Converting | `decode`, `parseInt`, `parseFloat`, `parseBool` |
-
-- The questions compare bytes, which for UTF-8 gives the same answer as comparing characters, and the empty string is found in every string, at both ends.
-- `stripPrefix`, `stripSuffix` and `splitOnce` return `None` when what they look for isn't there. `splitOnce` cuts at the first separator.
-- `splitWhile(text, keep)` returns the characters at the beginning that `keep` accepts, and everything after them.
-- The `trim` functions remove Unicode white space.
-- `split` returns one more piece than there are separators, so some may be empty: `split(",a,", ",")` is `["", "a", ""]`. An empty separator gives each character as its own piece.
-- `lines` drops the `\n` or `\r\n` that ends each line. A final line needs no ending, and nothing follows the last ending: `lines("a\n")` is `["a"]`.
-- `parseInt` reads decimal digits with an optional `-` before them. Anything else is `None`: an empty string, a `+`, spaces, `_`, and a number that doesn't fit an `Int`.
-- `parseFloat` reads a decimal number: digits with an optional `.` among them, before them or after them, then optionally `e` or `E` with an optional `+` or `-` and digits, and an optional `-` before it all. So `"3"`, `"-0.5"`, `".5"`, `"5."` and `"1.5e-3"` are numbers, which is more than a [literal](numbers.md) allows, and `"."`, `"+1"`, `"inf"` and `"1_000.0"` are `None`. The result is the `Float` nearest the number written, however many digits it has, a tie going to the one whose last bit is zero. A number too large for a `Float` is `None`, and one too small to tell from zero is zero.
-- `parseBool` is `true` for `"true"` and `false` for `"false"`, with any of the letters in capitals, so `"True"` and `"FALSE"` are read too. Anything else is `None`: `"yes"`, `"1"`, `"t"`, and either word with a space beside it.
-
-`std.char` provides `toChar`, the questions `isDigit` (the ten ASCII digits), `isAsciiLetter` and `isWhitespace` (Unicode white space), and `toAsciiUpper` and `toAsciiLower`, which change only the 26 unaccented letters.
+A string is taken apart by value, never by position: no function takes or returns an offset into one, so a piece always begins and ends between characters. [`std.string`](../stdlib/string.md) has the functions that ask about a string, cut it and parse it, and [`std.char`](../stdlib/char.md) the questions about a character.
 
 ## Validity
 
@@ -104,7 +74,7 @@ Every `String` is valid UTF-8. A literal can't be anything else, and bytes that 
 
 `String(x)` formats any printable value, as `print` would.
 
-Operations that can fail return an option under their own names, and aren't spelled as conversions: `decode(bytes)` returns `String?`, `parseInt(s)` returns `Int?`, `parseFloat(s)` returns `Float?`, `parseBool(s)` returns `Bool?` and `toChar(n)` returns `Char?`.
+Operations that can fail return an option under their own names, and aren't spelled as conversions: `decode(bytes)` returns `String?`, `parseInt(s)` returns `Int?`, `parseFloat(s)` returns `Float?`, `parseBool(s)` returns `Bool?` (all three in [`std.string`](../stdlib/string.md)) and `toChar(n)` returns `Char?`.
 
 ## Input
 
@@ -128,11 +98,9 @@ def main(): Unit ! IoError {
 
 ## Open questions
 
-- Whether `split` and `lines` become lazy once [ranges](../proposals/ranges.md) are decided.
-- Case mapping beyond ASCII, which needs Unicode's tables.
+None for strings themselves: see [`std.string`](../stdlib/string.md#open-questions) and [`std.char`](../stdlib/char.md#open-questions).
 
 ## Current implementation
 
 - Everything above is available on both backends, except as listed here.
-- `decode` and `toChar` are declared in `lang`, which `std.string` and `std.char` forward. `lang.string` also has `slice(text, from, to)`, which cuts a String at two byte offsets and panics unless both fall between characters. It exists so that `std.string` can cut a String without an unchecked conversion, and isn't part of the language's surface: the rule above, that no function takes an offset into a String, is still the one to follow.
 - The planned forms above aren't available.

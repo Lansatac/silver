@@ -10,3 +10,200 @@ test "nowNanos is nanoseconds since the Unix epoch, and doesn't go back between 
     expect(second >= first)
     expect(UInt64(first) > 0)
 }
+
+test "date checks its day, month and year" {
+    expect(String(date(2026, 11, 23)!) == "2026-11-23")
+    expect(date(2026, 2, 29) == None)
+    expect(date(2024, 2, 29) != None)
+    expect(date(2026, 13, 1) == None)
+    expect(date(2026, 4, 31) == None)
+    expect(date(10000, 1, 1) == None)
+    expect(date(-1, 1, 1) == None)
+    expect(String(date(0, 1, 1)!) == "0000-01-01")
+    expect(String(date(9999, 12, 31)!) == "9999-12-31")
+}
+
+test "the calendar's questions" {
+    val d = date(2026, 11, 23)!
+    expect(weekday(d) == Monday)
+    // A leap year, so 0001-01-01 is a Monday.
+    expect(date(0, 1, 1)!.weekday() == Saturday)
+    expect(dayOfYear(d) == 327)
+    expect(dayOfYear(date(2024, 12, 31)!) == 366)
+    expect(!isLeapYear(1900))
+    expect(isLeapYear(2000))
+    expect(daysInMonth(2024, 2) == 29)
+    expect(daysInMonth(2026, 4) == 30)
+    expect(panics(() => daysInMonth(2026, 13)) == "month 13 isn't 1 to 12")
+}
+
+test "adding days, months and years" {
+    val d = date(2026, 11, 23)!
+    expect(String(d.addDays(10)) == "2026-12-03")
+    expect(String(d.addDays(-730000)) == "0028-03-22")
+    expect(String(date(2026, 1, 31)!.addMonths(1)) == "2026-02-28")
+    expect(String(date(2024, 3, 31)!.addMonths(-13)) == "2023-02-28")
+    expect(String(date(2024, 2, 29)!.addYears(1)) == "2025-02-28")
+    expect(String(date(2024, 2, 29)!.addYears(4)) == "2028-02-29")
+    expect(daysSince(date(2027, 1, 1)!, d) == 39)
+    expect(daysSince(d, date(2027, 1, 1)!) == -39)
+}
+
+test "leaving 0000 to 9999 panics" {
+    expect(panics(() => date(9999, 12, 31)!.addDays(1)) == "year 10000 is outside 0000 to 9999")
+    expect(panics(() => date(0, 1, 1)!.addMonths(-1)) == "year -1 is outside 0000 to 9999")
+    expect(panics(() => toInstant(parseOffsetDateTime("9999-12-31T23:59:59Z")!).add(seconds(1))) == "year 10000 is outside 0000 to 9999")
+}
+
+test "dates, times and date-times order by time" {
+    expect(date(2026, 2, 28)! < date(2026, 3, 1)!)
+    expect(date(2025, 12, 31)! < date(2026, 1, 1)!)
+    expect(time(9, 59, 59, 999999999)! < time(10, 0, 0)!)
+    expect(DateTime(date(2026, 1, 1)!, time(23, 0, 0)!) < DateTime(date(2026, 1, 2)!, time(1, 0, 0)!))
+}
+
+test "time checks its fields" {
+    expect(String(time(14, 5, 0)!) == "14:05:00")
+    expect(time(24, 0, 0) == None)
+    expect(time(12, 60, 0) == None)
+    expect(time(12, 0, 60) == None)
+    expect(time(12, 0, 0, 1000000000) == None)
+    expect(time(12, 0, 0, -1) == None)
+}
+
+test "a fraction of a second is printed without its trailing zeros" {
+    expect(String(time(14, 5, 0, 500000000)!) == "14:05:00.5")
+    expect(String(time(0, 0, 0, 1)!) == "00:00:00.000000001")
+    expect(String(time(0, 0, 0, 120000)!) == "00:00:00.00012")
+}
+
+test "date-time arithmetic carries across days" {
+    val dt = DateTime(date(2026, 11, 23)!, time(23, 59, 30)!)
+    expect(String(dt) == "2026-11-23T23:59:30")
+    expect(String(dt.add(seconds(45))) == "2026-11-24T00:00:15")
+    expect(String(dt.subtract(hours(48))) == "2026-11-21T23:59:30")
+    expect(String(dt.add(nanoseconds(-1))) == "2026-11-23T23:59:29.999999999")
+    expect(String(dt.addMonths(3)) == "2027-02-23T23:59:30")
+    expect(since(dt.add(milliseconds(1500)), dt) == milliseconds(1500))
+}
+
+test "instants and offsets" {
+    val epoch = Instant(0, 0)
+    expect(String(epoch) == "1970-01-01T00:00:00Z")
+    expect(String(epoch.add(hours(25)).add(milliseconds(-1))) == "1970-01-02T00:59:59.999Z")
+    expect(epoch.subtract(nanoseconds(1)) == Instant(-1, 999999999))
+    expect(String(epoch.subtract(nanoseconds(1))) == "1969-12-31T23:59:59.999999999Z")
+    expect(String(epoch.atOffset(hours(-8))) == "1969-12-31T16:00:00-08:00")
+    expect(String(epoch.atOffset(minutes(330))) == "1970-01-01T05:30:00+05:30")
+    expect(String(epoch.atOffset(seconds(-75))) == "1969-12-31T23:58:45-00:01:15")
+    expect(toInstant(epoch.atOffset(minutes(330))) == epoch)
+    expect(since(epoch.add(seconds(3)), epoch) == seconds(3))
+}
+
+test "an offset has to be whole seconds less than a day from UTC" {
+    expect(panics(() => Instant(0, 0).atOffset(hours(24))) == "offset 24h0m0s isn't whole seconds less than a day from UTC")
+    expect(panics(() => Instant(0, 0).atOffset(milliseconds(1))) == "offset 1ms isn't whole seconds less than a day from UTC")
+}
+
+test "two offset date-times at one moment aren't equal, and order by moment then date and time" {
+    val a = parseOffsetDateTime("2026-01-01T00:00:00+01:00")!
+    val b = parseOffsetDateTime("2025-12-31T23:00:00Z")!
+    expect(toInstant(a) == toInstant(b))
+    expect(a != b)
+    expect(compare(a, b) == Greater)
+    expect(since(a, b) == Duration(0))
+    expect(parseOffsetDateTime("2026-01-01T00:30:00+01:00")! < b.add(minutes(45)))
+    expect(String(a.addDays(1)) == "2026-01-02T00:00:00+01:00")
+}
+
+test "durations print as Go writes them" {
+    expect(String(hours(25).add(milliseconds(1500))) == "25h0m1.5s")
+    expect(String(hours(2)) == "2h0m0s")
+    expect(String(minutes(1).add(seconds(30))) == "1m30s")
+    expect(String(seconds(59)) == "59s")
+    expect(String(milliseconds(250)) == "250ms")
+    expect(String(microseconds(1500)) == "1.5ms")
+    expect(String(nanoseconds(1500)) == "1.5µs")
+    expect(String(nanoseconds(-20)) == "-20ns")
+    expect(String(Duration(0)) == "0s")
+    expect(String(Duration(-9223372036854775807 - 1)) == "-2562047h47m16.854775808s")
+}
+
+test "duration arithmetic and order" {
+    expect(seconds(90) < minutes(2))
+    expect(negate(seconds(5)) == seconds(-5))
+    expect(subtract(minutes(1), seconds(1)) == seconds(59))
+    expect(milliseconds(1500).inSeconds() == 1.5)
+    expect(panics(() => hours(2562048)) == "Integer overflow")
+    expect(panics(() => since(Instant(9223372037, 0), Instant(0, 0))) == "Integer overflow")
+}
+
+test "parseDate takes only YYYY-MM-DD for a day that exists" {
+    expect(parseDate("1979-05-27") == date(1979, 5, 27))
+    expect(parseDate("1979-02-30") == None)
+    expect(parseDate("1979-5-27") == None)
+    expect(parseDate("1979-05-27 ") == None)
+    expect(parseDate("") == None)
+}
+
+test "parseTime needs seconds, and cuts a fraction off after nine digits" {
+    expect(parseTime("07:32:00.999999") == time(7, 32, 0, 999999000))
+    expect(parseTime("07:32:00.1234567891") == time(7, 32, 0, 123456789))
+    expect(parseTime("07:32:00.") == None)
+    expect(parseTime("07:32") == None)
+    expect(parseTime("24:00:00") == None)
+}
+
+test "parseDateTime takes T, t or a space between the date and the time" {
+    val expected = DateTime(date(1979, 5, 27)!, time(7, 32, 0)!)
+    expect(parseDateTime("1979-05-27T07:32:00") == expected)
+    expect(parseDateTime("1979-05-27t07:32:00") == expected)
+    expect(parseDateTime("1979-05-27 07:32:00") == expected)
+    expect(parseDateTime("1979-05-27_07:32:00") == None)
+    expect(parseDateTime("1979-05-27T07:32:00Z") == None)
+}
+
+test "parseOffsetDateTime needs an offset, Z or z or one up to 23:59" {
+    expect(String(parseOffsetDateTime("1979-05-27T07:32:00-08:00")!) == "1979-05-27T07:32:00-08:00")
+    expect(String(parseOffsetDateTime("1979-05-27T07:32:00z")!) == "1979-05-27T07:32:00Z")
+    expect(String(parseOffsetDateTime("1979-05-27T07:32:00+23:59")!) == "1979-05-27T07:32:00+23:59")
+    expect(parseOffsetDateTime("1979-05-27T07:32:00+24:00") == None)
+    expect(parseOffsetDateTime("1979-05-27T07:32:00+05") == None)
+    expect(parseOffsetDateTime("1979-05-27T07:32:00") == None)
+}
+
+test "parseInstant gives the moment" {
+    expect(String(parseInstant("1979-05-27T07:32:00.999999-08:00")!) == "1979-05-27T15:32:00.999999Z")
+    expect(parseInstant("1979-05-27t15:32:00z") == parseInstant("1979-05-27T07:32:00-08:00"))
+    expect(parseInstant("1979-05-27") == None)
+}
+
+test "printing and parsing go back and forth" {
+    val o = parseOffsetDateTime("2026-11-23T14:05:00.25+05:30")!
+    expect(parseOffsetDateTime(String(o)) == o)
+    val i = toInstant(o)
+    expect(parseInstant(String(i)) == i)
+}
+
+test "a fixed clock always says the same, at its offset" {
+    val fixed = FixedClock(parseInstant("2026-11-23T23:30:00Z")!, hours(2))
+    expect(String(now(fixed)) == "2026-11-23T23:30:00Z")
+    expect(String(nowWithOffset(fixed)) == "2026-11-24T01:30:00+02:00")
+    expect(today(fixed) == date(2026, 11, 24))
+}
+
+test "the system clock" {
+    expect(now() > parseInstant("2026-01-01T00:00:00Z")!)
+    val reading = now(SystemClock)
+    expect(reading.nanos >= 0 && reading.nanos < 1000000000)
+    expect(localOffset(reading).nanos % 1000000000 == 0)
+    expect(toInstant(nowWithOffset()) <= now())
+    expect(nowWithOffset().offset == localOffset(toInstant(nowWithOffset())))
+}
+
+test "a stopwatch never goes back" {
+    val watch = stopwatch()
+    val first = elapsed(watch)
+    expect(first >= Duration(0))
+    expect(elapsed(watch) >= first)
+}

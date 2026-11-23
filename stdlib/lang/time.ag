@@ -2,3 +2,9 @@ module lang.time
 
 // Wall-clock nanoseconds since the Unix epoch. The clock can jump, so this doesn't measure durations reliably.
 native("silver_nowNanos") def nowNanos(): Int
+
+// Nanoseconds from some fixed moment, never going back. Only the difference between two readings means anything.
+native("silver_monotonicNanos") def monotonicNanos(): Int
+
+// The system's local offset from UTC, in seconds, at the moment `unixSeconds` after the Unix epoch.
+native("silver_localOffsetSeconds") def localOffsetSeconds(unixSeconds: Int): Int

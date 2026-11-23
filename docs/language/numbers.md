@@ -54,7 +54,7 @@ val half: Float = 1 / 2       // 0.5: both literals are Floats
 | `~` (prefix) | bitwise not |
 | `<< >>` | shifts |
 
-`^` is xor. Silver has no power operator. `std.math` provides `pow` and `powInt`.
+`^` is xor. Silver has no power operator. [`std.math`](../stdlib/math.md) provides `pow` and `powInt`.
 
 Each has a compound assignment form (`+=`, `+%=`, `<<=` and so on), except `%`.
 
@@ -70,8 +70,6 @@ An integer operation produces the right answer or stops the program. This is the
 - a shift amount that is negative, or at least the type's width
 
 `<<` does not panic when bits fall off the end. `>>` is logical on unsigned types and arithmetic on signed types. `+%`, `-%` and `*%` wrap instead of panicking.
-
-`countOnes(x)`, from `std.math`, is how many bits of a `UInt` are 1: `countOnes(0b1011)` is 3. A value of another integer type is converted first, as in `countOnes(UInt(byte))`.
 
 ## Conversions
 

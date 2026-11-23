@@ -1,0 +1,5 @@
+FAIL "a failed one shows both sides" at ordered-conditions.ag(12,6)
+    ordered-conditions.ag(13,5): Expectation failed: Version(2, 0) < Version(1, 5)
+        left: Version(2, 0)
+        right: Version(1, 5)
+1 passed, 1 failed

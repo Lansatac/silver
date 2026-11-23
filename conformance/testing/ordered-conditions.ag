@@ -1,0 +1,14 @@
+type Version(major: Int, minor: Int)
+
+def compare(a: Version, b: Version): Ordering => derivedCompare(a, b)
+conform Version: Ord
+
+test "a comparison of an Ord type in expect and assert calls its compare" {
+    expect(Version(1, 2) < Version(1, 10))
+    expect(Version(2, 0) >= Version(1, 99))
+    assert(Version(1, 0) <= Version(1, 0))
+}
+
+test "a failed one shows both sides" {
+    expect(Version(2, 0) < Version(1, 5))
+}

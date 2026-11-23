@@ -225,7 +225,7 @@ type IoError = NotUtf8 | NotFound(path: String) | ReadFailed(path: String, reaso
 ```
 
 - `NotUtf8` is input that isn't UTF-8. It carries nothing, as `decode` returns a bare `None`.
-- `NotFound` is a [file](programs.md#files) that isn't there.
+- `NotFound` is a [file](../stdlib/file.md) that isn't there.
 - `ReadFailed` and `WriteFailed` are any other failure to read or write a file, with its path as the program gave it and the system's words for what went wrong. `InputFailed` is a failure to read standard input, which has no path.
 - A reason is the system's text in the system's language, for showing to a person, and carries no error number, since those differ between systems. A program mustn't compare it with anything: a kind of failure that programs want to tell apart becomes a member of its own, as `NotFound` is.
 

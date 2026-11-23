@@ -33,7 +33,7 @@ Only types with a C equivalent can appear in a native signature:
 
 `String`, arrays, tuples, user types, other options and function types can't cross. A string is converted explicitly, as described below.
 
-C's own integer types differ between platforms: `long` is 32 bits on Windows and 64 on Linux. `std.c` names them (`CInt`, `CLong`, `CSize` and the rest), each an alias for the Silver type of the right width on the platform being compiled for.
+C's own integer types differ between platforms: `long` is 32 bits on Windows and 64 on Linux. [`std.c`](../stdlib/c.md) names them (`CInt`, `CLong`, `CSize` and the rest), each an alias for the Silver type of the right width on the platform being compiled for.
 
 A parameter has to be declared with the C function's own width. A C function taking an `int` is declared with `CInt`, not `Int8`: Windows' calling convention leaves the upper bits of a narrower argument undefined, so the function would read garbage. A result can be declared narrower than C's, or as `Bool` for one that is only ever 0 or 1, and is cut down to it.
 
@@ -64,7 +64,7 @@ Silver doesn't manage what a handle refers to. Releasing it is up to the program
 
 ## Strings
 
-A Silver `String` isn't NUL-terminated, so it is never passed directly. `std.c` provides `CString`, a native type, with conversions that copy:
+A Silver `String` isn't NUL-terminated, so it is never passed directly. [`std.c`](../stdlib/c.md#strings)'s `CString` is a native type for a C string, with `toCString` and `fromCString` to copy one to and from a `String`:
 
 ```silver
 import std.c
@@ -72,14 +72,7 @@ import std.c
 native def getenv(name: CString): CString?
 
 def home(): String? => fromCString(getenv(toCString("HOME"))?)
-
-val file = fopen(toCString("notes.txt"), toCString("r"))
 ```
-
-- `toCString(s: String): CString` copies every byte of `s` and adds a NUL. A `\0` inside `s` isn't an error: C reads up to the first NUL, so it ends the string there.
-- `fromCString(s: CString): String?` copies the bytes up to the NUL. It's `None` when they aren't UTF-8, as for [`decode`](strings.md).
-- A `CString` from `toCString` stays valid while the program holds it. It's Silver's memory, so it must never be given to the library's `free`. One that a native returns, such as `getenv`'s, points into the library's memory and is valid for as long as the library says.
-- A `CString` prints like any handle, as `CString(0x...)`, never as its text.
 
 ## Libraries
 
@@ -115,14 +108,13 @@ intrinsic def panic(message: String): Never
 - Pointers to Silver data: `Ptr<T>`, passing an array or a string's bytes without copying, and types with a C layout. These wait on generics.
 - Calling Silver from C: exporting a function under a C symbol, and passing one as a callback.
 - Structures passed by value, and functions with variable arguments such as `printf`.
-- Whether the `std.c` names should become distinct types. As aliases, `CLong` and `Int32` are interchangeable on Windows and not on Linux, so code can compile on one and fail on the other. They are aliases to begin with, to find out how much that matters in practice.
 - Converting a handle to an integer, or to another native type. A sentinel pointer that isn't null, such as Windows' `INVALID_HANDLE_VALUE` or POSIX's `MAP_FAILED`, arrives as `Some(...)` and can't be told from a real handle, and a `Block` from `malloc` can't become a `CString`. For now such a pointer can be declared as `UInt64`, the integer of its width, which C passes the same way, and compared as a number.
 - Reading `errno`.
 - A tool that writes native declarations from a C header.
 
 ## Current implementation
 
-- `native def`, `native("...")`, `native library`, `native type`, `intrinsic def`, `intrinsic alias`, `intrinsic type`, `std.c`, `CString` and its conversions are available.
+- `native def`, `native("...")`, `native library`, `native type`, `intrinsic def`, `intrinsic alias` and `intrinsic type` are available.
 - The platform being compiled for is always the one the compiler runs on.
 - Compiled programs call natives directly. The interpreter can call only the natives it has built in: those that `lang` and the standard library declare, and the C library's `strlen`, `strcmp`, `strchr`, `getenv`, `malloc`, `free`, `abs`, `toupper`, `tolower`, `isdigit` and `ilogb`, each for any declaration C passes the same way as its own signature: a pointer as a native type, an option of one or `UInt64`, an integer parameter as an integer type at least as wide as C's, and an integer result as any integer type or `Bool`. Calling any other native while interpreting, or one of these declared some other way, is an error.
 - A module's `native library` is passed to the linker when the program calls one of that module's natives or uses one as a value.

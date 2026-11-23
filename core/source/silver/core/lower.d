@@ -2166,7 +2166,10 @@ private final class Lowering
             auto rightValue = lowerExpr(*right);
             auto heldLeft = temp("left", leftValue.type), heldRight = temp("right", rightValue.type);
             held = [let(heldLeft, leftValue), let(heldRight, rightValue)];
-            test = binaryOf(op, use(heldLeft, span), use(heldRight, span), types.bool_, condition.span);
+            if (auto compared = _analysis.comparisonOf(condition.id))
+                test = callUse(*compared, [use(heldLeft, span), use(heldRight, span)], condition.span);
+            else
+                test = binaryOf(op, use(heldLeft, span), use(heldRight, span), types.bool_, condition.span);
             values = [stringLiteral("\n    left: ", span), formatted(use(heldLeft, span)),
                 stringLiteral("\n    right: ", span), formatted(use(heldRight, span))];
         }
