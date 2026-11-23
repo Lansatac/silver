@@ -1,19 +1,10 @@
 {
 	"name": "runtime",
-	"description": "The runtime linked into compiled Silver programs, built into out/runtime in both modes for silverc to link.",
+	"description": "The runtime linked into compiled Silver programs, built into out/runtime for silverc to link.",
 	"targetType": "staticLibrary",
 	"targetName": "silver_rt",
+	"targetPath": "../out/runtime",
 	"sourcePaths": ["source"],
 	"importPaths": ["source"],
-	"configurations": [
-		{
-			"name": "unoptimized",
-			"targetPath": "../out/runtime/unoptimized"
-		},
-		{
-			"name": "optimized",
-			"targetPath": "../out/runtime/optimized",
-			"dflags": ["-O", "-inline"]
-		}
-	]
+	"dflags": ["-O", "-inline"]
 }

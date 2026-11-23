@@ -104,7 +104,7 @@ LinkResult linkExecutable(const Toolchain toolchain, string irPath, string outpu
     Optimization optimization = Optimization.none)
 {
     string runtime;
-    if (auto missing = findRuntime(runtime, optimization))
+    if (auto missing = findRuntime(runtime))
     {
         return LinkResult(false, missing);
     }
@@ -137,18 +137,13 @@ string[] linkCommand(const Toolchain toolchain, string objPath, string runtime, 
     return [toolchain.dmd] ~ linker ~ [objPath, runtime] ~ linked ~ ["-of=" ~ outputPath];
 }
 
-/// Where the runtime for `optimization` is. Each mode has a directory of its own.
-string runtimeBuildPath(Optimization optimization)
-{
-    return buildPath(runtimePath, optimization == Optimization.full ? "optimized" : "unoptimized");
-}
-
-/// Finds the runtime library for `optimization`. Returns why it isn't there, or null with `library` set.
-string findRuntime(out string library, Optimization optimization = Optimization.none)
+/// Finds the runtime library, which programs link whether or not they're optimized. Returns why it
+/// isn't there, or null with `library` set.
+string findRuntime(out string library)
 {
     version (Windows) enum name = "silver_rt.lib";
     else enum name = "libsilver_rt.a";
-    library = buildPath(runtimeBuildPath(optimization), name);
+    library = buildPath(runtimePath, name);
     if (exists(library)) return null;
     if (!exists(runtimePath))
     {
@@ -225,35 +220,20 @@ unittest
         assert(run.status == 0, run.output);
         // The runtime writes the platform's newline.
         assert(run.output.replace("\r\n", "\n") == "42\n2.5\nfalse\nhi()\n", run.output);
-
-        string runtime;
-        assert(findRuntime(runtime, optimization) is null);
-        assert(dirName(runtime) == runtimeBuildPath(optimization), runtime);
     }
 }
 
-@("the optimized runtime has a directory of its own and keeps the runtime's checks")
+@("the runtime is built optimized and keeps its own checks")
 unittest
 {
-    import std.algorithm : canFind;
+    import std.algorithm : canFind, map;
+    import std.array : array;
     import std.file : readText;
     import std.json : parseJSON;
 
-    assert(runtimeBuildPath(Optimization.none) != runtimeBuildPath(Optimization.full));
     auto recipe = readText(buildPath(dirName(dirName(runtimePath)), "runtime", "dub.json"));
-    string[] flags(string configuration)
-    {
-        foreach (c; parseJSON(recipe)["configurations"].array)
-        {
-            if (c["name"].str != configuration) continue;
-            string[] all;
-            if (auto given = "dflags" in c) foreach (f; given.array) all ~= f.str;
-            return all;
-        }
-        assert(false, "no configuration " ~ configuration);
-    }
-    assert(flags("unoptimized") == []);
-    assert(flags("optimized") == ["-O", "-inline"]);
+    auto flags = parseJSON(recipe)["dflags"].array.map!(f => f.str).array;
+    assert(flags.canFind("-O") && flags.canFind("-inline"), flags.to!string);
     assert(!recipe.canFind("-release") && !recipe.canFind("boundscheck"));
 }
 

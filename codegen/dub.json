@@ -7,10 +7,7 @@
 		"silver:core": "*",
 		"silver:sema": "*"
 	},
-	"preGenerateCommands": [
-		"\"$DUB\" build :runtime --root=\"$PACKAGE_DIR..\" --config=unoptimized --build=plain",
-		"\"$DUB\" build :runtime --root=\"$PACKAGE_DIR..\" --config=optimized --build=plain"
-	],
+	"preGenerateCommands": ["\"$DUB\" build :runtime --root=\"$PACKAGE_DIR..\" --build=plain"],
 	"configurations": [
 		{ "name": "library" },
 		{
