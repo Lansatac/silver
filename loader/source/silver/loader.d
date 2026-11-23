@@ -1231,7 +1231,7 @@ private void refuseConformances(const Module mod, string tested, SourceContext c
 }
 
 /// Directory holding `lang` and the standard library that ships with the compiler: `stdlib`
-/// beside the executable. Test executables are built at the repository's root for this.
+/// beside the executable. The build puts the test executables in out/, beside a link to stdlib/.
 string standardLibraryPath()
 {
     import std.file : thisExePath;
@@ -1735,7 +1735,7 @@ unittest
 
     // The standard library's prelude is named only where a build picks it, as `standardPrelude`.
     // Tests may name what they like. `testing/` and the driver are the build, so they aren't read.
-    auto root = buildNormalizedPath(standardLibraryPath(), "..");
+    auto root = buildNormalizedPath(dirName(__FILE_FULL_PATH__), "..", "..", "..");
     auto named = regex(moduleNameLiteral);
     size_t read;
     foreach (package_; ["ast", "syntax", "loader", "sema", "core", "interpreter", "codegen"])
@@ -1760,7 +1760,8 @@ unittest
     import std.algorithm : canFind;
     import std.regex : matchFirst, regex;
 
-    auto text = readText(buildPath(standardLibraryPath(), "..", "sema", "source", "silver", "sema", "analysis.d"));
+    auto text = readText(buildNormalizedPath(dirName(__FILE_FULL_PATH__), "..", "..", "..", "sema", "source", "silver",
+        "sema", "analysis.d"));
     assert(withoutTests(text).canFind("Analysis analyze("), "analysis.d's analyze isn't read");
     withoutTests("a\nversion (unittest) import b;\nc\n@(\"t\") unittest { if (x) { y(); } }\nd\n"
         ~ "version (unittest) { e }\nf\nversion (unittest) void g() { h; }\ni\nversion (unittest):\nj")

@@ -19,7 +19,7 @@
 /// into `silver_panic`.
 module silver.runtime.entry;
 
-/// Generated code's entry point, which runs the program's `main`.
+/// What generated code defines to run the program's `main`, which the runtime calls on a thread of its own.
 extern (C) void silver_main();
 
 private enum stackSize = 256 * 1024 * 1024;
@@ -41,14 +41,24 @@ private void runProgram()
     silver_main();
 }
 
-int main(string[] args)
+/// The C `main` that generated code defines calls this, so the runtime can be a library like any other:
+/// a linker looks for the entry point only in objects. It starts druntime as dmd's own `main` would.
+extern (C) int silver_start(int argc, char** argv)
+{
+    return _d_run_main(argc, argv, &runMain);
+}
+
+private alias MainFunction = extern (C) int function(char[][] args);
+private extern (C) int _d_run_main(int argc, char** argv, MainFunction mainFunction);
+
+private extern (C) int runMain(char[][] args)
 {
     import core.stdc.stdio : fprintf, stderr;
     import core.thread : Thread;
     import silver.runtime.arguments : takeArguments;
 
     // As an error returned from `main` is reported.
-    if (auto mistake = takeArguments(args))
+    if (auto mistake = takeArguments(cast(string[]) args))
     {
         fprintf(stderr, "error: %.*s\n", cast(int) mistake.length, mistake.ptr);
         return 1;

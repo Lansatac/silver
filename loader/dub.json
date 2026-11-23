@@ -5,11 +5,13 @@
 		"silver:ast": "*",
 		"silver:syntax": "*"
 	},
+	"preGenerateCommands-posix": ["mkdir -p \"$PACKAGE_DIR../out\" && ln -sfn ../stdlib \"$PACKAGE_DIR../out/stdlib\""],
+	"preGenerateCommands-windows": ["if not exist \"$PACKAGE_DIR..\\out\\stdlib\" (mkdir \"$PACKAGE_DIR..\\out\" 2>nul & mklink /J \"$PACKAGE_DIR..\\out\\stdlib\" \"$PACKAGE_DIR..\\stdlib\" >nul)"],
 	"configurations": [
 		{ "name": "library" },
 		{
 			"name": "unittest",
-			"targetPath": "..",
+			"targetPath": "../out",
 			"dependencies": {
 				"silver:testrunner": "*",
 				"fluent-asserts": "~>2.1"

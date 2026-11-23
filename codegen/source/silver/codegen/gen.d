@@ -451,11 +451,14 @@ private final class Generator
         // `keepAlive`'s asm.
         ~ "attributes #1 = { nounwind willreturn memory(inaccessiblemem: readwrite) }\n";
 
-    /// `silver_main`, which the runtime calls once druntime has started.
+    /// `silver_main`, which the runtime calls once druntime has started, and the C `main` that starts it.
     private string emitEntry()
     {
-        if (_program.entryPoint == size_t.max) return emitTestEntry();
-        return "define void @silver_main() #0 {\n.entry:\n  call void %s()\n  ret void\n}\n".format(mangled(_program.entryPoint));
+        auto main = _program.entryPoint == size_t.max ? emitTestEntry()
+            : "define void @silver_main() #0 {\n.entry:\n  call void %s()\n  ret void\n}\n".format(mangled(_program.entryPoint));
+        return main ~ "\ndeclare i32 @silver_start(i32, ptr)\n\n"
+            ~ "define i32 @main(i32 %argc, ptr %argv) #0 {\n.entry:\n"
+            ~ "  %status = call i32 @silver_start(i32 %argc, ptr %argv)\n  ret i32 %status\n}\n";
     }
 
     /// `silver_main` for running the tests: each runs through a guard, which a panic in it or `?`
