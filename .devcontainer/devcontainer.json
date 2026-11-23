@@ -1,6 +1,6 @@
 {
   "name": "Silver Development",
-  "build": { "dockerfile": "Dockerfile" },
+  "build": { "dockerfile": "Dockerfile", "target": "dev" },
   // The source is a clone on a volume, made from the Windows clone by setup.sh. Working on the
   // Windows drive directly goes through WSL's 9p file sharing, which was about 5x slower to build
   // and test on. The Windows clone is mounted for setup.sh, the files it links, and as a remote.
