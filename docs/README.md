@@ -1,6 +1,6 @@
 # The Silver language
 
-[![test](https://github.com/Lansatac/silver/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/Lansatac/silver/actions/workflows/test.yml?query=branch%3Amaster)
+[![Tests](https://github.com/Lansatac/silver/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/Lansatac/silver/actions/workflows/test.yml?query=branch%3Amaster)
 
 Silver is a statically typed language with a functional feel: values are immutable by default, absence is explicit, and blocks and `if` are expressions.
 
