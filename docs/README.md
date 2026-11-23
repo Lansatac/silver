@@ -1,5 +1,7 @@
 # The Silver language
 
+[![test](https://github.com/Lansatac/silver/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/Lansatac/silver/actions/workflows/test.yml?query=branch%3Amaster)
+
 Silver is a statically typed language with a functional feel: values are immutable by default, absence is explicit, and blocks and `if` are expressions.
 
 These documents describe the language as designed. Where the implementation doesn't match the design yet, the end of each file has a **Current implementation** section. Silver can be run by an interpreter or compiled to a native program, and both are meant to behave identically.
