@@ -1,6 +1,7 @@
 # Runs the whole suite (runTests) on Linux and Windows.
-# Linux runs it in the dev container's image, so CI and the container use the same pinned dmd, LDC,
-# clang and redub. Windows takes dmd's version and redub's commit from the same Dockerfile.
+# Linux runs it in the `build` stage of the dev container's Dockerfile, which the dev container is
+# built on, so both use the same pinned dmd, clang and redub. Windows takes dmd's version and
+# redub's commit from the same Dockerfile.
 name: test
 
 on:
@@ -25,14 +26,15 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build the dev container image
+      - name: Build the image
         uses: docker/build-push-action@v6
         with:
           context: .devcontainer
-          tags: silver-dev:ci
+          target: build
+          tags: silver-build:ci
           load: true
-          cache-from: type=gha,scope=devcontainer
-          cache-to: type=gha,mode=max,scope=devcontainer
+          cache-from: type=gha,scope=build
+          cache-to: type=gha,mode=max,scope=build
 
       - name: Cache fetched dub packages
         uses: actions/cache@v4
@@ -41,7 +43,7 @@ jobs:
           key: dub-linux-${{ hashFiles('dub.selections.json', '**/dub.json') }}
           restore-keys: dub-linux-
 
-      # Runs as the runner's user, who owns the checkout, rather than the image's `dev`.
+      # Runs as the runner's user, who owns the checkout.
       # The in-memory /tmp with exec is the one the dev container sets up (devcontainer.json).
       - name: Test
         run: |
@@ -53,7 +55,7 @@ jobs:
             -v "$GITHUB_WORKSPACE:/code" \
             -w /code \
             --tmpfs /tmp:rw,exec,mode=1777,size=8g \
-            silver-dev:ci ./runTests.sh
+            silver-build:ci ./runTests.sh
 
   windows:
     runs-on: windows-latest
