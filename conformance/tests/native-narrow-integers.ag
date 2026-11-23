@@ -5,8 +5,8 @@ import std.c
 native def toupper(c: CInt): UInt8
 native def tolower(c: CInt): Bool
 native def ilogb(x: Float): Int16
-native def isdigit(c: CInt): Int8
-native def abs(x: CInt): CInt
+native def isdigit(c: CInt): CInt
+native def abs(x: CInt): Int8
 
 def main(): Unit {
     printl(toupper(97))
@@ -18,6 +18,7 @@ def main(): Unit {
     printl(isdigit(53) != 0)
     printl(isdigit(97) == 0)
     printl(abs(-100))
+    printl(abs(-200))
     val upper = toupper
     printl(upper(98))
     val lower = tolower
