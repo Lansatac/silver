@@ -1,0 +1,5 @@
+FAIL "panics" at lone-panicking-test.ag(2,6)
+    panic: lone-panicking-test.ag(5,12): Index is out of range
+    Output:
+        before
+0 passed, 1 failed

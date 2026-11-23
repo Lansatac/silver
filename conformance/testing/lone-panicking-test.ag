@@ -1,0 +1,6 @@
+// The only test, which panics in its own body: its guard can't hand its frame over to it.
+test "panics" {
+    printl("before")
+    val xs = [1, 2]
+    printl(xs[length(xs) + 2])
+}

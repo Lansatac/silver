@@ -416,6 +416,8 @@ private final class Generator
     private bool[Type] _scalarsPending;
     /// The functions on a cycle of calls (`recursiveFunctions`), and their LLVM names.
     private bool[size_t] _recursive;
+    /// The functions a call can reach through a function value: see `escapedFunctions`.
+    private bool[size_t] _escaped;
     private bool[string] _recursiveNames;
 
     this(const ref Program program, const SourceMap sources)
@@ -428,6 +430,7 @@ private final class Generator
     {
         string[] functions;
         _recursive = recursiveFunctions();
+        _escaped = escapedFunctions();
         foreach (index; _recursive.byKey) _recursiveNames[mangled(index)] = true;
         foreach (i, ref func; _program.functions)
         {
@@ -471,7 +474,10 @@ private final class Generator
         auto text = "@silver.test.jump = internal global [5 x ptr] zeroinitializer\n\n"
             ~ "define private void @silver.test.escape() #0 noinline {\n.entry:\n"
             ~ "  call void @llvm.eh.sjlj.longjmp(ptr @silver.test.jump)\n  unreachable\n}\n\n"
-            ~ "define private void @silver.test.guard(ptr %test) #0 noinline {\n.entry:\n"
+            // No tail calls: a sibling call would free the frame the setjmp buffer points into
+            // before the test runs, so a test that panics would jump into a frame that's gone. That
+            // holds for the calls of a test inlined here too, which keep their own `tail` markers.
+            ~ "define private void @silver.test.guard(ptr %test) #0 noinline \"disable-tail-calls\"=\"true\" {\n.entry:\n"
             ~ "  %frame = call ptr @llvm.frameaddress.p0(i32 0)\n"
             ~ "  store ptr %frame, ptr @silver.test.jump\n"
             ~ "  %stack = call ptr @llvm.stacksave.p0()\n"
@@ -479,7 +485,7 @@ private final class Generator
             ~ "  store ptr %stack, ptr %slot\n"
             ~ "  %jumped = call i32 @llvm.eh.sjlj.setjmp(ptr @silver.test.jump)\n"
             ~ "  %fresh = icmp eq i32 %jumped, 0\n"
-            ~ "  br i1 %fresh, label %run, label %done\nrun:\n  call void %test()\n  br label %done\ndone:\n  ret void\n}\n\n"
+            ~ "  br i1 %fresh, label %run, label %done\nrun:\n  notail call void %test()\n  br label %done\ndone:\n  ret void\n}\n\n"
             ~ "define void @silver_main() #0 {\n.entry:\n  call void @silver_test_start(ptr @silver.test.escape)\n";
         foreach (i, test; _program.tests)
         {
@@ -516,7 +522,9 @@ private final class Generator
         auto span = func.body.span;
         auto returnType = llvmType(func.returnType, span);
         _function = new FunctionState(planSlots(func), scalarsOf(func.returnType, span));
-        auto stackCheck = emitStackCheck(span);
+        // Only recursion can overflow the stack, and every cycle of calls passes through a
+        // function on a cycle of direct calls or one reached through a function value.
+        auto stackCheck = index in _recursive || index in _escaped ? emitStackCheck(span) : Fragment.init;
 
         string[] params;
         Fragment receive;
@@ -2018,9 +2026,9 @@ private final class Generator
     /// it's left; and every loop being generated is left without passing its end.
     private Fragment keptOnReturn(Span span)
     {
-        auto code = keepAlive(_function.tailKept, span);
-        foreach_reverse (open; _function.open) code = code.then(keepAlive(keptBy(open), span));
-        return code.withValue(null);
+        const(Local)[] locals = _function.tailKept;
+        foreach_reverse (open; _function.open) locals ~= keptBy(open);
+        return keepAlive(locals, span);
     }
 
     private Fragment emit(const Expr e, const Loop loop)
@@ -2100,13 +2108,13 @@ private final class Generator
     /// without passing their ends.
     private Fragment keepLeaving(size_t label, Span span)
     {
-        Fragment code;
+        const(Local)[] locals;
         foreach_reverse (open; _function.open)
         {
             if (open == label) break;
-            code = code.then(keepAlive(keptBy(open), span));
+            locals ~= keptBy(open);
         }
-        return code.withValue(null);
+        return keepAlive(locals, span);
     }
 
     /// Makes LLVM keep each of `locals`' pointers, as its slot holds them now, somewhere until this
@@ -2118,11 +2126,26 @@ private final class Generator
     /// declared before it that it names where it's left, which is outside it, and at its head
     /// only when it calls something that stays a call, so a loop that becomes free of calls is
     /// optimized as before. This covers the shapes known to need it; it isn't a proof.
+    ///
+    /// The pointers go to as few `asm`s as their registers allow, since LLVM's inliner counts each
+    /// as a call: a range's `next` that's left a loop is otherwise too costly to inline.
     private Fragment keepAlive(const(Local)[] locals, Span span)
     {
+        enum perAsm = 6;
         Fragment code;
+        string[] values;
+        void flush()
+        {
+            if (values.length == 0) return;
+            code = code.then(Fragment.instruction("call void asm sideeffect \"\", \"%-(%s,%)\"(%-(ptr %s, %)) #1"
+                .format(values.map!(_ => "r"), values)));
+            values = null;
+        }
+        bool[const(Local)] seen;
         foreach (local; locals)
         {
+            if (local in seen) continue;
+            seen[local] = true;
             auto slot = _function.slots[local];
             if (slot is null) continue;
             auto layout = scalarsOf(local.type, span);
@@ -2130,10 +2153,12 @@ private final class Generator
             {
                 if (scalar != "ptr") continue;
                 auto value = loadScalars(layout, slot, i, 1);
-                code = code.then(value).then(Fragment.instruction(
-                    "call void asm sideeffect \"\", \"r\"(ptr %s) #1".format(value.value)));
+                code = code.then(value);
+                values ~= value.value;
+                if (values.length == perAsm) flush();
             }
         }
+        flush();
         return code.withValue(null);
     }
 
@@ -2229,24 +2254,26 @@ private final class Generator
     }
 
     /// Adds to `targets` every function `e` calls or makes a function value of, which is what
-    /// LLVM can inline or call.
-    private static void collectCalls(const Expr e, ref bool[size_t] targets)
+    /// LLVM can inline or call, and to `made` those it makes a function value of. `opaque` is set
+    /// when it calls what the call graph can't see: a function value, a native or an intrinsic,
+    /// or a comparison or hash of function values, which reaches their captures' functions.
+    private void collectCalls(const Expr e, ref bool[size_t] targets, ref bool[size_t] made, ref bool opaque)
     {
         void all(const Expr[] exprs)
         {
-            foreach (ref expr; exprs) collectCalls(expr, targets);
+            foreach (ref expr; exprs) collectCalls(expr, targets, made, opaque);
         }
 
         void inStmt(const Stmt s)
         {
             s.kind.match!(
-                (const Let let) => collectCalls(let.value, targets),
-                (const Assign assign) => collectCalls(assign.value, targets),
+                (const Let let) => collectCalls(let.value, targets, made, opaque),
+                (const Assign assign) => collectCalls(assign.value, targets, made, opaque),
                 (const AssignElement assign) {
-                    collectCalls(assign.index, targets);
-                    collectCalls(assign.value, targets);
+                    collectCalls(assign.index, targets, made, opaque);
+                    collectCalls(assign.value, targets, made, opaque);
                 },
-                (const Eval eval) => collectCalls(eval.expr, targets),
+                (const Eval eval) => collectCalls(eval.expr, targets, made, opaque),
             );
         }
 
@@ -2256,55 +2283,91 @@ private final class Generator
                 all(call.args);
             },
             (const CallClosure call) {
-                collectCalls(*call.callee, targets);
+                opaque = true;
+                collectCalls(*call.callee, targets, made, opaque);
                 all(call.args);
             },
             (const MakeClosure closure) {
                 targets[closure.target] = true;
+                made[closure.target] = true;
                 all(closure.captures);
             },
-            (const ForeignCall call) => all(call.args),
-            (const IntrinsicCall call) => all(call.args),
-            (const Prim prim) => all(prim.args),
-            (const Convert convert) => collectCalls(*convert.value, targets),
+            (const ForeignCall call) {
+                opaque = true;
+                all(call.args);
+            },
+            (const IntrinsicCall call) {
+                opaque = true;
+                all(call.args);
+            },
+            (const Prim prim) {
+                if (prim.args.any!(arg => _program.types.isFunction(arg.type))) opaque = true;
+                all(prim.args);
+            },
+            (const Convert convert) => collectCalls(*convert.value, targets, made, opaque),
             (const If if_) {
-                collectCalls(*if_.condition, targets);
-                collectCalls(*if_.trueBody, targets);
-                collectCalls(*if_.falseBody, targets);
+                collectCalls(*if_.condition, targets, made, opaque);
+                collectCalls(*if_.trueBody, targets, made, opaque);
+                collectCalls(*if_.falseBody, targets, made, opaque);
             },
             (const Block block) {
                 foreach (ref statement; block.statements) inStmt(statement);
-                if (block.result !is null) collectCalls(*block.result, targets);
+                if (block.result !is null) collectCalls(*block.result, targets, made, opaque);
             },
-            (const Loop loop) => collectCalls(*loop.body, targets),
-            (const Return return_) => collectCalls(*return_.value, targets),
+            (const Loop loop) => collectCalls(*loop.body, targets, made, opaque),
+            (const Return return_) => collectCalls(*return_.value, targets, made, opaque),
             (const Construct construct) => all(construct.fields),
-            (const Field field) => collectCalls(*field.object, targets),
+            (const Field field) => collectCalls(*field.object, targets, made, opaque),
             (const Update update) {
-                collectCalls(*update.object, targets);
-                collectCalls(*update.value, targets);
+                collectCalls(*update.object, targets, made, opaque);
+                collectCalls(*update.value, targets, made, opaque);
             },
             (const Inject inject) {
-                if (inject.payload !is null) collectCalls(*inject.payload, targets);
+                if (inject.payload !is null) collectCalls(*inject.payload, targets, made, opaque);
             },
-            (const IsMember test) => collectCalls(*test.subject, targets),
-            (const Payload payload) => collectCalls(*payload.subject, targets),
+            (const IsMember test) => collectCalls(*test.subject, targets, made, opaque),
+            (const Payload payload) => collectCalls(*payload.subject, targets, made, opaque),
             (const ArrayLit literal) => all(literal.elements),
             (const Index index) {
-                collectCalls(*index.array, targets);
-                collectCalls(*index.index, targets);
+                collectCalls(*index.array, targets, made, opaque);
+                collectCalls(*index.index, targets, made, opaque);
             },
             (const Slice slice) {
-                collectCalls(*slice.array, targets);
-                collectCalls(*slice.start, targets);
-                collectCalls(*slice.end, targets);
+                collectCalls(*slice.array, targets, made, opaque);
+                collectCalls(*slice.start, targets, made, opaque);
+                collectCalls(*slice.end, targets, made, opaque);
             },
-            (const Length length) => collectCalls(*length.array, targets),
+            (const Length length) => collectCalls(*length.array, targets, made, opaque),
             (const Cell cell) => all(cell.args),
-            (const Capture capture) => collectCalls(*capture.closure, targets),
-            (const TestFailure failure) => collectCalls(*failure.message, targets),
+            (const Capture capture) => collectCalls(*capture.closure, targets, made, opaque),
+            (const TestFailure failure) => collectCalls(*failure.message, targets, made, opaque),
             (_) {},
         );
+    }
+
+    /// The functions a call through a function value can reach that call something in turn, so
+    /// that a cycle of calls the call graph can't see passes through one of them. Reached that way
+    /// are every target of a closure, and what compares and hashes closures' captures, which the
+    /// runtime calls through a closure's descriptor and which recur as deep as closures capture
+    /// closures. One that calls nothing, as `x => x * 2` doesn't, is on no cycle.
+    private bool[size_t] escapedFunctions()
+    {
+        bool[size_t] escaped;
+        auto calls = new bool[](_program.functions.length);
+        foreach (i, ref func; _program.functions)
+        {
+            bool[size_t] targets;
+            bool opaque;
+            collectCalls(func.body, targets, escaped, opaque);
+            calls[i] = opaque || targets.length > 0;
+            if (func.captureEquality != noFunction) escaped[func.captureEquality] = true;
+            if (func.captureHash != noFunction) escaped[func.captureHash] = true;
+        }
+        foreach (i; escaped.keys)
+        {
+            if (!calls[i]) escaped.remove(i);
+        }
+        return escaped;
     }
 
     /// The functions on a cycle of calls, function values included (Tarjan's algorithm). LLVM can
@@ -2316,8 +2379,9 @@ private final class Generator
         auto callees = new size_t[][](count);
         foreach (i, ref func; _program.functions)
         {
-            bool[size_t] targets;
-            collectCalls(func.body, targets);
+            bool[size_t] targets, made;
+            bool opaque;
+            collectCalls(func.body, targets, made, opaque);
             callees[i] = targets.keys;
         }
 

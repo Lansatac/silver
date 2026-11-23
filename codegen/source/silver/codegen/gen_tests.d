@@ -5,8 +5,8 @@ module silver.codegen.gen_tests;
 version (unittest):
 
 import core.exception : AssertError;
-import std.algorithm : canFind, count, endsWith, filter, map, startsWith;
-import std.array : join;
+import std.algorithm : any, canFind, count, endsWith, filter, findSplitBefore, map, splitter, startsWith;
+import std.array : array, join;
 import std.file : mkdirRecurse, rmdirRecurse, tempDir, write;
 import std.path : buildPath;
 import std.process : escapeShellCommand, escapeShellFileName, execute, executeShell;
@@ -619,8 +619,8 @@ unittest
     auto ir = generateSource(source);
 
     size_t loads(string name) => functionLines(ir, "define internal i64 @\"main." ~ name ~ "\"").count!(text => text.canFind(" = load "));
-    // The stack limit, the array's two scalars and the field.
-    loads("third").should.equal(4);
+    // The array's two scalars and the field; it's on no cycle, so it doesn't check the stack.
+    loads("third").should.equal(3);
     // Neither reads the twelve fields of the `Wide` beside the one wanted.
     loads("tagOf").should.be.lessThan(12);
     loads("last").should.be.lessThan(24);
@@ -678,6 +678,36 @@ unittest
     Run run;
     if (!compileAndRun(source, run)) return;
     run.output.should.equal("12\n23\n103103\n3103\n3\n");
+}
+
+@("only a function that recursion can pass through checks the stack: one on a cycle, or one a function value reaches that calls something")
+unittest
+{
+    auto ir = generateSource("def twice(x: Int): Int => x * 2\n"
+        ~ "def down(n: Int): Int => if n == 0 => 0 else 1 + down(n - 1)\n"
+        ~ "def apply(f: (Int) -> Int, x: Int): Int => f(x)\n"
+        ~ "def main(): Unit {\n    printl(twice(down(3)))\n    printl(apply(x => x + 1, 2))\n    printl(apply(x => twice(x), 2))\n}");
+    bool checks(string first) => functionLines(ir, first).any!(text => text.canFind("@silver_stack_limit"));
+    checks("define internal i64 @\"main.twice\"").should.equal(false);
+    checks("define internal i64 @\"main.apply\"").should.equal(false);
+    checks("define internal void @\"main.main\"").should.equal(false);
+    checks("define internal i64 @\"main.down\"").should.equal(true);
+    // The first lambda calls nothing; the second calls twice.
+    auto lambdas = ir.splitter("\ndefine private i64 @\"main.lambda.").array[1 .. $].map!(f => f.findSplitBefore("\n}")[0]).array;
+    lambdas.length.should.equal(2);
+    lambdas.map!(f => f.canFind("@silver_stack_limit")).array.should.equal([false, true]);
+}
+
+@("the pointers kept alive where a loop is left go to one asm for up to six")
+unittest
+{
+    auto ir = generateSource("def total(a: [Int], b: [Int], c: [Int], d: [Int], e: [Int], f: [Int], g: [Int]): Int {\n"
+        ~ "    mutable val sum = 0\n    for x in a { sum += x + b[0] + c[0] + d[0] + e[0] + f[0] + g[0] }\n    sum\n}\n"
+        ~ "def main(): Unit {\n    val xs = [1]\n    printl(total(xs, xs, xs, xs, xs, xs, xs))\n}");
+    // Seven arrays, each a pointer and a length, kept where the loop is left: six, then one.
+    auto kept = functionLines(ir, "define internal i64 @\"main.total\"").filter!(text => text.canFind("asm sideeffect"))
+        .map!(text => text.findSplitBefore("(")[0]).array;
+    kept.should.equal(["  call void asm sideeffect \"\", \"r,r,r,r,r,r\"", "  call void asm sideeffect \"\", \"r\""]);
 }
 
 @("codegen marks what lets clang optimize, and an optimized program prints and panics as an unoptimized one does")

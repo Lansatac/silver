@@ -1,0 +1,8 @@
+// Recursion only through a function value is on no cycle the call graph sees, and still overflows as a panic.
+type Fn(call: (Fn, Int) -> Int)
+
+def main(): Unit {
+    printl("before")
+    val f = Fn((self: Fn, n: Int) => if n == 0 => 0 else self.call(self, n - 1) + 1)
+    printl(f.call(f, 100000000))
+}

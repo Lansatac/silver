@@ -1,0 +1,28 @@
+// The only test ends in a call that panics. Once the test is inlined into its guard, that call
+// mustn't become a jump that frees the guard's frame, which the panic jumps back into.
+import std.file
+
+def check(go: Bool): Unit {
+    printl("step 0")
+    printl("step 1")
+    printl("step 2")
+    printl("step 3")
+    printl("step 4")
+    printl("step 5")
+    printl("step 6")
+    printl("step 7")
+    printl("step 8")
+    printl("step 9")
+    printl("step 10")
+    printl("step 11")
+    printl("step 12")
+    printl("step 13")
+    printl("step 14")
+    printl("step 15")
+    if go && !exists("no-such-file") { panic("boom") }
+}
+
+test "panics" {
+    check(false)
+    check(true)
+}
