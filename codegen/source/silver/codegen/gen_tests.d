@@ -1,5 +1,5 @@
 /// Code generation tests. Each one compiles a Silver program to IR and checks it, and links and
-/// runs it when clang and dmd are available.
+/// runs it when clang is available.
 module silver.codegen.gen_tests;
 
 version (unittest):
@@ -57,7 +57,7 @@ struct Run
     string output;
 }
 
-/// Generates IR for `source` and, if clang and dmd are available, links and runs it. Returns
+/// Generates IR for `source` and, if clang is available, links and runs it. Returns
 /// false without running when a tool is missing, so the caller can skip its checks on the
 /// result. `inputPath` is the program's standard input, if it has one. A link failure fails the
 /// test and keeps the IR on disk for inspection.
