@@ -48,6 +48,14 @@ extern (C) int silver_start(int argc, char** argv)
     return _d_run_main(argc, argv, &runMain);
 }
 
+// dmd names the C runtime only in the object that defines `main`, which here is generated code's. So
+// this object, which every program pulls out of the library, names the one dmd is configured for.
+version (Windows)
+{
+    pragma(lib, __traits(getTargetInfo, "cppRuntimeLibrary"));
+    pragma(lib, "OLDNAMES");
+}
+
 private alias MainFunction = extern (C) int function(char[][] args);
 private extern (C) int _d_run_main(int argc, char** argv, MainFunction mainFunction);
 
