@@ -6,5 +6,7 @@
 	"targetPath": "../out/runtime",
 	"sourcePaths": ["source"],
 	"importPaths": ["source"],
-	"dflags": ["-O", "-inline"]
+	"dflags": ["-O", "-inline"],
+	"preGenerateCommands-posix": ["mkdir -p \"$PACKAGE_DIR../out/runtime\" && cp -u \"$(dirname \"$(readlink -f \"$(command -v \"$DC\")\")\")/../lib64/libphobos2.a\" \"$PACKAGE_DIR../out/runtime/\""],
+	"preGenerateCommands-windows": ["(if not exist \"$PACKAGE_DIR..\\out\\runtime\" mkdir \"$PACKAGE_DIR..\\out\\runtime\") & for %I in (\"$DC\") do xcopy /d /y /q \"%~dpI..\\lib64\\phobos64.lib\" \"$PACKAGE_DIR..\\out\\runtime\" >nul"]
 }
