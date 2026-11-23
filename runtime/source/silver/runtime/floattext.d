@@ -287,7 +287,7 @@ unittest
     assert(floatText(123456789012345680.0) == "1.2345678901234568e17");
     assert(floatText(double.max) == "1.7976931348623157e308");
     assert(floatText(double.min_normal) == "2.2250738585072014e-308");
-    assert(floatText(5e-324) == "5e-324");
+    assert(floatText(5e-324L) == "5e-324");
     assert(floatText(2.0 ^^ 52) == "4503599627370496.0");
     assert(floatText(double.nan) == "nan");
     assert(floatText(-double.infinity) == "-inf");
