@@ -62,3 +62,4 @@ type Json = :String | :Int | :Float | :Bool | :Null | :[Json] | :[String: Json]
 ## Current implementation
 
 - Everything above is built, in plain Silver in `stdlib/std/json.ag`, and tested in `stdlib/std/json.test.ag` on both backends.
+- `stdlib/std/json_suite.ag` runs the 318 parsing cases of [JSONTestSuite](https://github.com/nst/JSONTestSuite), generated from it by `json_suite.py`. Every case it says must be read is, except the two with a key named twice, and every case it says must be refused is: by `parse`, or for the 12 whose bytes aren't UTF-8, by `decode`, since a String is always valid UTF-8. Of the 35 cases left to the parser, 13 aren't UTF-8; of the rest, two numbers that become zero and 500 levels of nesting are read, and the other numbers, the halves of surrogate pairs and a leading byte-order mark are refused.

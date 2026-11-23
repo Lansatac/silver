@@ -431,7 +431,7 @@ def pretty(value: Json): String ! NotFinite {
     out
 }
 
-// The compact text, for showing a value. A NaN or an infinity shows as Silver prints it, which isn't JSON.
+// The compact text, for showing a value. A NaN or an infinity shows as Silver prints it, which isn't valid JSON.
 def opString(value: Json): String {
     mutable val out = ""
     emit(value, mutable out, false, false, 0)!

@@ -128,9 +128,14 @@ unittest
     import silver.ast : langPackage;
     import silver.loader : isCompanionFile, standardLibraryPath;
 
+    import std.file : readText;
+    import std.string : lineSplitter, startsWith;
+
     auto root = standardLibraryPath();
+    // A file with no `module` line is a script, as `std/json_suite.ag` is, and not importable.
     auto modules = dirEntries(root, "*.ag", SpanMode.depth)
         .filter!(e => !isCompanionFile(e.name))
+        .filter!(e => readText(e.name).lineSplitter.canFind!(line => line.startsWith("module ")))
         .map!(e => relativePath(e.name, root).stripExtension.pathSplitter.array)
         .map!(segments => (segments[$ - 1] == "package" ? segments[0 .. $ - 1] : segments).join("."))
         .array;
