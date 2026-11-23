@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Writes json_suite.ag from JSONTestSuite's parsing cases (github.com/nst/JSONTestSuite).
 
-    python3 stdlib/std/json_suite.py <JSONTestSuite checkout>
+    python3 conformance/tools/json_suite.py <JSONTestSuite checkout>
 
 A y_ case must parse, and write back to text that parses to the same value. An n_ case must be
 rejected: by parse, or, when its bytes aren't UTF-8, by decode, since a String is always valid
@@ -173,10 +173,10 @@ def main():
         out.append('')
     if unknown:
         sys.exit('no decision for: ' + ', '.join(unknown))
-    target = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'json_suite.ag')
+    target = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'stdlib', 'json_suite.ag')
     with open(target, 'w', newline='\n') as f:
         f.write('\n'.join(out).rstrip('\n') + '\n')
-    print(f'wrote {len(names)} cases to {target}')
+    print(f'wrote {len(names)} cases to {os.path.normpath(target)}')
 
 
 def is_utf8(path):

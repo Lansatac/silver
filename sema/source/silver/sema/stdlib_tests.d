@@ -132,7 +132,7 @@ unittest
     import std.string : lineSplitter, startsWith;
 
     auto root = standardLibraryPath();
-    // A file with no `module` line is a script, as `std/json_suite.ag` is, and not importable.
+    // A file with no `module` line is a script, which the language allows beside modules, and not importable.
     auto modules = dirEntries(root, "*.ag", SpanMode.depth)
         .filter!(e => !isCompanionFile(e.name))
         .filter!(e => readText(e.name).lineSplitter.canFind!(line => line.startsWith("module ")))

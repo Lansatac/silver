@@ -801,7 +801,9 @@ version (unittest)
     /// Runs the standard library's tests on `backend`, and returns its report if any of them didn't pass.
     string runStandardLibrary(TestBackend backend, string workDirectory, Optimization optimization = Optimization.none)
     {
-        auto files = testFiles(standardLibraryPath());
+        // `stdlib/` holds the companion tests, which ship with it; `conformance/stdlib/` holds suites that
+        // test it from outside, as `json_suite.ag` does.
+        auto files = testFiles(standardLibraryPath()) ~ testFiles(buildPath(conformanceDirectory, "stdlib"));
         auto packages = Packages(withStandardLibrary([]));
         auto runs = files.map!(file => runFile(file, packages, backend, workDirectory, optimization)).array;
         return succeeded(runs) ? null : report(runs);
