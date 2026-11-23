@@ -53,6 +53,18 @@ RUN curl -fsS https://dlang.org/install.sh | bash -s install "ldc-${LDC_VERSION}
     && ln -s ${LDC_DIR}/bin/ldmd2 /usr/local/bin/ldmd2 \
     && chmod -R a+rX /opt/dlang
 
+# redub, which runTests.sh builds and tests with, from Jason's fork: upstream's `redub test` doesn't
+# generate the dub_test_root silver.testrunner needs, and its builds drop dub.selections.json's
+# entries. Pinned to a commit on the fork's test-root branch; bump it to upgrade.
+ARG REDUB_COMMIT=c66790d5f6f1de7b1036bcc733a30ed0f7571e78
+RUN git clone --quiet https://github.com/Lansatac/redub.git /opt/redub \
+    && cd /opt/redub \
+    && git checkout --quiet ${REDUB_COMMIT} \
+    && dub build --quiet \
+    && ln -s /opt/redub/build/redub /usr/local/bin/redub \
+    && rm -rf /root/.dub \
+    && chmod -R a+rX /opt/redub
+
 # Beads (`bd`), the issue tracker. Pinned like dmd; bump the version to upgrade.
 ARG BEADS_VERSION=1.3.4
 RUN ARCH=$(dpkg --print-architecture) \

@@ -1,21 +1,38 @@
-# Runs every package's tests, then the root's. Extra arguments go to each `dub test`.
+# Runs every package's tests, then the root's. Extra arguments go to each package's test command.
 # Conformance runs each compiled program optimized as well; SILVER_CONFORMANCE_UNOPTIMIZED=1 skips that.
 # Packages are named relative to this directory (`:sema`, not `silver:sema`): dub can resolve a
 # qualified name to another checkout of the package, such as a git worktree.
+#
+# Builds and tests with redub from Jason's fork (github.com/Lansatac/redub, branch test-root), which
+# generates the dub_test_root that silver.testrunner needs and leaves dub.selections.json's entries
+# alone: $env:SILVER_REDUB, else ~\redub\build\redub.exe, else `redub` on the PATH (which in the dev
+# container is the fork, built into its image). Without one, dub does the same work more slowly.
 $packages = ':ast', ':syntax', ':loader', ':sema', ':core', ':interpreter', ':codegen', ':testing', ':conformance', ':frontend', 'root'
 $failed = @()
+
+$own = Join-Path $HOME 'redub\build\redub.exe'
+$onPath = Get-Command redub -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+$tool = if ($env:SILVER_REDUB) { $env:SILVER_REDUB }
+    elseif (Test-Path $own -PathType Leaf) { $own }
+    elseif ($onPath) { $onPath.Source }
+    else { $null }
+if (-not $tool -or -not (Test-Path $tool -PathType Leaf))
+{
+    Write-Host "note: redub wasn't found, so dub builds and tests. See the comment at the top of $PSCommandPath."
+    $tool = 'dub'
+}
 
 Push-Location $PSScriptRoot
 try
 {
     # The front end's end-to-end tests run the built silver and silverc.
     Write-Host "=== build"
-    dub build
+    & $tool build
     if ($LASTEXITCODE -ne 0) { $failed += 'build' }
     foreach ($package in $packages)
     {
         Write-Host "=== $package"
-        if ($package -eq 'root') { dub test @args } else { dub test $package @args }
+        if ($package -eq 'root') { & $tool test @args } else { & $tool test $package @args }
         if ($LASTEXITCODE -ne 0) { $failed += $package }
     }
 }
