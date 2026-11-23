@@ -7,6 +7,8 @@
 # generates the dub_test_root that silver.testrunner needs and leaves dub.selections.json's entries
 # alone: $env:SILVER_REDUB, else ~\redub\build\redub.exe, else `redub` on the PATH (which in the dev
 # container is the fork, built into its image). Without one, dub does the same work more slowly.
+# $env:SILVER_REDUB_PARALLEL is passed to redub as --parallel (auto, full, leaves or no): each dmd that
+# compiles against sema takes gigabytes, and several at once can need more memory than a machine has.
 $packages = ':ast', ':syntax', ':loader', ':sema', ':core', ':interpreter', ':codegen', ':testing', ':conformance', ':frontend', 'root'
 $failed = @()
 
@@ -21,18 +23,20 @@ if (-not $tool -or -not (Test-Path $tool -PathType Leaf))
     Write-Host "note: redub wasn't found, so dub builds and tests. See the comment at the top of $PSCommandPath."
     $tool = 'dub'
 }
+$options = @()
+if ($tool -ne 'dub' -and $env:SILVER_REDUB_PARALLEL) { $options = @("--parallel=$env:SILVER_REDUB_PARALLEL") }
 
 Push-Location $PSScriptRoot
 try
 {
     # The front end's end-to-end tests run the built silver and silverc.
     Write-Host "=== build"
-    & $tool build
+    & $tool build @options
     if ($LASTEXITCODE -ne 0) { $failed += 'build' }
     foreach ($package in $packages)
     {
         Write-Host "=== $package"
-        if ($package -eq 'root') { & $tool test @args } else { & $tool test $package @args }
+        if ($package -eq 'root') { & $tool test @options @args } else { & $tool test $package @options @args }
         if ($LASTEXITCODE -ne 0) { $failed += $package }
     }
 }

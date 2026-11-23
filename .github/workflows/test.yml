@@ -123,5 +123,8 @@ jobs:
           clang --version
           dmd --version
 
+      # One dmd at a time: in parallel, with each taking gigabytes, dmd crashed and then stalled on 16 GB.
       - name: Test
+        env:
+          SILVER_REDUB_PARALLEL: "no"
         run: ./runTests.ps1
