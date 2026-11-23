@@ -31,7 +31,7 @@ type Json = :String | :Int | :Float | :Bool | :Null | :[Json] | :[String: Json]
 
 ## Parsing
 
-`parse(text): Json ! JsonError` reads one value, with white space around it. `JsonError(message, line, column)` says why it stopped and where, with both counted from 1 and the column counted in characters.
+`parse(text): Json ! JsonError` reads one value, with white space around it. `JsonError(message, line, column)` says why it stopped and where, with both counted from 1 and the column counted in characters. It prints as `3:3: unexpected x`.
 
 - Only what RFC 8259 allows is read. There are no comments, no trailing commas, and no white space but space, tab, `\n` and `\r`.
 - An object that names a key twice is an error at the second key.
@@ -62,4 +62,4 @@ type Json = :String | :Int | :Float | :Bool | :Null | :[Json] | :[String: Json]
 ## Current implementation
 
 - Everything above is built, in plain Silver in `stdlib/std/json.ag`, and tested in `stdlib/std/json.test.ag` on both backends.
-- `conformance/stdlib/json_suite.ag` runs the 318 parsing cases of [JSONTestSuite](https://github.com/nst/JSONTestSuite), generated from it by `conformance/tools/json_suite.py`. Every case it says must be read is, except the two with a key named twice, and every case it says must be refused is: by `parse`, or for the 12 whose bytes aren't UTF-8, by `decode`, since a String is always valid UTF-8. Of the 35 cases left to the parser, 13 aren't UTF-8; of the rest, two numbers that become zero and 500 levels of nesting are read, and the other numbers, the halves of surrogate pairs and a leading byte-order mark are refused.
+- `conformance/stdlib/json_suite.ag` runs the 318 parsing cases of [JSONTestSuite](https://github.com/nst/JSONTestSuite), generated from it by `conformance/tools/json_suite.d`. Every case it says must be read is, except the two with a key named twice, and every case it says must be refused is: by `parse`, or for the 12 whose bytes aren't UTF-8, by `decode`, since a String is always valid UTF-8. Of the 35 cases left to the parser, 13 aren't UTF-8; of the rest, two numbers that become zero and 500 levels of nesting are read, and the other numbers, the halves of surrogate pairs and a leading byte-order mark are refused.

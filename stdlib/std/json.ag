@@ -13,6 +13,8 @@ type Json = :String | :Int | :Float | :Bool | :Null | :[Json] | :[String: Json]
 // Why parsing stopped, and where: `line` and `column` count from 1, and `column` counts characters.
 type JsonError(message: String, line: Int, column: Int)
 
+def opString(e: JsonError): String => "{e.line}:{e.column}: {e.message}"
+
 // A Float that JSON can't write, NaN or an infinity, and where it is as a JSON Pointer (RFC 6901),
 // as `/scores/2`, or `` for the whole value.
 type NotFinite(value: Float, path: String)

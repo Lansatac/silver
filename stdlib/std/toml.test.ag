@@ -1,0 +1,301 @@
+import std.toml
+import std.range
+import std.string
+import std.time
+
+// The value of `v` in a document that sets only it.
+def value(text: String): Toml? => match parse("v = " ~ text) {
+    Ok(doc) => doc["v"]
+    Error(_) => None
+}
+
+def error(text: String): TomlError? => match parse(text) {
+    Ok(_) => None
+    Error(e) => e
+}
+
+test "basic strings and their escapes" {
+    expect(value("\"hello\"") == Some("hello"))
+    expect(value("\"\"") == Some(""))
+    expect(value("\"a\\\"b\\\\c\\b\\t\\n\\f\\r\\e\"") == Some("a\"b\\c\u{8}\t\n\u{c}\r\u{1b}"))
+    expect(value("\"\\x41\\u00e9\\U0001F600\"") == Some("A\u{e9}\u{1f600}"))
+    expect(value("\"caf\u{e9}\"") == Some("caf\u{e9}"))
+}
+
+test "literal strings have no escapes" {
+    expect(value("'C:\\Users\\nodejs'") == Some("C:\\Users\\nodejs"))
+    expect(value("'<\\i\\c*\\s*>'") == Some("<\\i\\c*\\s*>"))
+}
+
+test "multi-line strings" {
+    expect(value("\"\"\"\nRoses\nViolets\"\"\"") == Some("Roses\nViolets"))
+    expect(value("\"\"\"\r\none\r\ntwo\"\"\"") == Some("one\ntwo"))
+    expect(value("\"\"\"The quick \\\n\n   brown \\\n   fox.\"\"\"") == Some("The quick brown fox."))
+    expect(value("\"\"\"Here are two quotation marks: \"\". Simple.\"\"\"") == Some("Here are two quotation marks: \"\". Simple."))
+    expect(value("\"\"\"\"This,\" she said, \"is just a pointless statement.\"\"\"\"") == Some("\"This,\" she said, \"is just a pointless statement.\""))
+    expect(value("'''\nThe first newline is\ntrimmed in raw strings.\n'''") == Some("The first newline is\ntrimmed in raw strings.\n"))
+    expect(value("''''That,' she said, 'is still pointless.'''''") == Some("'That,' she said, 'is still pointless.''"))
+}
+
+test "bad strings" {
+    expect(error("v = \"abc") == Some(TomlError("missing closing quote", 1, 5)))
+    expect(error("v = \"a\nb\"") == Some(TomlError("missing closing quote", 1, 5)))
+    expect(error("v = 'abc") == Some(TomlError("missing closing apostrophe", 1, 5)))
+    expect(error("v = \"a\\qb\"") == Some(TomlError("invalid escape", 1, 7)))
+    expect(error("v = \"\\ud800\"") == Some(TomlError("escape for a surrogate or past U+10FFFF, which isn't a character", 1, 6)))
+    expect(error("v = \"\\x4\"") == Some(TomlError("expected 2 hex digits", 1, 6)))
+    expect(error("v = \"a\u{7f}\"") == Some(TomlError("control character 127 in a string", 1, 7)))
+    expect(error("v = \"\"\"a\"\"\"\"\"\"") == Some(TomlError("too many quotes at the end of a multi-line string", 1, 9)))
+    expect(error("v = '''abc") == Some(TomlError("missing closing '''", 1, 5)))
+}
+
+test "integers" {
+    expect(value("42") == Some(42))
+    expect(value("+17") == Some(17))
+    expect(value("-0") == Some(0))
+    expect(value("1_000_000") == Some(1000000))
+    expect(value("0xDEAD_beef") == Some(3735928559))
+    expect(value("0o755") == Some(493))
+    expect(value("0b1101") == Some(13))
+    expect(value("9223372036854775807") == Some(9223372036854775807))
+    expect(value("-9223372036854775808") == Some(-9223372036854775807 - 1))
+    expect(value("0x7fffffffffffffff") == Some(9223372036854775807))
+}
+
+test "bad integers" {
+    expect(error("v = 9223372036854775808") == Some(TomlError("integer too large for an Int", 1, 5)))
+    expect(error("v = 0x8000000000000000") == Some(TomlError("integer too large for an Int", 1, 5)))
+    expect(error("v = 012") == Some(TomlError("leading zero in a number", 1, 5)))
+    expect(error("v = 1__2") == Some(TomlError("an underscore has to be between digits", 1, 6)))
+    expect(error("v = 1_") == Some(TomlError("an underscore has to be between digits", 1, 6)))
+    expect(error("v = 0x_1") == Some(TomlError("expected a digit", 1, 7)))
+    expect(error("v = 0X1") == Some(TomlError("invalid value 0X1", 1, 5)))
+    expect(error("v = +0x1") == Some(TomlError("invalid value +0x1", 1, 5)))
+    expect(error("v = 0b102") == Some(TomlError("invalid value 0b102", 1, 5)))
+}
+
+test "floats" {
+    expect(value("3.1415") == Some(3.1415))
+    expect(value("-0.01") == Some(-0.01))
+    expect(value("5e+22") == Some(5e22))
+    expect(value("1e06") == Some(1000000.0))
+    expect(value("-2E-2") == Some(-0.02))
+    expect(value("6.626e-34") == Some(6.626e-34))
+    expect(value("224_617.445_991") == Some(224617.445991))
+    expect(String(value("-0.0")!) == "-0.0")
+    expect(String(value("inf")!) == "inf")
+    expect(String(value("-inf")!) == "-inf")
+    expect(String(value("+nan")!) == "nan")
+    expect(String(value("-nan")!) == "nan")
+}
+
+test "bad floats" {
+    expect(error("v = .5") == Some(TomlError("invalid value .5", 1, 5)))
+    expect(error("v = 5.") == Some(TomlError("expected a digit", 1, 7)))
+    expect(error("v = 1.e5") == Some(TomlError("expected a digit", 1, 7)))
+    expect(error("v = 03.14") == Some(TomlError("leading zero in a number", 1, 5)))
+    expect(error("v = 1e400") == Some(TomlError("number too large", 1, 5)))
+    expect(error("v = infinity") == Some(TomlError("invalid value infinity", 1, 5)))
+    expect(error("v = 1.2.3") == Some(TomlError("invalid value 1.2.3", 1, 5)))
+}
+
+test "booleans" {
+    expect(value("true") == Some(true))
+    expect(value("false") == Some(false))
+    expect(error("v = True") == Some(TomlError("invalid value True", 1, 5)))
+    expect(error("v = truest") == Some(TomlError("invalid value truest", 1, 5)))
+}
+
+test "dates and times map to std.time" {
+    val dt = DateTime(date(1979, 5, 27)!, time(7, 32, 0)!)
+    expect(value("1979-05-27T07:32:00Z") == Some(OffsetDateTime(dt, Duration(0))))
+    expect(value("1979-05-27T00:32:00.999999-07:00") == Some(OffsetDateTime(DateTime(date(1979, 5, 27)!, time(0, 32, 0, 999999000)!), hours(-7))))
+    expect(value("1979-05-27 07:32:00z") == Some(OffsetDateTime(dt, Duration(0))))
+    expect(value("1979-05-27t07:32:00") == Some(dt))
+    expect(value("1979-05-27") == Some(date(1979, 5, 27)!))
+    expect(value("07:32:00") == Some(time(7, 32, 0)!))
+    expect(value("00:32:00.123456789123") == Some(time(0, 32, 0, 123456789)!))
+}
+
+test "seconds can be left out since TOML 1.1" {
+    expect(value("07:32") == Some(time(7, 32, 0)!))
+    expect(value("1979-05-27 07:32") == Some(DateTime(date(1979, 5, 27)!, time(7, 32, 0)!)))
+    expect(value("1979-05-27T07:32+05:30") == Some(OffsetDateTime(DateTime(date(1979, 5, 27)!, time(7, 32, 0)!), minutes(330))))
+}
+
+test "a date alone, with a comment or a space after it" {
+    val doc = parse("d = 1979-05-27 # birthday\ne = 1979-05-27 ")!
+    expect(doc["d"] == Some(date(1979, 5, 27)!))
+    expect(doc["e"] == Some(date(1979, 5, 27)!))
+}
+
+test "bad dates and times" {
+    expect(error("v = 2023-02-29") == Some(TomlError("no such date as 2023-02-29", 1, 5)))
+    expect(error("v = 23:59:60") == Some(TomlError("no such time as 23:59:60", 1, 5)))
+    expect(error("v = 1979-05-27T07:32:00+24:00") == Some(TomlError("invalid offset", 1, 24)))
+    expect(error("v = 1979-05-27T") == Some(TomlError("invalid value 1979-05-27T", 1, 5)))
+    expect(error("v = 1979-5-27") == Some(TomlError("invalid value 1979-5-27", 1, 5)))
+    expect(error("v = 07:32:00Z") == Some(TomlError("invalid value 07:32:00Z", 1, 5)))
+    expect(error("v = 07:32:00.") == Some(TomlError("invalid value 07:32:00.", 1, 5)))
+}
+
+test "arrays" {
+    expect(value("[]") == Some([]))
+    expect(value("[1, 2, 3,]") == Some([1, 2, 3]))
+    expect(value("[ \"a\", 1, [true], ]") == Some(["a", 1, [true]]))
+    expect(value("[\n  1, # one\n  2\n\n]") == Some([1, 2]))
+    expect(error("v = [1 2]") == Some(TomlError("expected , or ] but found 2", 1, 8)))
+    expect(error("v = [,]") == Some(TomlError("expected a value but found ,", 1, 6)))
+    expect(error("v = [1,\n") == Some(TomlError("missing closing ]", 2, 1)))
+}
+
+test "inline tables can span lines and end with a comma since TOML 1.1" {
+    val point: [String: Toml] = ["x": 1, "y": 2]
+    expect(value("\{ x = 1, y = 2 }") == Some(point))
+    expect(value("\{\n  x = 1, # the first\n  y = 2,\n}") == Some(point))
+    val nested: [String: Toml] = ["a": point]
+    expect(value("\{ a.x = 1, a.y = 2 }") == Some(nested))
+    val empty: [String: Toml] = [:]
+    expect(value("\{}") == Some(empty))
+}
+
+test "an inline table is closed when it ends" {
+    expect(error("a = \{ b = 1 }\na.c = 2") == Some(TomlError("a is an inline table, which can't be added to", 2, 1)))
+    expect(error("a = \{ b = 1 }\n[a.c]") == Some(TomlError("a is an inline table, which can't be added to", 2, 2)))
+    expect(error("a = \{ b = \{ c = 1 }, b.d = 2 }") == Some(TomlError("b is an inline table, which can't be added to", 1, 22)))
+    expect(error("a = \{ b = 1, b = 2 }") == Some(TomlError("b is already defined", 1, 14)))
+    expect(error("a = \{ b = 1 c = 2 }") == Some(TomlError("expected , or \} but found c", 1, 13)))
+    expect(error("a = \{ , }") == Some(TomlError("expected a key but found ,", 1, 7)))
+}
+
+test "keys bare, quoted and dotted" {
+    val doc = parse("bare_key-1 = 1\n\"quoted key\" = 2\n'lit.eral' = 3\n\"\" = 4\nphysical.color = \"orange\"\nsite.\"google.com\" = true\na . b = 5")!
+    expect(doc["bare_key-1"] == Some(1))
+    expect(doc["quoted key"] == Some(2))
+    expect(doc["lit.eral"] == Some(3))
+    expect(doc[""] == Some(4))
+    expect(doc["physical"]["color"].asString() == Some("orange"))
+    expect(doc["site"]["google.com"].asBool() == Some(true))
+    expect(doc["a"]["b"].asInt() == Some(5))
+    expect(error("a b = 1") == Some(TomlError("expected = after the key", 1, 3)))
+    expect(error("= 1") == Some(TomlError("expected a key but found =", 1, 1)))
+    expect(error("a. = 1") == Some(TomlError("expected a key but found =", 1, 4)))
+    expect(error("\"\"\"a\"\"\" = 1") == Some(TomlError("a key can't be a multi-line string", 1, 1)))
+    expect(error("a = 1\na = 2") == Some(TomlError("a is already defined", 2, 1)))
+    expect(error("a.b = 1\na.b.c = 2") == Some(TomlError("a.b is already an integer, so it can't hold keys", 2, 3)))
+    expect(error("\"a.b\" = 1\n\"a.b\" = 2") == Some(TomlError("\"a.b\" is already defined", 2, 1)))
+}
+
+test "tables keep their keys in the order the text gives them" {
+    val doc = parse("z = 1\na = 2\n[m]\n[b]\n")!
+    expect(keys(doc).array() == ["z", "a", "m", "b"])
+}
+
+test "headers, and tables they make on the way" {
+    val doc = parse("top = 1\n[a.b]\nx = 1\n[a]\ny = 2\n[x]\nd.e = 1\n[x.d.f]\ng = 2")!
+    expect(doc["a"]["b"]["x"].asInt() == Some(1))
+    expect(doc["a"]["y"].asInt() == Some(2))
+    expect(doc["x"]["d"]["e"].asInt() == Some(1))
+    expect(doc["x"]["d"]["f"]["g"].asInt() == Some(2))
+    expect(keys(asTable(doc["a"])!).array() == ["b", "y"])
+}
+
+test "a table can't be defined twice" {
+    expect(error("[a]\n[a]") == Some(TomlError("table a is already defined", 2, 2)))
+    expect(error("[a.b]\n[a]\n[a]") == Some(TomlError("table a is already defined", 3, 2)))
+    expect(error("a = 1\n[a]") == Some(TomlError("a is already an integer", 2, 2)))
+    expect(error("[a]\nb = 1\n[a.b]") == Some(TomlError("a.b is already an integer", 3, 4)))
+}
+
+test "dotted keys and headers can't add to each other's tables" {
+    expect(error("a.b = 1\n[a]") == Some(TomlError("a is a table that dotted keys made, which a header can't define again", 2, 2)))
+    expect(error("[fruit]\napple.color = 1\n[fruit.apple]") == Some(TomlError("fruit.apple is a table that dotted keys made, which a header can't define again", 3, 8)))
+    expect(error("[a.b.c]\n[a]\nb.d = 1") == Some(TomlError("a.b is a table that a header made, which a dotted key can't add to", 3, 1)))
+    val doc = parse("[fruit]\napple.color = \"red\"\n[fruit.apple.texture]\nsmooth = true")!
+    expect(doc["fruit"]["apple"]["texture"]["smooth"].asBool() == Some(true))
+}
+
+test "arrays of tables" {
+    val doc = parse("[[p]]\nname = \"Hammer\"\n[[p]]\n[[p]]\nname = \"Nail\"\n[p.extra]\nz = 3\n[[p.sub]]\nq = 1")!
+    expect(length(asArray(doc["p"])!) == 3)
+    expect(doc["p"][0]["name"].asString() == Some("Hammer"))
+    expect(doc["p"][1].asTable()!.isEmpty())
+    expect(doc["p"][2]["extra"]["z"].asInt() == Some(3))
+    expect(doc["p"][2]["sub"][0]["q"].asInt() == Some(1))
+    expect(error("a = []\n[[a]]") == Some(TomlError("a is already an array, not an array of tables", 2, 3)))
+    expect(error("[a]\n[[a]]") == Some(TomlError("a is already a table, not an array of tables", 2, 3)))
+    expect(error("[[a]]\n[a]") == Some(TomlError("a is already an array of tables", 2, 2)))
+    expect(error("[[a]]\nb.c = 1\n[a]\n") == Some(TomlError("a is already an array of tables", 3, 2)))
+    expect(error("[[a]]\n[b]\na.c = 1\n[x]\nz.y = 1\n[[x.z]]") == Some(TomlError("x.z is already a table, not an array of tables", 6, 5)))
+}
+
+test "a dotted key can't go through an array of tables" {
+    expect(error("[[a]]\n[b]\n[b.c]\n[x]\n") == None)
+    expect(error("[[a.b]]\n[a]\nb.c = 1") == Some(TomlError("a.b is an array of tables, which a dotted key can't add to", 3, 1)))
+}
+
+test "headers" {
+    expect(error("[ a . b ]\n[[ c ]]") == None)
+    expect(error("[a") == Some(TomlError("expected ] to end the table header", 1, 3)))
+    expect(error("[[a]") == Some(TomlError("expected ]] to end the table header", 1, 4)))
+    expect(error("[]") == Some(TomlError("expected a key but found ]", 1, 2)))
+    expect(error("[a] b = 1") == Some(TomlError("expected the end of the line but found b", 1, 5)))
+}
+
+test "comments, white space and line endings" {
+    val doc = parse("# a comment\n\t a = 1 # after\r\n\r\nb = 2 #\n#")!
+    expect(doc["a"] == Some(1) && doc["b"] == Some(2))
+    expect(parse("") == Ok([:]))
+    expect(error("a = 1\rb = 2") == Some(TomlError("carriage return without a line feed", 1, 6)))
+    expect(error("# bell \u{7}") == Some(TomlError("control character 7 in a comment", 1, 8)))
+    expect(error("a = 1 b = 2") == Some(TomlError("expected the end of the line but found b", 1, 7)))
+    expect(error("a =\n1") == Some(TomlError("expected a value", 1, 4)))
+}
+
+test "unseen characters are named in messages" {
+    expect(error("\u{feff}a = 1") == Some(TomlError("expected a key but found \u{feff} (U+FEFF)", 1, 1)))
+    expect(error("a = 1\u{0}") == Some(TomlError("expected the end of the line but found control character 0", 1, 6)))
+}
+
+test "errors give the line and the column in characters" {
+    expect(error("[t]\n\"\u{e9}\u{e9}\" = 1 x") == Some(TomlError("expected the end of the line but found x", 2, 10)))
+}
+
+test "nesting is limited to 512, as an error rather than a stack overflow" {
+    val deepest = "[".repeat().take(512).join("") ~ "]".repeat().take(512).join("")
+    _ = parse("v = " ~ deepest)?
+    expect(error("v = [" ~ deepest ~ "]") == Some(TomlError("nested more than 512 deep", 1, 517)))
+    expect(error("v = " ~ "\{a = ".repeat().take(600).join("")) == Some(TomlError("nested more than 512 deep", 1, 2565)))
+}
+
+test "indexing chains through missing keys" {
+    val doc = parse("[server]\nport = 8080\nhosts = [\"a\", \"b\"]")!
+    expect(doc["server"]["port"].asInt() == Some(8080))
+    expect(doc["server"]["hosts"][1].asString() == Some("b"))
+    expect(doc["server"]["hosts"][2] == None)
+    expect(doc["server"]["missing"]["deeper"] == None)
+    expect(doc["missing"]["port"].asInt() ?? 80 == 80)
+    expect(doc["server"]["port"][0] == None)
+}
+
+test "typed accessors" {
+    val doc = parse("s = 'x'\ni = 3\nf = 2.5\nb = true\no = 1979-05-27T07:32:00Z\nl = 1979-05-27T07:32:00\nd = 1979-05-27\nt = 07:32:00\na = [1]\nn = \{}")!
+    expect(doc["s"].asString() == Some("x"))
+    expect(doc["i"].asInt() == Some(3))
+    expect(doc["f"].asInt() == None)
+    expect(doc["i"].asFloat() == Some(3.0))
+    expect(doc["f"].asFloat() == Some(2.5))
+    expect(doc["b"].asBool() == Some(true))
+    expect(doc["o"].asOffsetDateTime() != None)
+    expect(doc["o"].asDateTime() == None)
+    expect(doc["l"].asDateTime() != None)
+    expect(doc["d"].asDate() == Some(date(1979, 5, 27)!))
+    expect(doc["t"].asTime() == Some(time(7, 32, 0)!))
+    expect(doc["a"].asArray() == Some([1]))
+    expect(doc["n"].asTable() != None)
+    expect(doc["s"].asTable() == None)
+}
+
+test "an error prints as its line, column and message" {
+    expect(String(error("a = 1\na = 2")!) == "2:1: a is already defined")
+}

@@ -1,0 +1,961 @@
+// TOML 1.1 (https://toml.io/en/v1.1.0): reading a document into tables of `Toml` values.
+module std.toml
+
+import std.string
+import std.time
+import lang.string : slice
+import lang.char : toChar
+
+type Toml = :String | :Int | :Float | :Bool | :OffsetDateTime | :DateTime | :Date | :Time | :[Toml] | :[String: Toml]
+
+// Why parsing stopped, and where: `line` and `column` count from 1, and `column` counts characters.
+type TomlError(message: String, line: Int, column: Int)
+
+def opString(e: TomlError): String => "{e.line}:{e.column}: {e.message}"
+
+private val maxDepth: Int = 512
+
+// ---- Reading a value ----
+
+// On `Toml?`, so lookups chain: `doc["a"]["b"]` is None when either is missing.
+def opIndex(value: Toml?, key: String): Toml? => match value {
+    Some(entries: [String: Toml]) => entries[key]
+    _ => None
+}
+
+def opIndex(value: Toml?, index: Int): Toml? => match value {
+    Some(items: [Toml]) => if index >= 0 && index < length(items) => items[index] else None
+    _ => None
+}
+
+def asString(value: Toml?): String? => match value {
+    Some(s: String) => s
+    _ => None
+}
+
+def asInt(value: Toml?): Int? => match value {
+    Some(n: Int) => n
+    _ => None
+}
+
+// A Float, or an Int as one, so that `timeout = 5` reads as well as `timeout = 5.0`.
+def asFloat(value: Toml?): Float? => match value {
+    Some(x: Float) => x
+    Some(n: Int) => Float(n)
+    _ => None
+}
+
+def asBool(value: Toml?): Bool? => match value {
+    Some(b: Bool) => b
+    _ => None
+}
+
+def asOffsetDateTime(value: Toml?): OffsetDateTime? => match value {
+    Some(o: OffsetDateTime) => o
+    _ => None
+}
+
+def asDateTime(value: Toml?): DateTime? => match value {
+    Some(dt: DateTime) => dt
+    _ => None
+}
+
+def asDate(value: Toml?): Date? => match value {
+    Some(d: Date) => d
+    _ => None
+}
+
+def asTime(value: Toml?): Time? => match value {
+    Some(t: Time) => t
+    _ => None
+}
+
+def asArray(value: Toml?): [Toml]? => match value {
+    Some(items: [Toml]) => items
+    _ => None
+}
+
+def asTable(value: Toml?): [String: Toml]? => match value {
+    Some(entries: [String: Toml]) => entries
+    _ => None
+}
+
+// ---- Parsing ----
+
+// A whole document, which is always a table. A key or a table can't be defined twice, and an
+// integer must fit an Int.
+def parse(text: String): [String: Toml] ! TomlError {
+    val data = bytes(text)
+    match parseDocument(text, data) {
+        Ok(table) => table
+        Error(Failure(message, at)) => fail errorAt(data, at, message)
+    }
+}
+
+// What went wrong, and the byte it's reported at.
+private type Failure(message: String, at: Int)
+
+private def errorAt(data: [UInt8], at: Int, message: String): TomlError {
+    mutable val line = 1
+    mutable val column = 1
+    for i in 0..at {
+        val b = data[i]
+        if b == 10 {
+            line += 1
+            column = 1
+        } else if (b & 0xc0) != 0x80 {
+            column += 1
+        }
+    }
+    TomlError(message, line, column)
+}
+
+// A table while the document is read, which keeps how it was made, since that decides what can
+// add to it later. A value is `Closed`, as is an inline table, which nothing can add to once it ends.
+private type Origin = Header | Implied | Dotted
+private type Table(origin: Origin, entries: [String: Entry])
+private type Closed(value: Toml)
+private type Tables(items: [Table])
+private type Entry = :Closed | :Table | :Tables
+
+// What a key names: a value, a table by `[name]`, or a table added to an array by `[[name]]`.
+private type Leaf = SetValue(value: Toml) | OpenTable | AddTable
+
+// A key, its parts and the byte each starts at.
+private type Key(names: [String], starts: [Int])
+
+// Why a key couldn't be put, and which of its parts it was.
+private type Clash(message: String, index: Int)
+
+private def parseDocument(text: String, data: [UInt8]): [String: Toml] ! Failure {
+    mutable val at = 0
+    mutable val root = Table(Header, [:])
+    mutable val current: [String] = []
+    while at < length(data) {
+        skipSpace(data, mutable at)
+        if at < length(data) && data[at] == 91 {
+            current = parseHeader(text, data, mutable at, mutable root)?
+        } else if at < length(data) && data[at] != 35 && data[at] != 10 && data[at] != 13 {
+            val key = parseKey(text, data, mutable at)?
+            val value = parseAssigned(text, data, mutable at, 0)?
+            match put(root, current ~ key.names, 0, length(current), SetValue(value)) {
+                Ok(table) => {
+                    root = table
+                }
+                Error(Clash(message, index)) => fail Failure(message, key.starts[index - length(current)])
+            }
+        }
+        endLine(text, data, mutable at)?
+    }
+    finish(root)
+}
+
+// `[name]` or `[[name]]`, for `at` on the first `[`, giving the name of the table that follows.
+private def parseHeader(text: String, data: [UInt8], mutable at: Int, mutable root: Table): [String] ! Failure {
+    val array = at + 1 < length(data) && data[at + 1] == 91
+    at += if array => 2 else 1
+    skipSpace(data, mutable at)
+    val key = parseKey(text, data, mutable at)?
+    val close = if array => "]]" else "]"
+    if !byteIs(data, at, 93) || (array && !byteIs(data, at + 1, 93)) {
+        fail Failure("expected {close} to end the table header", at)
+    }
+    at += if array => 2 else 1
+    match put(root, key.names, 0, length(key.names), if array => AddTable else OpenTable) {
+        Ok(table) => {
+            root = table
+        }
+        Error(Clash(message, index)) => fail Failure(message, key.starts[index])
+    }
+    key.names
+}
+
+// `=` and the value after it, for `at` just after the key.
+private def parseAssigned(text: String, data: [UInt8], mutable at: Int, depth: Int): Toml ! Failure {
+    if !byteIs(data, at, 61) {
+        fail Failure("expected = after the key", at)
+    }
+    at += 1
+    skipSpace(data, mutable at)
+    parseValue(text, data, mutable at, depth)?
+}
+
+// The end of an expression's line: white space, a comment, then a new line or the end.
+private def endLine(text: String, data: [UInt8], mutable at: Int): Unit ! Failure {
+    skipSpace(data, mutable at)
+    if byteIs(data, at, 35) {
+        skipComment(data, mutable at)?
+    }
+    if at == length(data) {
+        return
+    }
+    if !newline(data, mutable at)? {
+        fail Failure("expected the end of the line but found {charAt(text, at)}", at)
+    }
+}
+
+// Whether a new line, LF or CRLF, is at `at`, moving past it when it is. A CR alone is an error.
+private def newline(data: [UInt8], mutable at: Int): Bool ! Failure {
+    if byteIs(data, at, 10) {
+        at += 1
+        return true
+    }
+    if byteIs(data, at, 13) {
+        if !byteIs(data, at + 1, 10) {
+            fail Failure("carriage return without a line feed", at)
+        }
+        at += 2
+        return true
+    }
+    false
+}
+
+// TOML's white space within a line is only space and tab.
+private def skipSpace(data: [UInt8], mutable at: Int): Unit {
+    while at < length(data) && (data[at] == 32 || data[at] == 9) {
+        at += 1
+    }
+}
+
+// White space, comments and new lines, as between the items of an array or an inline table.
+private def skipBlank(data: [UInt8], mutable at: Int): Unit ! Failure {
+    while true {
+        skipSpace(data, mutable at)
+        if byteIs(data, at, 35) {
+            skipComment(data, mutable at)?
+        }
+        if !newline(data, mutable at)? {
+            return
+        }
+    }
+}
+
+// A comment, for `at` on its `#`, up to the end of its line.
+private def skipComment(data: [UInt8], mutable at: Int): Unit ! Failure {
+    at += 1
+    while at < length(data) {
+        val b = data[at]
+        if b == 10 || (b == 13 && byteIs(data, at + 1, 10)) {
+            return
+        }
+        if isControl(b) {
+            fail Failure("control character {b} in a comment", at)
+        }
+        at += 1
+    }
+}
+
+// The control characters TOML allows in no comment or string: all but tab, and DEL.
+private def isControl(b: UInt8): Bool => (b < 32 && b != 9) || b == 127
+
+private def byteIs(data: [UInt8], at: Int, byte: Int): Bool => at < length(data) && Int(data[at]) == byte
+
+private def isDigitByte(b: UInt8): Bool => b >= 48 && b <= 57
+
+private def isBareKeyByte(b: UInt8): Bool =>
+    (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || isDigitByte(b) || b == 45 || b == 95
+
+// What can't stop a bare value, so that `12ab` or `1.2.3` is one wrong value rather than a right one
+// followed by something else.
+private def isWordByte(b: UInt8): Bool => isBareKeyByte(b) || b == 43 || b == 46 || b == 58
+
+// The character at `at`, for a message, with its code point when it might not be seen.
+private def charAt(text: String, at: Int): String {
+    val data = bytes(text)
+    if at >= length(data) {
+        return "the end"
+    }
+    if isControl(data[at]) || data[at] == 9 {
+        return "control character {data[at]}"
+    }
+    match next(slice(text, at, length(data))) {
+        Some((c, _)) => if data[at] < 128 => String(c) else "{c} (U+{codePoint(Int(c))})"
+        None => ""
+    }
+}
+
+private def codePoint(n: Int): String {
+    mutable val out = ""
+    mutable val rest = n
+    while rest > 0 || length(bytes(out)) < 4 {
+        out = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"][rest % 16] ~ out
+        rest /= 16
+    }
+    out
+}
+
+// ---- Keys ----
+
+// A key, bare or quoted, and dotted or not, with the white space after it.
+private def parseKey(text: String, data: [UInt8], mutable at: Int): Key ! Failure {
+    mutable val names: [String] = []
+    mutable val starts: [Int] = []
+    while true {
+        if length(names) == maxDepth {
+            fail Failure("a key with more than {maxDepth} parts", at)
+        }
+        starts ~= [at]
+        names ~= [parseSimpleKey(text, data, mutable at)?]
+        skipSpace(data, mutable at)
+        if !byteIs(data, at, 46) {
+            break
+        }
+        at += 1
+        skipSpace(data, mutable at)
+    }
+    Key(names, starts)
+}
+
+private def parseSimpleKey(text: String, data: [UInt8], mutable at: Int): String ! Failure {
+    if byteIs(data, at, 34) || byteIs(data, at, 39) {
+        if byteIs(data, at + 1, Int(data[at])) && byteIs(data, at + 2, Int(data[at])) {
+            fail Failure("a key can't be a multi-line string", at)
+        }
+        return if data[at] == 34 => parseBasic(text, data, mutable at)? else parseLiteral(text, data, mutable at)?
+    }
+    val start = at
+    while at < length(data) && isBareKeyByte(data[at]) {
+        at += 1
+    }
+    if at == start {
+        fail Failure(if at == length(data) || data[at] == 10 || data[at] == 13 => "expected a key" else "expected a key but found {charAt(text, at)}", at)
+    }
+    slice(text, start, at)
+}
+
+// The key's first `count` parts, as TOML writes them, for a message.
+private def keyName(names: [String], count: Int): String {
+    mutable val out = ""
+    for i in 0..count {
+        if i > 0 {
+            out ~= "."
+        }
+        out ~= if isBare(names[i]) => names[i] else "\"{names[i]}\""
+    }
+    out
+}
+
+private def isBare(name: String): Bool {
+    val data = bytes(name)
+    length(data) > 0 && data.all(isBareKeyByte)
+}
+
+// ---- Tables ----
+
+// `table` with `names[k..]` put in it. The parts before `dottedFrom` go as a header's do, through
+// an array of tables to its last table, and the rest as a dotted key's do, only into tables that
+// dotted keys made.
+private def put(table: Table, names: [String], k: Int, dottedFrom: Int, leaf: Leaf): Table ! Clash {
+    val name = names[k]
+    val existing = table.entries[name]
+    mutable val entries = table.entries
+    if k == length(names) - 1 {
+        entries[name] = placed(existing, names, k, leaf)?
+        return Table(table.origin, entries)
+    }
+    val header = k < dottedFrom
+    val path = keyName(names, k + 1)
+    val entry: Entry = match existing {
+        None => put(Table(if header => Implied else Dotted, [:]), names, k + 1, dottedFrom, leaf)?
+        Some(inner: Table) => {
+            if !header && inner.origin != Dotted {
+                fail Clash("{path} is a table that a header made, which a dotted key can't add to", k)
+            }
+            put(inner, names, k + 1, dottedFrom, leaf)?
+        }
+        Some(Tables(items)) => {
+            if !header {
+                fail Clash("{path} is an array of tables, which a dotted key can't add to", k)
+            }
+            mutable val all = items
+            all[length(all) - 1] = put(items[length(items) - 1], names, k + 1, dottedFrom, leaf)?
+            Tables(all)
+        }
+        Some(Closed(value)) => fail Clash(cantHold(path, value), k)
+    }
+    entries[name] = entry
+    Table(table.origin, entries)
+}
+
+// What `names[k]`, the last part of a key, becomes, given what it already is.
+private def placed(existing: Entry?, names: [String], k: Int, leaf: Leaf): Entry ! Clash {
+    val path = keyName(names, k + 1)
+    match leaf {
+        SetValue(value) => match existing {
+            None => Closed(value)
+            Some(_) => fail Clash("{path} is already defined", k)
+        }
+        OpenTable => match existing {
+            None => Table(Header, [:])
+            Some(t: Table) => {
+                if t.origin == Dotted {
+                    fail Clash("{path} is a table that dotted keys made, which a header can't define again", k)
+                }
+                if t.origin == Header {
+                    fail Clash("table {path} is already defined", k)
+                }
+                Table(Header, t.entries)
+            }
+            Some(Tables(_)) => fail Clash("{path} is already an array of tables", k)
+            Some(Closed(value)) => fail Clash("{path} is already {kindName(value)}", k)
+        }
+        AddTable => match existing {
+            None => Tables([Table(Header, [:])])
+            Some(Tables(items)) => Tables(items ~ [Table(Header, [:])])
+            Some(_: Table) => fail Clash("{path} is already a table, not an array of tables", k)
+            Some(Closed(value)) => fail Clash("{path} is already {kindName(value)}, not an array of tables", k)
+        }
+    }
+}
+
+private def cantHold(path: String, value: Toml): String => match value {
+    _: [String: Toml] => "{path} is an inline table, which can't be added to"
+    _ => "{path} is already {kindName(value)}, so it can't hold keys"
+}
+
+private def kindName(value: Toml): String => match value {
+    _: String => "a string"
+    _: Int => "an integer"
+    _: Float => "a float"
+    _: Bool => "a boolean"
+    _: OffsetDateTime => "a date and time"
+    _: DateTime => "a date and time"
+    _: Date => "a date"
+    _: Time => "a time"
+    _: [Toml] => "an array"
+    _: [String: Toml] => "an inline table"
+}
+
+private def finish(table: Table): [String: Toml] {
+    mutable val out: [String: Toml] = [:]
+    for (name, entry) in table.entries {
+        val value: Toml = match entry {
+            Closed(v) => v
+            inner: Table => finish(inner)
+            Tables(items) => {
+                mutable val tables: [Toml] = []
+                for t in items {
+                    val finished: Toml = finish(t)
+                    tables ~= [finished]
+                }
+                tables
+            }
+        }
+        out[name] = value
+    }
+    out
+}
+
+// ---- Values ----
+
+private def parseValue(text: String, data: [UInt8], mutable at: Int, depth: Int): Toml ! Failure {
+    if at == length(data) || data[at] == 10 || data[at] == 13 || data[at] == 35 {
+        fail Failure("expected a value", at)
+    }
+    val b = data[at]
+    if b == 34 {
+        return if byteIs(data, at + 1, 34) && byteIs(data, at + 2, 34) => parseMultilineBasic(text, data, mutable at)? else parseBasic(text, data, mutable at)?
+    }
+    if b == 39 {
+        return if byteIs(data, at + 1, 39) && byteIs(data, at + 2, 39) => parseMultilineLiteral(text, data, mutable at)? else parseLiteral(text, data, mutable at)?
+    }
+    if b == 91 {
+        return parseArray(text, data, mutable at, depth + 1)?
+    }
+    if b == 123 {
+        return parseInlineTable(text, data, mutable at, depth + 1)?
+    }
+    if !isWordByte(b) {
+        fail Failure("expected a value but found {charAt(text, at)}", at)
+    }
+    val start = at
+    val value = parseWord(text, data, mutable at)?
+    if at < length(data) && isWordByte(data[at]) {
+        fail invalidWord(text, data, start)
+    }
+    value
+}
+
+// A value TOML writes without quotes or brackets: a boolean, a number, or a date or time.
+private def parseWord(text: String, data: [UInt8], mutable at: Int): Toml ! Failure {
+    if literal(data, mutable at, "true") {
+        return true
+    }
+    if literal(data, mutable at, "false") {
+        return false
+    }
+    if digitsAt(data, at, 4) != None && byteIs(data, at + 4, 45) {
+        return parseDateAndTime(text, data, mutable at)?
+    }
+    if digitsAt(data, at, 2) != None && byteIs(data, at + 2, 58) {
+        return parseTimeOfDay(text, data, mutable at, at)?
+    }
+    parseNumber(text, data, mutable at)?
+}
+
+private def invalidWord(text: String, data: [UInt8], start: Int): Failure {
+    mutable val end = start
+    while end < length(data) && isWordByte(data[end]) {
+        end += 1
+    }
+    Failure("invalid value {slice(text, start, end)}", start)
+}
+
+// Whether `word` is at `at`, moving past it when it is.
+private def literal(data: [UInt8], mutable at: Int, word: String): Bool {
+    val expected = bytes(word)
+    if at + length(expected) > length(data) {
+        return false
+    }
+    for i in 0..length(expected) {
+        if data[at + i] != expected[i] {
+            return false
+        }
+    }
+    at += length(expected)
+    true
+}
+
+// An array's items, for `at` on its `[`. A comma may follow the last.
+private def parseArray(text: String, data: [UInt8], mutable at: Int, depth: Int): [Toml] ! Failure {
+    if depth > maxDepth {
+        fail Failure("nested more than {maxDepth} deep", at)
+    }
+    at += 1
+    mutable val items: [Toml] = []
+    while true {
+        skipBlank(data, mutable at)?
+        if at == length(data) {
+            fail Failure("missing closing ]", at)
+        }
+        if data[at] == 93 {
+            break
+        }
+        items ~= [parseValue(text, data, mutable at, depth)?]
+        skipBlank(data, mutable at)?
+        if at == length(data) {
+            fail Failure("missing closing ]", at)
+        }
+        if data[at] == 44 {
+            at += 1
+        } else if data[at] != 93 {
+            fail Failure("expected , or ] but found {charAt(text, at)}", at)
+        }
+    }
+    at += 1
+    items
+}
+
+// An inline table, for `at` on its `\{`. Since TOML 1.1 it can span lines and end with a comma.
+private def parseInlineTable(text: String, data: [UInt8], mutable at: Int, depth: Int): [String: Toml] ! Failure {
+    if depth > maxDepth {
+        fail Failure("nested more than {maxDepth} deep", at)
+    }
+    at += 1
+    mutable val table = Table(Header, [:])
+    while true {
+        skipBlank(data, mutable at)?
+        if at == length(data) {
+            fail Failure("missing closing \}", at)
+        }
+        if data[at] == 125 {
+            break
+        }
+        val key = parseKey(text, data, mutable at)?
+        val value = parseAssigned(text, data, mutable at, depth)?
+        match put(table, key.names, 0, 0, SetValue(value)) {
+            Ok(t) => {
+                table = t
+            }
+            Error(Clash(message, index)) => fail Failure(message, key.starts[index])
+        }
+        skipBlank(data, mutable at)?
+        if at == length(data) {
+            fail Failure("missing closing \}", at)
+        }
+        if data[at] == 44 {
+            at += 1
+        } else if data[at] != 125 {
+            fail Failure("expected , or \} but found {charAt(text, at)}", at)
+        }
+    }
+    at += 1
+    finish(table)
+}
+
+// ---- Strings ----
+
+// A basic string, for `at` on its opening quote. Without escapes it's one slice of the text.
+private def parseBasic(text: String, data: [UInt8], mutable at: Int): String ! Failure {
+    val open = at
+    at += 1
+    mutable val start = at
+    mutable val value = ""
+    while at < length(data) {
+        val b = data[at]
+        if b == 34 {
+            val run = slice(text, start, at)
+            at += 1
+            return if start == open + 1 => run else value ~ run
+        }
+        if b == 92 {
+            value ~= slice(text, start, at)
+            value ~= String(parseEscape(data, mutable at)?)
+            start = at
+        } else if b == 10 || b == 13 {
+            break
+        } else if isControl(b) {
+            fail Failure("control character {b} in a string", at)
+        } else {
+            at += 1
+        }
+    }
+    fail Failure("missing closing quote", open)
+}
+
+// A literal string, for `at` on its opening apostrophe: what's between them, with no escapes.
+private def parseLiteral(text: String, data: [UInt8], mutable at: Int): String ! Failure {
+    val open = at
+    at += 1
+    while at < length(data) {
+        val b = data[at]
+        if b == 39 {
+            at += 1
+            return slice(text, open + 1, at - 1)
+        }
+        if b == 10 || b == 13 {
+            break
+        }
+        if isControl(b) {
+            fail Failure("control character {b} in a string", at)
+        }
+        at += 1
+    }
+    fail Failure("missing closing apostrophe", open)
+}
+
+// A string in `"""`, for `at` on the first quote. A new line straight after the opening quotes isn't
+// part of it, each CRLF is read as LF, and a `\` at the end of a line removes the white space and
+// new lines after it.
+private def parseMultilineBasic(text: String, data: [UInt8], mutable at: Int): String ! Failure {
+    val open = at
+    at += 3
+    _ = newline(data, mutable at)?
+    mutable val start = at
+    mutable val value = ""
+    while at < length(data) {
+        val b = data[at]
+        if b == 34 {
+            if val Some(extra) = closingQuotes(data, mutable at, 34)? {
+                return value ~ slice(text, start, at - 3)
+            }
+        } else if b == 92 {
+            value ~= slice(text, start, at)
+            if !lineEndingBackslash(data, mutable at)? {
+                value ~= String(parseEscape(data, mutable at)?)
+            }
+            start = at
+        } else if b == 13 {
+            value ~= slice(text, start, at)
+            _ = newline(data, mutable at)?
+            value ~= "\n"
+            start = at
+        } else if isControl(b) && b != 10 {
+            fail Failure("control character {b} in a string", at)
+        } else {
+            at += 1
+        }
+    }
+    fail Failure("missing closing \"\"\"", open)
+}
+
+// A string in `'''`, for `at` on the first apostrophe, read as `parseMultilineBasic` reads one but
+// with no escapes.
+private def parseMultilineLiteral(text: String, data: [UInt8], mutable at: Int): String ! Failure {
+    val open = at
+    at += 3
+    _ = newline(data, mutable at)?
+    mutable val start = at
+    mutable val value = ""
+    while at < length(data) {
+        val b = data[at]
+        if b == 39 {
+            if val Some(extra) = closingQuotes(data, mutable at, 39)? {
+                return value ~ slice(text, start, at - 3)
+            }
+        } else if b == 13 {
+            value ~= slice(text, start, at)
+            _ = newline(data, mutable at)?
+            value ~= "\n"
+            start = at
+        } else if isControl(b) && b != 10 {
+            fail Failure("control character {b} in a string", at)
+        } else {
+            at += 1
+        }
+    }
+    fail Failure("missing closing '''", open)
+}
+
+// For `at` on a quote in a multi-line string: when three or more are there, they close it, and the
+// count of those before the last three, which belong to the string, up to two of them. Otherwise
+// `at` moves past the one or two there are.
+private def closingQuotes(data: [UInt8], mutable at: Int, quote: Int): Int? ! Failure {
+    val first = at
+    while byteIs(data, at, quote) {
+        at += 1
+    }
+    val count = at - first
+    if count < 3 {
+        return None
+    }
+    if count > 5 {
+        fail Failure("too many quotes at the end of a multi-line string", first)
+    }
+    count - 3
+}
+
+// Whether a `\` at `at` ends its line, in a multi-line basic string, moving past it and the white
+// space and new lines after it when it does.
+private def lineEndingBackslash(data: [UInt8], mutable at: Int): Bool ! Failure {
+    mutable val i = at + 1
+    skipSpace(data, mutable i)
+    if !byteIs(data, i, 10) && !byteIs(data, i, 13) {
+        return false
+    }
+    while newline(data, mutable i)? {
+        skipSpace(data, mutable i)
+    }
+    at = i
+    true
+}
+
+// The character an escape writes, for `at` on its backslash, which is where an error is reported.
+private def parseEscape(data: [UInt8], mutable at: Int): Char ! Failure {
+    val escapeAt = at
+    if at + 1 >= length(data) {
+        fail Failure("invalid escape", escapeAt)
+    }
+    val e = data[at + 1]
+    at += 2
+    if e == 34 => '"'
+    else if e == 92 => '\\'
+    else if e == 98 => '\u{8}'
+    else if e == 101 => '\u{1b}'
+    else if e == 102 => '\u{c}'
+    else if e == 110 => '\n'
+    else if e == 114 => '\r'
+    else if e == 116 => '\t'
+    else if e == 120 => parseCodePoint(data, mutable at, escapeAt, 2)?
+    else if e == 117 => parseCodePoint(data, mutable at, escapeAt, 4)?
+    else if e == 85 => parseCodePoint(data, mutable at, escapeAt, 8)?
+    else fail Failure("invalid escape", escapeAt)
+}
+
+// `\xHH`, `\uHHHH` or `\UHHHHHHHH`, for `at` just after the letter.
+private def parseCodePoint(data: [UInt8], mutable at: Int, escapeAt: Int, count: Int): Char ! Failure {
+    if at + count > length(data) {
+        fail Failure("expected {count} hex digits", escapeAt)
+    }
+    mutable val value = 0
+    for i in at..at + count {
+        val digit = digitValue(data[i]) ?? 16
+        if digit >= 16 {
+            fail Failure("expected {count} hex digits", escapeAt)
+        }
+        value = value * 16 + digit
+    }
+    at += count
+    toChar(value) ?? fail Failure("escape for a surrogate or past U+10FFFF, which isn't a character", escapeAt)
+}
+
+// A digit's value in bases up to 16, with either case of letter.
+private def digitValue(b: UInt8): Int? {
+    if b >= 48 && b <= 57 => Int(b) - 48
+    else if b >= 97 && b <= 102 => Int(b) - 87
+    else if b >= 65 && b <= 70 => Int(b) - 55
+    else None
+}
+
+// ---- Numbers ----
+
+// An integer, decimal with a sign or not, or hex, octal or binary after `0x`, `0o` or `0b`; or a
+// float, with a fraction, an exponent or both, or `inf` or `nan` with a sign or not. An `_` can
+// stand between two digits.
+private def parseNumber(text: String, data: [UInt8], mutable at: Int): Toml ! Failure {
+    val start = at
+    val negative = byteIs(data, at, 45)
+    if negative || byteIs(data, at, 43) {
+        at += 1
+    }
+    if literal(data, mutable at, "inf") {
+        val zero = 0.0
+        return if negative => -1.0 / zero else 1.0 / zero
+    }
+    if literal(data, mutable at, "nan") {
+        val zero = 0.0
+        return zero / zero
+    }
+    if at == start && byteIs(data, at, 48) {
+        val radix = if byteIs(data, at + 1, 120) => 16 else if byteIs(data, at + 1, 111) => 8 else if byteIs(data, at + 1, 98) => 2 else 10
+        if radix != 10 {
+            at += 2
+            val digits = at
+            skipDigitRun(data, mutable at, radix)?
+            return accumulate(data, digits, at, radix, false) ?? fail Failure("integer too large for an Int", start)
+        }
+    }
+    val whole = at
+    if !isDigitIn(data, at, 10) {
+        fail invalidWord(text, data, start)
+    }
+    skipDigitRun(data, mutable at, 10)?
+    if data[whole] == 48 && at - whole > 1 {
+        fail Failure("leading zero in a number", whole)
+    }
+    mutable val integer = true
+    if byteIs(data, at, 46) {
+        at += 1
+        skipDigitRun(data, mutable at, 10)?
+        integer = false
+    }
+    if byteIs(data, at, 101) || byteIs(data, at, 69) {
+        at += 1
+        if byteIs(data, at, 43) || byteIs(data, at, 45) {
+            at += 1
+        }
+        skipDigitRun(data, mutable at, 10)?
+        integer = false
+    }
+    if integer {
+        return accumulate(data, whole, at, 10, negative) ?? fail Failure("integer too large for an Int", start)
+    }
+    mutable val written = if negative => "-" else ""
+    for i in whole..at {
+        if data[i] != 95 {
+            written ~= slice(text, i, i + 1)
+        }
+    }
+    parseFloat(written) ?? fail Failure("number too large", start)
+}
+
+// Digits in `radix` with an `_` only between two of them, for `at` on the first.
+private def skipDigitRun(data: [UInt8], mutable at: Int, radix: Int): Unit ! Failure {
+    if !isDigitIn(data, at, radix) {
+        fail Failure("expected a digit", at)
+    }
+    while at < length(data) {
+        if isDigitIn(data, at, radix) {
+            at += 1
+        } else if data[at] == 95 {
+            if !isDigitIn(data, at + 1, radix) {
+                fail Failure("an underscore has to be between digits", at)
+            }
+            at += 1
+        } else {
+            return
+        }
+    }
+}
+
+private def isDigitIn(data: [UInt8], at: Int, radix: Int): Bool => at < length(data) && (digitValue(data[at]) ?? 16) < radix
+
+// The value of the digits from `from` to `to`, skipping `_`, or None when it's too large for an
+// Int. It's counted downwards, since the most negative Int has no positive twin.
+private def accumulate(data: [UInt8], from: Int, to: Int, radix: Int, negative: Bool): Int? {
+    val lowest = -9223372036854775807 - 1
+    mutable val value = 0
+    for i in from..to {
+        if data[i] != 95 {
+            val digit = digitValue(data[i])!
+            if value < (lowest + digit) / radix {
+                return None
+            }
+            value = value * radix - digit
+        }
+    }
+    if negative => value else if value == lowest => None else -value
+}
+
+// ---- Dates and times ----
+
+// `count` decimal digits at `at`, or None.
+private def digitsAt(data: [UInt8], at: Int, count: Int): Int? {
+    if at + count > length(data) {
+        return None
+    }
+    mutable val value = 0
+    for i in at..at + count {
+        if !isDigitByte(data[i]) {
+            return None
+        }
+        value = value * 10 + Int(data[i]) - 48
+    }
+    value
+}
+
+// A date, and a time after it when there's one, with an offset after that when there's one, for
+// `at` on the year. A space can stand for the `T` only when a time follows it.
+private def parseDateAndTime(text: String, data: [UInt8], mutable at: Int): Toml ! Failure {
+    val start = at
+    val month = digitsAt(data, at + 5, 2) ?? -1
+    val day = if byteIs(data, at + 7, 45) => digitsAt(data, at + 8, 2) ?? -1 else -1
+    if month < 0 || day < 0 {
+        fail invalidWord(text, data, start)
+    }
+    val d = date(digitsAt(data, at, 4)!, month, day) ?? fail Failure("no such date as {slice(text, at, at + 10)}", start)
+    at += 10
+    val delimiter = byteIs(data, at, 84) || byteIs(data, at, 116) || (byteIs(data, at, 32) && digitsAt(data, at + 1, 2) != None && byteIs(data, at + 3, 58))
+    if !delimiter {
+        return d
+    }
+    at += 1
+    val t = parseTimeOfDay(text, data, mutable at, start)?
+    val dt = DateTime(d, t)
+    if byteIs(data, at, 90) || byteIs(data, at, 122) {
+        at += 1
+        return OffsetDateTime(dt, Duration(0))
+    }
+    if !byteIs(data, at, 43) && !byteIs(data, at, 45) {
+        return dt
+    }
+    val sign = if data[at] == 45 => -1 else 1
+    val hour = digitsAt(data, at + 1, 2) ?? -1
+    val minute = if byteIs(data, at + 3, 58) => digitsAt(data, at + 4, 2) ?? -1 else -1
+    if hour < 0 || minute < 0 || hour > 23 || minute > 59 {
+        fail Failure("invalid offset", at)
+    }
+    at += 6
+    OffsetDateTime(dt, minutes(sign * (hour * 60 + minute)))
+}
+
+// `HH:MM`, then `:SS` and a fraction of a second, each optional, for `at` on the hour, with
+// `start` where the value began. Digits past nanoseconds are dropped.
+private def parseTimeOfDay(text: String, data: [UInt8], mutable at: Int, start: Int): Time ! Failure {
+    val hourAt = at
+    val hour = digitsAt(data, at, 2) ?? -1
+    val minute = if byteIs(data, at + 2, 58) => digitsAt(data, at + 3, 2) ?? -1 else -1
+    if hour < 0 || minute < 0 {
+        fail invalidWord(text, data, start)
+    }
+    at += 5
+    mutable val second = 0
+    mutable val nanos = 0
+    if byteIs(data, at, 58) {
+        second = digitsAt(data, at + 1, 2) ?? fail invalidWord(text, data, start)
+        at += 3
+        if byteIs(data, at, 46) {
+            at += 1
+            if !isDigitIn(data, at, 10) {
+                fail invalidWord(text, data, start)
+            }
+            mutable val scale = 100000000
+            while isDigitIn(data, at, 10) {
+                nanos += (Int(data[at]) - 48) * scale
+                scale /= 10
+                at += 1
+            }
+        }
+    }
+    time(hour, minute, second, nanos) ?? fail Failure("no such time as {slice(text, hourAt, at)}", hourAt)
+}
