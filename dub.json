@@ -32,7 +32,7 @@
 		{
 			"name": "application",
 			"targetName": "silverc",
-			"preGenerateCommands": ["\"$DUB\" build :frontend --root=\"$PACKAGE_DIR\""]
+			"preGenerateCommands": ["\"$DUB\" build :frontend --root=\"$PACKAGE_DIR.\""]
 		},
 		{
 			"name": "unittest",
