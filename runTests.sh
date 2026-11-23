@@ -8,6 +8,8 @@
 # generates the dub_test_root that silver.testrunner needs and leaves dub.selections.json's entries
 # alone: $SILVER_REDUB, else `redub` on the PATH (the dev container builds the fork into its image),
 # else ~/redub/build/redub. Without one, dub does the same work more slowly.
+# $SILVER_REDUB_PARALLEL is passed to redub as --parallel (auto, full, leaves or no): each dmd that
+# compiles against sema takes gigabytes, and several at once can need more memory than a machine has.
 cd "$(dirname "$0")" || exit 1
 
 packages=(:ast :syntax :loader :sema :core :interpreter :codegen :testing :conformance :frontend)
@@ -20,8 +22,10 @@ elif command -v redub > /dev/null; then
 else
     redub="$HOME/redub/build/redub"
 fi
+options=()
 if [ -x "$redub" ]; then
     tool=("$redub")
+    [ -n "$SILVER_REDUB_PARALLEL" ] && options=("--parallel=$SILVER_REDUB_PARALLEL")
 else
     echo "note: redub wasn't found, so dub builds and tests. See the comment at the top of $0."
     tool=(dub)
@@ -29,14 +33,14 @@ fi
 
 # The front end's end-to-end tests run the built silver and silverc.
 echo "=== build"
-"${tool[@]}" build || failed+=(build)
+"${tool[@]}" build "${options[@]}" || failed+=(build)
 
 for package in "${packages[@]}" root; do
     echo "=== $package"
     if [ "$package" = root ]; then
-        "${tool[@]}" test "$@" || failed+=("$package")
+        "${tool[@]}" test "${options[@]}" "$@" || failed+=("$package")
     else
-        "${tool[@]}" test "$package" "$@" || failed+=("$package")
+        "${tool[@]}" test "$package" "${options[@]}" "$@" || failed+=("$package")
     fi
 done
 
