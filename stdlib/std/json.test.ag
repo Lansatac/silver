@@ -1,0 +1,198 @@
+import std.json
+import std.range
+import std.string
+
+test "parse integers" {
+    expect(parse("1") == Ok(1))
+    expect(parse("-42") == Ok(-42))
+    expect(parse("0") == Ok(0))
+    expect(parse("-0") == Ok(0))
+    expect(parse("9223372036854775807") == Ok(9223372036854775807))
+    expect(parse("-9223372036854775808") == Ok(-9223372036854775807 - 1))
+}
+
+test "parse floats" {
+    expect(parse("1.0") == Ok(1.0))
+    expect(parse("-0.5") == Ok(-0.5))
+    expect(parse("1e3") == Ok(1000.0))
+    expect(parse("2.5E-1") == Ok(0.25))
+    expect(parse("1E+2") == Ok(100.0))
+    expect(parse("0.30000000000000004") == Ok(0.1 + 0.2))
+    expect(parse("1e400") == Error(JsonError("number too large", 1, 1)))
+}
+
+test "an integer too large for an Int is an error, not a Float" {
+    expect(parse("9223372036854775808") == Error(JsonError("integer too large for an Int", 1, 1)))
+    expect(parse("[1, 123456789012345678901234567890]") == Error(JsonError("integer too large for an Int", 1, 5)))
+    expect(parse("123456789012345678901234567890.0") == Ok(1.2345678901234568e29))
+}
+
+test "parse rejects numbers JSON doesn't write" {
+    expect(parse("01") == Error(JsonError("leading zero in a number", 1, 1)))
+    expect(parse("-") == Error(JsonError("expected a digit", 1, 2)))
+    expect(parse("1.") == Error(JsonError("expected a digit after .", 1, 3)))
+    expect(parse(".5") == Error(JsonError("unexpected .", 1, 1)))
+    expect(parse("1e") == Error(JsonError("expected a digit in the exponent", 1, 3)))
+    expect(parse("+1") == Error(JsonError("unexpected +", 1, 1)))
+}
+
+test "parse strings" {
+    expect(parse("\"\"") == Ok(""))
+    expect(parse("\"hello, world\"") == Ok("hello, world"))
+    expect(parse("\"caf\u{e9}\"") == Ok("caf\u{e9}"))
+}
+
+test "parse string escapes" {
+    expect(parse("\"a\\\"b\\\\c\\/d\"") == Ok("a\"b\\c/d"))
+    expect(parse("\"\\b\\f\\n\\r\\t\"") == Ok("\u{8}\u{c}\n\r\t"))
+    expect(parse("\"\\u0041\\u00e9\"") == Ok("A\u{e9}"))
+    expect(parse("\"\\ud83d\\ude00\"") == Ok("\u{1f600}"))
+    expect(parse("\"x\\ny\"") == Ok("x\ny"))
+}
+
+test "parse rejects bad strings" {
+    expect(parse("\"abc") == Error(JsonError("missing closing quote", 1, 1)))
+    expect(parse("\"a\\x\"") == Error(JsonError("invalid escape", 1, 3)))
+    expect(parse("\"\\") == Error(JsonError("invalid escape", 1, 2)))
+    expect(parse("\"\\u12\"") == Error(JsonError("expected four hex digits", 1, 2)))
+    expect(parse("\"\\ud83d\"") == Error(JsonError("high surrogate without a low one", 1, 2)))
+    expect(parse("\"\\ud83d\\u12\"") == Error(JsonError("expected four hex digits", 1, 8)))
+    expect(parse("\"\\ud83d\\u0041\"") == Error(JsonError("high surrogate without a low one", 1, 2)))
+    expect(parse("\"\\ude00\"") == Error(JsonError("low surrogate without a high one", 1, 2)))
+    expect(parse("\"a\nb\"") == Error(JsonError("control character 10 in a string", 1, 3)))
+}
+
+test "parse true, false and null" {
+    expect(parse("true") == Ok(true))
+    expect(parse("false") == Ok(false))
+    expect(parse(" null ") == Ok(Null))
+    expect(parse("nul") == Error(JsonError("unexpected n", 1, 1)))
+    expect(parse("truex") == Error(JsonError("unexpected text after the value", 1, 5)))
+}
+
+test "parse objects" {
+    val empty: [String: Json] = [:]
+    expect(parse("\{}") == Ok(empty))
+    expect(parse(" \{ } ") == Ok(empty))
+    val inner: [String: Json] = ["d": "e"]
+    val expected: [String: Json] = ["a": 1, "b": [true, Null], "c": inner]
+    expect(parse("\{\"a\": 1, \"b\": [true, null], \"c\": \{\"d\": \"e\"}}") == Ok(expected))
+}
+
+test "an object keeps its members in order" {
+    val doc = parse("\{\"z\": 1, \"a\": 2, \"m\": 3}")!
+    expect(keys(asObject(doc)!).array() == ["z", "a", "m"])
+}
+
+test "an object can't name a key twice" {
+    expect(parse("\{\"a\": 1, \"a\": 2}") == Error(JsonError("duplicate key a", 1, 10)))
+    expect(parse("\{\"a\": \{\"b\": 1, \"b\": 1}}") == Error(JsonError("duplicate key b", 1, 16)))
+}
+
+test "parse rejects bad objects" {
+    expect(parse("\{\"a\" 1}") == Error(JsonError("expected : after the key", 1, 6)))
+    expect(parse("\{a: 1}") == Error(JsonError("expected a key in quotes", 1, 2)))
+    expect(parse("\{\"a\": 1,}") == Error(JsonError("expected a key in quotes", 1, 9)))
+    expect(parse("\{\"a\": 1 \"b\": 2}") == Error(JsonError("expected , or } but found \"", 1, 9)))
+    expect(parse("\{\"a\": 1") == Error(JsonError("missing closing }", 1, 8)))
+    expect(parse("\{") == Error(JsonError("missing closing }", 1, 2)))
+}
+
+test "parse arrays" {
+    expect(parse("[]") == Ok([]))
+    expect(parse("[1,2,3]") == Ok([1, 2, 3]))
+    expect(parse(" [ [1, 2] , \"a,b\" , [] ] ") == Ok([[1, 2], "a,b", []]))
+    expect(parse("[1 2]") == Error(JsonError("expected , or ] but found 2", 1, 4)))
+    expect(parse("[1,]") == Error(JsonError("unexpected ]", 1, 4)))
+    expect(parse("[1") == Error(JsonError("missing closing ]", 1, 3)))
+}
+
+test "nesting is limited to 512, as an error rather than a stack overflow" {
+    val deepest = "[".repeat().take(512).join("") ~ "]".repeat().take(512).join("")
+    _ = parse(deepest)?
+    expect(parse("[" ~ deepest ~ "]") == Error(JsonError("nested more than 512 deep", 1, 513)))
+    expect(parse("\{\"a\":".repeat().take(600).join("")) == Error(JsonError("nested more than 512 deep", 1, 2561)))
+}
+
+test "only JSON's four white space characters separate tokens" {
+    expect(parse(" \t\r\n1\n") == Ok(1))
+    expect(parse("\u{a0}1") == Error(JsonError("unexpected \u{a0}", 1, 1)))
+}
+
+test "errors give the line and the column in characters" {
+    expect(parse("[\n  1,\n  x\n]") == Error(JsonError("unexpected x", 3, 3)))
+    expect(parse("[\"\u{e9}\u{e9}\", x]") == Error(JsonError("unexpected x", 1, 8)))
+    expect(parse("") == Error(JsonError("unexpected end of input", 1, 1)))
+    expect(parse("1 2") == Error(JsonError("unexpected text after the value", 1, 3)))
+}
+
+test "indexing chains through missing members" {
+    val doc = parse("\{\"a\": \{\"b\": [10, 20]}, \"n\": null}")!
+    expect(doc["a"]["b"][1] == Some(20))
+    expect(doc["a"]["missing"]["b"] == None)
+    expect(doc["a"]["b"][2] == None)
+    expect(doc["a"]["b"][-1] == None)
+    expect(doc["a"][0] == None)
+    expect(doc["n"]["x"] == None)
+}
+
+test "typed accessors" {
+    val doc = parse("\{\"s\": \"x\", \"i\": 3, \"f\": 2.5, \"b\": true, \"n\": null, \"a\": [1], \"o\": \{}}")!
+    expect(doc["s"].asString() == Some("x"))
+    expect(doc["i"].asInt() == Some(3))
+    expect(doc["f"].asInt() == None)
+    expect(doc["f"].asFloat() == Some(2.5))
+    expect(doc["i"].asFloat() == Some(3.0))
+    expect(doc["b"].asBool() == Some(true))
+    expect(doc["a"].asArray() == Some([1]))
+    expect(doc["o"].asObject() != None)
+    expect(doc["s"].asObject() == None)
+    expect(doc["n"].isNull())
+    expect(!doc["missing"].isNull())
+    expect(doc["missing"].asString() == None)
+}
+
+test "write is compact and escapes what JSON needs" {
+    val members: [String: Json] = ["b": [1, 2.5, true, Null], "a": "x"]
+    expect(write(members) == Ok("\{\"b\":[1,2.5,true,null],\"a\":\"x\"}"))
+    expect(write("say \"hi\"\\ \n\t\u{1}\u{1f}") == Ok("\"say \\\"hi\\\"\\\\ \\n\\t\\u0001\\u001f\""))
+    expect(write("caf\u{e9} / \u{1f600}") == Ok("\"caf\u{e9} / \u{1f600}\""))
+    val key: [String: Json] = ["a\"b": 1]
+    expect(write(key) == Ok("\{\"a\\\"b\":1}"))
+}
+
+test "a Float is written so that it reads back as the same Float" {
+    expect(write(1.0) == Ok("1.0"))
+    expect(write(0.1 + 0.2) == Ok("0.30000000000000004"))
+    expect(write(1e300) == Ok("1e300"))
+    expect(write(5e-324) == Ok("5e-324"))
+    expect(parse(write(1.0)!) == Ok(1.0))
+}
+
+test "NaN and the infinities aren't JSON, and write says where they are" {
+    val zero = 0.0
+    val inner: [String: Json] = ["x/y": [1.0, 1.0 / zero]]
+    val outer: [String: Json] = ["a": inner]
+    expect(write(1.0 / zero) == Error(NotFinite(1.0 / zero, "")))
+    expect(write(outer) == Error(NotFinite(1.0 / zero, "/a/x~1y/1")))
+    expect(pretty([-1.0 / zero]) == Error(NotFinite(-1.0 / zero, "/0")))
+    val nan: Json = zero / zero
+    expect(String(nan) == "nan")
+}
+
+test "pretty indents by two spaces and keeps an array of scalars on one line" {
+    val doc = parse("\{\"a\": [1, \"x\", null], \"b\": \{\"c\": [[1], []]}, \"d\": \{}, \"e\": []}")!
+    expect(pretty(doc) == Ok("\{\n  \"a\": [1, \"x\", null],\n  \"b\": \{\n    \"c\": [\n      [1],\n      []\n    ]\n  },\n  \"d\": \{},\n  \"e\": []\n}"))
+}
+
+test "printing a Json value shows its compact text" {
+    val doc = parse("\{\"a\": [1, 2.0, \"q\\\"\"]}")!
+    expect(String(doc) == "\{\"a\":[1,2.0,\"q\\\"\"]}")
+}
+
+test "write and parse round-trip" {
+    val text = "\{\"name\":\"x\\ny\",\"n\":-12,\"f\":[0.1,1.0,1e-7,-0.0,1.7976931348623157e308],\"t\":true,\"z\":null,\"o\":\{\"\":[]}}"
+    val doc = parse(text)!
+    expect(write(doc) == Ok(text))
+    expect(parse(pretty(doc)!) == Ok(doc))
+}

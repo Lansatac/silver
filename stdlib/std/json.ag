@@ -1,0 +1,560 @@
+// JSON (RFC 8259): parsing text into a `Json` value, and writing one back.
+module std.json
+
+import std.string
+import lang.string : slice
+import lang.char : toChar
+
+// JSON's `null`, which Silver doesn't have.
+type Null
+
+type Json = :String | :Int | :Float | :Bool | :Null | :[Json] | :[String: Json]
+
+// Why parsing stopped, and where: `line` and `column` count from 1, and `column` counts characters.
+type JsonError(message: String, line: Int, column: Int)
+
+// A Float that JSON can't write, NaN or an infinity, and where it is as a JSON Pointer (RFC 6901),
+// as `/scores/2`, or `` for the whole value.
+type NotFinite(value: Float, path: String)
+
+private val maxDepth: Int = 512
+
+// ---- Reading a value ----
+
+// On `Json?`, so lookups chain: `doc["a"]["b"]` is None when either is missing.
+def opIndex(value: Json?, key: String): Json? => match value {
+    Some(members: [String: Json]) => members[key]
+    _ => None
+}
+
+def opIndex(value: Json?, index: Int): Json? => match value {
+    Some(items: [Json]) => if index >= 0 && index < length(items) => items[index] else None
+    _ => None
+}
+
+def asString(value: Json?): String? => match value {
+    Some(s: String) => s
+    _ => None
+}
+
+def asInt(value: Json?): Int? => match value {
+    Some(n: Int) => n
+    _ => None
+}
+
+// A Float, or an Int as one, since JSON doesn't tell `1` and `1.0` apart.
+def asFloat(value: Json?): Float? => match value {
+    Some(x: Float) => x
+    Some(n: Int) => Float(n)
+    _ => None
+}
+
+def asBool(value: Json?): Bool? => match value {
+    Some(b: Bool) => b
+    _ => None
+}
+
+def asArray(value: Json?): [Json]? => match value {
+    Some(items: [Json]) => items
+    _ => None
+}
+
+def asObject(value: Json?): [String: Json]? => match value {
+    Some(members: [String: Json]) => members
+    _ => None
+}
+
+def isNull(value: Json?): Bool => match value {
+    Some(Null) => true
+    _ => false
+}
+
+// ---- Parsing ----
+
+// Strict RFC 8259. An object can't name a key twice, an integer must fit an Int, and arrays and
+// objects can be nested 512 deep.
+def parse(text: String): Json ! JsonError {
+    val data = bytes(text)
+    mutable val at = 0
+    match parseDocument(text, data, mutable at) {
+        Ok(value) => value
+        Error(Failure(message)) => fail errorAt(data, at, message)
+    }
+}
+
+// What went wrong, with the cursor left where it did.
+private type Failure(message: String)
+
+private def errorAt(data: [UInt8], at: Int, message: String): JsonError {
+    mutable val line = 1
+    mutable val column = 1
+    for i in 0..at {
+        val b = data[i]
+        if b == 10 {
+            line += 1
+            column = 1
+        } else if (b & 0xc0) != 0x80 {
+            column += 1
+        }
+    }
+    JsonError(message, line, column)
+}
+
+private def parseDocument(text: String, data: [UInt8], mutable at: Int): Json ! Failure {
+    val value = parseValue(text, data, mutable at, 0)?
+    skipSpace(data, mutable at)
+    if at < length(data) {
+        fail Failure("unexpected text after the value")
+    }
+    value
+}
+
+// JSON's white space is only these four.
+private def skipSpace(data: [UInt8], mutable at: Int): Unit {
+    while at < length(data) {
+        val b = data[at]
+        if b != 32 && b != 10 && b != 13 && b != 9 {
+            return
+        }
+        at += 1
+    }
+}
+
+private def isDigitByte(b: UInt8): Bool => b >= 48 && b <= 57
+
+private def skipDigits(data: [UInt8], mutable at: Int): Unit {
+    while at < length(data) && isDigitByte(data[at]) {
+        at += 1
+    }
+}
+
+// The character at `at`, for a message.
+private def charAt(text: String, at: Int): String {
+    val rest = slice(text, at, length(bytes(text)))
+    match next(rest) {
+        Some((c, _)) => String(c)
+        None => ""
+    }
+}
+
+private def parseValue(text: String, data: [UInt8], mutable at: Int, depth: Int): Json ! Failure {
+    skipSpace(data, mutable at)
+    if at == length(data) {
+        fail Failure("unexpected end of input")
+    }
+    val b = data[at]
+    if b == 123 {
+        return parseObject(text, data, mutable at, depth + 1)?
+    }
+    if b == 91 {
+        return parseArray(text, data, mutable at, depth + 1)?
+    }
+    if b == 34 {
+        return parseString(text, data, mutable at)?
+    }
+    if isDigitByte(b) || b == 45 {
+        return parseNumber(text, data, mutable at)?
+    }
+    if literal(data, mutable at, "true") {
+        return true
+    }
+    if literal(data, mutable at, "false") {
+        return false
+    }
+    if literal(data, mutable at, "null") {
+        return Null
+    }
+    fail Failure("unexpected {charAt(text, at)}")
+}
+
+// Whether `word` is at `at`, moving past it when it is.
+private def literal(data: [UInt8], mutable at: Int, word: String): Bool {
+    val expected = bytes(word)
+    if at + length(expected) > length(data) {
+        return false
+    }
+    for i in 0..length(expected) {
+        if data[at + i] != expected[i] {
+            return false
+        }
+    }
+    at += length(expected)
+    true
+}
+
+// An array's items, for `at` on its `[`.
+private def parseArray(text: String, data: [UInt8], mutable at: Int, depth: Int): [Json] ! Failure {
+    if depth > maxDepth {
+        fail Failure("nested more than {maxDepth} deep")
+    }
+    at += 1
+    mutable val items: [Json] = []
+    skipSpace(data, mutable at)
+    if at < length(data) && data[at] == 93 {
+        at += 1
+        return items
+    }
+    while true {
+        items ~= [parseValue(text, data, mutable at, depth)?]
+        skipSpace(data, mutable at)
+        if at == length(data) {
+            fail Failure("missing closing ]")
+        }
+        val b = data[at]
+        if b == 93 {
+            at += 1
+            return items
+        }
+        if b != 44 {
+            fail Failure("expected , or ] but found {charAt(text, at)}")
+        }
+        at += 1
+    }
+    items
+}
+
+// An object's members, for `at` on its `\{`.
+private def parseObject(text: String, data: [UInt8], mutable at: Int, depth: Int): [String: Json] ! Failure {
+    if depth > maxDepth {
+        fail Failure("nested more than {maxDepth} deep")
+    }
+    at += 1
+    mutable val members: [String: Json] = [:]
+    skipSpace(data, mutable at)
+    if at < length(data) && data[at] == 125 {
+        at += 1
+        return members
+    }
+    while true {
+        skipSpace(data, mutable at)
+        if at == length(data) {
+            fail Failure("missing closing }")
+        }
+        if data[at] != 34 {
+            fail Failure("expected a key in quotes")
+        }
+        val keyAt = at
+        val key = parseString(text, data, mutable at)?
+        if contains(members, key) {
+            at = keyAt
+            fail Failure("duplicate key {key}")
+        }
+        skipSpace(data, mutable at)
+        if at == length(data) || data[at] != 58 {
+            fail Failure("expected : after the key")
+        }
+        at += 1
+        members[key] = parseValue(text, data, mutable at, depth)?
+        skipSpace(data, mutable at)
+        if at == length(data) {
+            fail Failure("missing closing }")
+        }
+        val b = data[at]
+        if b == 125 {
+            at += 1
+            return members
+        }
+        if b != 44 {
+            fail Failure("expected , or \} but found {charAt(text, at)}")
+        }
+        at += 1
+    }
+    members
+}
+
+// A string, for `at` on its opening quote. Without escapes it's one slice of the text.
+private def parseString(text: String, data: [UInt8], mutable at: Int): String ! Failure {
+    val open = at
+    at += 1
+    mutable val start = at
+    mutable val value = ""
+    while at < length(data) {
+        val b = data[at]
+        if b == 34 {
+            val run = slice(text, start, at)
+            at += 1
+            return if start == open + 1 => run else value ~ run
+        }
+        if b == 92 {
+            value ~= slice(text, start, at)
+            value ~= String(parseEscape(data, mutable at)?)
+            start = at
+        } else if b < 32 {
+            fail Failure("control character {b} in a string")
+        } else {
+            at += 1
+        }
+    }
+    at = open
+    fail Failure("missing closing quote")
+}
+
+// The character an escape writes, for `at` on its backslash, which is where an error is reported.
+private def parseEscape(data: [UInt8], mutable at: Int): Char ! Failure {
+    val escapeAt = at
+    if at + 1 >= length(data) {
+        fail Failure("invalid escape")
+    }
+    val e = data[at + 1]
+    at += 2
+    if e == 34 => '"'
+    else if e == 92 => '\\'
+    else if e == 47 => '/'
+    else if e == 98 => '\u{8}'
+    else if e == 102 => '\u{c}'
+    else if e == 110 => '\n'
+    else if e == 114 => '\r'
+    else if e == 116 => '\t'
+    else if e == 117 => parseUnicode(data, mutable at, escapeAt)?
+    else {
+        at = escapeAt
+        fail Failure("invalid escape")
+    }
+}
+
+// `\uXXXX`, for `at` just after the `u`. A character outside the Basic Multilingual Plane is written
+// as two, a high surrogate and then a low one.
+private def parseUnicode(data: [UInt8], mutable at: Int, escapeAt: Int): Char ! Failure {
+    val unit = hex4(data, at) ?? -1
+    if unit < 0 {
+        at = escapeAt
+        fail Failure("expected four hex digits")
+    }
+    at += 4
+    if unit >= 0xdc00 && unit <= 0xdfff {
+        at = escapeAt
+        fail Failure("low surrogate without a high one")
+    }
+    if unit < 0xd800 || unit > 0xdbff {
+        return toChar(unit)!
+    }
+    if at + 1 >= length(data) || data[at] != 92 || data[at + 1] != 117 {
+        at = escapeAt
+        fail Failure("high surrogate without a low one")
+    }
+    val low = hex4(data, at + 2) ?? -1
+    if low < 0 {
+        fail Failure("expected four hex digits")
+    }
+    if low < 0xdc00 || low > 0xdfff {
+        at = escapeAt
+        fail Failure("high surrogate without a low one")
+    }
+    at += 6
+    toChar(0x10000 + ((unit - 0xd800) << 10) + (low - 0xdc00))!
+}
+
+private def hex4(data: [UInt8], from: Int): Int? {
+    if from + 4 > length(data) {
+        return None
+    }
+    mutable val value = 0
+    for i in from..from + 4 {
+        value = value * 16 + hexDigit(data[i])?
+    }
+    value
+}
+
+private def hexDigit(b: UInt8): Int? {
+    if b >= 48 && b <= 57 => Int(b) - 48
+    else if b >= 97 && b <= 102 => Int(b) - 87
+    else if b >= 65 && b <= 70 => Int(b) - 55
+    else None
+}
+
+// A number as JSON writes it: `-` or not, `0` or digits that don't start with `0`, then a fraction
+// and an exponent, each optional. It's an Int unless it has a fraction or an exponent.
+private def parseNumber(text: String, data: [UInt8], mutable at: Int): Json ! Failure {
+    val start = at
+    if data[at] == 45 {
+        at += 1
+    }
+    val whole = at
+    skipDigits(data, mutable at)
+    if at == whole {
+        fail Failure("expected a digit")
+    }
+    if data[whole] == 48 && at - whole > 1 {
+        at = whole
+        fail Failure("leading zero in a number")
+    }
+    mutable val integer = true
+    if at < length(data) && data[at] == 46 {
+        at += 1
+        val fraction = at
+        skipDigits(data, mutable at)
+        if at == fraction {
+            fail Failure("expected a digit after .")
+        }
+        integer = false
+    }
+    if at < length(data) && (data[at] == 101 || data[at] == 69) {
+        at += 1
+        if at < length(data) && (data[at] == 43 || data[at] == 45) {
+            at += 1
+        }
+        val exponent = at
+        skipDigits(data, mutable at)
+        if at == exponent {
+            fail Failure("expected a digit in the exponent")
+        }
+        integer = false
+    }
+    val written = slice(text, start, at)
+    if integer {
+        if val n = parseInt(written) {
+            return n
+        }
+        at = start
+        fail Failure("integer too large for an Int")
+    }
+    if val x = parseFloat(written) {
+        return x
+    }
+    at = start
+    fail Failure("number too large")
+}
+
+// ---- Writing ----
+
+// Compact JSON text: no spaces, and object members in their order.
+def write(value: Json): String ! NotFinite {
+    mutable val out = ""
+    emit(value, mutable out, true, false, 0)?
+    out
+}
+
+// JSON text indented by two spaces, with an array of numbers, strings, booleans and nulls on one line.
+def pretty(value: Json): String ! NotFinite {
+    mutable val out = ""
+    emit(value, mutable out, true, true, 0)?
+    out
+}
+
+// The compact text, for showing a value. A NaN or an infinity shows as Silver prints it, which isn't JSON.
+def opString(value: Json): String {
+    mutable val out = ""
+    emit(value, mutable out, false, false, 0)!
+    out
+}
+
+private def emit(value: Json, mutable out: String, strict: Bool, indented: Bool, depth: Int): Unit ! NotFinite {
+    match value {
+        s: String => quote(s, mutable out)
+        n: Int => {
+            out ~= "{n}"
+        }
+        x: Float => {
+            if strict && x - x != 0.0 {
+                fail NotFinite(x, "")
+            }
+            out ~= "{x}"
+        }
+        b: Bool => {
+            out ~= if b => "true" else "false"
+        }
+        Null => {
+            out ~= "null"
+        }
+        items: [Json] => emitArray(items, mutable out, strict, indented, depth)?
+        members: [String: Json] => emitObject(members, mutable out, strict, indented, depth)?
+    }
+}
+
+private def isScalar(value: Json): Bool => match value {
+    _: [Json] => false
+    _: [String: Json] => false
+    _ => true
+}
+
+private def newline(mutable out: String, depth: Int): Unit {
+    out ~= "\n"
+    for _ in 0..depth {
+        out ~= "  "
+    }
+}
+
+private def emitArray(items: [Json], mutable out: String, strict: Bool, indented: Bool, depth: Int): Unit ! NotFinite {
+    val broken = indented && !items.all(isScalar)
+    out ~= "["
+    for i in 0..length(items) {
+        if i > 0 {
+            out ~= if indented && !broken => ", " else ","
+        }
+        if broken {
+            newline(mutable out, depth + 1)
+        }
+        if val Error(e) = emit(items[i], mutable out, strict, indented, depth + 1) {
+            fail NotFinite(e.value, "/{i}{e.path}")
+        }
+    }
+    if broken {
+        newline(mutable out, depth)
+    }
+    out ~= "]"
+}
+
+private def emitObject(members: [String: Json], mutable out: String, strict: Bool, indented: Bool, depth: Int): Unit ! NotFinite {
+    out ~= "\{"
+    mutable val first = true
+    for (key, member) in members {
+        if !first {
+            out ~= ","
+        }
+        first = false
+        if indented {
+            newline(mutable out, depth + 1)
+        }
+        quote(key, mutable out)
+        out ~= if indented => ": " else ":"
+        if val Error(e) = emit(member, mutable out, strict, indented, depth + 1) {
+            fail NotFinite(e.value, "/{pointerSegment(key)}{e.path}")
+        }
+    }
+    if indented && !first {
+        newline(mutable out, depth)
+    }
+    out ~= "}"
+}
+
+// A key as a JSON Pointer writes it, with `~` as `~0` and `/` as `~1`.
+private def pointerSegment(key: String): String {
+    if !contains(key, "~") && !contains(key, "/") {
+        return key
+    }
+    mutable val out = ""
+    for c in key {
+        out ~= if c == '~' => "~0" else if c == '/' => "~1" else String(c)
+    }
+    out
+}
+
+// `text` in quotes, escaping `"`, `\` and the control characters, and nothing else.
+private def quote(text: String, mutable out: String): Unit {
+    out ~= "\""
+    val data = bytes(text)
+    mutable val start = 0
+    for i in 0..length(data) {
+        val b = data[i]
+        if b == 34 || b == 92 || b < 32 {
+            out ~= slice(text, start, i)
+            out ~= escaped(b)
+            start = i + 1
+        }
+    }
+    out ~= slice(text, start, length(data))
+    out ~= "\""
+}
+
+private def escaped(b: UInt8): String {
+    if b == 34 => "\\\""
+    else if b == 92 => "\\\\"
+    else if b == 10 => "\\n"
+    else if b == 13 => "\\r"
+    else if b == 9 => "\\t"
+    else if b == 8 => "\\b"
+    else if b == 12 => "\\f"
+    else "\\u00{hexText(Int(b) >> 4)}{hexText(Int(b) & 15)}"
+}
+
+private def hexText(n: Int): String => if n < 10 => "{n}" else ["a", "b", "c", "d", "e", "f"][n - 10]

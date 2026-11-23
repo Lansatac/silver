@@ -58,6 +58,7 @@ The modules of `std` are described in `stdlib/`, one file to a module, in the sa
 | [std.random](stdlib/random.md) | A seeded generator, SplitMix64 | Implemented |
 | [std.time](stdlib/time.md) | Dates, times, moments, durations, offsets, clocks, parsing and printing | Implemented, without named time zones |
 | [std.file](stdlib/file.md) | Reading and writing a file whole | Implemented |
+| [std.json](stdlib/json.md) | Parsing, finding things in and writing JSON | Implemented, without decoding into your own types |
 | [std.process](stdlib/process.md) | `exit` and the environment | Not built |
 | [std.c](stdlib/c.md) | C's integer types and strings, for native declarations | Implemented |
 
