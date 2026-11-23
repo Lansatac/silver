@@ -56,7 +56,7 @@ RUN curl -fsS https://dlang.org/install.sh | bash -s install "ldc-${LDC_VERSION}
 # redub, which runTests.sh builds and tests with, from Jason's fork: upstream's `redub test` doesn't
 # generate the dub_test_root silver.testrunner needs, and its builds drop dub.selections.json's
 # entries. Pinned to a commit on the fork's test-root branch; bump it to upgrade.
-ARG REDUB_COMMIT=c66790d5f6f1de7b1036bcc733a30ed0f7571e78
+ARG REDUB_COMMIT=0962451ae2b9e93634f2a6de70fd2e87bc813b22
 RUN git clone --quiet https://github.com/Lansatac/redub.git /opt/redub \
     && cd /opt/redub \
     && git checkout --quiet ${REDUB_COMMIT} \
