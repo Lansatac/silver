@@ -1,0 +1,5 @@
+// A chain where an array is expected is an error that names `.array()`.
+def main(): Unit {
+    val xs = [1, 2, 3]
+    val doubled: [Int] = xs.map(x => x * 2)
+}

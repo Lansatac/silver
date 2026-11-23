@@ -2216,6 +2216,26 @@ unittest
         .shouldReport(DiagnosticCode.InvalidOperand, At("A(1)", 1));
 }
 
+@("a range where an array, a matching branch or a range is wanted names array, seq or byIndex only when it would fit")
+unittest
+{
+    string inMain(string body) => "def main(): Unit {\n    val xs = [1, 2]\n    " ~ body ~ "\n}";
+    analyzed(inMain("val ys: [Int] = xs.map(x => x)")).onlyMessage(DiagnosticCode.TypeMismatch)
+        .should.equal("Type `Mapped<[Int], Int, Int>` is not assignable to type `[Int]`; `.array()` collects it into one");
+    analyzed(inMain("val ys: [String] = xs.map(x => x)")).onlyMessage(DiagnosticCode.TypeMismatch)
+        .should.equal("Type `Mapped<[Int], Int, Int>` is not assignable to type `[String]`");
+    analyzed(inMain("val ys: [Int] = 5")).onlyMessage(DiagnosticCode.TypeMismatch)
+        .should.equal("Type `Int` is not assignable to type `[Int]`");
+    analyzed(inMain("val ys = if true => xs else 0..2")).onlyMessage(DiagnosticCode.TypeMismatch)
+        .should.equal("Branches have different types `[Int]` and `Interval<Int>`; `.seq()` on each makes both a `Seq<Int>`");
+    analyzed(inMain("val ys = if true => xs else [\"a\"].map(s => s)")).onlyMessage(DiagnosticCode.TypeMismatch)
+        .should.equal("Branches have different types `[Int]` and `Mapped<[String], String, String>`");
+    analyzed("type A(x: Int)\ndef length(a: A): Int => 1\ndef opIndex(a: A, index: Int): Int => 1\n"
+        ~ "def main(): Unit {\n    for x in A(1) { }\n}").onlyMessage(DiagnosticCode.InvalidOperand)
+        .should.equal("`for` loops over a `Range` or an `Iterable`, and `A` is neither: no conformance says so; it has a `length` "
+            ~ "and an `opIndex`, so `conform A: Sized & Indexed<Int>` lets `.byIndex()` step it");
+}
+
 @("the next a for uses is the one its conformance found where it's declared")
 unittest
 {

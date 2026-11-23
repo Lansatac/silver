@@ -1,0 +1,6 @@
+// Branches that build different chains of one item type are an error that names `.seq()`.
+def main(): Unit {
+    val xs = [1, 2, 3]
+    val evens = true
+    val picked = if evens => xs.filter(x => x % 2 == 0) else xs.map(x => x * 2)
+}

@@ -1,0 +1,10 @@
+// An `Indexed` type that isn't a range is an error that names `.byIndex()`.
+type Row(cells: [Int])
+
+def length(r: Row): Int => length(r.cells)
+def opIndex(r: Row, i: Int): Int => r.cells[i]
+conform Row: Sized & Indexed<Int>
+
+def main(): Unit {
+    for cell in Row([1, 2]) { printl(cell) }
+}

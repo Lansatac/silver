@@ -1,0 +1,1 @@
+T0005: `for` loops over a `Range` or an `Iterable`, and `Row` is neither: no conformance says so; it's an `Indexed`, so `.byIndex()` steps it

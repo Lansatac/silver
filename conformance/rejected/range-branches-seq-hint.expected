@@ -1,0 +1,1 @@
+T0001: Branches have different types `Filtered<[Int], Int>` and `Mapped<[Int], Int, Int>`; `.seq()` on each makes both a `Seq<Int>`

@@ -1,1 +1,1 @@
-T0001: Branches have different types `[Int]` and `Filtered<[Int], Int>`
+T0001: Branches have different types `[Int]` and `Filtered<[Int], Int>`; `.seq()` on each makes both a `Seq<Int>`

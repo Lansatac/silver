@@ -2960,7 +2960,7 @@ private final class TypeChecker
         Type joinedOf(const(Expr)[] bodies, const(Type)[] types, Span span, string what)
         {
             auto joined = _types.never;
-            foreach (i, type; types) joined = join(joined, type, bodies[i].span, what);
+            foreach (i, type; types) joined = join(joined, type, bodies[i].span, what, ctx.site);
             if (joined != _types.error)
             {
                 foreach (i, body; bodies) coerce(body, types[i], joined);
@@ -4884,12 +4884,40 @@ private final class TypeChecker
         scope (exit) _hinting = false;
         auto tried = bound.dup;
         auto found = satisfy(goal, open, tried, site, null);
-        if (!found.holds) return "";
+        if (!found.holds) return goal.decl == rangeDecl() || goal.decl == iterableDecl() ? byIndexHint(goal.self, site) : "";
         auto args = goal.args.map!(a => _types.substitute(a, tried)).array;
         auto line = "`conform %s: %s`".format(_types.describe(goal.self), _declarer.describe(Bound(goal.decl, args)));
         if (auto general = generalConformance(goal, found.witnesses)) line = general;
         if (_resolutions.declarations.interfaces[goal.decl].functions.length == 0) return "; declare it with %s".format(line);
         return "; it has the functions, so %s is all that's missing".format(line);
+    }
+
+    /// What to add when `self` isn't a range but the standard library's `byIndex` could step it:
+    /// it's an `Indexed`, or it has the `length` and `opIndex` one needs. The compiler names no
+    /// module outside `lang`, so the interfaces are the ones by those names that arrays conform to.
+    private string byIndexHint(Type self, Site site)
+    {
+        Id!InterfaceDecl named(string name)
+        {
+            foreach (decl; _typing.conformances.byKey)
+            {
+                if (_resolutions.declarations.interfaces[decl].name == name
+                    && _typing.conformances[decl].any!(entry => _types.isArray(entry.self)))
+                    return decl;
+            }
+            return Id!InterfaceDecl.init;
+        }
+        auto indexed = named("Indexed"), sized = named("Sized");
+        if (!indexed.isValid || !sized.isValid) return "";
+        auto t = TypeParam(_ids.next!TypeParam, "T", Span.init);
+        auto goal = Goal(indexed, self, [_types.parameter(t.id, "T")]);
+        Substitution bound;
+        if (lookUp(goal, [t], bound, site, 0).holds) return "; it's an `Indexed`, so `.byIndex()` steps it";
+        Substitution tried, none;
+        if (!satisfy(goal, [t], tried, site, null).holds || t.id !in tried) return "";
+        if (!satisfy(Goal(sized, self, []), null, none, site, null).holds) return "";
+        return "; it has a `length` and an `opIndex`, so `conform %s: Sized & Indexed<%s>` lets `.byIndex()` step it"
+            .format(_types.describe(self), _types.describe(tried[t.id]));
     }
 
     /// The `conform` line for every type the generic function `witnesses[0]` stands for takes, as
@@ -5968,7 +5996,7 @@ private final class TypeChecker
                         "This parameter is `mutable`, so the call can change the argument; write `mutable` before it");
                 }
                 if (checked[i]) continue;
-                if (typed[i] != Type.init) coerce(arg, typed[i], paramTypes[i]);
+                if (typed[i] != Type.init) coerce(arg, typed[i], paramTypes[i], ctx.site);
                 else checkArgument(arg, paramTypes[i], ctx);
                 continue;
             }
@@ -6178,7 +6206,7 @@ private final class TypeChecker
                                 "This parameter is `mutable`, so the call can change the argument; write `mutable` before it");
                         }
                         if (type == Type.init) check(arg, funcData.params[i], ctx);
-                        else coerce(arg, type, funcData.params[i]);
+                        else coerce(arg, type, funcData.params[i], ctx.site);
                         continue;
                     }
                     if (!funcData.isMutable(i))
@@ -6758,7 +6786,7 @@ private final class TypeChecker
         foreach (i, arg; args)
         {
             if (checked[i] || !arg.id.isValid) continue;
-            if (typed[i] != Type.init) coerce(arg, typed[i], found.signature.params[i]);
+            if (typed[i] != Type.init) coerce(arg, typed[i], found.signature.params[i], ctx.site);
             else checkArgument(arg, found.signature.params[i], ctx);
         }
         return found;
@@ -6939,7 +6967,7 @@ private final class TypeChecker
 
         auto thenType = trueBranch(if_, () => synthesizeBeside(*if_.trueBody, errors, ctx));
         auto elseType = synthesizeBeside(*if_.falseBody, errors, ctx);
-        auto joined = join(thenType, elseType, span, "Branches");
+        auto joined = join(thenType, elseType, span, "Branches", ctx.site);
         if (joined != _types.error)
         {
             coerce(*if_.trueBody, thenType, joined);
@@ -6950,7 +6978,7 @@ private final class TypeChecker
 
     /// The type that both `a` and `b` fit, or `error` (reported at `span`) if there isn't one.
     /// `what` names the things that have these types, for the error.
-    private Type join(Type a, Type b, Span span, string what)
+    private Type join(Type a, Type b, Span span, string what, Site site = Site.init)
     {
         if (a == _types.error || b == _types.error) return _types.error;
         if (a == _types.never) return b;
@@ -6965,8 +6993,15 @@ private final class TypeChecker
         if (_types.isFailure(b) && valued(a)) return _types.errorUnion(a, _types.errorOf(b));
 
         if (_types.sameApartFromError(a, b)) return _types.error;
+        auto erase = "";
+        if (site.module_ !is null)
+        {
+            auto item = rangeItem(a, site);
+            if (item != Type.init && item == rangeItem(b, site))
+                erase = "; `.seq()` on each makes both a `Seq<%s>`".format(_types.describe(item));
+        }
         _collector.reportError(DiagnosticCode.TypeMismatch, span,
-            "%s have different types `%s` and `%s`".format(what, _types.describe(a), _types.describe(b)));
+            "%s have different types `%s` and `%s`%s".format(what, _types.describe(a), _types.describe(b), erase));
         return _types.error;
     }
 
@@ -7065,14 +7100,14 @@ private final class TypeChecker
                 (const Lambda l) => l,
                 (_) => assert(0, "checked above"),
             );
-            return coerce(expr, typeLambda(expr, lambda, &data, ctx.site), expected);
+            return coerce(expr, typeLambda(expr, lambda, &data, ctx.site), expected, ctx.site);
         }
         // What's expected can say what a generic use's type arguments are, also through `!` and `?`.
         auto isMethod = expr.kind.match!((const CallExpr call) => isMethodCall(expr.id, *call.callee), _ => false);
         auto unwraps = expr.kind.match!((const AssertExpr _) => true, (const PropagateExpr _) => true, _ => false);
         if (isMethod || unwraps || genericUse(expr).found || isOverloadedUse(expr))
         {
-            return coerce(expr, synthesizeExact(expr, ctx, expected), expected);
+            return coerce(expr, synthesizeExact(expr, ctx, expected), expected, ctx.site);
         }
         if (auto range = asRange(&expr))
         {
@@ -7093,7 +7128,7 @@ private final class TypeChecker
         if (auto owner = _declarer.ownerOf(constructed))
         {
             auto member = _typing.nominalTypes[constructed];
-            if (wantsMember(member, *owner, expected)) return coerce(expr, synthesizeExact(expr, ctx), expected);
+            if (wantsMember(member, *owner, expected)) return coerce(expr, synthesizeExact(expr, ctx), expected, ctx.site);
         }
         if (_declarer.isSum(expected))
         {
@@ -7206,12 +7241,12 @@ private final class TypeChecker
             }
         }
 
-        return coerce(expr, synthesize(expr, ctx), expected);
+        return coerce(expr, synthesize(expr, ctx), expected, ctx.site);
     }
 
     /// Fits `expr`, already found to have type `type`, to `expected`: a literal adapts and a
     /// value that isn't an option yet is promoted, and anything else has to be assignable.
-    private Type coerce(const Expr expr, Type type, Type expected)
+    private Type coerce(const Expr expr, Type type, Type expected, Site site = Site.init)
     {
         if (isNumeric(expected) && isIntLiteral(expr))
         {
@@ -7262,7 +7297,7 @@ private final class TypeChecker
             _typing.promotions[expr.id] = expected;
             return expected;
         }
-        requireAssignable(type, expected, expr.span);
+        requireAssignable(type, expected, expr.span, site);
         return type;
     }
 
@@ -7359,7 +7394,7 @@ private final class TypeChecker
         auto joined = _types.never;
         foreach (i, type; types)
         {
-            joined = join(joined, type, match_.arms[i].body.span, "Match arms");
+            joined = join(joined, type, match_.arms[i].body.span, "Match arms", ctx.site);
         }
         if (joined == _types.error) return joined;
         foreach (i, arm; match_.arms)
@@ -7834,13 +7869,41 @@ private final class TypeChecker
         );
     }
 
-    private void requireAssignable(Type from, Type to, Span span)
+    private void requireAssignable(Type from, Type to, Span span, Site site = Site.init)
     {
         if (isAssignable(from, to) || _types.mentionsError(from) || _types.mentionsError(to)) return;
         auto opaque = _types.isParameter(to)
             ? ", which could be any type; only a value of type `%s` is one".format(_types.describe(to)) : "";
+        auto collect = "";
+        if (site.module_ !is null && _types.isArray(to) && !_types.isArray(from))
+        {
+            auto item = rangeItem(from, site);
+            if (item != Type.init && isAssignable(item, _types.arrayElement(to))) collect = "; `.array()` collects it into one";
+        }
         _collector.reportError(DiagnosticCode.TypeMismatch, span,
-            "Type `%s` is not assignable to type `%s`%s".format(_types.describe(from), _types.describe(to), opaque));
+            "Type `%s` is not assignable to type `%s`%s%s".format(_types.describe(from), _types.describe(to), opaque, collect));
+    }
+
+    /// What `type` gives as a `Range`, or through the range its `Iterable` gives, as `site` sees
+    /// it; `Type.init` when it's neither. Only for wording an error.
+    private Type rangeItem(Type type, Site site)
+    {
+        auto range = rangeDecl();
+        auto collection = iterableDecl();
+        if (!range.isValid || _types.isParameter(type)) return Type.init;
+        auto t = TypeParam(_ids.next!TypeParam, "T", Span.init);
+        Substitution bound;
+        if (lookUp(Goal(range, type, [_types.parameter(t.id, "T")]), [t], bound, site, 0).holds && t.id in bound)
+            return bound[t.id];
+        if (!collection.isValid) return Type.init;
+        auto r = TypeParam(_ids.next!TypeParam, "R", Span.init);
+        Substitution gives;
+        if (!lookUp(Goal(collection, type, [_types.parameter(r.id, "R")]), [r], gives, site, 0).holds || r.id !in gives)
+            return Type.init;
+        Substitution inner;
+        if (lookUp(Goal(range, gives[r.id], [_types.parameter(t.id, "T")]), [t], inner, site, 0).holds && t.id in inner)
+            return inner[t.id];
+        return Type.init;
     }
 
 }

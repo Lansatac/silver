@@ -1,1 +1,1 @@
-T0043: `map` needs `C` to be an `Iterable<R>`, and `Row` isn't one: no conformance says so
+T0043: `map` needs `C` to be an `Iterable<R>`, and `Row` isn't one: no conformance says so; it has a `length` and an `opIndex`, so `conform Row: Sized & Indexed<Int>` lets `.byIndex()` step it

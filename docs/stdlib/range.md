@@ -198,5 +198,4 @@ These are listed in the [ranges proposal](../proposals/ranges.md#open-questions)
 - Not built yet, as designed in the proposal: `sum`, `Backward` and `reversed`. `sorted` and `sortedBy` are a merge sort written in Silver.
 - An adapter's type can be built with its constructor by a module that imports it, which skips what `take` and `step` check: `Stepped(xs, 0)` divides by zero when asked for its length.
 - A panic in an adapter, such as indexing a `Taken` past its length, is reported at the line in `std.range` that panics, not at the caller's index.
-- Passing a type that isn't a range to an adapter says so, but doesn't yet suggest `byIndex()` for a type with a `length` and an `opIndex`. `byIndex()` on a type that isn't `Indexed` reports the missing `Sized` as well.
-- Assigning a chain where an array is expected is a type mismatch that doesn't yet suggest `array()`.
+- `byIndex()` on a type that isn't `Indexed` reports the missing `Sized` as well.
