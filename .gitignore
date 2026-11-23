@@ -1,14 +1,13 @@
 .dub
 docs.json
 __dummy.html
-/silver
-/silverc
+# What the build makes: silver, silverc, the test executables, the runtime and a link to stdlib/.
+/out/
 *.so
 *.dylib
 *.dll
 *.a
 *.lib
-*-test-*
 *.exe
 *.o
 *.obj
@@ -22,10 +21,6 @@ __dummy.html
 
 # `silver build --emit-llvm` output.
 *.ll
-
-# The compiled runtime library, unoptimized and optimized, rebuilt when its sources change.
-runtime/build/
-runtime/build-optimized/
 
 # Experimental Silver programs, kept out of the repo on purpose.
 /exploration/

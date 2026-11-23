@@ -9,6 +9,7 @@
 		"./sema/",
 		"./core/",
 		"./interpreter/",
+		"./runtime/",
 		"./codegen/",
 		"./testing/",
 		"./conformance/",
@@ -28,6 +29,7 @@
 		"silver:testing": "*"
 	},
 	"targetType": "executable",
+	"targetPath": "out",
 	"configurations": [
 		{
 			"name": "application",

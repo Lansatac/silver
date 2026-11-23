@@ -19,7 +19,8 @@
 			"libs-windows": [
 				"psapi"
 			],
-			"name": "unittest"
+			"name": "unittest",
+			"targetPath": "../out"
 		}
 	]
 }

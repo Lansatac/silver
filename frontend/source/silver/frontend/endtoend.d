@@ -1,6 +1,6 @@
 /// Runs `silver` and `silverc` on the projects under frontend/tests, and on ones built in the temp
-/// directory. Both executables have to be built at the repository's root first, which `dub build`
-/// does and `runTests.sh` does before testing.
+/// directory. Both executables have to be built into out/ first, which `redub build` at the repository's
+/// root does, as `runTests.sh` does before testing.
 module silver.frontend.endtoend;
 
 version (unittest):
@@ -18,12 +18,12 @@ immutable fixtures = buildPath(root, "frontend", "tests");
 version (Windows) enum exe = ".exe";
 else enum exe = "";
 
-/// The built executable `name` at the repository's root, failing the test when it isn't there.
+/// The built executable `name` in out/, failing the test when it isn't there.
 string built(string name)
 {
-    auto path = buildPath(root, name ~ exe);
+    auto path = buildPath(root, "out", name ~ exe);
     assert(exists(path), path ~ " isn't there: the front end's end-to-end tests run the built executables, so run "
-        ~ "`dub build` at the repository's root first");
+        ~ "`redub build` at the repository's root first");
     return path;
 }
 
@@ -196,11 +196,12 @@ unittest
     expectRan(run(["build", "-o", output, "hello.ag"]), "Linking failed:\nThe runtime wasn't found. It's the directory "
         ~ "`runtime` beside the compiler, which would be " ~ buildPath(install, "runtime") ~ ".\n", 1);
 
-    copyTree(buildPath(root, "runtime", "source"), buildPath(install, "runtime", "source"));
+    // The built runtime alone, with no sources: silverc only links it.
+    copyTree(buildPath(root, "out", "runtime"), buildPath(install, "runtime"));
     expectRan(run(["build", "-o", output, "hello.ag"]), "");
     expectRan(runIn([output], work), "the copy\n");
-    assert(exists(buildPath(install, "runtime", "build")), "the runtime wasn't built in the copy");
-    assert(!exists(buildPath(install, "runtime", "build-optimized")));
+    expectRan(run(["build", "-O", "-o", output, "hello.ag"]), "");
+    expectRan(runIn([output], work), "the copy\n");
 }
 
 @("a file with no silver.toml at or above it runs as before")
