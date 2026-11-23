@@ -78,6 +78,18 @@ RUN ARCH=$(dpkg --print-architecture) \
     && ln -s bd /usr/local/bin/beads \
     && cd / && rm -rf "$TMP"
 
+# GitHub's CLI (`gh`), for pull requests and CI runs. Pinned like beads; bump the version to upgrade.
+ARG GH_VERSION=2.105.0
+RUN ARCH=$(dpkg --print-architecture) \
+    && TARBALL=gh_${GH_VERSION}_linux_${ARCH}.tar.gz \
+    && BASE=https://github.com/cli/cli/releases/download/v${GH_VERSION} \
+    && TMP=$(mktemp -d) && cd "$TMP" \
+    && curl -fsSLO "${BASE}/${TARBALL}" \
+    && curl -fsSL "${BASE}/gh_${GH_VERSION}_checksums.txt" | grep " ${TARBALL}\$" | sha256sum -c - \
+    && tar -xzf "${TARBALL}" \
+    && install -m 0755 "gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh \
+    && cd / && rm -rf "$TMP"
+
 # Ubuntu's image ships an `ubuntu` user with UID 1000; replace it with `dev`.
 ARG USERNAME=dev
 ARG USER_UID=1000
