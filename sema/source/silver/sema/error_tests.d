@@ -117,7 +117,7 @@ def main(): Unit => ()`).shouldHaveNoDiagnostics();
         ~ "def b(): Int? => parse(\"1\") ?? { return None }\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
 }
 
-@("a lambda's return type is inferred from its ?s, and one error has to take in the others")
+@("a lambda's return type is inferred from its ?s, listing the errors they pass on")
 unittest
 {
     auto a = analyzedErrors(`val f = (t: String) => parse(t)? * 2
@@ -128,8 +128,9 @@ unittest
     a.shouldHaveNoDiagnostics();
     a.shouldHaveType("(t: String) => parse(t)? * 2", "(String) -> Int ! ParseError");
     a.shouldHaveType("(n: Int) => if n > 0 => factorial(n)? else Error(Negative)", "(Int) -> Int ! Negative | Overflow");
-    analyzedErrors(`val f = (t: String) => parse(t)? + factorial(1)?`)
-        .shouldReport(DiagnosticCode.InvalidPropagation, At("factorial(1)?", 1));
+    auto both = analyzedErrors(`val f = (t: String) => parse(t)? + factorial(1)?`);
+    both.shouldHaveNoDiagnostics();
+    both.shouldHaveType("(t: String) => parse(t)? + factorial(1)?", "(String) -> Int ! Negative | Overflow | ParseError");
     analyzedErrors(`val f = (k: String) => {
         val s = lookup(k)?
         parse(s)?

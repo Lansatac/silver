@@ -129,6 +129,15 @@ val bigger = point.scaled(2)
 
 The receiver behaves as any first argument does. It takes part in overload selection, and it adapts and promotes like any argument. A value is promoted after the field lookup, which uses its own type. So with `f(x: Int?)`, `value.f()` works on an `Int`. Promotion only wraps, so `optional.f()` with `f(x: Int)` is an error, for which `?.` is the appropriate form.
 
+`x?.f(args)` calls `f` on `x`'s value when `x` is an option or error union, and is otherwise `None` or `x`'s error, without evaluating `args`. Its type follows the [`?.` rule](options.md#through-a-value-), and on an error union, the errors of `x` and `f` are [listed together](errors.md#where-errors-meet):
+
+```silver
+val port = settings?.lookup("port")             // Int? when settings: Settings? and lookup gives Int?
+val json = readFile("dub.json")?.parse()?        // passes on readFile's errors or parse's
+```
+
+A field `f` holding a function is called the same way.
+
 ## Overloading
 
 Functions can be overloaded on all of their parameters, and `f(x)` and `x.f()` choose in the same way.
@@ -298,7 +307,6 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 
 - Whether `x.f()` can drop its parentheses.
 - Whether a method call can have a `mutable` receiver.
-- Method calls through `?.`, as in `a?.f()`.
 
 ## Current implementation
 

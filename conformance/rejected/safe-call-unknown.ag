@@ -1,0 +1,5 @@
+// With no field or function by its name, `a?.f()` reports the member missing.
+def main(): Unit {
+    val some: Int? = 3
+    printl(some?.missing())
+}

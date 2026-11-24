@@ -1,0 +1,99 @@
+// `a?.f(...)` calls `f` on `a`'s value, or is `None` or `a`'s error.
+
+type Oops(n: Int)
+type Odd(n: Int)
+type Box(size: Int, scale: (Int) -> Int)
+type Halving(next: Int ! Odd)
+type Parse = :Odd | :Oops
+
+def twice(x: Int): Int => x * 2
+def plus(x: Int, y: Int): Int => x + y
+def positive(x: Int): Int? => if x > 0 => x else None
+def shown(x: Int?): String => "{x}"
+def half(x: Int): Int ! Odd => if x % 2 == 0 => x / 2 else Error(Odd(x))
+def count(ok: Bool): Int ! Oops => if ok => 8 else Error(Oops(1))
+def halving(ok: Bool): Halving ! Oops => if ok => Halving(half(3)) else Error(Oops(2))
+def head<T>(xs: [T]): T? => if xs.length() > 0 => xs[0] else None
+def mapped<T>(x: T?, f: (T) -> Int): Int? => x?.applied(f)
+def applied<T>(x: T, f: (T) -> Int): Int => f(x)
+def none<T>(x: Int): [T] => []
+def parsed(ok: Bool): Int ! Parse => if ok => 6 else Error(Oops(3))
+def say(x: Int): Unit => printl("said {x}")
+
+def noisy(x: Int?): Int? {
+    printl("receiver")
+    x
+}
+
+def argument(): Int {
+    printl("argument")
+    1
+}
+
+def quarter(ok: Bool): Int ! Oops | Odd {
+    val n = count(ok)?.half()?.half()?
+    n
+}
+
+def main(): Unit {
+    val some: Int? = 3
+    val none: Int? = None
+    printl(some?.twice())
+    printl(none?.twice())
+    printl(some?.plus(4))
+
+    // An option the call gives isn't wrapped again.
+    printl(some?.positive())
+    printl(none?.positive())
+
+    // The receiver is promoted as any first argument is.
+    printl(some?.shown())
+
+    // A field holding a function is called.
+    val box: Box? = Box(2, x => x * 10)
+    printl(box?.scale(5))
+
+    // Generic functions, and one called from generic code.
+    val xs: [Int]? = [7, 8]
+    printl(xs?.head())
+    printl(xs?.length())
+    printl(mapped(Some("abc"), s => 5))
+    val text: String? = None
+    printl(mapped(text, s => 5))
+
+    // What's expected of the result says what's expected of the call.
+    val empty: [String]? = some?.none()
+    printl(empty)
+
+    // On an error union the error is kept.
+    printl(count(true)?.twice())
+    printl(count(false)?.twice())
+
+    // Errors on both sides are listed together, also through a chain.
+    val both: Int ! Oops | Odd = count(true)?.half()
+    printl(both)
+    val failed: Int ! Oops | Odd = count(false)?.half()
+    printl(failed)
+    val chained: Int ! Oops | Odd = count(true)?.half()?.half()?.half()
+    printl(chained)
+    printl(quarter(true))
+    printl(quarter(false))
+
+    // Or one takes the other in, as a sum does its member.
+    printl(parsed(true)?.half())
+    printl(parsed(false)?.half())
+
+    // A field that's an error union does the same.
+    val field: Int ! Oops | Odd = halving(true)?.next
+    printl(field)
+    val missing: Int ! Oops | Odd = halving(false)?.next
+    printl(missing)
+
+    // A call giving `Unit?` can be a statement.
+    some?.say()
+    none?.say()
+
+    // The receiver is evaluated once, and the arguments only when there's a value.
+    printl(noisy(some)?.plus(argument()))
+    printl(noisy(none)?.plus(argument()))
+}

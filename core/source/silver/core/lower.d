@@ -11,7 +11,7 @@ import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
 import silver.core.nodes;
 import silver.core.slots : numberLocals;
-import silver.sema : Analysis, DerivedOrder, DerivedPart, DictionaryFunctions, FunctionUse, IndexFunctions, LoopFunctions, ConstChar, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
+import silver.sema : Analysis, DerivedOrder, DerivedPart, DictionaryFunctions, FunctionUse, IndexFunctions, LoopFunctions, SafeCall, ConstChar, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
     Bound, Substitution, SymbolId, Type, TypeTable, Witness;
 
 /// A parameter's local name. Discarded ones get a name no Silver identifier can have, so several
@@ -132,6 +132,16 @@ private struct Instance
         auto type = new Type;
         *type = concrete(*option);
         return type;
+    }
+
+    /// What `a?.f(...)` does on `a`'s value, with its types for this instance.
+    const(SafeCall)* safeCallOf(Id!(ast.Expr) call) const
+    {
+        auto safe = analysis.safeCallOf(call);
+        if (safe is null) return null;
+        auto instance = new SafeCall;
+        *instance = SafeCall(concrete(safe.called), safe.promotion == Type.init ? Type.init : concrete(safe.promotion));
+        return instance;
     }
 
     const(Type)* constructedMemberOf(Id!(ast.Expr) id) const
@@ -888,8 +898,10 @@ private final class Lowering
         auto args = fields.length.iota.map!(i => field(value, i, fields[i].type)).array;
         auto typeArgs = types[value.type].match!((const NominalData nominal) => nominal.args, _ => null);
         auto holds = Expr(types.bool_, span, ExprKind(Call(slotFor(InstanceKey(decl.invariantFunction, typeArgs)), args)));
-        auto error = Expr(types.errorOf(result), span, ExprKind(Call(slotFor(InstanceKey(decl.invariantError, typeArgs)), args)));
-        return Expr(result, span, ExprKind(If(boxed(holds), boxed(then), boxed(inject(0, error, result)))));
+        auto reason = _analysis.signatureOf(decl.invariantError, typeArgs).ret;
+        auto error = Expr(reason, span, ExprKind(Call(slotFor(InstanceKey(decl.invariantError, typeArgs)), args)));
+        return Expr(result, span, ExprKind(If(boxed(holds), boxed(then),
+            boxed(inject(0, promote(error, reason, types.errorOf(result)), result)))));
     }
 
     /// A function that calls the native `func`, for using it as a value.
@@ -1138,8 +1150,8 @@ private final class Lowering
         return Expr(type, span, ExprKind(Block([let(held, operand)], boxed(choice))));
     }
 
-    /// `x?.f`: `None` if `x` is, and otherwise its field, which isn't wrapped again when it's an
-    /// option already.
+    /// `x?.f`: `None` or `x`'s error if `x` is one, and otherwise its field, which isn't wrapped
+    /// again when it's an option already.
     private Expr lowerSafeMember(const ast.Expr e, const ast.SafeMemberAccess access, Type type)
     {
         auto span = e.span;
@@ -1148,10 +1160,8 @@ private final class Lowering
         auto index = _analysis.fieldIndexOf(e.id);
         auto record = payload(use(option, span), 1);
         auto value = field(record, index, fieldTypes(record.type)[index]);
-        if (value.type != type) value = inject(1, value, type);
-        auto absent = types.isErrorUnion(type) ? inject(0, payload(use(option, span), 0), type) : noneOf(type, span);
-        auto choice = Expr(type, span, ExprKind(If(boxed(isMember(use(option, span), 1)), boxed(value),
-            boxed(absent))));
+        auto choice = Expr(type, span, ExprKind(If(boxed(isMember(use(option, span), 1)),
+            boxed(promote(value, value.type, type)), boxed(absentOf(option, type, span)))));
         return Expr(type, span, ExprKind(Block([let(option, object)], boxed(choice))));
     }
 
@@ -2040,6 +2050,14 @@ private final class Lowering
     private Expr lowerCall(const ast.Expr e, const ast.CallExpr call, Type type)
     {
         auto span = e.span;
+        if (auto safe = _analysis.safeCallOf(e.id)) return lowerSafeCall(e, call, *safe, type);
+        return lowerDirectCall(e, call, type);
+    }
+
+    /// A call that isn't through `?.`, or one that is, on the value it's made on.
+    private Expr lowerDirectCall(const ast.Expr e, const ast.CallExpr call, Type type)
+    {
+        auto span = e.span;
         if (_analysis.constructionOf(e.id) !is null)
         {
             return construct(type, call.args.map!(a => lowerExpr(a)).array, span);
@@ -2082,6 +2100,49 @@ private final class Lowering
             case ast.FunctionKind.required:
                 assert(0, "a function a bound supplies is replaced by its witness");
         }
+    }
+
+    /// `x?.f(y)`: `None` or `x`'s error if `x` is one, and otherwise the call on its value, which
+    /// stands in for `x` as the receiver, or whose field is called.
+    private Expr lowerSafeCall(const ast.Expr e, const ast.CallExpr call, const SafeCall safe, Type type)
+    {
+        auto span = e.span;
+        auto access = (*call.callee).kind.match!(
+            (const ast.SafeMemberAccess a) => a,
+            (_) => assert(0, "a safe call is through `?.`"),
+        );
+        auto object = lowerExpr(*access.object);
+        auto held = temp("receiver", object.type);
+        auto value = payload(use(held, span), 1);
+
+        Expr called;
+        if (_analysis.methodCallOf(e.id) !is null)
+        {
+            if (safe.promotion != Type.init) value = promote(value, value.type, safe.promotion);
+            _lowered[access.object.id] = value;
+            called = lowerDirectCall(e, call, safe.called);
+            _lowered.remove(access.object.id);
+        }
+        else
+        {
+            auto index = _analysis.fieldIndexOf(call.callee.id);
+            _lowered[call.callee.id] = field(value, index, fieldTypes(value.type)[index]);
+            called = lowerDirectCall(e, call, safe.called);
+            _lowered.remove(call.callee.id);
+        }
+        auto present = promote(called, called.type, type);
+        auto choice = Expr(type, span, ExprKind(If(boxed(isMember(use(held, span), 1)), boxed(present),
+            boxed(absentOf(held, type, span)))));
+        return Expr(type, span, ExprKind(Block([let(held, object)], boxed(choice))));
+    }
+
+    /// What `x?.f` or `x?.f(y)` of type `type` is when `held`, holding `x`, has no value: `None`,
+    /// or `x`'s error as one of `type`'s.
+    private Expr absentOf(Local held, Type type, Span span)
+    {
+        if (!types.isErrorUnion(type)) return noneOf(type, span);
+        auto error = payload(use(held, span), 0);
+        return inject(0, promote(error, error.type, types.errorOf(type)), type);
     }
 
     /// A call of a function that syntax uses, given its arguments as values.

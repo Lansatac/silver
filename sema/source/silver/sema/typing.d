@@ -39,6 +39,8 @@ package struct Typing
     SideTable!(Id!Expr, const(Expr)[]) concatOperands;
     SideTable!(Id!Expr, const(CallExpr)*) methodCalls;
     SideTable!(Id!Expr, Id!FunctionDecl) methodCallees;
+    /// For each `a?.f(...)`, by the call, what the call gives on `a`'s value.
+    SideTable!(Id!Expr, SafeCall) safeCalls;
     /// For a `for` over something other than an array or `a..b`, the functions it calls, by the `for`.
     SideTable!(Id!Expr, LoopFunctions) loops;
     /// For `<`, `<=`, `>` or `>=` on anything but two numbers, Strings or Chars, `lang`'s
@@ -143,6 +145,15 @@ struct LoopFunctions
 {
     FunctionUse next;
     FunctionUse iterate;
+}
+
+/// `a?.f(...)`, which calls `f` on `a`'s value. `called` is the call's type there, before it's
+/// made an option or error union again. `promotion` is what `a`'s value is promoted to as the
+/// receiver, or `Type.init`; it's kept here rather than as `a`'s, since `a` itself isn't promoted.
+struct SafeCall
+{
+    Type called;
+    Type promotion;
 }
 
 /// How `derivedCompare` orders two values of a declared type: for a sum, by which member each is,

@@ -35,7 +35,7 @@ def factorial(n: Int): Int ! Negative | Overflow
 
 - Each name is a type that's already declared. A list never declares one, so a misspelt name is an error.
 - A type can't be listed twice, and the order doesn't matter: `Int ! Negative | Overflow` and `Int ! Overflow | Negative` are the same type.
-- A list is written only after `!`.
+- A list is written only after `!`. It's also what an error union gets where errors of different types [meet](#where-errors-meet).
 
 ### Widening
 
@@ -57,6 +57,23 @@ Int ! Empty                         // fits Int ! ParseError | Missing, as a mem
 A declared sum is one type, so it doesn't fit a list of its own members: `Int ! ParseError` doesn't fit `Int ! Empty | BadDigit | TooLarge`.
 
 This is what lets one function report the failures of everything it calls. It happens wherever an error union is checked against another, most often at [`?`](#passing-it-on-).
+
+### Where errors meet
+
+Where error unions with different errors come together, the result lists them all: the branches of an `if` or `match`, the `?`s and values of a lambda whose return type is inferred, [`?.`](#the-option-operators) through something that can fail, and a [`with`](user-types.md#copying-with-changes) that checks two invariants. When one error already fits the other, as a member fits its sum, the result is the one it fits, so no route to an error is listed twice:
+
+```silver
+def count(ok: Bool): Int ! Oops => ...
+def half(x: Int): Int ! Odd => ...
+def parsed(text: String): Int ! Input => ...        // type Input = :Empty | :Odd
+
+val either = if c => count(c) else half(3)      // Int ! Oops | Odd
+val halved = count(true)?.half()                // Int ! Oops | Odd
+val twice = (ok: Bool) => half(count(ok)?)?     // (Bool) -> Int ! Oops | Odd
+val read = parsed(text)?.half()                 // Int ! Input
+```
+
+The values have to agree as they would without the errors: `Int ! Oops` and `String ! Odd` don't meet. A declared sum is still never made up: only lists are.
 
 ## Values
 
@@ -120,7 +137,7 @@ val number = parseInt(raw) ?? return None           // an error union, in a func
 
 `??` drops the error it replaces, so `parse(raw) ?? fail Invalid(raw)` is also how one error is exchanged for another.
 
-A lambda's return type is inferred from its `?`s and its value, so `line => parseInt(line)? * 2` is a `(String) -> Int ! ParseError`. Two `?`s on different error types need a written return type, since a list is never invented.
+A lambda's return type is inferred from its `?`s and its value, so `line => parseInt(line)? * 2` is a `(String) -> Int ! ParseError`. Its `?`s on different error types are [listed together](#where-errors-meet).
 
 ### Asserting it worked: `!`
 
@@ -157,7 +174,8 @@ These work on an error union as they do on an option, and drop the error:
 
 - `a ?? b` is the value, or else `b`, with the result types `??` has on an option. So `parseInt(text) ?? None` is an `Int?`.
 - `if val n = parseInt(text)` binds the value. `if val Error(reason) = parseInt(text)` binds the error.
-- `a?.b` with `a: T ! E` is a `U ! E`, flat as with options.
+- `a?.b` and `a?.f(...)` with `a: T ! E` are a `U ! E` when the field or call gives a `U`, and a `U` with `E` and `F` [listed together](#where-errors-meet) when it gives a `U ! F`, so `readFile(path)?.parse()?` passes on either function's error.
+
 
 `while val` doesn't take an error union, since the loop would end on an error without a word. Unwrap the error first: `while val line = read()? { ... }`.
 

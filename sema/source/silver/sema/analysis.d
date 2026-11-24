@@ -166,6 +166,12 @@ final class Analysis
         return null;
     }
 
+    /// What `a?.f(...)` does on `a`'s value, or null if `call` isn't one of those.
+    const(SafeCall)* safeCallOf(Id!Expr call) const
+    {
+        return call in _typing.safeCalls;
+    }
+
     /// Whether the `for` loop `for_` is over an `Interval` value, which it loops over as over `a..b`.
     bool isIntervalLoop(Id!Expr for_) const
     {
