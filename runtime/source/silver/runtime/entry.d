@@ -61,6 +61,35 @@ version (Windows)
     pragma(lib, __traits(getTargetInfo, "cppRuntimeLibrary"));
     pragma(lib, "legacy_stdio_definitions");
     pragma(lib, "oldnames");
+
+    /// What clang calls before a frame of over a page, with its size in RAX: touches each page from the
+    /// caller's stack pointer down to the frame's end, in order, so Windows' guard page grows the stack
+    /// page by page. Visual Studio's C runtime has it and MinGW's import libraries don't. It moves no
+    /// stack pointer and changes no register but the flags, as callers expect.
+    extern (C) void __chkstk() nothrow @nogc
+    {
+        asm nothrow @nogc
+        {
+            naked;
+            push RCX;
+            push RAX;
+            lea RCX, [RSP + 24];
+            cmp RAX, 0x1000;
+            jb Llast;
+        Lpage:
+            sub RCX, 0x1000;
+            test qword ptr [RCX], RCX;
+            sub RAX, 0x1000;
+            cmp RAX, 0x1000;
+            ja Lpage;
+        Llast:
+            sub RCX, RAX;
+            test qword ptr [RCX], RCX;
+            pop RAX;
+            pop RCX;
+            ret;
+        }
+    }
 }
 
 private alias MainFunction = extern (C) int function(char[][] args);
