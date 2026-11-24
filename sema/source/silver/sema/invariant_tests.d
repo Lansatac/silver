@@ -98,9 +98,10 @@ unittest
     a.shouldDeclareType(At("moved", 1), "Span ! Reversed");
     a.shouldDeclareType(At("renamed", 1), "Meeting");
     a.shouldDeclareType(At("later", 1), "Meeting ! TooEarly");
-    // `time.high` changes `time`, which `Meeting`'s invariant names, but `TooEarly` and `Reversed` differ.
-    analyzedWith(spans, "    val meeting = Meeting(Span(1, 2)!, \"a\")!\n    val x = meeting with (time.high = 4)")
-        .shouldReport(DiagnosticCode.NotSupportedYet, At("meeting with (time.high = 4)", 1));
+    // `time.high` changes `time`, which `Meeting`'s invariant names, so both its errors are listed.
+    auto both = analyzedWith(spans, "    val meeting = Meeting(Span(1, 2)!, \"a\")!\n    val x = meeting with (time.high = 4)");
+    both.shouldHaveNoDiagnostics();
+    both.shouldDeclareType(At("x", 1), "Meeting ! Reversed | TooEarly");
 }
 
 @("a field an invariant names can't be assigned, assigned through, or passed as mutable")

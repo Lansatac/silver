@@ -67,9 +67,30 @@ panic: server.ag(4,16): `lookup("port")` was None
 
 It's how a caller says that a missing value here would be a bug. It follows its operand on the same line. See [Errors](errors.md#asserting-it-worked-).
 
-### Field access: `?.`
+### Through a value: `?.`
 
-`a?.b` with `a: T?` and a field `b: U` is `U?`. If the field is already `U?`, the result stays `U?`, so `a?.b?.c` is one flat option. `T` must be a declared type, so `?.` doesn't reach through nested options, and a `?.` path can't be assigned through.
+`a?.b` with `a: T?` and a field `b: U` is `U?`. If the field is already `U?`, the result stays `U?`, so `a?.b?.c` is one flat option. For a field, `T` must be a declared type, so `?.` doesn't reach through nested options, and a `?.` path can't be assigned through.
+
+`a?.f(args)` is the [method call](functions.md#method-call-syntax) `a.f(args)` on `a`'s value, with its result typed as a field's would be. When `a` is `None`, `args` aren't evaluated:
+
+```silver
+def twice(x: Int): Int => x * 2
+def positive(x: Int): Int? => if x > 0 => x else None
+def say(x: Int): Unit => printl(x)
+
+val some: Int? = 3
+val none: Int? = None
+some?.twice()        // Some(6)
+some?.positive()     // Some(3), not Some(Some(3))
+none?.twice()        // None
+some?.say()          // prints 3
+```
+
+A `?.` whose field or call gives `Unit` can stand as a statement, since all it drops is whether it ran. One whose call gives a `Unit?` of its own can't, since that `None` means something.
+
+Whether the result is wrapped again depends on the types as the code is written, so in a generic function, `x?.f()` with `f` giving a `T` is a `T?` even where `T` is itself an option.
+
+`?.` binds as tightly as `.`, so `x?.f()` is a call through `?.`, not `x?` followed by `.f()`. To pass on `x`'s absence first and call `f` on what's left, write `(x?).f()`.
 
 ## Equality and ordering
 

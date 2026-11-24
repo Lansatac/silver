@@ -173,6 +173,6 @@ val r = if val Circle(radius) = shape => radius else 0.0
   - A field the condition names can't be assigned, assigned through, or passed as a `mutable` argument.
   - `!` on a construction whose arguments are all literals is checked at compile time.
   - An inline member of a sum takes one with the condition and the error each in parentheses, and its constructor gives the sum or the error.
-  - The `else` can't lead back to building its own type, and a `with` through two invariants with different errors is an error.
+  - The `else` can't lead back to building its own type.
   - A condition can name a field whose type contains a `Ref`, whose cell then changes without being checked.
 - Everything else above is implemented.

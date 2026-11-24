@@ -1,0 +1,7 @@
+// `?.` calls a function on an option or error union's value, and `.` on any other value.
+def twice(x: Int): Int => x * 2
+
+def main(): Unit {
+    val plain = 3
+    printl(plain?.twice())
+}

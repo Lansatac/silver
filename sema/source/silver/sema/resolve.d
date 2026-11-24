@@ -2486,6 +2486,7 @@ private final class NameResolver
                 {
                     (*call.callee).kind.match!(
                         (const MemberAccess access) => lookUpMethod(expr.id, access.member, scopeTable),
+                        (const SafeMemberAccess access) => lookUpMethod(expr.id, access.member, scopeTable),
                         (_) {},
                     );
                 }

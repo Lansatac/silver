@@ -1,0 +1,60 @@
+// Where errors of different types meet, they're listed together.
+type Oops(n: Int)
+type Odd(n: Int)
+type Parse = :Odd | :Blank
+type Blank
+type Reversed(low: Int, high: Int)
+type Span(low: Int, high: Int) invariant low <= high else Reversed(low, high)
+type TooEarly
+type Meeting(time: Span, title: String) invariant time.low >= 0 else TooEarly
+
+def count(ok: Bool): Int ! Oops => if ok => 8 else Error(Oops(1))
+def half(x: Int): Int ! Odd => if x % 2 == 0 => x / 2 else Error(Odd(x))
+def parsed(ok: Bool): Int ! Parse => if ok => 6 else Error(Blank)
+
+def report(r: Int ! Oops | Odd): Unit => printl("listed {r}")
+def report(s: String): Unit => printl(s)
+
+def main(): Unit {
+    // Through `?.`.
+    val n = count(true)?.half()
+    printl(n)
+    printl(count(false)?.half())
+    printl(count(true)?.half()?.half()?.half())
+    printl(count(true)?.half()!)
+    printl(count(false)?.half() ?? 0)
+    if val m = count(true)?.half() {
+        printl(m)
+    }
+    val expected: Int ! Oops | Odd = 4
+    printl(count(true)?.half() == expected)
+    report(count(true)?.half())
+
+    // A lambda's `?`s.
+    val both = (ok: Bool) => half(count(ok)?)?
+    printl(both(true))
+    printl(both(false))
+
+    // Branches.
+    val chosen = if n == expected => count(false) else half(3)
+    printl(chosen)
+    val failed = if n == expected => Error(Oops(2)) else half(5)
+    printl(failed)
+
+    // A sum takes in its own member rather than being listed beside it.
+    val absorbed = parsed(true)?.half()
+    printl(absorbed)
+    match parsed(false)?.half() {
+        Ok(value) => printl(value)
+        Error(Odd(k)) => printl("odd {k}")
+        Error(Blank) => printl("blank")
+    }
+
+    // A `with` that checks two invariants.
+    val meeting = Meeting(Span(1, 2)!, "a")!
+    printl(meeting with (time = Span(0, 4)!))
+    val reversed = meeting with (time.high = 0)
+    printl(reversed)
+    val early = meeting with (time.low = -1)
+    printl(early)
+}

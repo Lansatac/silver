@@ -1,0 +1,8 @@
+// A `?.` call giving `Unit` can be a statement, but one whose call gives a `Unit?` of its own can't.
+def attempt(x: Int): Unit? => None
+
+def main(): Unit {
+    val some: Int? = 3
+    some?.attempt()
+    printl("after")
+}

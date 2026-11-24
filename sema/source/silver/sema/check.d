@@ -1288,7 +1288,7 @@ private final class TypeChecker
     }
 
     /// The error union a lambda returns when its `?`s pass on errors and its values join to
-    /// `joined`. One error has to take in the others, since a list is never invented.
+    /// `joined`, listing the errors of each.
     private Type withPassedErrors(Type joined, const InferredReturn inferred, Span span)
     {
         if (inferred.nones.length > 0)
@@ -1299,26 +1299,12 @@ private final class TypeChecker
         }
         auto success = joined;
         Type reason = inferred.errors[0];
-        Span at = inferred.errorSpans[0];
         if (_types.isErrorUnion(joined) || _types.isFailure(joined))
         {
             success = _types.isErrorUnion(joined) ? _types.successOf(joined) : _types.never;
             reason = _types.errorOf(joined);
-            at = span;
         }
-        foreach (i, error; inferred.errors)
-        {
-            if (errorFits(error, reason)) continue;
-            if (!errorFits(reason, error))
-            {
-                _collector.reportError(DiagnosticCode.InvalidPropagation, inferred.errorSpans[i],
-                    "This `?` passes on `%s`, and %s `%s`; write the lambda's return type, as in `(...): %s ! %s | %s => ...`"
-                        .format(_types.describe(error), at == span ? "its value is" : "another passes on", _types.describe(reason),
-                            _types.describe(success == _types.never ? _types.unit : success), _types.describe(reason), _types.describe(error)));
-                return _types.error;
-            }
-            reason = error;
-        }
+        foreach (error; inferred.errors) reason = mergedErrors(reason, error);
         if (success == _types.never)
         {
             _collector.reportError(DiagnosticCode.UntypedErrorUnion, span,
@@ -1405,7 +1391,8 @@ private final class TypeChecker
                 {
                     reportUnhandled(expr.expr.span, type);
                 }
-                else if (type != _types.unit && type != _types.never && type != _types.error)
+                else if (type != _types.unit && type != _types.never && type != _types.error
+                    && !(type == _types.option(_types.unit) && givesUnit(expr.expr)))
                 {
                     _collector.reportError(DiagnosticCode.UnusedValue, expr.expr.span,
                         "This value of type `%s` is unused; bind it with `val`, or drop it with `_ = ...`"
@@ -2123,7 +2110,7 @@ private final class TypeChecker
                 requireLoop("continue", expr.span, ctx);
                 return _types.never;
             },
-            (const SafeMemberAccess access) => synthesizeSafeMember(expr, access, ctx),
+            (const SafeMemberAccess access) => synthesizeSafeMember(expr, access, ctx, expected),
             (const ArrayLiteral literal) => synthesizeArrayLiteral(literal, ctx),
             (const MapLiteral literal) => synthesizeDictionaryLiteral(expr, literal, ctx),
             (const IndexExpr index) => synthesizeIndex(expr, index, ctx),
@@ -2994,7 +2981,8 @@ private final class TypeChecker
         );
         if (branched != Type.init) return branched;
 
-        auto isMethod = expr.kind.match!((const CallExpr call) => isMethodCall(expr.id, *call.callee), _ => false);
+        auto isMethod = expr.kind.match!((const CallExpr call) => isMethodCall(expr.id, *call.callee),
+            (const SafeMemberAccess _) => true, _ => false);
         auto unwraps = expr.kind.match!((const AssertExpr _) => true, (const PropagateExpr _) => true, _ => false);
         auto constructed = constructedDecl(expr);
         auto owner = _declarer.ownerOf(constructed);
@@ -3020,35 +3008,45 @@ private final class TypeChecker
 
     /// `a?.b`. A field that's already an option isn't wrapped again, which is what makes
     /// `a?.b?.c` one flat option: each `?.` works on the option the one before it produced.
-    private Type synthesizeSafeMember(const Expr expr, const SafeMemberAccess access, BodyContext ctx)
+    private Type synthesizeSafeMember(const Expr expr, const SafeMemberAccess access, BodyContext ctx, Type expected)
     {
         auto objectType = _declarer.requireTyped(synthesize(*access.object, ctx), access.object.span);
-        if (objectType == _types.error) return objectType;
-        auto fallible = _types.isErrorUnion(objectType);
-        if (!_types.isOption(objectType) && !fallible)
-        {
-            _collector.reportError(DiagnosticCode.InvalidOperand, access.object.span,
-                "`?.` needs an option or an error union, got `%s`; a field of any other value is read with `.`"
-                    .format(_types.describe(objectType)));
-            return _types.error;
-        }
+        if (!throughValue(objectType, access.object.span, "a field of any other value is read with `.`")) return _types.error;
 
-        auto record = fallible ? _types.successOf(objectType) : _types.optionInner(objectType);
+        auto record = _types.isErrorUnion(objectType) ? _types.successOf(objectType) : _types.optionInner(objectType);
         auto fields = _declarer.fieldsOf(record);
         foreach (i, field; fields)
         {
             if (field.name == access.member)
             {
                 _typing.fieldIndexes[expr.id] = i;
-                if (!fallible) return _types.isOption(field.type) ? field.type : _types.option(field.type);
-                auto reason = _types.errorOf(objectType);
-                auto flat = _types.isErrorUnion(field.type) && _types.errorOf(field.type) == reason;
-                return flat ? field.type : _types.errorUnion(field.type, reason);
+                return throughSafe(objectType, field.type);
             }
         }
         _collector.reportError(DiagnosticCode.UnknownMember, expr.span,
             "Type `%s` has no member named `%s`".format(_types.describe(objectType), access.member));
         return _types.error;
+    }
+
+    /// Whether `held`, the type of the object of `?.`, is an option or error union, reporting it if not.
+    private bool throughValue(Type held, Span span, string otherwise)
+    {
+        if (held == _types.error) return false;
+        if (_types.isOption(held) || _types.isErrorUnion(held)) return true;
+        _collector.reportError(DiagnosticCode.InvalidOperand, span,
+            "`?.` needs an option or an error union, got `%s`; %s".format(_types.describe(held), otherwise));
+        return false;
+    }
+
+    /// The errors `a` and `b` together, in the one form they're listed in: when one takes in the
+    /// other, that one, and otherwise a list of each type once, leaving out a member of a declared
+    /// sum that's listed too.
+    private Type mergedErrors(Type a, Type b)
+    {
+        if (errorFits(b, a)) return a;
+        if (errorFits(a, b)) return b;
+        auto all = _types.listed(a) ~ _types.listed(b);
+        return _types.errorList(all.filter!(m => !all.any!(t => t != m && _declarer.membersOf(t).canFind(m))).array);
     }
 
     /// A hole takes whatever `print` does, so its type needs no check of its own.
@@ -6235,12 +6233,30 @@ private final class TypeChecker
         );
     }
 
-    /// Whether `object.f(...)` is on a value and some declaration could be `f`.
+    /// Whether `expr` is `a?.b` or `a?.f(...)` with the field or call a `Unit`, which as a
+    /// statement drops only whether it ran.
+    private bool givesUnit(const Expr expr)
+    {
+        if (auto safe = expr.id in _typing.safeCalls) return safe.called == _types.unit;
+        return expr.kind.match!(
+            (const SafeMemberAccess access) {
+                auto held = _typing.exprTypes.get(access.object.id, _types.error);
+                auto record = _types.isErrorUnion(held) ? _types.successOf(held)
+                    : _types.isOption(held) ? _types.optionInner(held) : _types.error;
+                auto index = expr.id in _typing.fieldIndexes;
+                return index !is null && _declarer.fieldsOf(record)[*index].type == _types.unit;
+            },
+            _ => false,
+        );
+    }
+
+    /// Whether `object.f(...)` is on a value and some declaration could be `f`. `object?.f(...)`
+    /// always is one, for a field as for a function.
     private bool isMethodCall(Id!Expr call, const Expr callee)
     {
-        if ((call in _resolutions.methodLookups) is null) return false;
         return callee.kind.match!(
-            (const MemberAccess access) => !isModulePath(*access.object),
+            (const MemberAccess access) => (call in _resolutions.methodLookups) !is null && !isModulePath(*access.object),
+            (const SafeMemberAccess _) => true,
             _ => false,
         );
     }
@@ -6266,31 +6282,89 @@ private final class TypeChecker
 
     /// `object.f(args)`. A field named `f` comes first; otherwise it's `f(object, args)`, with the
     /// `f` a plain name finds at module level. The receiver was synthesized to look for the field,
-    /// so it's an argument that already has its type.
+    /// so it's an argument that already has its type. `object?.f(args)` is the same call on
+    /// `object`'s value, made an option or error union again.
     private Type methodCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected)
     {
-        auto access = (*call.callee).kind.match!(
-            (const MemberAccess m) => m,
+        const(Expr)* object;
+        string member;
+        const(TypeExpr)[] typeArgs;
+        bool safe;
+        (*call.callee).kind.match!(
+            (const MemberAccess m) {
+                object = m.object;
+                member = m.member;
+                typeArgs = m.typeArgs;
+            },
+            (const SafeMemberAccess m) {
+                object = m.object;
+                member = m.member;
+                safe = true;
+            },
             (_) => assert(0, "isMethodCall only accepts a member access"),
         );
-        auto objectType = synthesize(*access.object, ctx);
+        if (!safe) return callOn(expr, call, object, member, typeArgs, synthesize(*object, ctx), ctx, expected);
 
+        auto held = _declarer.requireTyped(synthesize(*object, ctx), object.span);
+        if (!throughValue(held, object.span, "a function is called on any other value with `.`"))
+        {
+            foreach (arg; call.args) synthesize(arg, ctx);
+            return _types.error;
+        }
+        auto fallible = _types.isErrorUnion(held);
+        auto value = fallible ? _types.successOf(held) : _types.optionInner(held);
+        // Without a field or a function named `member`, it's the field that's missing.
+        if ((expr.id in _resolutions.methodLookups) is null && !hasField(value, member))
+        {
+            _collector.reportError(DiagnosticCode.UnknownMember, call.callee.span,
+                "Type `%s` has no member named `%s`".format(_types.describe(held), member));
+            foreach (arg; call.args) synthesize(arg, ctx);
+            return _types.error;
+        }
+        // What's expected of the result, as far as it says what's expected of the call.
+        auto inner = expected == Type.init || expected == _types.error ? Type.init
+            : _types.isOption(expected) ? _types.optionInner(expected)
+            : _types.isErrorUnion(expected) ? _types.successOf(expected) : Type.init;
+        auto called = callOn(expr, call, object, member, typeArgs, value, ctx, inner);
+        if (called == _types.error) return called;
+        auto promotion = object.id in _typing.promotions;
+        _typing.safeCalls[expr.id] = SafeCall(called, promotion is null ? Type.init : *promotion);
+        _typing.promotions.remove(object.id);
+        return throughSafe(held, called);
+    }
+
+    /// The type of `a?.b` or `a?.f(...)`, with `a` of type `held`, when `b` or the call on `a`'s
+    /// value is `inner`. It's flat: an option isn't wrapped again, and errors on both sides are
+    /// listed together.
+    private Type throughSafe(Type held, Type inner)
+    {
+        if (inner == _types.error) return inner;
+        if (!_types.isErrorUnion(held)) return _types.isOption(inner) ? inner : _types.option(inner);
+        auto reason = _types.errorOf(held);
+        if (!_types.isErrorUnion(inner)) return _types.errorUnion(inner, reason);
+        return _types.errorUnion(_types.successOf(inner), mergedErrors(reason, _types.errorOf(inner)));
+    }
+
+    /// `object.f(args)` with `object` of type `objectType`, as `methodCall` describes.
+    private Type callOn(const Expr expr, const CallExpr call, const(Expr)* object, string member,
+        const(TypeExpr)[] typeArgs, Type objectType, BodyContext ctx, Type expected)
+    {
         Type asField()
         {
-            rejectTypeArguments(access.typeArgs, access.member, call.callee.span);
-            auto calleeType = fieldOf(*call.callee, access, objectType);
+            rejectTypeArguments(typeArgs, member, call.callee.span);
+            auto calleeType = fieldOf(*call.callee, member, objectType);
             _typing.exprTypes[call.callee.id] = calleeType;
             return applyCallee(calleeType, call, expr.span, ctx);
         }
 
-        if (objectType == _types.error || hasField(objectType, access.member)) return asField();
+        if (objectType == _types.error || hasField(objectType, member)) return asField();
 
         auto lookup = distinct(_resolutions.methodLookups[expr.id]);
-        auto arguments = (cast(Expr*) access.object)[0 .. 1] ~ cast(Expr[]) call.args;
+        auto arguments = (cast(Expr*) object)[0 .. 1] ~ cast(Expr[]) call.args;
         auto mutables = call.mutableArgs.length > 0 ? false ~ call.mutableArgs.dup : null;
         auto rewritten = new const CallExpr(cast(Expr*) call.callee, arguments, mutables);
         _typing.methodCalls[expr.id] = rewritten;
-        auto receiver = _declarer.requireTyped(objectType, access.object.span);
+        auto receiver = _declarer.requireTyped(objectType, object.span);
         auto typed = new Type[arguments.length];
         typed[0] = receiver;
         auto reported = _collector.diagnostics.length;
@@ -6303,7 +6377,7 @@ private final class TypeChecker
         }
         else if (receiver != _types.error)
         {
-            function_ = chooseFunction(*call.callee, access.member, access.typeArgs, lookup, *rewritten, typed, true, ctx, expected);
+            function_ = chooseFunction(*call.callee, member, typeArgs, lookup, *rewritten, typed, true, ctx, expected);
         }
         if (!function_.isValid)
         {
@@ -6317,7 +6391,7 @@ private final class TypeChecker
         _typing.methodCallees[expr.id] = function_;
 
         auto decl = _resolutions.declarations.functions[function_];
-        if (!receiverFits(access, functionType, receiver, call.callee.span))
+        if (!receiverFits(member, object.span, functionType, receiver, call.callee.span))
         {
             return applyCallee(_types.error, *rewritten, expr.span, ctx, typed);
         }
@@ -6326,21 +6400,21 @@ private final class TypeChecker
             Generic g;
             g.name = call.callee.id;
             g.span = call.callee.span;
-            g.spelled = access.member;
-            g.written = access.typeArgs;
+            g.spelled = member;
+            g.written = typeArgs;
             g.params = _resolutions.typeParamsOf(function_);
             g.writable = decl.typeParams.length;
             g.func = function_;
             g.type = functionType;
             return applyGeneric(expr, g, *rewritten, expected, ctx, typed, true);
         }
-        rejectTypeArguments(access.typeArgs, access.member, call.callee.span);
+        rejectTypeArguments(typeArgs, member, call.callee.span);
         return applyCallee(functionType, *rewritten, expr.span, ctx, typed);
     }
 
     /// Whether a receiver of type `receiver` can be the first argument of a function of type
     /// `functionType`, reporting why not. Its type is checked as any argument's is.
-    private bool receiverFits(const MemberAccess access, Type functionType, Type receiver, Span calleeSpan)
+    private bool receiverFits(string member, Span objectSpan, Type functionType, Type receiver, Span calleeSpan)
     {
         if (receiver == _types.error) return false;
         auto signature = _types[functionType].match!(
@@ -6350,14 +6424,14 @@ private final class TypeChecker
         if (signature.params.length == 0)
         {
             _collector.reportError(DiagnosticCode.WrongArgumentCount, calleeSpan,
-                "`%s` takes no arguments, so it can't be called on a value".format(access.member));
+                "`%s` takes no arguments, so it can't be called on a value".format(member));
             return false;
         }
         if (signature.isMutable(0))
         {
-            _collector.reportError(DiagnosticCode.MutabilityMismatch, access.object.span,
+            _collector.reportError(DiagnosticCode.MutabilityMismatch, objectSpan,
                 "`%s` changes its first argument, so the write has to show at the call; write `%s(mutable ...)`"
-                    .format(access.member, access.member));
+                    .format(member, member));
             return false;
         }
         return true;
@@ -6419,7 +6493,6 @@ private final class TypeChecker
         // Each value along a path whose invariant names the field updated in it is checked, once.
         size_t[][] checks;
         Type[] errors;
-        Type[] checkedTypes;
         foreach (i, ref update; with_.updates)
         {
             if (indexes[i].length < update.path.length) continue;
@@ -6433,23 +6506,16 @@ private final class TypeChecker
                     if (!requireInvariant(declOf(type), expr.span, ctx.site)) return _types.error;
                     checks ~= prefix.dup;
                     errors ~= invariantErrorOf(type);
-                    checkedTypes ~= type;
                 }
                 type = _declarer.fieldsOf(type)[indexes[i][depth]].type;
             }
         }
         if (checks.length == 0) return objectType;
-        auto different = errors.countUntil!(e => e != errors[0]);
-        if (different >= 0)
-        {
-            _collector.reportError(DiagnosticCode.NotSupportedYet, expr.span,
-                ("This `with` checks the invariants of `%s` and `%s`, which give different errors, and a `with` with "
-                    ~ "two errors isn't supported yet; update the inner value with a `with` of its own first")
-                    .format(_types.describe(checkedTypes[0]), _types.describe(checkedTypes[different])));
-            return _types.error;
-        }
+        if (errors.canFind(_types.error)) return _types.error;
+        auto reason = errors[0];
+        foreach (error; errors[1 .. $]) reason = mergedErrors(reason, error);
         _typing.withChecks[expr.id] = checks.sort!((a, b) => a.length > b.length).release;
-        return errors[0] == _types.error ? _types.error : _types.errorUnion(objectType, errors[0]);
+        return _types.errorUnion(objectType, reason);
     }
 
     /// The type of the field `update` writes, reached from `object`, with the field index of each
@@ -6485,27 +6551,27 @@ private final class TypeChecker
         rejectTypeArguments(member.typeArgs, member.member, expr.span);
         auto object = synthesize(*member.object, ctx);
         auto reported = _collector.diagnostics.length;
-        auto type = fieldOf(expr, member, object);
+        auto type = fieldOf(expr, member.member, object);
         if (type == _types.error) sayModuleHidden(expr, reported);
         return type;
     }
 
     /// The field `member` names on a value of `objectType`, reported if there's none.
-    private Type fieldOf(const Expr expr, const MemberAccess member, Type objectType)
+    private Type fieldOf(const Expr expr, string member, Type objectType)
     {
         if (objectType == _types.error) return _types.error;
 
         auto fields = _declarer.fieldsOf(objectType);
         foreach (i, field; fields)
         {
-            if (field.name == member.member)
+            if (field.name == member)
             {
                 _typing.fieldIndexes[expr.id] = i;
                 return field.type;
             }
         }
         _collector.reportError(DiagnosticCode.UnknownMember, expr.span,
-            "Type `%s` has no member named `%s`".format(_types.describe(objectType), member.member));
+            "Type `%s` has no member named `%s`".format(_types.describe(objectType), member));
         return _types.error;
     }
 
@@ -6991,6 +7057,19 @@ private final class TypeChecker
         auto valued = (Type t) => !_types.isFailure(t) && !_types.isErrorUnion(t) && t != _types.emptyArray && t != _types.emptyDictionary;
         if (_types.isFailure(a) && valued(b)) return _types.errorUnion(b, _types.errorOf(a));
         if (_types.isFailure(b) && valued(a)) return _types.errorUnion(a, _types.errorOf(b));
+        // Errors that meet are listed together, when the values agree.
+        auto fallible = (Type t) => _types.isFailure(t) || _types.isErrorUnion(t);
+        if (fallible(a) && fallible(b))
+        {
+            auto value = (Type t) => _types.isFailure(t) ? _types.never : _types.successOf(t);
+            auto x = value(a), y = value(b);
+            auto success = x == _types.never || isAssignable(x, y) ? y : y == _types.never || isAssignable(y, x) ? x : Type.init;
+            if (success != Type.init)
+            {
+                auto errors = mergedErrors(_types.errorOf(a), _types.errorOf(b));
+                return success == _types.never ? _types.failure(errors) : _types.errorUnion(success, errors);
+            }
+        }
 
         if (_types.sameApartFromError(a, b)) return _types.error;
         auto erase = "";
@@ -7103,7 +7182,8 @@ private final class TypeChecker
             return coerce(expr, typeLambda(expr, lambda, &data, ctx.site), expected, ctx.site);
         }
         // What's expected can say what a generic use's type arguments are, also through `!` and `?`.
-        auto isMethod = expr.kind.match!((const CallExpr call) => isMethodCall(expr.id, *call.callee), _ => false);
+        auto isMethod = expr.kind.match!((const CallExpr call) => isMethodCall(expr.id, *call.callee),
+            (const SafeMemberAccess _) => true, _ => false);
         auto unwraps = expr.kind.match!((const AssertExpr _) => true, (const PropagateExpr _) => true, _ => false);
         if (isMethod || unwraps || genericUse(expr).found || isOverloadedUse(expr))
         {

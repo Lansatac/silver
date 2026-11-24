@@ -1,0 +1,17 @@
+Ok(4)
+Error(Oops(1))
+Ok(1)
+4
+0
+4
+true
+listed Ok(4)
+Ok(4)
+Error(Oops(1))
+Error(Oops(1))
+Error(Oops(2))
+Ok(3)
+blank
+Ok(Meeting(Span(0, 4), a))
+Error(Reversed(1, 0))
+Error(TooEarly)
