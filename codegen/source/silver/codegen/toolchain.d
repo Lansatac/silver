@@ -7,8 +7,8 @@ import std.process : environment, execute, ProcessException;
 
 /// The D runtime linked into every compiled program, with the druntime and Phobos it was built
 /// against, and on Windows MinGW's import libraries for the C runtime and the system: `runtime`
-/// beside the executable, where the compiler's build puts them. The test executables are built
-/// beside it too.
+/// beside the executable. out/ has them for silver and silverc; the test executables are built in
+/// build/, where the runtime is built and a link to stdlib/ is made.
 string runtimePath()
 {
     import std.file : thisExePath;
@@ -190,12 +190,12 @@ string findRuntime()
     return null;
 }
 
-@("runtimePath is out/runtime in the repository, where its build puts the runtime")
+@("runtimePath is build/runtime in the repository, where its build puts the runtime")
 unittest
 {
     import std.path : baseName;
 
-    assert(runtimePath.baseName == "runtime" && dirName(runtimePath).baseName == "out", runtimePath);
+    assert(runtimePath.baseName == "runtime" && dirName(runtimePath).baseName == "build", runtimePath);
     assert(exists(buildPath(dirName(dirName(runtimePath)), "runtime", "dub.json")));
 }
 

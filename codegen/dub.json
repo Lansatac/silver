@@ -12,7 +12,7 @@
 		{ "name": "library" },
 		{
 			"name": "unittest",
-			"targetPath": "../out",
+			"targetPath": "../build",
 			"dependencies": {
 				"silver:testrunner": "*",
 				"fluent-asserts": "~>2.1",

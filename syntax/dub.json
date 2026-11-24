@@ -20,7 +20,7 @@
 				"psapi"
 			],
 			"name": "unittest",
-			"targetPath": "../out"
+			"targetPath": "../build"
 		}
 	]
 }

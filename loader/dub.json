@@ -5,13 +5,13 @@
 		"silver:ast": "*",
 		"silver:syntax": "*"
 	},
-	"preGenerateCommands-posix": ["mkdir -p \"$PACKAGE_DIR../out\" && ln -sfn ../stdlib \"$PACKAGE_DIR../out/stdlib\""],
-	"preGenerateCommands-windows": ["if not exist \"$PACKAGE_DIR..\\out\\stdlib\" (mkdir \"$PACKAGE_DIR..\\out\" 2>nul & mklink /J \"$PACKAGE_DIR..\\out\\stdlib\" \"$PACKAGE_DIR..\\stdlib\" >nul)"],
+	"preGenerateCommands-posix": ["mkdir -p \"$PACKAGE_DIR../out\" \"$PACKAGE_DIR../build\" && ln -sfn ../stdlib \"$PACKAGE_DIR../out/stdlib\" && ln -sfn ../stdlib \"$PACKAGE_DIR../build/stdlib\""],
+	"preGenerateCommands-windows": ["for %D in (out build) do @(if not exist \"$PACKAGE_DIR..\\%D\\stdlib\" (mkdir \"$PACKAGE_DIR..\\%D\" 2>nul & mklink /J \"$PACKAGE_DIR..\\%D\\stdlib\" \"$PACKAGE_DIR..\\stdlib\" >nul))"],
 	"configurations": [
 		{ "name": "library" },
 		{
 			"name": "unittest",
-			"targetPath": "../out",
+			"targetPath": "../build",
 			"dependencies": {
 				"silver:testrunner": "*",
 				"fluent-asserts": "~>2.1"

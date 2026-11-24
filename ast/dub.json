@@ -6,7 +6,7 @@
 		{ "name": "library" },
 		{
 			"name": "unittest",
-			"targetPath": "../out"
+			"targetPath": "../build"
 		}
 	]
 }

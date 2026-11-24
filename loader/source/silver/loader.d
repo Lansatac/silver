@@ -1231,7 +1231,7 @@ private void refuseConformances(const Module mod, string tested, SourceContext c
 }
 
 /// Directory holding `lang` and the standard library that ships with the compiler: `stdlib`
-/// beside the executable. The build puts the test executables in out/, beside a link to stdlib/.
+/// beside the executable. The build puts the test executables in build/, beside a link to stdlib/, as it does silver and silverc in out/.
 string standardLibraryPath()
 {
     import std.file : thisExePath;

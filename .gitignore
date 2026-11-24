@@ -1,7 +1,9 @@
 .dub
 docs.json
 __dummy.html
-# What the build makes: silver, silverc, the test executables, the runtime and a link to stdlib/.
+# What a build leaves: intermediates and every executable, test ones included, in build/; out/ holds only what ships
+# (silver, silverc, runtime/ and a link to stdlib/).
+/build/
 /out/
 *.so
 *.dylib

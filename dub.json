@@ -31,18 +31,21 @@
 	},
 	"targetType": "executable",
 	"stringImportPaths": ["generated"],
-	"targetPath": "out",
+	"targetPath": "build",
 	"configurations": [
 		{
 			"name": "application",
 			"targetName": "silverc",
-			"preGenerateCommands": ["\"$DUB\" build :frontend --root=\"$PACKAGE_DIR.\""]
+			"postBuildCommands-posix": ["\"$PACKAGE_DIR./ship.sh\""],
+			"postBuildCommands-windows": ["\"$PACKAGE_DIR.\\ship.cmd\""],
+			"preGenerateCommands-posix": ["\"$DUB\" build :frontend --root=\"$PACKAGE_DIR.\" && \"$PACKAGE_DIR./ship.sh\""],
+			"preGenerateCommands-windows": ["\"$DUB\" build :frontend --root=\"$PACKAGE_DIR.\" && \"$PACKAGE_DIR.\\ship.cmd\""]
 		},
 		{
 			"name": "unittest",
 			"targetName": "silver-test-application",
-			"preGenerateCommands-posix": ["\"$DUB\" build :stampversion --root=\"$PACKAGE_DIR.\" && \"$PACKAGE_DIR./out/stampversion\" \"$PACKAGE_DIR./generated/version.txt\" \"$PACKAGE_DIR.\""],
-			"preGenerateCommands-windows": ["\"$DUB\" build :stampversion --root=\"$PACKAGE_DIR.\" && \"$PACKAGE_DIR.\\out\\stampversion.exe\" \"$PACKAGE_DIR.\\generated\\version.txt\" \"$PACKAGE_DIR.\""],
+			"preGenerateCommands-posix": ["\"$DUB\" build :stampversion --root=\"$PACKAGE_DIR.\" && \"$PACKAGE_DIR./build/stampversion\" \"$PACKAGE_DIR./generated/version.txt\" \"$PACKAGE_DIR.\""],
+			"preGenerateCommands-windows": ["\"$DUB\" build :stampversion --root=\"$PACKAGE_DIR.\" && \"$PACKAGE_DIR.\\build\\stampversion.exe\" \"$PACKAGE_DIR.\\generated\\version.txt\" \"$PACKAGE_DIR.\""],
 			"dependencies": {
 				"fluent-asserts": "~>2.1"
 			}
