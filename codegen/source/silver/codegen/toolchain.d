@@ -27,8 +27,8 @@ struct Toolchain
     string lld;
 }
 
-/// Finds clang (`$SILVER_CLANG`, else `clang` on the PATH) and lld (`$SILVER_LLD`, else `lld-link`
-/// on Windows and `ld.lld` elsewhere). Returns what's missing, or null if the toolchain was found.
+/// Finds clang (`$SILVER_CLANG`, else `clang` on the PATH) and lld (`$SILVER_LLD`, else on Windows the
+/// `lld-link` beside clang, and elsewhere `ld.lld`). Returns what's missing, or null if the toolchain was found.
 string findToolchain(out Toolchain toolchain)
 {
     toolchain.clang = findTool("SILVER_CLANG", "clang");
@@ -38,14 +38,33 @@ string findToolchain(out Toolchain toolchain)
     }
     version (Windows)
     {
-        toolchain.lld = findTool("SILVER_LLD", "lld-link");
+        // Beside clang, not first on the PATH, which is often dmd's older one: it's LLVM's own, of the
+        // same version, and knows `/lldignoreenv`.
+        auto besideClang = buildPath(dirName(onPath(toolchain.clang)), "lld-link.exe");
+        toolchain.lld = findTool("SILVER_LLD", besideClang);
         if (toolchain.lld is null)
         {
-            return "lld-link wasn't found. Install LLVM, or set SILVER_LLD to lld-link's path.";
+            return "lld-link wasn't found beside clang, at " ~ besideClang ~ ". Install LLVM's, or set "
+                ~ "SILVER_LLD to its path.";
         }
     }
     else toolchain.lld = findTool("SILVER_LLD", "ld.lld");
     return null;
+}
+
+/// `tool` itself if it's a path, else where the PATH finds it, or `tool` if nowhere.
+version (Windows) private string onPath(string tool)
+{
+    import std.algorithm : splitter;
+    import std.path : baseName, defaultExtension;
+
+    if (tool.baseName != tool) return tool;
+    foreach (directory; environment.get("PATH", "").splitter(';'))
+    {
+        auto candidate = buildPath(directory, tool.defaultExtension("exe"));
+        if (directory.length && exists(candidate)) return candidate;
+    }
+    return tool;
 }
 
 private string findTool(string variable, string fallback)
