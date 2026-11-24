@@ -23,7 +23,8 @@ immutable usage = "Usage: silver <file>                           run <file>\n"
     ~ "Options go before the file, and are the compiler's: run `silverc --help` for them, other than\n"
     ~ "--show-command, which prints the compiler's command line before running it.\n"
     ~ "A silver.toml in the file's directory or above describes its project's packages. With no file,\n"
-    ~ "it's looked for from the working directory. Run `silver <command> --help` for more on each.";
+    ~ "it's looked for from the working directory. Run `silver <command> --help` for more on each.\n"
+    ~ "`silver --version` prints silver's version.";
 
 /// What `silver <command> --help` prints.
 immutable string[string] commandUsage;
@@ -700,10 +701,19 @@ unittest
     assert(commandLine(["silverc", "run", "--package", "a=my dir", "f.ag", ""]) == `silverc run --package "a=my dir" f.ag ""`);
 }
 
+/// The version stamped at build time by tools/stampversion.d.
+immutable versionText = import("version.txt");
+
 /// Runs `silver` with the command line `args`, returning the exit status.
 int run(string[] args)
 {
     import std.file : getcwd;
+
+    if (args.length == 2 && args[1] == "--version")
+    {
+        stdout.writeln("silver ", versionText);
+        return 0;
+    }
 
     auto asked = request(args[1 .. $]);
     if (auto help = helpFor(asked))

@@ -29,6 +29,8 @@
 		"silver:testing": "*"
 	},
 	"targetType": "executable",
+	"stringImportPaths": ["out"],
+	"preGenerateCommands": ["\"$DC\" -run \"$PACKAGE_DIR./tools/stampversion.d\" \"$PACKAGE_DIR./out/version.txt\""],
 	"targetPath": "out",
 	"configurations": [
 		{

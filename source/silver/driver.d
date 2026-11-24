@@ -368,6 +368,9 @@ unittest
     assert(takeOptimization(args, optimize) !is null);
 }
 
+/// The version stamped at build time by tools/stampversion.d.
+immutable versionText = import("version.txt");
+
 immutable usage = "Usage: silverc [run] [OPTION]... <file> [ARGUMENT]...   run <file> with the arguments\n"
     ~ "       silverc build [OPTION]... <file>   compile <file> to an executable with LLVM\n"
     ~ "       silverc test [OPTION]... <path>    run the tests in <path>, a file or a directory\n"
@@ -1189,6 +1192,7 @@ int run(string[] args)
     string outputPath;
     bool emitLlvm;
     bool emitCore;
+    bool showVersion;
     Backend backend;
     bool optimize;
     string[] filters;
@@ -1237,6 +1241,7 @@ int run(string[] args)
     "optimize|O", "build, and run or test with -b llvm: have clang optimize the compiled program."
         ~ " -O2 is the same, and -O0 is the default, no optimization", &optimize,
     "emit-llvm", "build: write LLVM IR instead of an executable, optimized with -O", &emitLlvm,
+    "version", "print silverc's version and stop", &showVersion,
     "emit-core", "print the Core the program lowers to instead of running it", &emitCore,
     "filter", "test: run only the tests whose name contains this, case-sensitively; given more than once,"
         ~ " those matching any of them", &filters,
@@ -1256,6 +1261,11 @@ int run(string[] args)
     if (arguments.helpWanted)
     {
         defaultGetoptPrinter("The Silver interpreter and compiler.\n" ~ usage, arguments.options);
+        return 0;
+    }
+    if (showVersion)
+    {
+        writeln("silverc ", versionText);
         return 0;
     }
     if (programs.length > 1)

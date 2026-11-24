@@ -2,6 +2,8 @@
 	"name": "frontend",
 	"description": "silver: the front end, which finds a project and calls the compiler, silverc.",
 	"targetType": "executable",
+	"stringImportPaths": ["../out"],
+	"preGenerateCommands": ["\"$DC\" -run \"$PACKAGE_DIR../tools/stampversion.d\" \"$PACKAGE_DIR../out/version.txt\""],
 	"targetName": "silver",
 	"targetPath": "../out",
 	"configurations": [

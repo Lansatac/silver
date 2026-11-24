@@ -858,3 +858,36 @@ unittest
         ~ "packages are described in its package file, silver.toml: what a package uses is its `uses`, and each "
         ~ "package it uses or describes is a `[[package]]` entry\n", 1);
 }
+
+/// The version `silver --version` and `silverc --version` print: a tag's number, then what follows it
+/// (`-3-gabc1234`, `-dirty`), or `0.0.0-` and a commit or `dev` where there's no tag or no git.
+bool isVersion(string text)
+{
+    import std.regex : matchFirst, regex;
+
+    return !matchFirst(text, regex(`^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)*$`)).empty;
+}
+
+@("silver --version and silverc --version print one line each, with the same version")
+unittest
+{
+    import std.string : chomp;
+
+    auto fromSilver = silver(["--version"], tempDir);
+    auto fromCompiler = runIn([built("silverc"), "--version"], tempDir);
+    assert(fromSilver.status == 0 && fromSilver.output.startsWith("silver "), fromSilver.output);
+    assert(fromCompiler.status == 0 && fromCompiler.output.startsWith("silverc "), fromCompiler.output);
+    auto number = fromSilver.output.chomp["silver ".length .. $];
+    assert(isVersion(number), "not a version: " ~ number);
+    assert(fromCompiler.output.chomp["silverc ".length .. $] == number);
+    assert(fromSilver.output.count('\n') == 1 && fromCompiler.output.count('\n') == 1);
+}
+
+@("a version is a tag's number, perhaps followed by what git describe adds")
+unittest
+{
+    foreach (good; ["0.1.0", "1.20.3", "0.1.0-3-gabc1234", "0.1.0-3-gabc1234-dirty", "0.0.0-dev", "0.0.0-gabc1234"])
+        assert(isVersion(good), good);
+    foreach (bad; ["", "v0.1.0", "0.1", "unknown", "0.1.0\n"])
+        assert(!isVersion(bad), bad);
+}
