@@ -946,3 +946,13 @@ unittest
     stamped(stamper, stamp, directory);
     assert(readText(stamp) == "1.2.3", readText(stamp));
 }
+
+@("out/ has the silver and silverc that were last built into build/, so these tests run what was built")
+unittest
+{
+    import std.file : read;
+
+    foreach (name; ["silver", "silverc"])
+        assert(read(built(name)) == read(buildPath(root, "build", name ~ exe)), built(name) ~ " isn't the "
+            ~ buildPath(root, "build", name ~ exe) ~ " last built");
+}
