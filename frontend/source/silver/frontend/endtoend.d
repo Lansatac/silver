@@ -18,10 +18,11 @@ immutable fixtures = buildPath(root, "frontend", "tests");
 version (Windows) enum exe = ".exe";
 else enum exe = "";
 
-/// The built executable `name` in out/, failing the test when it isn't there.
+/// The built executable `name` in out/, or in build/ for stampversion, which doesn't ship, failing the test
+/// when it isn't there.
 string built(string name)
 {
-    auto path = buildPath(root, "out", name ~ exe);
+    auto path = buildPath(root, name == "stampversion" ? "build" : "out", name ~ exe);
     assert(exists(path), path ~ " isn't there: the front end's end-to-end tests run the built executables, so run "
         ~ "`redub build` at the repository's root first");
     return path;
