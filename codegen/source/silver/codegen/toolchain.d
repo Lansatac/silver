@@ -1,13 +1,14 @@
 module silver.codegen.toolchain;
 
 import std.conv : to;
-import std.file : exists;
+import std.file : exists, remove;
 import std.path : buildPath, dirName, setExtension;
 import std.process : environment, execute, ProcessException;
 
 /// The D runtime linked into every compiled program, with the druntime and Phobos it was built
-/// against: `runtime` beside the executable, where the compiler's build puts them. The test
-/// executables are built beside it too.
+/// against, and on Windows MinGW's import libraries for the C runtime and the system: `runtime`
+/// beside the executable, where the compiler's build puts them. The test executables are built
+/// beside it too.
 string runtimePath()
 {
     import std.file : thisExePath;
@@ -15,18 +16,19 @@ string runtimePath()
     return buildPath(thisExePath.dirName, "runtime");
 }
 
-/// The external tool that turns IR into an executable: clang compiles the IR and, as the driver
-/// of the platform's linker, links it with the runtime.
+/// The external tools that turn IR into an executable: clang compiles the IR, and off Windows
+/// drives the platform's linker; on Windows lld-link links.
 struct Toolchain
 {
     string clang;
-    /// Whether clang should link with lld, which links Phobos statically many times faster than
-    /// GNU ld. Only looked for off Windows, where clang uses the MSVC linker.
-    bool lld;
+    /// lld: on Windows lld-link, which links with only the runtime's libraries, so Visual Studio
+    /// isn't needed. Off Windows ld.lld if it was found, which links Phobos statically many times
+    /// faster than GNU ld, or null to let clang use the system's linker.
+    string lld;
 }
 
-/// Finds clang (`$SILVER_CLANG`, else `clang` on the PATH). Returns what's missing, or null if it
-/// was found.
+/// Finds clang (`$SILVER_CLANG`, else `clang` on the PATH) and lld (`$SILVER_LLD`, else `lld-link`
+/// on Windows and `ld.lld` elsewhere). Returns what's missing, or null if the toolchain was found.
 string findToolchain(out Toolchain toolchain)
 {
     toolchain.clang = findTool("SILVER_CLANG", "clang");
@@ -34,8 +36,15 @@ string findToolchain(out Toolchain toolchain)
     {
         return "clang wasn't found. Install LLVM, or set SILVER_CLANG to clang's path.";
     }
-    version (Windows) {}
-    else toolchain.lld = findTool("SILVER_LLD", "ld.lld") !is null;
+    version (Windows)
+    {
+        toolchain.lld = findTool("SILVER_LLD", "lld-link");
+        if (toolchain.lld is null)
+        {
+            return "lld-link wasn't found. Install LLVM, or set SILVER_LLD to lld-link's path.";
+        }
+    }
+    else toolchain.lld = findTool("SILVER_LLD", "ld.lld");
     return null;
 }
 
@@ -92,50 +101,72 @@ LinkResult optimizeIr(const Toolchain toolchain, string irPath, string outputPat
 LinkResult linkExecutable(const Toolchain toolchain, string irPath, string outputPath, const string[] libraries = [],
     Optimization optimization = Optimization.none)
 {
-    string[] runtime;
-    if (auto missing = findRuntime(runtime))
+    if (auto missing = findRuntime())
     {
         return LinkResult(false, missing);
     }
-    auto linked = execute(linkCommand(toolchain, irPath, runtime, libraries, outputPath, optimization));
+
+    version (Windows) auto objPath = outputPath.setExtension("obj");
+    else auto objPath = outputPath.setExtension("o");
+    scope (exit) if (exists(objPath)) remove(objPath);
+    // The IR has no target triple, so clang uses the host's; it warns about that otherwise.
+    auto compiled = execute([toolchain.clang, "-c", "-Wno-override-module"] ~ optimizationFlags(optimization)
+        ~ ["-o", objPath, irPath]);
+    if (compiled.status != 0)
+    {
+        return LinkResult(false, compiled.output);
+    }
+
+    auto linked = execute(linkCommand(toolchain, objPath, runtimePath, libraries, outputPath));
     return LinkResult(linked.status == 0, linked.output);
 }
 
-/// The clang command that compiles `irPath` and links it with `runtime` and `libraries` into `outputPath`.
-string[] linkCommand(const Toolchain toolchain, string irPath, const string[] runtime, const string[] libraries,
-    string outputPath, Optimization optimization = Optimization.none)
+version (Windows) private enum runtimeLibraries = ["silver_rt.lib", "phobos64.lib"];
+else private enum runtimeLibraries = ["libsilver_rt.a", "libphobos2.a"];
+
+/// The command that links `objPath` with the libraries in `runtime` and `libraries` into `outputPath`.
+string[] linkCommand(const Toolchain toolchain, string objPath, string runtime, const string[] libraries,
+    string outputPath)
 {
-    import std.algorithm : map;
+    import std.algorithm : filter, map, splitter;
     import std.array : array;
 
-    // clang passes `-lname` to the MSVC linker as `name.lib`.
-    auto linked = libraries.map!(l => "-l" ~ l).array;
-    auto linker = toolchain.lld ? ["-fuse-ld=lld"] : [];
-    // What dmd adds when it links: Phobos's own dependencies off Windows, and on Windows no
-    // identical-code folding, which would merge functions D expects to have distinct addresses.
-    version (Windows) auto system = ["-Wl,/OPT:NOICF"];
-    else auto system = ["-lpthread", "-lm", "-lrt", "-ldl"];
-    // The IR has no target triple, so clang uses the host's; it warns about that otherwise.
-    return [toolchain.clang, "-Wno-override-module"] ~ optimizationFlags(optimization) ~ linker
-        ~ [irPath] ~ runtime ~ linked ~ system ~ ["-o", outputPath];
+    auto linked = runtimeLibraries.map!(l => buildPath(runtime, l)).array;
+    version (Windows)
+    {
+        // The runtime's MinGW libraries are the only ones searched for what the runtime names, such as
+        // the C runtime, even where Visual Studio is installed, so a program links and runs the same with
+        // or without it. `LIB`'s directories come after them, for the native libraries a program names.
+        // `/OPT:NOICF` is dmd's: folding identical functions would merge ones D expects to be distinct.
+        auto searched = ["/libpath:" ~ buildPath(runtime, "mingw")]
+            ~ environment.get("LIB", "").splitter(';').filter!(d => d.length).map!(d => "/libpath:" ~ d).array;
+        return [toolchain.lld, "/nologo", "/lldignoreenv", "/opt:noicf"] ~ searched ~ [objPath] ~ linked
+            ~ libraries.map!(l => l ~ ".lib").array ~ ["/out:" ~ outputPath];
+    }
+    else
+    {
+        auto linker = toolchain.lld ? ["-fuse-ld=lld"] : [];
+        // What dmd adds when it links, for Phobos.
+        return [toolchain.clang] ~ linker ~ [objPath] ~ linked ~ libraries.map!(l => "-l" ~ l).array
+            ~ ["-lpthread", "-lm", "-lrt", "-ldl", "-o", outputPath];
+    }
 }
 
-/// Finds the runtime's libraries, which programs link whether or not they're optimized: the runtime, and
-/// the druntime and Phobos it was built against. Returns why one isn't there, or null with `libraries` set.
-string findRuntime(out string[] libraries)
+/// Checks that the runtime's libraries are there, which programs link whether or not they're optimized.
+/// Returns why one isn't, or null.
+string findRuntime()
 {
-    version (Windows) enum names = ["silver_rt.lib", "phobos64.lib"];
-    else enum names = ["libsilver_rt.a", "libphobos2.a"];
     if (!exists(runtimePath))
     {
         return "The runtime wasn't found. It's the directory `runtime` beside the compiler, which would be "
             ~ runtimePath ~ ".";
     }
-    foreach (name; names)
+    version (Windows) enum needed = runtimeLibraries ~ ["mingw"];
+    else enum needed = runtimeLibraries;
+    foreach (name; needed)
     {
         auto library = buildPath(runtimePath, name);
         if (!exists(library)) return "The runtime is missing " ~ library ~ ".";
-        libraries ~= library;
     }
     return null;
 }
@@ -224,19 +255,24 @@ unittest
     assert(!recipe.canFind("-release") && !recipe.canFind("boundscheck"));
 }
 
-@("the link command names each native library the way clang takes it")
+@("the link command names the runtime's libraries, and each native library the way the linker takes it")
 unittest
 {
-    auto command = linkCommand(Toolchain("clang"), "main.ll", ["rt.a", "phobos.a"], ["SDL2", "m"], "main");
-    version (Windows) auto system = ["-Wl,/OPT:NOICF"];
-    else auto system = ["-lpthread", "-lm", "-lrt", "-ldl"];
-    assert(command == ["clang", "-Wno-override-module", "main.ll", "rt.a", "phobos.a", "-lSDL2", "-lm"] ~ system
-        ~ ["-o", "main"], command.to!string);
-}
+    auto command = linkCommand(Toolchain("clang", "lld"), "main.o", "rt", ["SDL2", "m"], "main");
+    version (Windows)
+    {
+        import std.algorithm : canFind, endsWith, find;
 
-@("the link command asks for lld when the toolchain found it, and optimizes when asked")
-unittest
-{
-    auto command = linkCommand(Toolchain("clang", true), "main.ll", ["rt.a"], [], "main", Optimization.full);
-    assert(command[0 .. 5] == ["clang", "-Wno-override-module", "-O2", "-fuse-ld=lld", "main.ll"], command.to!string);
+        assert(command[0 .. 5] == ["lld", "/nologo", "/lldignoreenv", "/opt:noicf", "/libpath:" ~ buildPath("rt", "mingw")],
+            command.to!string);
+        assert(command.find("main.o")[0 .. 6] == ["main.o", buildPath("rt", "silver_rt.lib"),
+            buildPath("rt", "phobos64.lib"), "SDL2.lib", "m.lib", "/out:main"], command.to!string);
+    }
+    else
+    {
+        assert(command == ["clang", "-fuse-ld=lld", "main.o", buildPath("rt", "libsilver_rt.a"),
+            buildPath("rt", "libphobos2.a"), "-lSDL2", "-lm", "-lpthread", "-lm", "-lrt", "-ldl", "-o", "main"],
+            command.to!string);
+        assert(linkCommand(Toolchain("clang"), "main.o", "rt", [], "main")[0 .. 2] == ["clang", "main.o"]);
+    }
 }
