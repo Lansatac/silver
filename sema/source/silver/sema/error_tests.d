@@ -140,6 +140,20 @@ unittest
         .shouldReport(DiagnosticCode.InvalidPropagation, At("factorial(1)?", 1));
 }
 
+@("branches with different errors list them together, when their values are the same type")
+unittest
+{
+    auto a = analyzedErrors(`val c = true
+    val both = if c => parse("1") else factorial(1)
+    val bare = if c => parse("1") else Error(Negative)`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("both", 1), "Int ! Negative | Overflow | ParseError");
+    a.shouldDeclareType(At("bare", 1), "Int ! Negative | ParseError");
+    analyzedErrors(`val c = true
+    val wider = if c => lookup("k") ?? None else parse("1")`)
+        .shouldReport(DiagnosticCode.TypeMismatch, At("if c", 1));
+}
+
 @("an error union can't be left unused, though _ drops it")
 unittest
 {
