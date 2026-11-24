@@ -50,15 +50,17 @@ extern (C) int silver_start(int argc, char** argv)
 
 // dmd names the C runtime only in the object that defines `main`, which here is generated code's. So
 // this object, which every program pulls out of the library, names the one dmd is configured for.
-// Visual Studio's C runtime keeps the stdio functions Phobos calls, such as `sscanf`, in a library of
-// their own, which dmd adds when it links against it; MinGW's (`msvcrt120` and the like) has them.
+// The runtime's recipe configures it for `vcruntime140`, and with it go the Universal C Runtime, which
+// is part of Windows, and the stdio functions it defines only in its headers. These are MinGW's libraries,
+// which leave a program importing only `ucrtbase.dll` and the system's DLLs.
 version (Windows)
 {
-    private enum cRuntime = __traits(getTargetInfo, "cppRuntimeLibrary");
-    pragma(lib, cRuntime);
-    pragma(lib, "OLDNAMES");
-    static if (cRuntime.length >= 6 && cRuntime[0 .. 6] == "libcmt" || cRuntime == "msvcrt" || cRuntime == "msvcrtd")
-        pragma(lib, "legacy_stdio_definitions");
+    // First, so `memcpy` and the like come from it, which Windows has, rather than `vcruntime140.dll`,
+    // which it doesn't; `vcruntime140`'s library then gives only the startup code that's linked in.
+    pragma(lib, "ucrtbase");
+    pragma(lib, __traits(getTargetInfo, "cppRuntimeLibrary"));
+    pragma(lib, "legacy_stdio_definitions");
+    pragma(lib, "oldnames");
 }
 
 private alias MainFunction = extern (C) int function(char[][] args);
