@@ -903,6 +903,21 @@ unittest
     }
 }
 
+@("an option's value is never silver's --version")
+unittest
+{
+    auto ran = silver(["build", "-o", "--version", "h.ag"], tempDir);
+    assert(ran.status != 0 && !ran.output.startsWith("silver "), ran.output);
+}
+
+/// Runs the stamper without a SILVER_VERSION that the tests' own environment may carry.
+void stamped(string stamper, string stamp, string directory)
+{
+    auto result = std.process.execute([stamper, stamp, directory], ["SILVER_VERSION": null], std.process.Config.none,
+        size_t.max, directory);
+    assert(result.status == 0, result.output);
+}
+
 @("the version of a repository with no version tag is its commit, whatever other tags it has")
 unittest
 {
@@ -912,7 +927,8 @@ unittest
     scope (exit) rmdirRecurse(directory);
     void git(string[] words)
     {
-        auto ran = std.process.execute(["git", "-C", directory, "-c", "user.name=t", "-c", "user.email=t@t"] ~ words);
+        auto ran = std.process.execute(["git", "-C", directory, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+            "-c", "tag.gpgsign=false"] ~ words);
         assert(ran.status == 0, ran.output);
     }
     git(["init", "-q"]);
@@ -921,11 +937,11 @@ unittest
     git(["tag", "-a", "release-notes", "-m", "not a version"]);
     auto stamp = buildPath(directory, "stamp", "version.txt");
     auto stamper = built("stampversion");
-    expectRan(runIn([stamper, stamp, directory], directory), "");
+    stamped(stamper, stamp, directory);
     auto version_ = readText(stamp);
     assert(version_.startsWith("0.0.0-g") && !version_.canFind("release"), version_);
 
     git(["tag", "-a", "v1.2.3", "-m", "v"]);
-    expectRan(runIn([stamper, stamp, directory], directory), "");
+    stamped(stamper, stamp, directory);
     assert(readText(stamp) == "1.2.3", readText(stamp));
 }

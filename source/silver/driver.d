@@ -368,7 +368,7 @@ unittest
     assert(takeOptimization(args, optimize) !is null);
 }
 
-/// The version stamped at build time by tools/stampversion.d.
+/// The version stamped at build time by the stampversion program.
 immutable versionText = import("version.txt");
 
 immutable usage = "Usage: silverc [run] [OPTION]... <file> [ARGUMENT]...   run <file> with the arguments\n"

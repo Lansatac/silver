@@ -143,6 +143,8 @@ struct Arguments
     bool show;
     /// Whether `--` came where the file would be, so there's no file and what follows it is the program's.
     bool dashed;
+    /// Whether `--version` is among the options, which makes the whole command silver's to answer.
+    bool version_;
 }
 
 /// Takes `rest` apart. The file is the first word that isn't an option or an option's value, and `--`
@@ -157,6 +159,10 @@ Arguments split(string[] rest)
         if (rest[i] == showCommand)
         {
             result.show = true;
+        }
+        else if (rest[i] == "--version")
+        {
+            result.version_ = true;
         }
         else if (compilerOptionsWithValues.canFind(rest[i]))
         {
@@ -701,7 +707,7 @@ unittest
     assert(commandLine(["silverc", "run", "--package", "a=my dir", "f.ag", ""]) == `silverc run --package "a=my dir" f.ag ""`);
 }
 
-/// The version stamped at build time by tools/stampversion.d.
+/// The version stamped at build time by the stampversion program.
 immutable versionText = import("version.txt");
 
 /// Runs `silver` with the command line `args`, returning the exit status.
@@ -716,7 +722,7 @@ int run(string[] args)
         stdout.writeln(help);
         return 0;
     }
-    if (split(asked.rest).options.canFind("--version"))
+    if (split(asked.rest).version_)
     {
         stdout.writeln("silver ", versionText);
         return 0;
