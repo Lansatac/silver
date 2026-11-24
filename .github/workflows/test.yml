@@ -112,19 +112,31 @@ jobs:
           key: dub-windows-${{ hashFiles('dub.selections.json', '**/dub.json') }}
           restore-keys: dub-windows-
 
-      # The image ships LLVM; make sure its clang is the one on the PATH.
-      - name: Find clang
+      # As a release does: silverc, in out, and the test executables, in build, find clang and lld-link
+      # in llvm beside themselves before the PATH. The image ships LLVM.
+      - name: Bundle LLVM's clang and lld-link
         run: |
-          $llvm = 'C:\Program Files\LLVM\bin'
-          if (-not (Get-Command clang -ErrorAction SilentlyContinue) -and (Test-Path $llvm)) {
-            Add-Content $env:GITHUB_PATH $llvm
-            $env:PATH = "$llvm;$env:PATH"
+          $clang = Get-Command clang -ErrorAction SilentlyContinue
+          $llvm = if ($clang) { Split-Path $clang.Source } else { 'C:\Program Files\LLVM\bin' }
+          foreach ($dir in 'out\llvm', 'build\llvm') {
+            New-Item -ItemType Directory -Force $dir | Out-Null
+            Copy-Item "$llvm\clang.exe", "$llvm\lld-link.exe" $dir
           }
-          clang --version
+          out\llvm\clang.exe --version
+          Get-ChildItem out\llvm | Format-Table Name, Length
+          # Any DLL here that Windows doesn't have would have to be bundled too.
+          foreach ($exe in 'clang', 'lld-link') {
+            "$exe imports:"
+            & "$llvm\llvm-readobj.exe" --coff-imports "out\llvm\$exe.exe" | Select-String 'Name:'
+          }
           dmd --version
 
       # One dmd at a time: in parallel, with each taking gigabytes, dmd crashed and then stalled on 16 GB.
+      # Without clang on the PATH, so programs build only with the bundled tools.
       - name: Test
         env:
           SILVER_REDUB_PARALLEL: "no"
-        run: ./runTests.ps1
+        run: |
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -and -not (Test-Path (Join-Path $_ 'clang.exe')) }) -join ';'
+          if (Get-Command clang -ErrorAction SilentlyContinue) { throw 'clang is still on the PATH' }
+          ./runTests.ps1

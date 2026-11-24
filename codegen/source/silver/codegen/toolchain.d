@@ -16,6 +16,15 @@ string runtimePath()
     return buildPath(thisExePath.dirName, "runtime");
 }
 
+/// Where a release bundles LLVM's tools: `llvm` beside the executable. A checkout's build has none, so
+/// the tools come from the PATH.
+string bundledLlvmPath()
+{
+    import std.file : thisExePath;
+
+    return buildPath(thisExePath.dirName, "llvm");
+}
+
 /// The external tools that turn IR into an executable: clang compiles the IR, and off Windows
 /// drives the platform's linker; on Windows lld-link links.
 struct Toolchain
@@ -27,11 +36,13 @@ struct Toolchain
     string lld;
 }
 
-/// Finds clang (`$SILVER_CLANG`, else `clang` on the PATH) and lld (`$SILVER_LLD`, else on Windows the
-/// `lld-link` beside clang, and elsewhere `ld.lld`). Returns what's missing, or null if the toolchain was found.
+/// Finds clang (`$SILVER_CLANG`, else the one bundled in `llvm` beside the executable, else `clang` on the
+/// PATH) and lld (`$SILVER_LLD`, else on Windows the `lld-link` beside clang, and elsewhere `ld.lld`). Returns
+/// what's missing, or null if the toolchain was found.
 string findToolchain(out Toolchain toolchain)
 {
-    toolchain.clang = findTool("SILVER_CLANG", "clang");
+    auto bundled = executablePath(buildPath(bundledLlvmPath, "clang"));
+    toolchain.clang = findTool("SILVER_CLANG", exists(bundled) ? bundled : "clang");
     if (toolchain.clang is null)
     {
         return "clang wasn't found. Install LLVM, or set SILVER_CLANG to clang's path.";
