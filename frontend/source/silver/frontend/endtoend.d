@@ -891,3 +891,41 @@ unittest
     foreach (bad; ["", "v0.1.0", "0.1", "unknown", "0.1.0\n"])
         assert(!isVersion(bad), bad);
 }
+
+@("silver --version is silver's wherever it is among the options before the file")
+unittest
+{
+    foreach (words; [["--version"], ["--version", "h.ag"], ["run", "--version"], ["build", "--version", "h.ag"],
+        ["--show-command", "--version"]])
+    {
+        auto ran = silver(words, tempDir);
+        assert(ran.status == 0 && ran.output.startsWith("silver ") && ran.output.count('\n') == 1, ran.output);
+    }
+}
+
+@("the version of a repository with no version tag is its commit, whatever other tags it has")
+unittest
+{
+    import std.file : readText;
+
+    auto directory = makeTree("frontend-version", ["f.txt": "x"]);
+    scope (exit) rmdirRecurse(directory);
+    void git(string[] words)
+    {
+        auto ran = std.process.execute(["git", "-C", directory, "-c", "user.name=t", "-c", "user.email=t@t"] ~ words);
+        assert(ran.status == 0, ran.output);
+    }
+    git(["init", "-q"]);
+    git(["add", "f.txt"]);
+    git(["commit", "-q", "-m", "one"]);
+    git(["tag", "-a", "release-notes", "-m", "not a version"]);
+    auto stamp = buildPath(directory, "stamp", "version.txt");
+    auto stamper = built("stampversion");
+    expectRan(runIn([stamper, stamp, directory], directory), "");
+    auto version_ = readText(stamp);
+    assert(version_.startsWith("0.0.0-g") && !version_.canFind("release"), version_);
+
+    git(["tag", "-a", "v1.2.3", "-m", "v"]);
+    expectRan(runIn([stamper, stamp, directory], directory), "");
+    assert(readText(stamp) == "1.2.3", readText(stamp));
+}

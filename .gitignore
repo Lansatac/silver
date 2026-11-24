@@ -27,3 +27,6 @@ __dummy.html
 /scratch/
 /scratch.ag
 
+
+# Written by the stampversion hook: the version silver and silverc print.
+/generated/

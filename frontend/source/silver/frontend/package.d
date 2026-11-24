@@ -707,18 +707,18 @@ immutable versionText = import("version.txt");
 /// Runs `silver` with the command line `args`, returning the exit status.
 int run(string[] args)
 {
+    import std.algorithm : canFind;
     import std.file : getcwd;
-
-    if (args.length == 2 && args[1] == "--version")
-    {
-        stdout.writeln("silver ", versionText);
-        return 0;
-    }
 
     auto asked = request(args[1 .. $]);
     if (auto help = helpFor(asked))
     {
         stdout.writeln(help);
+        return 0;
+    }
+    if (split(asked.rest).options.canFind("--version"))
+    {
+        stdout.writeln("silver ", versionText);
         return 0;
     }
     auto compiler = compilerPath();

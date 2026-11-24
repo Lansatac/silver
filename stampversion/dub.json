@@ -1,0 +1,7 @@
+{
+	"name": "stampversion",
+	"description": "Writes generated/version.txt, the version silver and silverc print, from git describe; built once by the hooks of silver and silverc, since compiling it for every build cost more than the build.",
+	"targetType": "executable",
+	"targetName": "stampversion",
+	"targetPath": "../out"
+}

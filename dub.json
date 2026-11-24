@@ -14,6 +14,7 @@
 		"./testing/",
 		"./conformance/",
 		"./frontend/",
+		"./stampversion/",
 		"./testrunner/"
 	],
 	"license": "MIT",
@@ -29,8 +30,7 @@
 		"silver:testing": "*"
 	},
 	"targetType": "executable",
-	"stringImportPaths": ["out"],
-	"preGenerateCommands": ["\"$DC\" -run \"$PACKAGE_DIR./tools/stampversion.d\" \"$PACKAGE_DIR./out/version.txt\""],
+	"stringImportPaths": ["generated"],
 	"targetPath": "out",
 	"configurations": [
 		{
@@ -41,6 +41,8 @@
 		{
 			"name": "unittest",
 			"targetName": "silver-test-application",
+			"preGenerateCommands-posix": ["\"$DUB\" build :stampversion --root=\"$PACKAGE_DIR.\" && \"$PACKAGE_DIR./out/stampversion\" \"$PACKAGE_DIR./generated/version.txt\" \"$PACKAGE_DIR.\""],
+			"preGenerateCommands-windows": ["\"$DUB\" build :stampversion --root=\"$PACKAGE_DIR.\" && \"$PACKAGE_DIR.\\out\\stampversion.exe\" \"$PACKAGE_DIR.\\generated\\version.txt\" \"$PACKAGE_DIR.\""],
 			"dependencies": {
 				"fluent-asserts": "~>2.1"
 			}
