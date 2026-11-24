@@ -138,6 +138,40 @@ val json = readFile("dub.json")?.parse()?        // passes on readFile's errors 
 
 A field `f` holding a function is called the same way.
 
+## Type functions
+
+A function can belong to a type rather than take a value of it. The type is written before its name, with a `.`, and it's called on the type the same way:
+
+```silver
+def Point.origin(): Point => Point(0, 0)
+def Point.fromText(text: String): Point? => ...
+def Int.fromText(text: String): Int? => parseInt(text)
+
+val o = Point.origin()
+val n = Int.fromText("12")
+```
+
+It's for a function that has no value of the type to be given, most often one that makes a value of it, and it's how an [interface](interfaces.md#a-type-only-in-the-result) asks for one.
+
+- It's a module-level function in every other way: it can be private, generic and overloaded, and it can serve a conformance. A plain call `fromText(text)` doesn't reach it; only a call on a type does.
+- Type functions of one name are overloads of each other, told apart by the type and then the parameters as usual, so `Point.fromText` and `Int.fromText` above are two. A type function and an ordinary function of the same name are never duplicates: `def Point.describe()` and `def describe(p: Point)` are both fine.
+- The type at a call has to be the declared one, or an instance of it, since nothing promotes a type: `Circle.area()` doesn't reach `def Shape.area()` when `Circle` is a member of the sum `Shape`.
+- In a declaration, any type can go before the `.`, as in `def [T].empty(): [T]` or `def T?.none(): T?`.
+- A name in that type that isn't a type where the declaration is written is a type parameter, as in a [conformance](interfaces.md#conformance), and a bound is written on it there. The function's own type parameters follow its name:
+
+  ```silver
+  def Stack<T>.empty(): Stack<T> => Stack([])
+  def Box<T: FromText>.fromText(text: String): Box<T>? => ...
+  def Stack<T>.fromRange<R: Range<T>>(items: R): Stack<T> => ...
+  ```
+
+  Type arguments written at a call are the function's own. The type's come from the type the call names.
+- At a call, what's before the `.` names a type: a type's name, qualified or not, an alias, a built-in type such as `Int`, a type parameter, or `Self` inside an interface. A generic type can have its arguments written, as in `Stack<Int>.empty()`, or leave them to [inference](generics.md#inference) as a constructor does, so `val s: Stack<Int> = Stack.empty()` works. A type written with punctuation, such as `[Int]` or `Int?`, can't be written there, since `[Int]` is an array: an alias or a type parameter names it.
+- A name that's a type means the type before `.`, never its constructor, so `Point.describe()` calls the type function `describe` of `Point`, and passing the constructor is `describe(Point)`.
+- A marker is a value, so `Unknown.f()` is a method call on that value, and a type function can't be declared for a marker: `def f(_: Unknown)` does the same, since the marker is the type's only value.
+- `Point.fromText` without a call isn't a function value. `text => Point.fromText(text)` is one.
+- In a generic function, a type parameter's bounds supply its type functions, called on the parameter as `T.fromText(text)`.
+
 ## Overloading
 
 Functions can be overloaded on all of their parameters, and `f(x)` and `x.f()` choose in the same way.
@@ -152,7 +186,19 @@ describe("a")      // describe(String)
 describe([true])   // describe<T>([T])
 ```
 
-- Two `def`s of one name in a scope are allowed when their parameter types differ. A different return type doesn't make them differ, and neither does `mutable` alone, an alias of the same type, or other names for the type parameters.
+- Two `def`s of one name in a scope are allowed when their parameter types differ, or when they differ in which parameters are `mutable`. A different return type doesn't make them differ, and neither does an alias of the same type or other names for the type parameters.
+- An argument passed as `mutable` fits only a `mutable` parameter, and one passed without it only a parameter that isn't, so the call says which of two such functions it means. That lets the pure and in-place forms of one operation share a name:
+
+  ```silver
+  def next(g: Gen): (UInt64, Gen)?      // as a range: the value and the generator after it
+  def next(mutable g: Gen): UInt64      // in place
+
+  next(g)            // the first
+  next(mutable g)    // the second
+  g.next()           // the first, since a method call doesn't pass its receiver as `mutable`
+  ```
+
+  A call that leaves out `mutable` reaches the other function rather than an error, which the result's type almost always catches: the pure form has to give back the new value, and a result that's dropped is an error.
 - A local or parameter holding a function wins outright and isn't overloaded.
 - The type a call is expected to have never makes one function better than another, since functions aren't overloaded on their return type. What it gives a type parameter has to suit the arguments, though, so it can rule a function out.
 - A [bound](interfaces.md#bounds) takes no part. Two functions with the same parameter types are duplicates whatever their bounds, and the bounds of the function chosen are checked afterwards, so one that fails is an error at the call and never passes the call to another function; see [Interfaces](interfaces.md#choosing-a-function).
@@ -320,3 +366,5 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 - Two native functions of one name in a module have to bind different C symbols, and two intrinsics can't share a name.
 - A `mutable` first parameter is rejected for a method call. A later `mutable` argument is fine.
 - `tail` isn't available.
+- `mutable` alone doesn't make an overload yet: two functions that differ only in it are `T0035`.
+- Type functions aren't built. A function for a type only in its result takes a parameter of the marker type `Of<T>` from `std.of`, as [Interfaces](interfaces.md#current-implementation) describes, and `Point.describe()` is still a method call with `Point`'s constructor as its receiver.

@@ -5,7 +5,7 @@ import std.time
 // SplitMix64.
 type Rng(state: UInt64)
 
-val golden: UInt64 = 0x9E3779B97F4A7C15
+private val golden: UInt64 = 0x9E3779B97F4A7C15
 
 def seeded(seed: UInt64): Rng => Rng(seed)
 def fromClock(): Rng => seeded(UInt64(nowNanos()))

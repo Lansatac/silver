@@ -169,6 +169,7 @@ type Grow<T> = More(rest: Grow<(T, T)>, head: T) | Stop    // error: `Grow<T>`, 
 - Generic aliases, as in `alias Pair<T> = (T, T)`.
 - Type parameters on a nested `def`.
 - Leaving some type arguments to inference, as in `convert<_, Int>(x)`.
+- Default type arguments, as in `def make<R: Seedable = Xoshiro256>(seed: UInt64): R` or `type Pair<A, B = A>`: what a parameter is when nothing else decides it.
 - Value parameters, as in `def pow<n: Int>(x: Float)`, with compile-time evaluation.
 - Whether `Option` becomes an ordinary generic sum in the prelude, with `T?` as its spelling.
 - Inferring a common type when arguments disagree, which waits on the same decision for integers widening.

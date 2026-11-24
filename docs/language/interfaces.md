@@ -38,7 +38,7 @@ interface Indexed<T>: Sized {
 
 - `Self` is the type that conforms. It's a type only inside an interface, and nothing else can be named `Self`.
 - A function has a signature and no body, and no type parameters of its own. The interface's type parameters are in scope.
-- Every function takes a `Self` somewhere in its parameters, because a function is found by what it's given. See [A type only in the result](#a-type-only-in-the-result).
+- Every function takes a `Self` somewhere in its parameters or is a type function of `Self`, as in `def Self.fromText(text: String): Self?`, because a function is found by what it's given. See [A type only in the result](#a-type-only-in-the-result).
 - Two functions can share a name when their parameter types differ.
 - An interface is declared at module level, can be `private`, and shares its module's names with types.
 
@@ -240,24 +240,23 @@ A literal doesn't adapt through a bound. With `toJson(x: UInt8)` and `conform UI
 
 ## A type only in the result
 
-A function that produces a `Self` from nothing of that type has no argument to be found by. It takes a parameter whose only job is to carry the type, `Of<T>`, from `std.of`, which the prelude forwards:
+A function that produces a `Self` from nothing of that type has no value to be found by, so it's a [type function](functions.md#type-functions) of `Self`, called on the type:
 
 ```silver
-interface FromText { def fromText(of: Of<Self>, text: String): Self? }
+interface FromText { def Self.fromText(text: String): Self? }
 
-def fromText(of: Of<Point>, text: String): Point? => ...
-def fromText(of: Of<Int>, text: String): Int? => ...
+def Point.fromText(text: String): Point? => ...
+def Int.fromText(text: String): Int? => parseInt(text)
 conform Point: FromText
 conform Int: FromText
 
-// One generic function in front, which is what callers use.
-def fromText<T: FromText>(text: String): T? => fromText(Of<T>, text)
+def parseAll<T: FromText>(lines: [String]): [T?] => lines.map(line => T.fromText(line))
 
-val p = fromText<Point>("origin")
-val n: Int? = fromText("one")
+val points = parseAll<Point>(lines)
+val n = Int.fromText("12")
 ```
 
-`Of<T>` is an ordinary type with one value, written `Of<Point>`. Nothing about lookup or conformance is special to these functions.
+A conformance finds a type function as a call on the type would find it, where the declaration is written. Nothing else about lookup or conformance is special to these functions.
 
 ## An interface name as a parameter type
 
@@ -359,14 +358,14 @@ A binding needs no such annotation: the value already has a type, and the bindin
 - An `if type` that narrows an argument its bounds leave open, as `if type R: Range<Int>` where `R` is a `Range<T>`, making `T` an `Int` in the branch; one that names a type of its own, as `if type R: Range<E>`; and one that asks about a type that isn't a bare type parameter, as `if type Box<T>: Sized`.
 - Generic functions in an interface.
 - Whether the functions can also be written inside the `conform` declaration.
-- A shorter way to write a function for a type only in the result, such as `def Point.fromText(text: String): Point?`.
-- Whether `Of` is the right name.
 
 Decided, and not part of the first version, each described in the [conformance proposal](../proposals/conformance.md): which [package](modules.md#packages) may declare a conformance, and a program's conformance for a library's type that only the program sees. `Ord` is an ordinary interface, described in [Types](types.md#ordering). The proposal also has the reasoning behind these rules and what was rejected.
 
 ## Current implementation
 
-Declared conformance is built as described above, except what needs packages:
+Declared conformance is built as described above, except what needs packages and type functions:
+
+- [Type functions](functions.md#type-functions) aren't built yet. A function for a type only in its result takes a parameter of the marker type `Of<T>` from `std.of`, which the prelude forwards, as in `interface FromText { def fromText(of: Of<Self>, text: String): Self? }` and `def fromText(of: Of<Point>, text: String): Point?`. It's called `fromText(Of<Point>, text)` or `Of<Point>.fromText(text)`.
 
 - In the first version every module sees every conformance, and any module can declare one.
 - A conformance's functions are found as a call where it's declared would find them. Where that chooses among functions of one name, one whose own bounds fail is passed over, unlike at a call, and so is one for an overloaded function used as a value.

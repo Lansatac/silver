@@ -57,7 +57,7 @@ The modules of `std` are described in `stdlib/`, one file to a module, in the sa
 | [std.char](stdlib/char.md) | Questions about characters, ASCII case | Implemented |
 | [std.range](stdlib/range.md) | Adapters, sources, `Sized` and `Indexed`, `Seq`, consumers, ordering | Partial: `sum` and `reversed` aren't built |
 | [std.math](stdlib/math.md) | `Float` functions, `powInt`, `factorial`, `countOnes` | Implemented |
-| [std.random](stdlib/random.md) | A seeded generator, SplitMix64 | Implemented |
+| [std.random](stdlib/random.md) | Generators behind an `Rng` interface, SplitMix64 and xoshiro256++ | Partial: one generator, SplitMix64, and no interface |
 | [std.time](stdlib/time.md) | Dates, times, moments, durations, offsets, clocks, parsing and printing | Implemented, without named time zones |
 | [std.file](stdlib/file.md) | Reading and writing a file whole | Implemented |
 | [std.json](stdlib/json.md) | Parsing, finding things in and writing JSON | Implemented, without decoding into your own types |
