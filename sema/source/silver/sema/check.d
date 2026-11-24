@@ -7057,15 +7057,15 @@ private final class TypeChecker
         auto valued = (Type t) => !_types.isFailure(t) && !_types.isErrorUnion(t) && t != _types.emptyArray && t != _types.emptyDictionary;
         if (_types.isFailure(a) && valued(b)) return _types.errorUnion(b, _types.errorOf(a));
         if (_types.isFailure(b) && valued(a)) return _types.errorUnion(a, _types.errorOf(b));
-        // Errors that meet are listed together, when the values agree.
+        // Errors that meet are listed together, when the values are the same.
         auto fallible = (Type t) => _types.isFailure(t) || _types.isErrorUnion(t);
         if (fallible(a) && fallible(b))
         {
             auto value = (Type t) => _types.isFailure(t) ? _types.never : _types.successOf(t);
             auto x = value(a), y = value(b);
-            auto success = x == _types.never || isAssignable(x, y) ? y : y == _types.never || isAssignable(y, x) ? x : Type.init;
-            if (success != Type.init)
+            if (x == y || x == _types.never || y == _types.never)
             {
+                auto success = x == _types.never ? y : x;
                 auto errors = mergedErrors(_types.errorOf(a), _types.errorOf(b));
                 return success == _types.never ? _types.failure(errors) : _types.errorUnion(success, errors);
             }

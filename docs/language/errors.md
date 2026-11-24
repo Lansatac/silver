@@ -73,7 +73,7 @@ val twice = (ok: Bool) => half(count(ok)?)?     // (Bool) -> Int ! Oops | Odd
 val read = parsed(text)?.half()                 // Int ! Input
 ```
 
-The values have to agree as they would without the errors: `Int ! Oops` and `String ! Odd` don't meet. A declared sum is still never made up: only lists are.
+Branches whose values differ don't meet, even when one would promote to the other: `Int ! Oops` and `Int? ! Odd` are an error, as `Int ! Oops` and `String ! Odd` are. A bare `Error(e)` meets any of them. A declared sum is still never made up: only lists are.
 
 ## Values
 
