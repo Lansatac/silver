@@ -1,0 +1,107 @@
+// `+`, `-`, `*`, `/`, `%` and prefix `-` on anything but two numbers call `opAdd`, `opSub`, `opMul`,
+// `opDiv`, `opRem` and `opNeg`, chosen as any call of that name with those operands would be.
+type Vec2(x: Float, y: Float)
+
+def opAdd(a: Vec2, b: Vec2): Vec2 => Vec2(a.x + b.x, a.y + b.y)
+def opSub(a: Vec2, b: Vec2): Vec2 => Vec2(a.x - b.x, a.y - b.y)
+def opMul(v: Vec2, k: Float): Vec2 => Vec2(v.x * k, v.y * k)
+def opMul(k: Float, v: Vec2): Vec2 => Vec2(v.x * k, v.y * k)
+// The result needn't be an operand's type: this one is a Float.
+def opMul(a: Vec2, b: Vec2): Float => a.x * b.x + a.y * b.y
+def opDiv(v: Vec2, k: Float): Vec2 => Vec2(v.x / k, v.y / k)
+def opRem(v: Vec2, k: Float): Vec2 => Vec2(v.x % k, v.y % k)
+def opNeg(v: Vec2): Vec2 => Vec2(-v.x, -v.y)
+
+def show(v: Vec2): String => "({v.x}, {v.y})"
+
+// Operands aren't swapped: a subtraction of mixed types is its own function.
+type Money(cents: Int)
+def opAdd(a: Money, b: Int): Money => Money(a.cents + b)
+def opSub(a: Int, b: Money): Money => Money(a - b.cents)
+
+// Each operand is evaluated once, left then right, and what the function does shows when.
+type Tick(n: Int)
+def opAdd(a: Tick, b: Tick): Tick {
+    printl("add {a.n} {b.n}")
+    Tick(a.n * 10 + b.n)
+}
+def opMul(a: Tick, b: Tick): Tick {
+    printl("mul {a.n} {b.n}")
+    Tick(a.n * b.n)
+}
+def make(n: Int): Tick {
+    printl("make {n}")
+    Tick(n)
+}
+
+// A generic operator function is an ordinary generic function, never chosen for two numbers.
+type Pair<T>(first: T, second: T)
+def opAdd<T>(a: Pair<T>, b: Pair<T>): Pair<T> => Pair(a.first, b.second)
+
+type Holder(v: Vec2, list: [Vec2])
+
+def main(): Unit {
+    val p = Vec2(1.0, 2.0) + Vec2(3.0, 4.0)
+    printl(show(p))
+    printl(show(p - Vec2(1.0, 1.0)))
+    printl(show(p * 2.0))
+    printl(show(2.0 * p))
+    // A literal beside a user type takes the parameter's type, as a call's argument does.
+    printl(show(p * 2))
+    printl(show(3 * p))
+    printl(p * p)
+    printl(show(p / 2.0))
+    printl(show(p % 3.0))
+    printl(show(-p))
+    printl(show(p - p * 0.5))
+    printl(show(-p * 2.0))
+
+    printl(Money(5) + 3)
+    printl(10 - Money(4))
+
+    // Operators called by name, as a method and as a value.
+    printl(show(opAdd(p, p)))
+    printl(show(p.opAdd(p)))
+    val add: (Vec2, Vec2) -> Vec2 = opAdd
+    printl(show(add(p, p)))
+
+    // `*` binds tighter than `+`: the products are made, then added, each operand once.
+    val ticks = make(1) + make(2) * make(3)
+    printl(ticks)
+
+    mutable val q = p
+    q += p
+    printl(show(q))
+    q -= Vec2(1.0, 1.0)
+    printl(show(q))
+    q *= 0.5
+    printl(show(q))
+    q /= 2.0
+    printl(show(q))
+    q = q % 1.0
+    printl(show(q))
+
+    mutable val ps = [p, p]
+    ps[0] += p
+    printl(show(ps[0]) ~ " " ~ show(ps[1]))
+    val last = 1
+    ps[last] -= p
+    printl(show(ps[0]) ~ " " ~ show(ps[1]))
+
+    mutable val h = Holder(p, [p, p])
+    h.v += p
+    h.list[1] += h.v
+    printl(show(h.v) ~ " " ~ show(h.list[0]) ~ " " ~ show(h.list[1]))
+
+    // The element and its index are read once.
+    mutable val ts = [Tick(1), Tick(2)]
+    ts[make(1).n] += Tick(5)
+    printl(ts)
+
+    val pairs = Pair(1, 2) + Pair(3, 4)
+    printl(pairs)
+    printl(Pair("a", "b") + Pair("c", "d"))
+    // Built-in arithmetic is as it was.
+    printl(1 + 2 * 3 - 4 / 2 % 5)
+    printl(1.5 * 2.0 - -1.0)
+}

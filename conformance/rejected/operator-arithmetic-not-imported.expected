@@ -1,0 +1,1 @@
+T0005: `a + b` calls `opAdd`, and no `opAdd` here takes `Vec` and `Vec`

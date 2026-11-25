@@ -1,0 +1,21 @@
+// An operator function is found where the operator is written, so a module can write one for a type
+// it didn't declare, and a type's own module's are there once imported.
+import operator_arithmetic_support.units : Meters, Feet
+import operator_arithmetic_support.vectors
+
+def opAdd(a: Meters, b: Meters): Meters => Meters(a.value + b.value)
+def opMul(a: Meters, k: Float): Meters => Meters(a.value * k)
+def opAdd(a: Meters, b: Feet): Meters => Meters(a.value + b.value * 0.3048)
+def opNeg(a: Feet): Feet => Feet(-a.value)
+
+def main(): Unit {
+    printl(Meters(1.0) + Meters(2.5))
+    printl(Meters(2.0) * 3.0)
+    printl(Meters(1.0) + Feet(10.0) + Meters(0.5))
+    printl(-Feet(3.0))
+    printl(Vec(1, 2) + Vec(3, 4))
+    printl(-Vec(1, 2) * 3)
+    mutable val v = Vec(0, 0)
+    v += Vec(5, 5)
+    printl(v)
+}

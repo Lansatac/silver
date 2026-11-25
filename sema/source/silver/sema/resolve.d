@@ -93,9 +93,9 @@ package struct Resolution
     /// Names that could be more than one function, by the name's expression. The type checker
     /// chooses, so these have no entry in `resolutions`.
     SideTable!(Id!Expr, Candidates) overloads;
-    /// For each `for` and each `x[i]`, by name, the functions that calls of `length`, `opIndex`,
-    /// `opIndexAssign` and `next` there would choose from, since that syntax means calls
-    /// of them on anything but an array or `a..b`.
+    /// For each `for`, each `x[i]` and each arithmetic operator, by name, the functions that calls
+    /// of `length`, `opIndex`, `opIndexAssign`, `next` and `opAdd` and the like there would choose
+    /// from, since that syntax means calls of them on anything the machine doesn't do it for.
     SideTable!(Id!Expr, Candidates[string]) operatorLookups;
     Declarations declarations;
     /// The `native library` of each module that names one.
@@ -2509,9 +2509,11 @@ private final class NameResolver
                 resolveBody(lambda.params, *lambda.body, scopeTable, expr.id, lambda.self);
             },
             (const UnaryExpr unary) {
+                if (auto name = operatorFunction(unary.op)) recordOperators(expr, [name], scopeTable);
                 resolveExpr(*unary.operand, scopeTable);
             },
             (const BinaryExpr binary) {
+                if (auto name = operatorFunction(binary.op)) recordOperators(expr, [name], scopeTable);
                 resolveExpr(*binary.left, scopeTable);
                 resolveExpr(*binary.right, scopeTable);
             },

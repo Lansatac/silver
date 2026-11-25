@@ -1,0 +1,5 @@
+module operator_arithmetic_support.units
+
+// Types with no operators of their own: a user of them writes them.
+type Meters(value: Float)
+type Feet(value: Float)

@@ -1,0 +1,5 @@
+module operator_arithmetic_support.vectors
+
+type Vec(x: Int, y: Int)
+
+def opAdd(a: Vec, b: Vec): Vec => Vec(a.x + b.x, a.y + b.y)

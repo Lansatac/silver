@@ -1,0 +1,1 @@
+T0005: `a / b` calls `opDiv`, and no `opDiv` here takes `Vec2` and `Float`

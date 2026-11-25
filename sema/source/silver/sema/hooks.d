@@ -113,12 +113,30 @@ package void checkTypeHooks(Modules)(Modules modules, ref Typing typing, const r
         if (f.name != "opString" && !paired.canFind(data.decl)) paired ~= data.decl;
     }
 
+    // An arithmetic operator function that takes only built-in numbers could never be called by
+    // its operator, which is built in for them.
+    void checkArithmetic(const FunctionDecl f)
+    {
+        auto arity = f.name == "opNeg" ? 1 : ["opAdd", "opSub", "opMul", "opDiv", "opRem"].canFind(f.name) ? 2 : 0;
+        if (arity == 0 || f.invariantOf.isValid || f.testName !is null || f.kind != FunctionKind.ordinary) return;
+        auto declared = SymbolId(f.id) in typing.symbolTypes;
+        if (declared is null || types.mentionsError(*declared)) return;
+        auto params = types[*declared].match!((const FunctionData data) => data.params, _ => null);
+        if (params.length != arity || !params.all!(p => types.isInteger(p) || p == types.float_)) return;
+        collector.reportError(DiagnosticCode.InvalidOperatorFunction, f.nameSpan,
+            "`%s` takes only built-in numbers, so the operator on them is built in and could never call it; an operator function is for a type of your own"
+                .format(f.name));
+    }
+
     foreach (mod; modules)
     {
         foreach (decl; mod.declarations)
         {
             decl.kind.match!(
-                (const FunctionDecl f) { check(f, mod.name); },
+                (const FunctionDecl f) {
+                    check(f, mod.name);
+                    checkArithmetic(f);
+                },
                 (_) {},
             );
         }
