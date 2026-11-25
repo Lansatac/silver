@@ -325,7 +325,7 @@ ps[0] += p                                   // ps[0] is read once, and written 
 - The result is whatever the function returns, so `p * p` above is a `Float`. An [interface](interfaces.md) is what makes it the operands' type, as `def opAdd(a: Self, b: Self): Self` does.
 - `a op= b` is `a = a op b`, with the place `a` read once, through fields and elements as for a built-in operator. There's no function for a compound assignment. There's no `%=` for anything. `a - b` is never `a + -b`, and operands are never swapped, so each form a type wants is a function of its own.
 - Two built-in numbers are built in, whatever functions are in scope, and keep their own errors: `1 + 1.5` with an `Int` and a `Float` is still an error that values never convert, and not a missing `opAdd`.
-- An operator function whose parameters are all built-in numbers is an error where it's declared, since the operator on them is built in and it could never be called. It can have a parameter of another type, or be generic: `opAdd<T>(a: T, b: T)` is allowed, and is never chosen for two built-in numbers.
+- An operator function whose parameters are all built-in numbers is an error where it's declared, since the operator on them is built in and it could never be called. It can have a parameter of another type, or be generic: `opAdd<T>(a: T, b: T)` is allowed. It's never called for operands known to be two built-in numbers, but inside a generic function whose operands are of a type parameter, `a + b` calls it for any `T`, even when the function is used with numbers.
 - The wrapping operators `+% -% *%` are built in only, and an operator that calls a function isn't allowed in a top-level [constant](bindings.md#top-level-constants), which can't call one.
 - An operator function is an ordinary function. It can be called by name, as `a.opAdd(b)`, be private, and be used as a value.
 
@@ -400,6 +400,7 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 - Of the arguments compared by their shape, `None` and `[]` count one step wherever they go.
 - Arithmetic on literals isn't compared by its shape yet: it's an `Int`, as [Numbers](numbers.md#current-implementation) describes, so `f(1 + 2)` doesn't fit an `f(x: UInt8)`.
 - An arithmetic operator's literal operand takes the type its operator function's parameter asks for, but arithmetic made of literals doesn't: `p * (1 + 2)` passes an `Int`, so it needs an `opMul` that takes one.
+- An operator finds the module-level functions and a bound's, as `x[i]` does, so a nested `def opAdd` or a local `val opMul` holding a function is found by a written call `opAdd(a, b)` but not by `a + b`. An `opAdd` of another arity is an ordinary function, and a nested `def` of an operator function's name isn't checked for taking only numbers.
 - A method call's receiver needs a type of its own, so `None.f()` and `[].f()` are errors. An integer literal receiver adapts, as in `(200).f()` with `f(x: UInt8)`.
 - Two native functions of one name in a module have to bind different C symbols, and two intrinsics can't share a name.
 - A `mutable` first parameter is rejected for a method call. A later `mutable` argument is fine.
