@@ -6,7 +6,7 @@ import std.sumtype;
 import std.traits : isSigned;
 
 import silver.ast : BinaryOp, UnaryOp;
-import silver.runtime.floattext : floatText;
+import silver.runtime.floattext : float32Text, floatText;
 import silver.sema.type : IntegerInfo;
 
 struct ConstInt
@@ -29,9 +29,15 @@ struct ConstChar
     dchar value;
 }
 
+/// A `Float32`, wrapped so a `match` tells it from a `Float`: a `float` converts to `double`.
+struct ConstFloat32
+{
+    float value;
+}
+
 /// The integers are wrapped because `long` and `ulong` convert implicitly, so a `match` couldn't
 /// tell them apart. A narrower type's value is held sign- or zero-extended.
-alias ConstValue = SumType!(ConstInt, ConstUInt, bool, double, string, ConstUnit, ConstChar);
+alias ConstValue = SumType!(ConstInt, ConstUInt, bool, double, string, ConstUnit, ConstChar, ConstFloat32);
 
 /// An operation with no value, like an overflowing `+`. The message says why.
 package final class ConstantFailure : Exception
@@ -52,6 +58,7 @@ package string formatValue(const ConstValue value)
         (const ConstUInt v) => v.value.to!string,
         (const bool v) => v.to!string,
         (const double v) => floatText(v),
+        (const ConstFloat32 v) => float32Text(v.value),
         (const string v) => v,
         (const ConstUnit _) => "()",
         (const ConstChar v) => [v.value].to!string,
@@ -79,6 +86,7 @@ package ConstValue binaryValue(BinaryOp op, const ConstValue lhs, const ConstVal
         // `false` is before `true`, as `lang`'s `compare` has it.
         (const bool l) => comparison!bool(op, l, rhs.get!(const bool)),
         (const double l) => floatBinary(op, l, rhs.get!(const double)),
+        (const ConstFloat32 l) => float32Binary(op, l.value, rhs.get!(const ConstFloat32).value),
         (const string l) => stringBinary(op, l, rhs.get!(const string)),
         (const ConstUnit _) => equality!bool(op, true, true),
         (const ConstChar l) => comparison!dchar(op, l.value, rhs.get!(const ConstChar).value),
@@ -94,6 +102,7 @@ package ConstValue unaryValue(UnaryOp op, const ConstValue operand, IntegerInfo 
         (const ConstUInt v) => integerUnary(op, v.value, info),
         (const bool v) => ConstValue(!v),
         (const double v) => ConstValue(op == UnaryOp.Minus ? -v : v),
+        (const ConstFloat32 v) => ConstValue(ConstFloat32(op == UnaryOp.Minus ? -v.value : v.value)),
         (_) => assert(0, "sema only applies unary operators to numbers and Bools"),
     );
 }
@@ -247,6 +256,33 @@ private ConstValue floatBinary(BinaryOp op, double lhs, double rhs)
     default:
         return comparison!double(op, lhs, rhs);
     }
+}
+
+/// Each result is stored as a `float`, so it's rounded to single precision as the backends do.
+private ConstValue float32Binary(BinaryOp op, float lhs, float rhs)
+{
+    float result;
+    switch (op)
+    {
+    case BinaryOp.Add:
+        result = lhs + rhs;
+        break;
+    case BinaryOp.Subtract:
+        result = lhs - rhs;
+        break;
+    case BinaryOp.Multiply:
+        result = lhs * rhs;
+        break;
+    case BinaryOp.Divide:
+        result = lhs / rhs;
+        break;
+    case BinaryOp.Modulo:
+        result = lhs % rhs;
+        break;
+    default:
+        return comparison!float(op, lhs, rhs);
+    }
+    return ConstValue(ConstFloat32(result));
 }
 
 private ConstValue stringBinary(BinaryOp op, string lhs, string rhs)

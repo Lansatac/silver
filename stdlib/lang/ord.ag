@@ -31,6 +31,12 @@ def compare(a: Float, b: Float): Ordering {
     if a == b { return Equal }
     if a == a => Less else if b == b => Greater else Equal
 }
+def compare(a: Float32, b: Float32): Ordering {
+    if a < b { return Less }
+    if a > b { return Greater }
+    if a == b { return Equal }
+    if a == a => Less else if b == b => Greater else Equal
+}
 def compare(a: Char, b: Char): Ordering => if a < b => Less else if a > b => Greater else Equal
 def compare(a: String, b: String): Ordering => if a < b => Less else if a > b => Greater else Equal
 def compare(a: Bool, b: Bool): Ordering => if a == b => Equal else if b => Less else Greater
@@ -151,6 +157,7 @@ conform UInt8: Ord
 conform UInt16: Ord
 conform UInt32: Ord
 conform Float: Ord
+conform Float32: Ord
 conform Char: Ord
 conform String: Ord
 conform Bool: Ord

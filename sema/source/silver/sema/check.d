@@ -134,6 +134,8 @@ private final class TypeChecker
     /// to where it's used, so ranges are checked once all the bodies have been.
     private const(Expr)[] _intLiterals;
     private bool[Id!Expr] _negatedLiterals;
+    /// Every float literal, for the same reason: one that adapted to `Float32` must round to a finite value.
+    private const(Expr)[] _floatLiterals;
     /// Constants whose initializer already has an error, which evaluating would only repeat.
     private bool[Id!ConstDecl] _unevaluable;
     /// Constructions of a type with an invariant from literals alone, which are checked once the
@@ -331,6 +333,13 @@ private final class TypeChecker
         foreach (literal; _intLiterals)
         {
             checkLiteralRange(literal);
+        }
+        bool[Id!Expr] floatsChecked;
+        foreach (literal; _floatLiterals)
+        {
+            if (literal.id in floatsChecked) continue;
+            floatsChecked[literal.id] = true;
+            checkFloatLiteralRange(literal);
         }
 
         // Last, because an integer literal's type isn't final until everything's been checked.
@@ -760,6 +769,21 @@ private final class TypeChecker
         _collector.reportError(DiagnosticCode.NonConstantInitializer, expr.span,
             "A top-level constant can only be built from literals, operators and other constants");
         return false;
+    }
+
+    /// A float literal that adapted to `Float32` must round to a finite value.
+    private void checkFloatLiteralRange(const Expr expr)
+    {
+        if (_typing.exprTypes[expr.id] != _types.float32) return;
+        auto value = expr.kind.match!(
+            (const FloatLiteral l) => l.value,
+            (_) => assert(0, "only float literals are recorded"),
+        );
+        if (value == value && cast(float) value == float.infinity)
+        {
+            _collector.reportError(DiagnosticCode.LiteralOutOfRange, expr.span,
+                "This float literal doesn't fit in `Float32`; its largest value is about 3.4028235e38");
+        }
     }
 
     private void checkLiteralRange(const Expr expr)
@@ -2060,7 +2084,10 @@ private final class TypeChecker
                 _intLiterals ~= expr;
                 return _types.int_;
             },
-            (const FloatLiteral _) => _types.float_,
+            (const FloatLiteral _) {
+                _floatLiterals ~= expr;
+                return _types.float_;
+            },
             (const StringLiteral _) => _types.string_,
             (const CharLiteral _) => _types.char_,
             (const InterpolatedString interpolated) => synthesizeInterpolated(interpolated, ctx),
@@ -3074,7 +3101,7 @@ private final class TypeChecker
 
     private bool isNumeric(Type t)
     {
-        return _types.isInteger(t) || t == _types.float_;
+        return _types.isInteger(t) || _types.isFloat(t);
     }
 
     private bool isOrdered(Type t)
@@ -3289,7 +3316,8 @@ private final class TypeChecker
     {
         auto core = layerCore(target);
         auto literalFits = isIntLiteral(expr)
-            && (isNumeric(core) || _declarer.isSum(core) && _declarer.membersOf(core).any!(m => isNumeric(m)));
+            && (isNumeric(core) || _declarer.isSum(core) && _declarer.membersOf(core).any!(m => isNumeric(m)))
+            || isFloatLiteral(expr) && (core == _types.float32 || _declarer.isSum(core) && floatMembers(core) == [_types.float32]);
         if (_declarer.isSum(target)) return isAssignable(type, target) || literalFits;
         if (type == _types.emptyArray && _types.isArray(target)) return true;
         if (type == _types.emptyDictionary && isDictionary(target)) return true;
@@ -3354,6 +3382,14 @@ private final class TypeChecker
                 rightType = adaptLiteral(*binary.right, leftType);
             }
             else if (!isShift && adaptsTo(rightType) && isIntLiteral(*binary.left) && !isIntLiteral(*binary.right))
+            {
+                leftType = adaptLiteral(*binary.left, rightType);
+            }
+            else if (!integerOnly && leftType == _types.float32 && isFloatLiteral(*binary.right))
+            {
+                rightType = adaptLiteral(*binary.right, leftType);
+            }
+            else if (!integerOnly && rightType == _types.float32 && isFloatLiteral(*binary.left))
             {
                 leftType = adaptLiteral(*binary.left, rightType);
             }
@@ -3825,6 +3861,7 @@ private final class TypeChecker
         return arg.kind.match!(
             (const BoolLiteral _) => true,
             (const FloatLiteral _) => true,
+            (const UnaryExpr _) => isFloatLiteral(arg),
             (const StringLiteral _) => true,
             (const CharLiteral _) => true,
             (const UnitLiteral _) => true,
@@ -3872,6 +3909,19 @@ private final class TypeChecker
             }
             if (!isNumeric(core)) return Fit.none;
             return Fit.promoted(steps + (core == _types.int_ ? 0 : 1));
+        }
+        if (isFloatLiteral(arg) && !bare)
+        {
+            // A float literal is a `Float` unless the number it lands in is a `Float32`.
+            auto steps = 0;
+            auto core = param;
+            for (; _types.isOption(core) || _types.isErrorUnion(core); steps++)
+            {
+                core = _types.isOption(core) ? _types.optionInner(core) : _types.successOf(core);
+            }
+            auto adapts = core == _types.float32
+                || _declarer.isSum(core) && floatMembers(core) == [_types.float32];
+            if (adapts) return Fit.promoted(steps + 1);
         }
         if (isLambda(arg))
         {
@@ -3971,6 +4021,7 @@ private final class TypeChecker
         return arg.kind.match!(
             (const BoolLiteral _) => _types.bool_,
             (const FloatLiteral _) => _types.float_,
+            (const UnaryExpr _) => isFloatLiteral(arg) ? _types.float_ : Type.init,
             (const StringLiteral _) => _types.string_,
             (const CharLiteral _) => _types.char_,
             (const UnitLiteral _) => _types.unit,
@@ -7332,12 +7383,19 @@ private final class TypeChecker
         {
             return adaptLiteral(expr, expected);
         }
+        if (expected == _types.float32 && isFloatLiteral(expr)) return adaptLiteral(expr, expected);
         if (_declarer.isSum(expected))
         {
             auto hasValue = type != _types.error && type != _types.never;
             if (hasValue && type != expected)
             {
                 if (isIntLiteral(expr)) return injectLiteral(expr, expected);
+                if (isFloatLiteral(expr) && floatMembers(expected) == [_types.float32])
+                {
+                    adaptLiteral(expr, _types.float32);
+                    _typing.promotions[expr.id] = expected;
+                    return expected;
+                }
                 if (isAssignable(type, expected))
                 {
                     _typing.promotions[expr.id] = expected;
@@ -7349,6 +7407,7 @@ private final class TypeChecker
         {
             if (isBothSides(expr, type, expected)) return _types.error;
             if (isIntLiteral(expr)) type = adaptLayered(expr, type, expected);
+            else if (isFloatLiteral(expr) && layerCore(expected) == _types.float32) type = adaptLiteral(expr, _types.float32);
             auto hasValue = type != _types.error && type != _types.never;
             if (hasValue && type != expected && isAssignable(type, expected))
             {
@@ -7360,6 +7419,7 @@ private final class TypeChecker
         {
             if (isBothSides(expr, type, expected)) return _types.error;
             if (isIntLiteral(expr)) type = adaptLayered(expr, type, expected);
+            else if (isFloatLiteral(expr) && layerCore(expected) == _types.float32) type = adaptLiteral(expr, _types.float32);
             auto hasValue = type != _types.error && type != _types.never;
             if (hasValue && type != expected && isAssignable(type, expected))
             {
@@ -7432,7 +7492,15 @@ private final class TypeChecker
                     .format(_types.describe(sum), _types.describe(integers[0])));
             return _types.error;
         }
-        auto numbers = integers.length == 1 ? integers : _declarer.membersOf(sum).filter!(m => m == _types.float_).array;
+        auto floats = floatMembers(sum);
+        if (integers.empty && floats.length > 1)
+        {
+            _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
+                "`%s` has more than one float member; convert this to the one you mean, as in `%s(...)`"
+                    .format(_types.describe(sum), _types.describe(floats[0])));
+            return _types.error;
+        }
+        auto numbers = integers.length == 1 ? integers : floats;
         if (numbers.length == 1)
         {
             adaptLiteral(expr, numbers[0]);
@@ -7896,7 +7964,24 @@ private final class TypeChecker
         );
     }
 
-    /// Re-records an integer literal (and any sign on it) as `type`.
+    /// A float literal, possibly signed. It's a `Float` unless the type expected of it is `Float32`.
+    private bool isFloatLiteral(const Expr expr)
+    {
+        return expr.kind.match!(
+            (const FloatLiteral _) => true,
+            (const UnaryExpr unary) => (unary.op == UnaryOp.Minus || unary.op == UnaryOp.Plus)
+                && isFloatLiteral(*unary.operand),
+            _ => false,
+        );
+    }
+
+    /// The float types among the members of `sum`.
+    private const(Type)[] floatMembers(Type sum)
+    {
+        return _declarer.membersOf(sum).filter!(m => _types.isFloat(m)).array;
+    }
+
+    /// Re-records a number literal (and any sign on it) as `type`.
     private Type adaptLiteral(const Expr expr, Type type)
     {
         expr.kind.match!(

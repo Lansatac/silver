@@ -17,7 +17,7 @@ final class TypeTable
 {
     private int nextIndex = 1;
 
-    Type error, never, unit, bool_, int_, float_, string_, char_, any;
+    Type error, never, unit, bool_, int_, float_, float32, string_, char_, any;
     Type int8, int16, int32, uint8, uint16, uint32, uint_;
     /// The type of a bare `None`, assignable to every option. No value keeps it: each one is
     /// promoted to the option it lands in.
@@ -44,6 +44,7 @@ final class TypeTable
         bool_ = registerTypeData(TypeData(Primitive(Primitive.Kind.Bool)));
         int_ = registerTypeData(TypeData(Primitive(Primitive.Kind.Int)));
         float_ = registerTypeData(TypeData(Primitive(Primitive.Kind.Float)));
+        float32 = registerTypeData(TypeData(Primitive(Primitive.Kind.Float32)));
         string_ = registerTypeData(TypeData(Primitive(Primitive.Kind.String)));
         char_ = registerTypeData(TypeData(Primitive(Primitive.Kind.Char)));
         any = registerTypeData(TypeData(Primitive(Primitive.Kind.Any)));
@@ -384,6 +385,25 @@ final class TypeTable
         );
     }
 
+    /// `Float` or `Float32`.
+    bool isFloat(Type t) const
+    {
+        return _types[t.index].match!(
+            (const Primitive p) => p.kind == Primitive.Kind.Float || p.kind == Primitive.Kind.Float32,
+            _ => false,
+        );
+    }
+
+    /// The width of the float type `t`: 64 for `Float`, 32 for `Float32`.
+    uint floatBits(Type t) const
+    {
+        return _types[t.index].match!(
+            (const Primitive p) => p.kind == Primitive.Kind.Float ? 64 : p.kind == Primitive.Kind.Float32 ? 32
+                : assert(0, "not a float type"),
+            (_) => assert(0, "not a float type"),
+        );
+    }
+
     /// The size and signedness of the integer type `t`, or of the integer a `Char` is held as.
     IntegerInfo integerOf(Type t) const
     {
@@ -465,6 +485,7 @@ struct Primitive
         UInt32,
         UInt,
         Char,
+        Float32,
     }
     Kind kind;
 }

@@ -818,7 +818,7 @@ private final class Generator
     /// A zero for each of `scalars`.
     private static string[] zeros(const string[] scalars)
     {
-        return scalars.map!(s => s == "ptr" ? "null" : s == "double" ? "0.0" : s == "i1" ? "false" : "0").array;
+        return scalars.map!(s => s == "ptr" ? "null" : s == "double" || s == "float" ? "0.0" : s == "i1" ? "false" : "0").array;
     }
 
     /// The LLVM parameters that receive `param`, which is passed as `count` arguments.
@@ -1047,10 +1047,13 @@ private final class Generator
         return Fragment.constant(value.to!string);
     }
 
-    /// As its bits, since a decimal constant has to be exact in LLVM.
+    /// As its bits, since a decimal constant has to be exact in LLVM. LLVM writes a `float` constant
+    /// as the bits of the `double` of the same value, and refuses one that isn't exactly a `float`,
+    /// so a `Float32` is rounded first.
     private Fragment emit(const Expr e, const FloatLit literal)
     {
-        return Fragment.constant(floatConstant(literal.value));
+        auto value = e.type == _program.types.float32 ? cast(double) cast(float) literal.value : literal.value;
+        return Fragment.constant(floatConstant(value));
     }
 
     private static string floatConstant(double value)
@@ -1337,11 +1340,19 @@ private final class Generator
         else if (type == types.char_) bits = _function.convert("zext", llvmType(type, span), value[0], "i64");
         else
         {
-            assert(type == types.float_, "lowering hashes only primitives, Refs, native types and function values with `Hash`");
+            assert(types.isFloat(type), "lowering hashes only primitives, Refs, native types and function values with `Hash`");
+            // A `Float32` hashes as the `Float` it widens to, as the interpreter holds it.
+            Fragment widen;
+            string x = value[0];
+            if (type == types.float32)
+            {
+                widen = _function.convert("fpext", "float", x, "double");
+                x = widen.value;
+            }
             // `0.0 == -0.0`, so both hash as `0.0`.
-            auto zero = _function.result("fcmp oeq double %s, 0.0".format(value[0]));
-            auto chosen = _function.result("select i1 %s, double 0.0, double %s".format(zero.value, value[0]));
-            bits = zero.then(chosen).then(_function.convert("bitcast", "double", chosen.value, "i64"));
+            auto zero = _function.result("fcmp oeq double %s, 0.0".format(x));
+            auto chosen = _function.result("select i1 %s, double 0.0, double %s".format(zero.value, x));
+            bits = widen.then(zero).then(chosen).then(_function.convert("bitcast", "double", chosen.value, "i64"));
         }
         return bits.then(_function.result("call i64 %s(i64 %s)".format(hashMix(), bits.value)));
     }
@@ -1518,6 +1529,7 @@ private final class Generator
         auto types = _program.types;
         if (types.isInteger(type)) return types.integerOf(type).signed ? "int" : "uint";
         if (type == types.float_) return "float";
+        if (type == types.float32) return "float32";
         if (type == types.bool_) return "bool";
         if (type == types.unit) return "unit";
         if (type == types.string_) return "string";
@@ -1742,7 +1754,7 @@ private final class Generator
     {
         auto types = _program.types;
         auto type = llvmType(operandType, span);
-        auto isFloat = operandType == types.float_;
+        auto isFloat = types.isFloat(operandType);
         auto isInteger = types.isInteger(operandType);
         auto signed = isInteger && types.integerOf(operandType).signed;
         /// `op` on the operands, written after it, into a new temp.
@@ -1822,6 +1834,7 @@ private final class Generator
                 [wide.value]));
         }
         if (type == types.float_) return callRuntimeForString("silver_format_float", value);
+        if (type == types.float32) return callRuntimeForString("silver_format_float32", value);
         if (type == types.bool_) return callRuntimeForString("silver_format_bool", value);
         if (type == types.char_) return callRuntimeForString("silver_format_char", value);
         if (type in _program.nativeTypes) return callRuntimeForString("silver_format_address", value);
@@ -1883,18 +1896,33 @@ private final class Generator
         auto target = e.type;
         if (source == target) return value;
 
-        if (target == types.float_)
+        if (types.isFloat(target))
         {
+            auto result = llvmType(target, e.span);
+            if (types.isFloat(source))
+            {
+                auto opcode = target == types.float32 ? "fptrunc" : "fpext";
+                return value.then(_function.convert(opcode, llvmType(source, e.span), value.value, result));
+            }
             auto signed = types.integerOf(source).signed;
-            return value.then(_function.convert(signed ? "sitofp" : "uitofp", llvmType(source, e.span), value.value, "double"));
+            return value.then(_function.convert(signed ? "sitofp" : "uitofp", llvmType(source, e.span), value.value, result));
         }
 
         auto to = types.integerOf(target);
         auto message = "Value is out of range for %sInt%s".format(to.signed ? "" : "U", to.bits);
-        if (source == types.float_)
+        if (types.isFloat(source))
         {
-            return value.then(emitFloatToIntegerCheck(value.value, to, e.span, message))
-                .then(_function.convert(to.signed ? "fptosi" : "fptoui", "double", value.value, llvmType(target, e.span)));
+            // Checked as a `double`, which holds every `float` exactly, so the limits are the same
+            // exact values for both.
+            Fragment widen;
+            auto operand = value.value;
+            if (source == types.float32)
+            {
+                widen = _function.convert("fpext", "float", operand, "double");
+                operand = widen.value;
+            }
+            return value.then(widen).then(emitFloatToIntegerCheck(operand, to, e.span, message))
+                .then(_function.convert(to.signed ? "fptosi" : "fptoui", "double", operand, llvmType(target, e.span)));
         }
 
         auto from = types.integerOf(source);
@@ -3286,6 +3314,7 @@ private final class Generator
         if (type == types.unit || type == types.never || type == types.none || type == types.emptyDictionary) return null;
         if (type == types.bool_) return ["i1"];
         if (type == types.float_) return ["double"];
+        if (type == types.float32) return ["float"];
         if (types.isInteger(type) || type == types.char_) return ["i%s".format(types.integerOf(type).bits)];
         if (type == types.string_ || type == types.emptyArray || types.isArray(type)) return sliceScalars;
         if (types.isFunction(type)) return closureScalars;

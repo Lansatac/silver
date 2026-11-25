@@ -4,7 +4,7 @@ module silver.sema;
 
 public import silver.sema.analysis;
 public import silver.sema.typing : Bound, DerivedOrder, DerivedPart, DictionaryFunctions, FieldInfo, FunctionUse, IndexFunctions, LoopFunctions, SafeCall, Witness;
-public import silver.sema.constant : ConstChar, ConstInt, ConstUInt, ConstUnit, ConstValue;
+public import silver.sema.constant : ConstChar, ConstFloat32, ConstInt, ConstUInt, ConstUnit, ConstValue;
 public import silver.sema.resolve : SymbolId;
 public import silver.sema.target;
 public import silver.sema.type;

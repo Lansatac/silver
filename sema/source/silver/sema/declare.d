@@ -486,6 +486,8 @@ package final class Declarer
             case Builtin.Bool: return _types.bool_;
             case Builtin.Int: return _types.int_;
             case Builtin.Float: return _types.float_;
+            case Builtin.Float32: return _types.float32;
+            case Builtin.Float64: return _types.float_;
             case Builtin.String: return _types.string_;
             case Builtin.Char: return _types.char_;
             case Builtin.Any: return _types.any;
