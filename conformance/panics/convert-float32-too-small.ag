@@ -1,0 +1,5 @@
+// -2^31 - 1 isn't a Float32; the next one below -2^31 is -2147483904.
+def main(): Unit {
+    printl(Int32(Float32(-2147483648.0)))
+    printl(Int32(Float32(-2147483904.0)))
+}

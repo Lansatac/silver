@@ -1,0 +1,40 @@
+// Top-level constants of type Float32: literals that adapt, and arithmetic on other constants done
+// in single precision, as the program would do it.
+val tenth: Float32 = 0.1
+val negative: Float32 = -2.5
+val whole: Float32 = 3
+val negativeWhole: Float32 = -4
+val negativeZero: Float32 = -0
+val sum: Float32 = tenth + tenth + tenth
+val product: Float32 = tenth * negative
+val difference: Float32 = whole - tenth
+val quotient: Float32 = whole / tenth
+val remainder: Float32 = whole % negative
+val negated: Float32 = -tenth
+val ordered: Bool = tenth < whole
+val same: Bool = sum == tenth * 3.0
+val tooPrecise: Float32 = 16777216.0 + whole
+val text: String = "{tenth} {sum}"
+val flipped: Float32 = -negativeZero
+
+def main(): Unit {
+    printl(tenth)
+    printl(negative)
+    printl(whole)
+    printl(negativeWhole)
+    printl(negativeZero)
+    printl(sum)
+    printl(product)
+    printl(difference)
+    printl(quotient)
+    printl(remainder)
+    printl(negated)
+    printl(ordered)
+    printl(same)
+    printl(text)
+    printl(flipped)
+    printl(tooPrecise)
+    printl(sum == tenth + tenth + tenth)
+    printl(quotient == whole / tenth)
+    printl(Float(tenth))
+}

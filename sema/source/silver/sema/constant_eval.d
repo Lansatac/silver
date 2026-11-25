@@ -8,6 +8,7 @@ import std.sumtype;
 
 import silver.ast;
 import silver.sema.constant;
+import silver.sema.floatliteral : float32Of;
 import silver.sema.resolve;
 import silver.sema.type;
 import silver.sema.typing : FunctionUse;
@@ -189,7 +190,7 @@ private struct ConstantEvaluator
     {
         return expr.kind.match!(
             (const BoolLiteral literal) => boxedConstant(ConstValue(bool(literal.value))),
-            (const FloatLiteral literal) => boxedConstant(ConstValue(double(literal.value))),
+            (const FloatLiteral literal) => floatLiteralValue(expr, literal),
             (const StringLiteral literal) {
                 string text = literal.value;
                 return boxedConstant(ConstValue(text));
@@ -235,6 +236,13 @@ private struct ConstantEvaluator
         return constantNamedBy(name) in _constants;
     }
 
+    /// A float literal that adapted to `Float32` is rounded to one.
+    private const(ConstValue)* floatLiteralValue(const Expr expr, const FloatLiteral literal)
+    {
+        if (_exprTypes[expr.id] == _types.float32) return boxedConstant(ConstValue(ConstFloat32(float32Of(literal))));
+        return boxedConstant(ConstValue(double(literal.value)));
+    }
+
     /// Takes in the sign of a negated literal, so that `-128` is a value even where `128` isn't.
     private const(ConstValue)* integerLiteralValue(const Expr expr, const IntLiteral literal)
     {
@@ -244,6 +252,11 @@ private struct ConstantEvaluator
         if (!_types.isInteger(type))
         {
             double value = cast(double) literal.value;
+            if (type == _types.float32)
+            {
+                float single = cast(float) literal.value;
+                return boxedConstant(ConstValue(ConstFloat32(negated ? -single : single)));
+            }
             return boxedConstant(ConstValue(negated ? -value : value));
         }
 

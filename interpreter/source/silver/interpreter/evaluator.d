@@ -15,7 +15,7 @@ import silver.interpreter.stack : checkStack, runOnLargeStack;
 import silver.interpreter.foreign : addressText, CKind, CValue, foreignFunctions, fromCString, toCString;
 import silver.interpreter.values;
 import silver.runtime.files : pathExists, readWhole, writeWhole;
-import silver.runtime.floattext : floatText;
+import silver.runtime.floattext : float32Text, floatText;
 
 private alias IntegerTypes = AliasSeq!(byte, short, int, long, ubyte, ushort, uint, ulong);
 
@@ -544,7 +544,11 @@ final class Evaluator
                 : lhs.as!CellValue is rhs.as!CellValue;
             return Value(prim.op == PrimOp.Equal ? same : !same);
         }
-        if (lhs.has!double) return floatPrim(prim.op, lhs.as!double, rhs);
+        if (lhs.has!double)
+        {
+            return operandType == types.float32 ? float32Prim(prim.op, cast(float) lhs.as!double, rhs)
+                : floatPrim(prim.op, lhs.as!double, rhs);
+        }
         if (lhs.has!bool) return compare(prim.op, lhs.as!bool, rhs.as!bool);
         if (lhs.has!string) return compare(prim.op, lhs.as!string, rhs.as!string);
         if (lhs.has!Unit) return compare(prim.op, 0, 0);
@@ -621,6 +625,38 @@ final class Evaluator
             case PrimOp.Modulo: return Value(lhs % rhs);
             default: return compare(op, lhs, rhs);
         }
+    }
+
+    /// A `Float32` is held as the `double` it widens to, which is exact. Each result is stored in a
+    /// `float`, so it's rounded to single precision as the compiled code rounds it, and not later.
+    private static Value float32Prim(PrimOp op, float lhs, Value second)
+    {
+        static Value single(float value) => Value(cast(double) value);
+
+        if (op == PrimOp.Negate) return single(-lhs);
+        float rhs = cast(float) second.as!double;
+        float result;
+        switch (op)
+        {
+            case PrimOp.Add:
+                result = lhs + rhs;
+                break;
+            case PrimOp.Subtract:
+                result = lhs - rhs;
+                break;
+            case PrimOp.Multiply:
+                result = lhs * rhs;
+                break;
+            case PrimOp.Divide:
+                result = lhs / rhs;
+                break;
+            case PrimOp.Modulo:
+                result = lhs % rhs;
+                break;
+            default:
+                return compare(op, lhs, rhs);
+        }
+        return single(result);
     }
 
     /// `T` is the D type of the operands' width and signedness. A `Value` holds every integer as
@@ -737,9 +773,15 @@ final class Evaluator
     private Value convert(Value value, Type from, Type to)
     {
         auto types = _program.types;
+        if (to == types.float32)
+        {
+            if (types.isFloat(from)) return Value(cast(double) cast(float) value.as!double);
+            auto bits = value.as!long;
+            return Value(cast(double) (types.integerOf(from).signed ? cast(float) bits : cast(float) cast(ulong) bits));
+        }
         if (to == types.float_)
         {
-            if (from == types.float_) return value;
+            if (types.isFloat(from)) return value;
             auto bits = value.as!long;
             return Value(types.integerOf(from).signed ? cast(double) bits : cast(double) cast(ulong) bits);
         }
@@ -748,7 +790,7 @@ final class Evaluator
         foreach (T; IntegerTypes)
         {
             if (target.bits != T.sizeof * 8 || target.signed != isSigned!T) continue;
-            if (from == types.float_)
+            if (types.isFloat(from))
             {
                 auto number = value.as!double;
                 if (!floatFits!T(number)) throw conversionFailure!T();
@@ -1022,7 +1064,10 @@ final class Evaluator
         }
         if (value.has!Unit) return "()";
         if (value.has!bool) return value.as!bool.to!string;
-        if (value.has!double) return floatText(value.as!double);
+        if (value.has!double)
+        {
+            return type == types.float32 ? float32Text(cast(float) value.as!double) : floatText(value.as!double);
+        }
         if (value.has!string) return value.as!string;
         if (value.has!Handle) return addressText(value.as!Handle.address);
         assert(value.has!Closure, "lowering formats anything else itself");

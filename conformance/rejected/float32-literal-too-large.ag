@@ -1,0 +1,11 @@
+val limit: Float32 = 3.4028235e38
+val over: Float32 = 1e40
+
+def main(): Unit {
+    val big: Float32 = 1e40
+    val negative: Float32 = -1e40
+    val fine: Float32 = 3e38
+    val float: Float = 1e40
+    printl(big + negative + fine)
+    printl(float)
+}

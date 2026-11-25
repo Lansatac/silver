@@ -1,0 +1,6 @@
+// 2^31 is exactly a Float32, and one past the largest Int32.
+def main(): Unit {
+    printl("before")
+    printl(Int32(Float32(2147483520.0)))
+    printl(Int32(Float32(2147483648.0)))
+}

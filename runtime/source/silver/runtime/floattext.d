@@ -20,11 +20,34 @@ string floatText(double value)
     if (biased == 0 && fraction == 0) return sign ~ "0.0";
     ulong f = biased == 0 ? fraction : fraction | (1UL << 52);
     int e = biased == 0 ? -1074 : biased - 1075;
+    return written(sign, f, e, biased > 1, 52);
+}
 
+/// A `Float32` as `floatText` writes a `Float`, with the fewest digits that read back as the same
+/// 32-bit value: `0.1` for the float nearest a tenth, where widening it to a double would give
+/// `0.10000000149011612`.
+string float32Text(float value)
+{
+    if (value != value) return "nan";
+    if (value == float.infinity) return "inf";
+    if (value == -float.infinity) return "-inf";
+    uint bits = () @trusted { return *cast(uint*) &value; }();
+    auto sign = (bits >> 31) ? "-" : "";
+    auto biased = cast(int) ((bits >> 23) & 0xff);
+    auto fraction = bits & ((1U << 23) - 1);
+    if (biased == 0 && fraction == 0) return sign ~ "0.0";
+    ulong f = biased == 0 ? fraction : fraction | (1U << 23);
+    int e = biased == 0 ? -149 : biased - 150;
+    return written(sign, f, e, biased > 1, 23);
+}
+
+/// The text of the positive value f × 2^e, where `fractionBits` is the width of the format's fraction.
+private string written(string sign, ulong f, int e, bool normal, int fractionBits)
+{
     char[17] digits;
     int count;
     int k;
-    shortest(f, e, biased > 1, digits, count, k);
+    shortest(f, e, normal, fractionBits, digits, count, k);
     auto d = digits[0 .. count].idup;
     // `d` is the digits of 0.d × 10^k.
     auto exponent = k - 1;
@@ -65,10 +88,10 @@ private string decimal(int n)
 /// smaller exponent exists, which is when the gap below a power of two is half the gap above.
 /// The value lies in (low, high), its rounding interval, with the ends included when f is even,
 /// since a tie reads back as the even significand.
-private void shortest(ulong f, int e, bool normal, ref char[17] digits, out int count, out int k)
+private void shortest(ulong f, int e, bool normal, int fractionBits, ref char[17] digits, out int count, out int k)
 {
     Big r, s, plus, minus;
-    auto unequalGaps = normal && f == (1UL << 52);
+    auto unequalGaps = normal && f == (1UL << fractionBits);
     if (e >= 0)
     {
         r = Big.of(f);
@@ -291,4 +314,23 @@ unittest
     assert(floatText(2.0 ^^ 52) == "4503599627370496.0");
     assert(floatText(double.nan) == "nan");
     assert(floatText(-double.infinity) == "-inf");
+}
+
+unittest
+{
+    assert(float32Text(0.1f) == "0.1");
+    assert(float32Text(1.0f) == "1.0");
+    assert(float32Text(-0.0f) == "-0.0");
+    assert(float32Text(16777216.0f) == "16777216.0");
+    assert(float32Text(1.0f / 3) == "0.33333334");
+    assert(float32Text(0.00001f) == "1e-5");
+    assert(float32Text(1e16f) == "1e16");
+    assert(float32Text(float.max) == "3.4028235e38");
+    assert(float32Text(float.min_normal) == "1.1754944e-38");
+    assert(float32Text(float.min_normal * float.epsilon) == "1e-45");
+    assert(float32Text(float.nan) == "nan");
+    assert(float32Text(float.infinity) == "inf");
+    assert(float32Text(-float.infinity) == "-inf");
+    assert(float32Text(8388607.5f) == "8388607.5");
+    assert(float32Text(8388608.5f) == "8388608.0");
 }

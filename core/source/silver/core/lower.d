@@ -11,7 +11,7 @@ import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
 import silver.core.nodes;
 import silver.core.slots : numberLocals;
-import silver.sema : Analysis, DerivedOrder, DerivedPart, DictionaryFunctions, FunctionUse, IndexFunctions, LoopFunctions, SafeCall, ConstChar, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
+import silver.sema : Analysis, DerivedOrder, DerivedPart, DictionaryFunctions, FunctionUse, IndexFunctions, LoopFunctions, SafeCall, ConstChar, ConstFloat32, float32Of, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
     Bound, Substitution, SymbolId, Type, TypeTable, Witness;
 
 /// A parameter's local name. Discarded ones get a name no Silver identifier can have, so several
@@ -743,7 +743,7 @@ private final class Lowering
             (const ast.UnitLiteral _) => make(ExprKind(UnitLit())),
             (const ast.BoolLiteral literal) => make(ExprKind(BoolLit(literal.value))),
             (const ast.IntLiteral literal) => make(numberLiteral(literal.value, false, type)),
-            (const ast.FloatLiteral literal) => make(ExprKind(FloatLit(literal.value))),
+            (const ast.FloatLiteral literal) => make(floatLiteral(literal, type)),
             (const ast.StringLiteral literal) => make(ExprKind(StringLit(literal.value))),
             (const ast.CharLiteral literal) => make(ExprKind(IntLit(literal.value))),
             (const ast.InterpolatedString interpolated) => lowerInterpolated(interpolated, span),
@@ -989,10 +989,11 @@ private final class Lowering
     {
         auto type = _analysis.typeOf(constant);
         auto kind = _analysis.valueOf(constant).match!(
-            (const ConstInt v) => type == types.float_ ? ExprKind(FloatLit(v.value)) : ExprKind(IntLit(cast(ulong) v.value)),
-            (const ConstUInt v) => type == types.float_ ? ExprKind(FloatLit(v.value)) : ExprKind(IntLit(v.value)),
+            (const ConstInt v) => types.isFloat(type) ? floatLiteral(v.value, type) : ExprKind(IntLit(cast(ulong) v.value)),
+            (const ConstUInt v) => types.isFloat(type) ? floatLiteral(v.value, type) : ExprKind(IntLit(v.value)),
             (const bool v) => ExprKind(BoolLit(v)),
             (const double v) => ExprKind(FloatLit(v)),
+            (const ConstFloat32 v) => ExprKind(FloatLit(v.value)),
             (const string v) => ExprKind(StringLit(v)),
             (const ConstUnit _) => ExprKind(UnitLit()),
             (const ConstChar v) => ExprKind(IntLit(v.value)),
@@ -1003,12 +1004,32 @@ private final class Lowering
     /// A literal of `type`, which may be `Float` when an integer literal adapted to one.
     private ExprKind numberLiteral(ulong magnitude, bool negative, Type type)
     {
+        if (type == types.float32)
+        {
+            float value = magnitude;
+            return ExprKind(FloatLit(negative ? -value : value));
+        }
         if (type == types.float_)
         {
             double value = magnitude;
             return ExprKind(FloatLit(negative ? -value : value));
         }
         return ExprKind(IntLit(negative ? 0UL - magnitude : magnitude));
+    }
+
+    /// A float literal of `type`, which is `Float32` when it adapted to one: its value is then the
+    /// `Float32` nearest the written text, held as the `double` it widens to. `negated` is a minus
+    /// in front of it that the parser kept apart.
+    private ExprKind floatLiteral(const ast.FloatLiteral literal, Type type, bool negated = false)
+    {
+        double value = type == types.float32 ? float32Of(literal) : literal.value;
+        return ExprKind(FloatLit(negated ? -value : value));
+    }
+
+    /// A float constant of `type` from a whole number.
+    private ExprKind floatLiteral(double value, Type type)
+    {
+        return ExprKind(FloatLit(type == types.float32 ? cast(double) cast(float) value : value));
     }
 
     private ExprKind lowerUnary(const ast.UnaryExpr unary, Type type)
@@ -1021,7 +1042,7 @@ private final class Lowering
                 // A negated literal is one value: `-128` is an Int8, though `128` alone isn't.
                 auto negated = unary.operand.kind.match!(
                     (const ast.IntLiteral literal) => [numberLiteral(literal.value, true, type)],
-                    (const ast.FloatLiteral literal) => [ExprKind(FloatLit(-literal.value))],
+                    (const ast.FloatLiteral literal) => [floatLiteral(literal, type, true)],
                     _ => null,
                 );
                 if (negated !is null) return negated[0];
@@ -3266,6 +3287,22 @@ unittest
 
     print(result.program).should.equal(
         `def f(x: Float): Float Add(Multiply(-2.0, x), Divide(10.0, 4.0))`);
+}
+
+@("a literal that adapted to Float32 is a float literal, rounded to a Float32")
+unittest
+{
+    import std.sumtype : get;
+
+    auto result = loweredFunction(`def f(x: Float32): Float32 => x * 0.1 + 3`, "f");
+
+    print(result.program).should.equal(
+        `def f(x: Float32): Float32 Add(Multiply(x, 0.1), 3.0)`);
+    auto body_ = result.program.functions[result.program.functions.countUntil!(f => f.name == "f")].body;
+    auto sum = body_.kind.get!Prim;
+    auto product = sum.args[0].kind.get!Prim;
+    auto tenth = product.args[1].kind.get!FloatLit.value;
+    assert(tenth != 0.1 && tenth == cast(double) cast(float) tenth);
 }
 
 @("a chain of ~ is one Concat, and ~= is an Append")

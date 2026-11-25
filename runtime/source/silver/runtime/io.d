@@ -9,7 +9,7 @@ import std.conv : to;
 import std.stdio : readln, stdout;
 
 import silver.runtime.buffer : newString;
-import silver.runtime.format : floatText;
+import silver.runtime.format : float32Text, floatText;
 import silver.runtime.memory : SavedRegisters, silver_save_registers;
 import silver.runtime.panic : outOfMemory, panic;
 import silver.runtime.testing : testing, testOutput;
@@ -19,6 +19,7 @@ extern (C) nothrow:
 void silver_print_int(long value) { output(value.to!string, false); }
 void silver_print_uint(ulong value) { output(value.to!string, false); }
 void silver_print_float(double value) { output(floatText(value), false); }
+void silver_print_float32(float value) { output(float32Text(value), false); }
 void silver_print_bool(bool value) { output(value.to!string, false); }
 void silver_print_string(const(char)* data, size_t length) { output(data[0 .. length], false); }
 void silver_print_unit() { output("()", false); }
@@ -27,6 +28,7 @@ void silver_print_char(uint value) { output([cast(dchar) value].to!string, false
 void silver_printl_int(long value) { output(value.to!string, true); }
 void silver_printl_uint(ulong value) { output(value.to!string, true); }
 void silver_printl_float(double value) { output(floatText(value), true); }
+void silver_printl_float32(float value) { output(float32Text(value), true); }
 void silver_printl_bool(bool value) { output(value.to!string, true); }
 void silver_printl_string(const(char)* data, size_t length) { output(data[0 .. length], true); }
 void silver_printl_unit() { output("()", true); }

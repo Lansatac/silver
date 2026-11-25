@@ -30,6 +30,7 @@ countOnes(0b1011)       // 3
 
 ## Open questions
 
+- The functions take and give a `Float`. A `Float32` goes through `Float(x)` and back with `Float32(...)`; versions for `Float32` can come later, under the same names, so a call picks one by its argument.
 - Whether other maths written for speed counts as arithmetic, and panics, as `powInt` does: see [Errors](../language/errors.md#open-questions).
 
 ## Current implementation

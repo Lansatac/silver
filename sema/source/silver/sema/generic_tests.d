@@ -241,7 +241,7 @@ unittest
 @("the first thing that determines a type parameter decides it, with no search for a common type")
 unittest
 {
-    analyzedGeneric(`    val p = pair(1.5, "a")`).shouldReport(DiagnosticCode.TypeMismatch, At(`"a"`, 1));
+    analyzedGeneric(`    val p = pair(1.5, "a")`).shouldReport(DiagnosticCode.TypeMismatch, At("1.5", 1));
     analyzedGeneric(`    val p = pair(Box(1), Box(true))`).shouldReport(DiagnosticCode.TypeMismatch, At("Box", 3));
 }
 

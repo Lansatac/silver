@@ -1,0 +1,7 @@
+// A Float too large for a Float32 converts to infinity without a panic, and it's the integer
+// conversion of that infinity that does.
+def main(): Unit {
+    val big = Float32(1e300)
+    printl(big)
+    printl(UInt64(big))
+}

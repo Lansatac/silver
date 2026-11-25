@@ -5,6 +5,7 @@ import std.array;
 import std.conv;
 import std.range : iota, repeat;
 import std.sumtype;
+import std.math : isInfinity;
 import std.string;
 
 
@@ -12,6 +13,7 @@ import silver.ast;
 import silver.sema.constant_eval;
 import silver.sema.coverage;
 import silver.sema.declare;
+import silver.sema.floatliteral : float32Of;
 import silver.sema.hooks : checkTypeHooks;
 import silver.sema.recursion;
 import silver.sema.type;
@@ -134,6 +136,8 @@ private final class TypeChecker
     /// to where it's used, so ranges are checked once all the bodies have been.
     private const(Expr)[] _intLiterals;
     private bool[Id!Expr] _negatedLiterals;
+    /// Every float literal, for the same reason: one that adapted to `Float32` must round to a finite value.
+    private const(Expr)[] _floatLiterals;
     /// Constants whose initializer already has an error, which evaluating would only repeat.
     private bool[Id!ConstDecl] _unevaluable;
     /// Constructions of a type with an invariant from literals alone, which are checked once the
@@ -331,6 +335,13 @@ private final class TypeChecker
         foreach (literal; _intLiterals)
         {
             checkLiteralRange(literal);
+        }
+        bool[Id!Expr] floatsChecked;
+        foreach (literal; _floatLiterals)
+        {
+            if (literal.id in floatsChecked) continue;
+            floatsChecked[literal.id] = true;
+            checkFloatLiteralRange(literal);
         }
 
         // Last, because an integer literal's type isn't final until everything's been checked.
@@ -782,6 +793,27 @@ private final class TypeChecker
         _collector.reportError(DiagnosticCode.NonConstantInitializer, expr.span,
             "A top-level constant can only be built from literals, operators and other constants");
         return false;
+    }
+
+    /// A float literal must round to a finite value of the type it ended up with.
+    private void checkFloatLiteralRange(const Expr expr)
+    {
+        auto type = _typing.exprTypes[expr.id];
+        auto literal = expr.kind.match!(
+            (const FloatLiteral l) => l,
+            (_) => assert(0, "only float literals are recorded"),
+        );
+        auto value = literal.value;
+        if (type == _types.float32 && value == value && isInfinity(float32Of(literal)))
+        {
+            _collector.reportError(DiagnosticCode.LiteralOutOfRange, expr.span,
+                "This float literal doesn't fit in `Float32`; its largest value is about 3.4028235e38");
+        }
+        else if (type == _types.float_ && isInfinity(value))
+        {
+            _collector.reportError(DiagnosticCode.LiteralOutOfRange, expr.span,
+                "This float literal doesn't fit in `Float`; its largest value is about 1.7976931348623157e308");
+        }
     }
 
     private void checkLiteralRange(const Expr expr)
@@ -2082,7 +2114,10 @@ private final class TypeChecker
                 _intLiterals ~= expr;
                 return _types.int_;
             },
-            (const FloatLiteral _) => _types.float_,
+            (const FloatLiteral _) {
+                _floatLiterals ~= expr;
+                return _types.float_;
+            },
             (const StringLiteral _) => _types.string_,
             (const CharLiteral _) => _types.char_,
             (const InterpolatedString interpolated) => synthesizeInterpolated(interpolated, ctx),
@@ -3096,7 +3131,7 @@ private final class TypeChecker
 
     private bool isNumeric(Type t)
     {
-        return _types.isInteger(t) || t == _types.float_;
+        return _types.isInteger(t) || _types.isFloat(t);
     }
 
     private bool isOrdered(Type t)
@@ -3373,7 +3408,8 @@ private final class TypeChecker
     {
         auto core = layerCore(target);
         auto literalFits = isIntLiteral(expr)
-            && (isNumeric(core) || _declarer.isSum(core) && _declarer.membersOf(core).any!(m => isNumeric(m)));
+            && (isNumeric(core) || _declarer.isSum(core) && _declarer.membersOf(core).any!(m => isNumeric(m)))
+            || isFloatLiteral(expr) && (core == _types.float32 || _declarer.isSum(core) && floatMembers(core) == [_types.float32]);
         if (_declarer.isSum(target)) return isAssignable(type, target) || literalFits;
         if (type == _types.emptyArray && _types.isArray(target)) return true;
         if (type == _types.emptyDictionary && isDictionary(target)) return true;
@@ -3467,6 +3503,14 @@ private final class TypeChecker
                 rightType = adaptLiteral(*binary.right, leftType);
             }
             else if (!isShift && adaptsTo(rightType) && isIntLiteral(*binary.left) && !isIntLiteral(*binary.right))
+            {
+                leftType = adaptLiteral(*binary.left, rightType);
+            }
+            else if (!integerOnly && leftType == _types.float32 && isFloatLiteral(*binary.right))
+            {
+                rightType = adaptLiteral(*binary.right, leftType);
+            }
+            else if (!integerOnly && rightType == _types.float32 && isFloatLiteral(*binary.left))
             {
                 leftType = adaptLiteral(*binary.left, rightType);
             }
@@ -3938,6 +3982,7 @@ private final class TypeChecker
         return arg.kind.match!(
             (const BoolLiteral _) => true,
             (const FloatLiteral _) => true,
+            (const UnaryExpr _) => isFloatLiteral(arg),
             (const StringLiteral _) => true,
             (const CharLiteral _) => true,
             (const UnitLiteral _) => true,
@@ -3985,6 +4030,19 @@ private final class TypeChecker
             }
             if (!isNumeric(core)) return Fit.none;
             return Fit.promoted(steps + (core == _types.int_ ? 0 : 1));
+        }
+        if (isFloatLiteral(arg) && !bare)
+        {
+            // A float literal is a `Float` unless the number it lands in is a `Float32`.
+            auto steps = 0;
+            auto core = param;
+            for (; _types.isOption(core) || _types.isErrorUnion(core); steps++)
+            {
+                core = _types.isOption(core) ? _types.optionInner(core) : _types.successOf(core);
+            }
+            auto adapts = core == _types.float32
+                || _declarer.isSum(core) && floatMembers(core) == [_types.float32];
+            if (adapts) return Fit.promoted(steps + 1);
         }
         if (isLambda(arg))
         {
@@ -4084,6 +4142,7 @@ private final class TypeChecker
         return arg.kind.match!(
             (const BoolLiteral _) => _types.bool_,
             (const FloatLiteral _) => _types.float_,
+            (const UnaryExpr _) => isFloatLiteral(arg) ? _types.float_ : Type.init,
             (const StringLiteral _) => _types.string_,
             (const CharLiteral _) => _types.char_,
             (const UnitLiteral _) => _types.unit,
@@ -5824,7 +5883,7 @@ private final class TypeChecker
         foreach (param; g.params ~ g.ownerParams) bound[param.id] = _types.error;
     }
 
-    /// An argument whose type depends on where it goes: an integer literal, a lambda, `None`, `[]`
+    /// An argument whose type depends on where it goes: an integer literal, a float literal, a lambda, `None`, `[]`
     /// or `[:]`, and as with `None`, a generic name with no type arguments that isn't called, like `Nil`.
     private bool isUntyped(const Expr expr)
     {
@@ -5835,7 +5894,7 @@ private final class TypeChecker
             _ => false,
         );
         if (genericName && expr.id !in _resolutions.aliasedInstances && genericNamed(expr).found) return true;
-        return isIntLiteral(expr) || isLambda(expr) || expr.kind.match!(
+        return isIntLiteral(expr) || isFloatLiteral(expr) || isLambda(expr) || expr.kind.match!(
             (const NoneLiteral _) => true,
             (const OkExpr _) => true,
             (const ArrayLiteral literal) => literal.elements.length == 0,
@@ -5902,6 +5961,8 @@ private final class TypeChecker
             bindParams(signature.params[i], type, bindable(), b.bound);
         }
         bool known(size_t i) => !signature.isMutable(i) && !call.isMutable(i) && isBound(signature.params[i], params, b.bound);
+        // A float literal that hasn't had its turn. Integer literals, and what's made of them, wait for it.
+        bool floatPending() => args.length.iota.any!(j => isFloatLiteral(args[j]) && b.typed[j] == Type.init && !b.checked[j] && !known(j));
         bool open() => params.any!(p => p.id !in b.bound);
         void solveBounds()
         {
@@ -5957,6 +6018,7 @@ private final class TypeChecker
                 b.checked[i] = true;
                 continue;
             }
+            if (!call.isMutable(i) && waitsForFloat(arg) && floatPending()) continue;
             if (trial)
             {
                 auto type = defaultType(arg);
@@ -5985,11 +6047,29 @@ private final class TypeChecker
                     if (!trial) checkArgument(arg, _types.substitute(signature.params[i], b.bound), ctx);
                     b.checked[i] = progress = true;
                 }
-                else if (isIntLiteral(arg))
+                // An integer literal beside a float literal waits, so that `pair(1, 1.5)` is a `Float` pair.
+                else if (isFloatLiteral(arg) || isIntLiteral(arg)
+                    && !floatPending())
                 {
                     if (trial)
                     {
-                        bind(i, _types.int_);
+                        bind(i, isIntLiteral(arg) ? _types.int_ : _types.float_);
+                        b.checked[i] = true;
+                    }
+                    else
+                    {
+                        b.typed[i] = synthesize(arg, ctx);
+                        bind(i, b.typed[i]);
+                    }
+                    progress = true;
+                }
+                else if (!call.isMutable(i) && waitsForFloat(arg) && !floatPending())
+                {
+                    // Nothing has fixed its parameters, so it's typed on its own, as it would have been in the first pass.
+                    if (trial)
+                    {
+                        auto type = defaultType(arg);
+                        if (type != Type.init) bind(i, type);
                         b.checked[i] = true;
                     }
                     else
@@ -6181,7 +6261,7 @@ private final class TypeChecker
                 continue;
             }
             auto untyped = args.length.iota.filter!(i => mentions(i) && typed[i] == Type.init && !isLambda(args[i])
-                && !isIntLiteral(args[i]));
+                && !isIntLiteral(args[i]) && !isFloatLiteral(args[i]));
             if (!untyped.empty)
             {
                 auto arg = args[untyped.front];
@@ -7451,12 +7531,19 @@ private final class TypeChecker
         {
             return adaptLiteral(expr, expected);
         }
+        if (expected == _types.float32 && isFloatLiteral(expr)) return adaptLiteral(expr, expected);
         if (_declarer.isSum(expected))
         {
             auto hasValue = type != _types.error && type != _types.never;
             if (hasValue && type != expected)
             {
                 if (isIntLiteral(expr)) return injectLiteral(expr, expected);
+                if (isFloatLiteral(expr) && floatMembers(expected) == [_types.float32])
+                {
+                    adaptLiteral(expr, _types.float32);
+                    _typing.promotions[expr.id] = expected;
+                    return expected;
+                }
                 if (isAssignable(type, expected))
                 {
                     _typing.promotions[expr.id] = expected;
@@ -7468,6 +7555,7 @@ private final class TypeChecker
         {
             if (isBothSides(expr, type, expected)) return _types.error;
             if (isIntLiteral(expr)) type = adaptLayered(expr, type, expected);
+            else if (isFloatLiteral(expr) && layerCore(expected) == _types.float32) type = adaptLiteral(expr, _types.float32);
             auto hasValue = type != _types.error && type != _types.never;
             if (hasValue && type != expected && isAssignable(type, expected))
             {
@@ -7479,6 +7567,7 @@ private final class TypeChecker
         {
             if (isBothSides(expr, type, expected)) return _types.error;
             if (isIntLiteral(expr)) type = adaptLayered(expr, type, expected);
+            else if (isFloatLiteral(expr) && layerCore(expected) == _types.float32) type = adaptLiteral(expr, _types.float32);
             auto hasValue = type != _types.error && type != _types.never;
             if (hasValue && type != expected && isAssignable(type, expected))
             {
@@ -7551,7 +7640,15 @@ private final class TypeChecker
                     .format(_types.describe(sum), _types.describe(integers[0])));
             return _types.error;
         }
-        auto numbers = integers.length == 1 ? integers : _declarer.membersOf(sum).filter!(m => m == _types.float_).array;
+        auto floats = floatMembers(sum);
+        if (integers.empty && floats.length > 1)
+        {
+            _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
+                "`%s` has more than one float member; convert this to the one you mean, as in `%s(...)`"
+                    .format(_types.describe(sum), _types.describe(floats[0])));
+            return _types.error;
+        }
+        auto numbers = integers.length == 1 ? integers : floats;
         if (numbers.length == 1)
         {
             adaptLiteral(expr, numbers[0]);
@@ -8015,7 +8112,47 @@ private final class TypeChecker
         );
     }
 
-    /// Re-records an integer literal (and any sign on it) as `type`.
+    /// An array, tuple, `Some` or dictionary literal made only of literals, with an integer literal in it.
+    /// Where a float literal argument is waiting to bind a type parameter, so does this, since typing it
+    /// first would bind `Int`: `pick(1.5, [2])` is a `[Float]`.
+    private bool waitsForFloat(const Expr arg)
+    {
+        bool onlyLiterals(const Expr e) => isLiteral(e) || e.kind.match!(
+            (const NoneLiteral _) => true,
+            (const ArrayLiteral l) => l.elements.all!(x => onlyLiterals(x)),
+            (const TupleLiteral l) => l.elements.all!(x => onlyLiterals(x)),
+            (const SomeExpr some) => onlyLiterals(*some.value),
+            (const MapLiteral m) => m.keys.all!(x => onlyLiterals(x)) && m.values.all!(x => onlyLiterals(x)),
+            _ => false,
+        );
+        bool hasInteger(const Expr e) => isIntLiteral(e) || e.kind.match!(
+            (const ArrayLiteral l) => l.elements.any!(x => hasInteger(x)),
+            (const TupleLiteral l) => l.elements.any!(x => hasInteger(x)),
+            (const SomeExpr some) => hasInteger(*some.value),
+            (const MapLiteral m) => m.keys.any!(x => hasInteger(x)) || m.values.any!(x => hasInteger(x)),
+            _ => false,
+        );
+        return !isIntLiteral(arg) && onlyLiterals(arg) && hasInteger(arg);
+    }
+
+    /// A float literal, possibly signed. It's a `Float` unless the type expected of it is `Float32`.
+    private bool isFloatLiteral(const Expr expr)
+    {
+        return expr.kind.match!(
+            (const FloatLiteral _) => true,
+            (const UnaryExpr unary) => (unary.op == UnaryOp.Minus || unary.op == UnaryOp.Plus)
+                && isFloatLiteral(*unary.operand),
+            _ => false,
+        );
+    }
+
+    /// The float types among the members of `sum`.
+    private const(Type)[] floatMembers(Type sum)
+    {
+        return _declarer.membersOf(sum).filter!(m => _types.isFloat(m)).array;
+    }
+
+    /// Re-records a number literal (and any sign on it) as `type`.
     private Type adaptLiteral(const Expr expr, Type type)
     {
         expr.kind.match!(

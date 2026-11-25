@@ -262,6 +262,195 @@ unittest
         .shouldReport(DiagnosticCode.InvalidOperand, At("i", 2));
 }
 
+// Float32
+
+@("type checking gives a float or integer literal the type Float32 where one is expected")
+unittest
+{
+    auto a = analyzedMain(`val f: Float32 = 1.5
+    val g: Float32 = -2.5
+    val h: Float32 = 3
+    val i: Float32 = -4
+    val j = 5.5`);
+    a.shouldHaveType("1.5", "Float32");
+    a.shouldHaveType("-2.5", "Float32");
+    a.shouldHaveType("3", "Float32");
+    a.shouldHaveType("-4", "Float32");
+    a.shouldHaveType("5.5", "Float");
+    a.shouldHaveNoDiagnostics();
+}
+
+@("type checking gives a float literal the Float32 of an argument, result, element, option or sum member")
+unittest
+{
+    auto a = analyzed(`type Box(value: Float32)
+type Number = :Float32 | :Int
+def g(x: Float32): Float32 => 2.5
+def main(): Unit {
+    val a = g(0.5)
+    val b = Box(0.25)
+    val xs: [Float32] = [1.5]
+    val maybe: Float32? = 0.75
+    val n: Number = 1.75
+}`);
+    a.shouldHaveType("2.5", "Float32");
+    a.shouldHaveType("0.5", "Float32");
+    a.shouldHaveType("0.25", "Float32");
+    a.shouldHaveType("1.5", "Float32");
+    a.shouldHaveType("0.75", "Float32");
+    a.shouldHaveType("1.75", "Float32");
+    a.shouldHaveNoDiagnostics();
+}
+
+@("type checking lets a literal beside a Float32 operand be a Float32")
+unittest
+{
+    auto a = analyzedMain(`val x: Float32 = 1.5
+    val y = x * 2.5
+    val z = 0.5 + x
+    val w = x == 7
+    val v = -x`);
+    a.shouldHaveType("x * 2.5", "Float32");
+    a.shouldHaveType("2.5", "Float32");
+    a.shouldHaveType("0.5", "Float32");
+    a.shouldHaveType("7", "Float32");
+    a.shouldHaveType("-x", "Float32");
+    a.shouldHaveNoDiagnostics();
+}
+
+@("type checking keeps Float and Float32 values apart, and Float64 is Float")
+unittest
+{
+    analyzedMain("val x: Float32 = 1.5\n    val d = 2.5\n    printl(x + d)")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("x + d", 1));
+    analyzedMain("val x: Float32 = 1.5\n    val d = 2.5\n    printl(x < d)")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("x < d", 1));
+    analyzedMain("val d = 2.5\n    val x: Float32 = d").shouldReport(DiagnosticCode.TypeMismatch, At("d", 2));
+    analyzed("def f(x: Float32): Unit => ()\ndef main(): Unit {\n    val d = 1.5\n    f(d)\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("d", 2));
+    analyzedMain("val n = 1\n    val x: Float32 = n").shouldReport(DiagnosticCode.TypeMismatch, At("n", 2));
+    analyzedMain("val x: Float32 = 1.5\n    val y: Float64 = x").shouldReport(DiagnosticCode.TypeMismatch, At("x", 2));
+    analyzedMain("val x: Float64 = 1.5\n    val y: Float = x").shouldHaveNoDiagnostics();
+}
+
+@("type checking converts between Float32, Float and the integers by calling the type")
+unittest
+{
+    auto a = analyzedMain(`val x: Float32 = 1.5
+    val d = 2.5
+    val n = 7
+    val a = Float(x)
+    val b = Float32(d)
+    val c = Float32(n)
+    val e = Int(x)
+    val f = Float32(1)`);
+    a.shouldHaveType("Float(x)", "Float");
+    a.shouldHaveType("Float32(d)", "Float32");
+    a.shouldHaveType("Float32(n)", "Float32");
+    a.shouldHaveType("Int(x)", "Int");
+    a.shouldHaveType("Float32(1)", "Float32");
+    a.shouldHaveNoDiagnostics();
+}
+
+@("a float literal that rounds to infinity as a Float32 is out of range, and one that fits is not")
+unittest
+{
+    analyzedMain("val x: Float32 = 1e40").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e40", 1));
+    analyzedMain("val x: Float32 = -1e40").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e40", 1));
+    analyzedMain("val x: Float32? = Some(1e40)").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e40", 1));
+    analyzedMain("val x: Float32 = 3.4028235e38\n    val y: Float32 = 1e-50\n    val z = 1e30").shouldHaveNoDiagnostics();
+}
+
+@("a float literal argument doesn't fix a type parameter: the expected type or another argument does, else it's a Float")
+unittest
+{
+    auto a = analyzed(`def id<T>(x: T): T => x
+def pair<T>(a: T, b: T): T => b
+def main(): Unit {
+    val d: Float32 = id(1.5)
+    val e = id(2.5)
+    val f: Float32 = id(-3.5)
+    val g = pair(4, 4.5)
+    val h = pair(Float32(1.0), 5.5)
+    val i = pair(6.5, Float32(1.0))
+    val j: Float32 = id(7)
+}`);
+    a.shouldHaveType("id(1.5)", "Float32");
+    a.shouldHaveType("1.5", "Float32");
+    a.shouldHaveType("id(2.5)", "Float");
+    a.shouldHaveType("id(-3.5)", "Float32");
+    a.shouldHaveType("pair(4, 4.5)", "Float");
+    a.shouldHaveType("4", "Float");
+    a.shouldHaveType("pair(Float32(1.0), 5.5)", "Float32");
+    a.shouldHaveType("5.5", "Float32");
+    a.shouldHaveType("pair(6.5, Float32(1.0))", "Float32");
+    a.shouldHaveType("6.5", "Float32");
+    a.shouldHaveType("id(7)", "Float32");
+    a.shouldHaveNoDiagnostics();
+}
+
+@("integer literals nested in an array, tuple, option or dictionary literal wait for a float literal argument")
+unittest
+{
+    auto a = analyzed(`def pick<T>(x: T, xs: [T]): [T] => xs
+def tup<T>(x: T, t: (T, T)): T => x
+def op<T>(x: T, o: T?): T => x
+def dict<T>(x: T, d: [T: String]): T => x
+def main(): Unit {
+    val ra = pick(1.5, [2])
+    val rb = pick(-1.25, [2, 3])
+    val rc = pick(1.75, [2.5, 3])
+    val rd = tup(1.5, (7, 8))
+    val re = op(1.5, Some(9))
+    val rf = dict(1.5, [4: "a"])
+    val rg = pick(5, [6])
+    val rh = pick(11, [2.5])
+    val ri = pick(Float32(1.0), [12])
+    val rj: [Float32] = pick(1.0625, [13])
+}`);
+    a.shouldDeclareType(At("ra", 1), "[Float]");
+    a.shouldDeclareType(At("rb", 1), "[Float]");
+    a.shouldDeclareType(At("rc", 1), "[Float]");
+    a.shouldDeclareType(At("rd", 1), "Float");
+    a.shouldDeclareType(At("re", 1), "Float");
+    a.shouldDeclareType(At("rf", 1), "Float");
+    a.shouldDeclareType(At("rg", 1), "[Int]");
+    a.shouldDeclareType(At("rh", 1), "[Float]");
+    a.shouldDeclareType(At("ri", 1), "[Float32]");
+    a.shouldHaveType("13", "Float32");
+    a.shouldHaveNoDiagnostics();
+}
+
+@("a float literal never becomes an integer type through a type parameter")
+unittest
+{
+    analyzed("def id<T>(x: T): T => x\ndef main(): Unit {\n    val n: Int = id(1.5)\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("1.5", 1));
+}
+
+@("a float literal too large for a Float is out of range wherever it's a Float, and the largest one is not")
+unittest
+{
+    analyzedMain("val x: Float = 1e400").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e400", 1));
+    analyzedMain("val x: Float = -1e400").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e400", 1));
+    analyzedMain("val x = 1e400").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e400", 1));
+    analyzedMain("val d = 2.5\n    val x = d + 1e400").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e400", 1));
+    analyzed("def f(x: Float): Unit => ()\ndef main(): Unit => f(1e400)")
+        .shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e400", 1));
+    analyzed("val limit: Float = 1e400\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e400", 1));
+    analyzedMain("val a = 1.7976931348623157e308\n    val b = 1e-400\n    val c = Float32(1e40)").shouldHaveNoDiagnostics();
+}
+
+@("a Float32 isn't an operand of a bit operator, and can't cross into C yet")
+unittest
+{
+    analyzedMain("val x: Float32 = 1.5\n    printl(x & 1)").shouldReport(DiagnosticCode.InvalidOperand, At("x", 2));
+    analyzedMain("val x: Float32 = 1.5\n    printl(~x)").shouldReport(DiagnosticCode.InvalidOperand, At("x", 2));
+    analyzed("native def g(x: Float32): Unit\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidNativeType, At("Float32", 1));
+}
+
 // Operators
 
 @("type checking gives arithmetic its operands' numeric type")

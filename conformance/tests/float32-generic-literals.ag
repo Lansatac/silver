@@ -1,0 +1,29 @@
+// A float literal argument doesn't fix a type parameter, as an integer literal doesn't: the type
+// expected of the call or another argument does, and only otherwise the literal is a Float.
+def id<T>(x: T): T => x
+def pair<T>(a: T, b: T): T => b
+
+def main(): Unit {
+    val d: Float32 = id(1.5)
+    val e = id(1.5)
+    val f: Float32 = id(-1.5)
+    val g = pair(1, 1.5)
+    val h = pair(Float32(1.0), 2.5)
+    val i = pair(2.5, Float32(1.0))
+    val tie: Float32 = id(1.00000005960464477539062500000001)
+    val whole: Float32 = id(1)
+    printl(d)
+    printl(e)
+    printl(f)
+    printl(g)
+    printl(h)
+    printl(i)
+    printl(tie)
+    printl(whole)
+
+    // Which type each is shows in what it does with a value a Float32 can't hold.
+    printl(Float(id(0.1)) == 0.1)
+    val tenth: Float32 = id(0.1)
+    printl(Float(tenth) == 0.1)
+    printl(Float(pair(Float32(0.5), 0.1)) == 0.1)
+}

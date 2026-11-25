@@ -54,6 +54,19 @@ unittest
 `).should.equal("3\n10\n6\n");
 }
 
+@("a Float32 is computed and printed in single precision")
+unittest
+{
+    runMain(`
+    val big = Float32(16777216.0)
+    printl(big + Float32(1.0) == big)
+    printl(Float32(0.1) + Float32(0.2))
+    printl(Float(Float32(0.1)))
+    printl(Float32(1e300))
+    printl(Int(Float32(2.9)))
+`).should.equal("true\n0.3\n0.10000000149011612\ninf\n2\n");
+}
+
 @("a native the interpreter has is called by its symbol")
 unittest
 {

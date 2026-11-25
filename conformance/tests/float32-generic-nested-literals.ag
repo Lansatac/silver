@@ -1,0 +1,26 @@
+// Integer literals nested in an array, tuple, option or dictionary literal wait for a float literal
+// argument, as a bare integer literal does, so that the float literal and the others agree on a type.
+def pick<T>(x: T, xs: [T]): [T] => xs ~ [x]
+def tup<T>(x: T, t: (T, T)): T => x
+def op<T>(x: T, o: T?): T => o ?? x
+def dict<T>(x: T, d: [T: String]): T => x
+def two<T, U>(x: T, ys: [U]): U => ys[0]
+
+def main(): Unit {
+    printl(pick(1.5, [2]))
+    printl(pick(-1.5, [2, 3]))
+    printl(pick(1.5, [2.5, 3]))
+    printl(tup(1.5, (1, 2)))
+    printl(op(1.5, Some(2)))
+    printl(dict(1.5, [2: "a"]))
+
+    // Other arguments or the expected type still decide, and integers alone are Ints.
+    printl(pick(1, [2]))
+    printl(pick(1, [2.5]))
+    printl(two(1.5, [2]))
+    printl(pick(Float32(1.5), [2]))
+    val v: [Float32] = pick(1.00000005960464477539062500000001, [2])
+    printl(v)
+    printl(Float(pick(Float32(0.1), [2])[1]) == 0.1)
+    printl(Float(pick(0.1, [2])[1]) == 0.1)
+}

@@ -10,13 +10,14 @@ import silver.runtime.buffer : newString, silver_array_append;
 import silver.runtime.memory : SavedRegisters, silver_save_registers;
 import silver.runtime.panic : outOfMemory, panic;
 
-public import silver.runtime.floattext : floatText;
+public import silver.runtime.floattext : float32Text, floatText;
 
 extern (C) nothrow:
 
 void silver_format_int(long value, const(char)** data, size_t* length) { format(value, data, length); }
 void silver_format_uint(ulong value, const(char)** data, size_t* length) { format(value, data, length); }
 void silver_format_float(double value, const(char)** data, size_t* length) { format(value, data, length); }
+void silver_format_float32(float value, const(char)** data, size_t* length) { format(value, data, length); }
 void silver_format_bool(bool value, const(char)** data, size_t* length) { format(value, data, length); }
 void silver_format_char(uint value, const(char)** data, size_t* length) { format(cast(dchar) value, data, length); }
 
@@ -64,6 +65,7 @@ private void format(T)(T value, const(char)** data, size_t* length)
     try
     {
         static if (is(T == double)) newString(floatText(value), data, length);
+        else static if (is(T == float)) newString(float32Text(value), data, length);
         else newString(value.to!string, data, length);
     }
     catch (OutOfMemoryError)
