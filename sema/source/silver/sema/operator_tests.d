@@ -235,6 +235,8 @@ unittest
     analyzed("def opAdd(a: Int, b: Int): Int => a\ndef main(): Unit {}").shouldReport(DiagnosticCode.InvalidOperatorFunction, At("opAdd", 1));
     analyzed("def opMul(a: Int, b: Float): Float => b\ndef main(): Unit {}").shouldReport(DiagnosticCode.InvalidOperatorFunction, At("opMul", 1));
     analyzed("def opNeg(a: UInt8): UInt8 => a\ndef main(): Unit {}").shouldReport(DiagnosticCode.InvalidOperatorFunction, At("opNeg", 1));
+    analyzed("def opAdd(a: Float32, b: Float32): Float32 => a\ndef main(): Unit {}").shouldReport(DiagnosticCode.InvalidOperatorFunction, At("opAdd", 1));
+    analyzed("def opDiv(a: Float32, b: Int): Float32 => a\ndef main(): Unit {}").shouldReport(DiagnosticCode.InvalidOperatorFunction, At("opDiv", 1));
     analyzed("def opAdd<T>(a: T, b: T): T => a
 def opMul(a: String, k: Int): String => a
 def opAdd(a: Int, b: String, c: Int): Int => a

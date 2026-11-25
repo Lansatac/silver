@@ -1,0 +1,29 @@
+// Operator functions over a type holding `Float32`: a float literal operand becomes the parameter's
+// `Float32`, and between a `Float32` and a `Float` overload it is a `Float`, as in any call.
+type V(x: Float32, y: Float32)
+
+def opAdd(a: V, b: V): V => V(a.x + b.x, a.y + b.y)
+def opMul(v: V, k: Float32): V => V(v.x * k, v.y * k)
+def opMul(k: Float32, v: V): V => V(v.x * k, v.y * k)
+def opNeg(v: V): V => V(-v.x, -v.y)
+
+type W(x: Float)
+def opMul(w: W, k: Float32): String => "Float32"
+def opMul(w: W, k: Float): String => "Float"
+
+def main(): Unit {
+    val p = V(1.5, 2.0) + V(0.1, 4.0)
+    printl(p.x)
+    printl((p * 2.5).x)
+    printl((2 * p).y)
+    printl((-p).x)
+    val f: Float32 = 0.1
+    printl((p * f).x)
+    mutable val m = p
+    m += p
+    m *= 0.5
+    printl(m.y)
+
+    printl(W(2.0) * 1.5)
+    printl(W(2.0) * f)
+}
