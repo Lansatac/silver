@@ -157,7 +157,6 @@ Apart from the infinities and NaN, the text is a Float literal in Silver and a n
 
 - A float literal's range is checked once checking is done, since its type isn't final before, so Core and the backends never see an infinite literal.
 - `std.math` is `Float`-only: a `Float32` goes through `Float(x)` and back. `parseFloat` returns a `Float`.
-- A `Float32` can't be in a native function's signature yet.
 - A `Float32` is a 32-bit `float` in compiled code. The interpreter holds it as the `double` it widens to, rounded to a `float` after every operation, so both compute in single precision.
 - Adaptation doesn't go through arithmetic yet. Only a literal by itself adapts, also in parentheses or negated, so `val x: UInt8 = 1 + 2` and `1 + 2 + small` are errors while `small + 1 + 2` works; `UInt8(1 + 2)` is the way to write it.
 - A literal arm of an `if` or `match` doesn't take the type of the other arms yet, so `if c => 1 else small` is an error unless a `UInt8` is expected of it.

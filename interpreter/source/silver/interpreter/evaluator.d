@@ -1001,7 +1001,7 @@ final class Evaluator
         auto result = native.call(args);
         if (e.type == types.unit || e.type == types.never) return Value(Unit());
         if (e.type == types.float_) return Value(result.float_);
-        if (e.type == types.float32) return Value(cast(double) cast(float) result.float_);
+        if (e.type == types.float32) return Value(result.float_);
         if (e.type == types.bool_) return Value(result.integer != 0);
         if (types.isInteger(e.type))
         {
@@ -1013,9 +1013,10 @@ final class Evaluator
     }
 
     /// Whether C passes a value of `type` as a `kind`: a pointer is a native type, an option of one or
-    /// a 64-bit integer, `float` a `Float32` and `double` a `Float`, and `void` a result of `Unit` or `Never`. An integer result can be any integer
-    /// type or `Bool`, cut down from C's; an integer parameter has to be at least as wide as C's `int`,
-    /// since Windows' convention leaves the upper bits of a narrower one undefined.
+    /// a 64-bit integer, `float` a `Float32` and `double` a `Float`, and `void` a result of `Unit` or
+    /// `Never`. An integer result can be any integer type or `Bool`, cut down from C's; an integer
+    /// parameter has to be at least as wide as C's `int`, since Windows' convention leaves the upper bits
+    /// of a narrower one undefined.
     private bool accepts(CKind kind, Type type, bool isResult)
     {
         auto types = _program.types;
