@@ -393,7 +393,7 @@ def main(): Unit {
 unittest
 {
     analyzed("def id<T>(x: T): T => x\ndef main(): Unit {\n    val n: Int = id(1.5)\n}")
-        .shouldReport(DiagnosticCode.TypeMismatch, At("id(1.5)", 1));
+        .shouldReport(DiagnosticCode.TypeMismatch, At("1.5", 1));
 }
 
 @("a float literal too large for a Float is out of range wherever it's a Float, and the largest one is not")
