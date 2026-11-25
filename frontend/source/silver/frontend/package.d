@@ -781,6 +781,21 @@ version (unittest)
 {
     import std.file : rmdirRecurse;
 
+    /// Removes a directory and all in it, read-only files too: git's objects are read-only, and on
+    /// Windows rmdirRecurse can't delete one.
+    void removeTree(string directory)
+    {
+        version (Windows)
+        {
+            import core.sys.windows.winnt : FILE_ATTRIBUTE_READONLY;
+            import std.file : dirEntries, setAttributes, SpanMode;
+
+            foreach (entry; dirEntries(directory, SpanMode.depth))
+                if (!entry.isDir) setAttributes(entry.name, entry.attributes & ~FILE_ATTRIBUTE_READONLY);
+        }
+        rmdirRecurse(directory);
+    }
+
     /// A fresh directory under the temp directory holding `files` (path to text). A path ending in
     /// `/` is an empty directory. The caller removes it.
     string makeTree(string name, string[string] files)
@@ -789,7 +804,7 @@ version (unittest)
         import std.path : buildNormalizedPath;
 
         auto directory = buildNormalizedPath(tempDir, "silver-" ~ name);
-        if (exists(directory)) rmdirRecurse(directory);
+        if (exists(directory)) removeTree(directory);
         mkdirRecurse(directory);
         foreach (path, text; files)
         {
