@@ -93,6 +93,11 @@ def main(): Unit {
     h.list[1] += h.v
     printl(show(h.v) ~ " " ~ show(h.list[0]) ~ " " ~ show(h.list[1]))
 
+    h.v *= 2.0
+    h.list[0] /= 2.0
+    ps[0] *= 0.5
+    printl(show(h.v) ~ " " ~ show(h.list[0]) ~ " " ~ show(ps[0]))
+
     // The element and its index are read once.
     mutable val ts = [Tick(1), Tick(2)]
     ts[make(1).n] += Tick(5)

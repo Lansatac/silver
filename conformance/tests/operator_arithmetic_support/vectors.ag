@@ -5,3 +5,7 @@ type Vec(x: Int, y: Int)
 def opAdd(a: Vec, b: Vec): Vec => Vec(a.x + b.x, a.y + b.y)
 def opNeg(v: Vec): Vec => Vec(-v.x, -v.y)
 def opMul(v: Vec, k: Int): Vec => Vec(v.x * k, v.y * k)
+
+// Private, so this module's `dot` uses it and nothing outside can.
+private def opMul(a: Vec, b: Vec): Int => a.x * b.x + a.y * b.y
+def dot(a: Vec, b: Vec): Int => a * b

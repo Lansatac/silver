@@ -15,6 +15,7 @@ def main(): Unit {
     printl(-Feet(3.0))
     printl(Vec(1, 2) + Vec(3, 4))
     printl(-Vec(1, 2) * 3)
+    printl(dot(Vec(1, 2), Vec(3, 4)))
     mutable val v = Vec(0, 0)
     v += Vec(5, 5)
     printl(v)

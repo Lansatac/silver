@@ -241,6 +241,43 @@ def opNeg(a: V): V => a
 def main(): Unit => print(1 + 2)").shouldHaveNoDiagnostics();
 }
 
+@("a function of the operator's name with no parameters is not a candidate, for arithmetic or indexing")
+unittest
+{
+    analyzed("type V(x: Int)\ndef opAdd(): Int => 1\ndef main(): Unit => print(V(1) + V(2))")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("V(1)", 1));
+    analyzed("type V(x: Int)\ndef opNeg(): Int => 1\ndef main(): Unit => print(-V(1))")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("V(1)", 1));
+    analyzed("type V(x: Int)\ndef opIndex(): Int => 1\ndef opIndex(v: V, i: Int): Int => i\ndef main(): Unit => print(V(1)[2])")
+        .shouldHaveNoDiagnostics();
+    analyzed("type V(x: Int)\ndef opIndex(): Int => 1\ndef main(): Unit => print(V(1)[2])")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("V(1)", 1));
+}
+
+@("an operand fitted by its shape is typed as the call's argument is, and reported once")
+unittest
+{
+    enum v = "type V(x: Int)\n";
+    analyzed(v ~ "def opSub(a: V, b: [Float]): V => a\ndef main(): Unit => print(V(1) - [1, 2.5])").shouldHaveNoDiagnostics();
+    analyzed(v ~ "def opMul(a: V, b: (Int, [Float])): V => a\ndef main(): Unit => print(V(1) * (1, [1, 2.5]))").shouldHaveNoDiagnostics();
+    analyzed(v ~ "def opDiv(a: V, b: (Int8?)?): V => a\ndef main(): Unit => print(V(1) / Some(None))").shouldHaveNoDiagnostics();
+    analyzed(v ~ "def opDiv(a: V, f: (Int) -> Int): V => a\ndef main(): Unit => print(V(1) / (x => x + 1))").shouldHaveNoDiagnostics();
+    analyzed(v ~ "def opSub(a: V, b: Int8): V => a\ndef main(): Unit => print(V(1) - 100)").shouldHaveNoDiagnostics();
+    analyzed(v ~ "def opSub(a: V, b: Int8): V => a\ndef main(): Unit => print(V(1) - 200)")
+        .shouldReport(DiagnosticCode.LiteralOutOfRange, At("200", 1));
+    analyzed(v ~ "def opNeg(a: [Float]): V => V(1)\ndef main(): Unit => print(-[1, 2.5])").shouldHaveNoDiagnostics();
+    analyzed(v ~ "def opAdd(a: String, b: V): V => b\ndef main(): Unit => print(\"s\" + V(1))").shouldHaveNoDiagnostics();
+}
+
+@("an operand that never returns fits any parameter, as it does in a call")
+unittest
+{
+    analyzed("type V(x: Int)\ndef opAdd(a: V, b: V): V => a\ndef main(): Unit => print(V(1) + panic(\"y\"))")
+        .shouldHaveNoDiagnostics();
+    analyzed("type V(x: Int)\ndef opAdd(a: V, b: V): V => a\ndef main(): Unit => print(panic(\"y\") + V(1))")
+        .shouldHaveNoDiagnostics();
+}
+
 @("an operator that calls a function can't be in a top-level constant")
 unittest
 {
