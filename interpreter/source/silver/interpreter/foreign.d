@@ -4,7 +4,8 @@
 ///
 /// Each is described by its C signature, so the evaluator can serve any declaration that C's
 /// calling convention passes the same way: a pointer can be declared as a native type, an option of
-/// one, or a 64-bit integer, and an integer as any integer type.
+/// one, or a 64-bit integer, an integer as any integer type, and a `float` as a `Float32` (never a
+/// `Float`, which C passes as a `double`).
 module silver.interpreter.foreign;
 
 /// How C passes a parameter or result.
@@ -13,6 +14,8 @@ enum CKind
     integer,
     pointer,
     float_,
+    /// C's `float`: the double a `CValue` holds, narrowed to single precision on the way in.
+    single,
     /// `void`, as a result.
     none,
 }
@@ -42,13 +45,18 @@ private char* text(CValue value) => cast(char*) value.pointer;
 shared static this()
 {
     import core.stdc.ctype : isdigit, tolower, toupper;
-    import core.stdc.math : atan, cos, exp, ilogb, log, pow, sin, sqrt;
+    import core.stdc.math : atan, cos, cosf, exp, expf, ilogb, log, pow, powf, sin, sinf, sqrt, sqrtf;
     import core.stdc.stdlib : abs, free, getenv, malloc;
     import core.stdc.string : strchr, strcmp, strlen;
 
     static ForeignFunction unary(alias f)()
     {
         return ForeignFunction([CKind.float_], CKind.float_, (CValue[] args) => floatValue(f(args[0].float_)));
+    }
+
+    static ForeignFunction unaryFloat(alias f)()
+    {
+        return ForeignFunction([CKind.single], CKind.single, (CValue[] args) => floatValue(f(cast(float) args[0].float_)));
     }
 
     alias integer = CKind.integer, pointer = CKind.pointer, float_ = CKind.float_, none = CKind.none;
@@ -60,6 +68,12 @@ shared static this()
         "cos": unary!cos,
         "atan": unary!atan,
         "pow": ForeignFunction([float_, float_], float_, (CValue[] args) => floatValue(pow(args[0].float_, args[1].float_))),
+        "sqrtf": unaryFloat!sqrtf,
+        "expf": unaryFloat!expf,
+        "sinf": unaryFloat!sinf,
+        "cosf": unaryFloat!cosf,
+        "powf": ForeignFunction([CKind.single, CKind.single], CKind.single,
+            (CValue[] args) => floatValue(powf(cast(float) args[0].float_, cast(float) args[1].float_))),
         "ilogb": ForeignFunction([float_], integer, (CValue[] args) => integerValue(ilogb(args[0].float_))),
         "isdigit": ForeignFunction([integer], integer, (CValue[] args) => integerValue(isdigit(cast(int) args[0].integer))),
         "abs": ForeignFunction([integer], integer, (CValue[] args) => integerValue(abs(cast(int) args[0].integer))),

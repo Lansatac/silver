@@ -138,6 +138,21 @@ unittest
     assert(error !is null);
     error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
     error.diagnostic.message.should.contain("as it's declared");
+
+    // `sqrtf` takes a C `float` and `sqrt` a `double`: the other width is refused, not called wrongly.
+    error = collectException!RuntimeError(run("native def sqrtf(x: Float): Float\ndef main(): Unit {\n    printl(sqrtf(4.0))\n}"));
+    assert(error !is null);
+    error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
+    error.diagnostic.message.should.contain("as it's declared");
+
+    error = collectException!RuntimeError(run("native def sqrt(x: Float32): Float32\ndef main(): Unit {\n    printl(sqrt(4.0))\n}"));
+    assert(error !is null);
+    error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
+    error.diagnostic.message.should.contain("as it's declared");
+
+    error = collectException!RuntimeError(run("native def sqrtf(x: Float32): Float\ndef main(): Unit {\n    printl(sqrtf(4.0))\n}"));
+    assert(error !is null);
+    error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
 }
 
 @("a built-in native serves any declaration C passes the same way, a pointer as a 64-bit integer included")
