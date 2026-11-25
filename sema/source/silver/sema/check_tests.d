@@ -361,6 +361,41 @@ unittest
     analyzedMain("val x: Float32 = 3.4028235e38\n    val y: Float32 = 1e-50\n    val z = 1e30").shouldHaveNoDiagnostics();
 }
 
+@("a float literal argument doesn't fix a type parameter: the expected type or another argument does, else it's a Float")
+unittest
+{
+    auto a = analyzed(`def id<T>(x: T): T => x
+def pair<T>(a: T, b: T): T => b
+def main(): Unit {
+    val d: Float32 = id(1.5)
+    val e = id(2.5)
+    val f: Float32 = id(-3.5)
+    val g = pair(4, 4.5)
+    val h = pair(Float32(1.0), 5.5)
+    val i = pair(6.5, Float32(1.0))
+    val j: Float32 = id(7)
+}`);
+    a.shouldHaveType("id(1.5)", "Float32");
+    a.shouldHaveType("1.5", "Float32");
+    a.shouldHaveType("id(2.5)", "Float");
+    a.shouldHaveType("id(-3.5)", "Float32");
+    a.shouldHaveType("pair(4, 4.5)", "Float");
+    a.shouldHaveType("4", "Float");
+    a.shouldHaveType("pair(Float32(1.0), 5.5)", "Float32");
+    a.shouldHaveType("5.5", "Float32");
+    a.shouldHaveType("pair(6.5, Float32(1.0))", "Float32");
+    a.shouldHaveType("6.5", "Float32");
+    a.shouldHaveType("id(7)", "Float32");
+    a.shouldHaveNoDiagnostics();
+}
+
+@("a float literal never becomes an integer type through a type parameter")
+unittest
+{
+    analyzed("def id<T>(x: T): T => x\ndef main(): Unit {\n    val n: Int = id(1.5)\n}")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("id(1.5)", 1));
+}
+
 @("a float literal too large for a Float is out of range wherever it's a Float, and the largest one is not")
 unittest
 {

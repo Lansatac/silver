@@ -5770,7 +5770,7 @@ private final class TypeChecker
         foreach (param; g.params ~ g.ownerParams) bound[param.id] = _types.error;
     }
 
-    /// An argument whose type depends on where it goes: an integer literal, a lambda, `None`, `[]`
+    /// An argument whose type depends on where it goes: an integer literal, a float literal, a lambda, `None`, `[]`
     /// or `[:]`, and as with `None`, a generic name with no type arguments that isn't called, like `Nil`.
     private bool isUntyped(const Expr expr)
     {
@@ -5781,7 +5781,7 @@ private final class TypeChecker
             _ => false,
         );
         if (genericName && expr.id !in _resolutions.aliasedInstances && genericNamed(expr).found) return true;
-        return isIntLiteral(expr) || isLambda(expr) || expr.kind.match!(
+        return isIntLiteral(expr) || isFloatLiteral(expr) || isLambda(expr) || expr.kind.match!(
             (const NoneLiteral _) => true,
             (const OkExpr _) => true,
             (const ArrayLiteral literal) => literal.elements.length == 0,
@@ -5931,11 +5931,13 @@ private final class TypeChecker
                     if (!trial) checkArgument(arg, _types.substitute(signature.params[i], b.bound), ctx);
                     b.checked[i] = progress = true;
                 }
-                else if (isIntLiteral(arg))
+                // An integer literal beside a float literal waits, so that `pair(1, 1.5)` is a `Float` pair.
+                else if (isFloatLiteral(arg) || isIntLiteral(arg)
+                    && !args.length.iota.any!(j => isFloatLiteral(args[j]) && b.typed[j] == Type.init && !b.checked[j] && !known(j)))
                 {
                     if (trial)
                     {
-                        bind(i, _types.int_);
+                        bind(i, isIntLiteral(arg) ? _types.int_ : _types.float_);
                         b.checked[i] = true;
                     }
                     else
@@ -6127,7 +6129,7 @@ private final class TypeChecker
                 continue;
             }
             auto untyped = args.length.iota.filter!(i => mentions(i) && typed[i] == Type.init && !isLambda(args[i])
-                && !isIntLiteral(args[i]));
+                && !isIntLiteral(args[i]) && !isFloatLiteral(args[i]));
             if (!untyped.empty)
             {
                 auto arg = args[untyped.front];

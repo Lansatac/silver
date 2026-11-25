@@ -56,6 +56,20 @@ val half: Float = 1 / 2       // 0.5: both literals are Floats
 - Each literal is checked at compile time to fit, and the arithmetic then behaves as it does anywhere: `val y: UInt8 = 200 + 100` panics with `Integer overflow` when it runs. In a [constant](bindings.md#top-level-constants), which is evaluated at compile time, it's a compile error.
 - With nothing expected and no number beside it, arithmetic on integer literals is an `Int`.
 
+A literal argument doesn't fix the type parameter of a generic function by itself, whether it's an integer or a float literal. The other arguments or the type expected of the call do, and only when nothing else does, the literal takes its default type:
+
+```silver
+def id<T>(x: T): T => x
+def pair<T>(a: T, b: T): T => b
+
+val d: Float32 = id(1.5)         // a Float32
+val e = id(1.5)                  // a Float
+val g = pair(1, 1.5)             // a Float
+val h = pair(Float32(1.0), 2.5)  // a Float32: the other argument fixes it
+```
+
+A float literal never becomes an integer type this way.
+
 ## Operators
 
 | Operators | Meaning |
@@ -139,7 +153,6 @@ Apart from the infinities and NaN, the text is a Float literal in Silver and a n
 
 ## Current implementation
 
-- A float literal doesn't adapt to `Float32` through generic inference, where an integer literal does: with `def id<T>(x: T): T`, `val b: Float32 = id(1)` compiles, and `val a: Float32 = id(1.5)` is an error, since `1.5` is a `Float`.
 - A float literal's range is checked once checking is done, since its type isn't final before, so Core and the backends never see an infinite literal.
 - `std.math` is `Float`-only: a `Float32` goes through `Float(x)` and back. `parseFloat` returns a `Float`.
 - A `Float32` can't be in a native function's signature yet.
