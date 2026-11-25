@@ -36,10 +36,10 @@
 		{
 			"name": "application",
 			"targetName": "silverc",
-			"postBuildCommands-posix": ["\"$PACKAGE_DIR./ship.sh\" silverc"],
-			"postBuildCommands-windows": ["\"$PACKAGE_DIR.\\ship.cmd\" silverc.exe"],
-			"preGenerateCommands-posix": ["\"$DUB\" build :frontend --root=\"$PACKAGE_DIR.\" && \"$PACKAGE_DIR./ship.sh\" silver silverc"],
-			"preGenerateCommands-windows": ["\"$DUB\" build :frontend --root=\"$PACKAGE_DIR.\" && \"$PACKAGE_DIR.\\ship.cmd\" silver.exe silverc.exe"]
+			"postBuildCommands-posix": ["\"$PACKAGE_DIR./ship.sh\" silver silverc"],
+			"postBuildCommands-windows": ["\"$PACKAGE_DIR.\\ship.cmd\" silver.exe silverc.exe"],
+			"preGenerateCommands-posix": ["\"$DUB\" build :frontend --root=\"$PACKAGE_DIR.\""],
+			"preGenerateCommands-windows": ["\"$DUB\" build :frontend --root=\"$PACKAGE_DIR.\""]
 		},
 		{
 			"name": "unittest",
