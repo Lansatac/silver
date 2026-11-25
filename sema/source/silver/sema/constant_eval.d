@@ -8,6 +8,7 @@ import std.sumtype;
 
 import silver.ast;
 import silver.sema.constant;
+import silver.sema.floatliteral : float32Of;
 import silver.sema.resolve;
 import silver.sema.type;
 
@@ -233,7 +234,7 @@ private struct ConstantEvaluator
     /// A float literal that adapted to `Float32` is rounded to one.
     private const(ConstValue)* floatLiteralValue(const Expr expr, const FloatLiteral literal)
     {
-        if (_exprTypes[expr.id] == _types.float32) return boxedConstant(ConstValue(ConstFloat32(cast(float) literal.value)));
+        if (_exprTypes[expr.id] == _types.float32) return boxedConstant(ConstValue(ConstFloat32(float32Of(literal))));
         return boxedConstant(ConstValue(double(literal.value)));
     }
 

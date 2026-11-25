@@ -27,7 +27,7 @@ x + 0.25                 // the literal is a Float32, beside one
 val big: Float32 = 1e40  // error: doesn't fit
 ```
 
-A float literal is rounded to the nearest value of its type, and one that rounds to infinity is a compile error, for a `Float` as for a `Float32`: `1e400` is an error wherever it's a `Float`, and `1e40` is one where a `Float32` is expected. A literal too small for its type rounds to zero. Only a literal is checked: a conversion or arithmetic that leaves the range is infinity, so `Float32(1e40)` and `1e300 * 1e300` are `inf`.
+A float literal is rounded once, from its text, to the nearest value of its type, and one that rounds to infinity is a compile error, for a `Float` as for a `Float32`: `1e400` is an error wherever it's a `Float`, and `1e40` is one where a `Float32` is expected. A literal too small for its type rounds to zero. Only a literal is checked: a conversion or arithmetic that leaves the range is infinity, so `Float32(1e40)` and `1e300 * 1e300` are `inf`.
 
 An integer literal takes the type expected of it, or the type of the number beside it, and is checked at compile time to fit. With neither, it is an `Int`. An arm of an `if` or `match` that's a literal takes the type of the other arms in the same way, so with `small: UInt8`, `if c => 1 else small` is a `UInt8`. A sign is an operator applied to a literal, but a negated literal still adapts, so `-128` is a valid `Int8`.
 
@@ -99,6 +99,8 @@ Float(n)         // the nearest Float
 Float32(1e300)   // inf
 ```
 
+`Float32(d)` rounds a `Float`, so with a literal written inside it the text is rounded twice, first to a `Float` and then to a `Float32`. For text that lies just past the midpoint between two `Float32`s, closer to it than a `Float` can tell, that can differ by one step from `val x: Float32 = text`, which rounds the text once.
+
 `Float32` and `Float` never convert implicitly, so `x + d` with a `Float32` and a `Float` is an error: write `Float(x) + d` to compute in double precision, or `x + Float32(d)` to compute in single.
 
 ## Printing floats
@@ -137,6 +139,7 @@ Apart from the infinities and NaN, the text is a Float literal in Silver and a n
 
 ## Current implementation
 
+- A float literal doesn't adapt to `Float32` through generic inference, where an integer literal does: with `def id<T>(x: T): T`, `val b: Float32 = id(1)` compiles, and `val a: Float32 = id(1.5)` is an error, since `1.5` is a `Float`.
 - A float literal's range is checked once checking is done, since its type isn't final before, so Core and the backends never see an infinite literal.
 - `std.math` is `Float`-only: a `Float32` goes through `Float(x)` and back. `parseFloat` returns a `Float`.
 - A `Float32` can't be in a native function's signature yet.

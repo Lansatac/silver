@@ -1,0 +1,8 @@
+// (2 - 2^-24) × 2^127 is the midpoint between the largest Float32 and 2^128, and rounds to infinity.
+val limit: Float32 = 340282356779733661637539395458142568447.0
+val midpoint: Float32 = 340282356779733661637539395458142568448.0
+
+def main(): Unit {
+    printl(limit)
+    printl(midpoint)
+}

@@ -5,6 +5,7 @@ import std.array;
 import std.conv;
 import std.range : iota, repeat;
 import std.sumtype;
+import std.math : isInfinity;
 import std.string;
 
 
@@ -12,6 +13,7 @@ import silver.ast;
 import silver.sema.constant_eval;
 import silver.sema.coverage;
 import silver.sema.declare;
+import silver.sema.floatliteral : float32Of;
 import silver.sema.hooks : checkTypeHooks;
 import silver.sema.recursion;
 import silver.sema.type;
@@ -775,16 +777,17 @@ private final class TypeChecker
     private void checkFloatLiteralRange(const Expr expr)
     {
         auto type = _typing.exprTypes[expr.id];
-        auto value = expr.kind.match!(
-            (const FloatLiteral l) => l.value,
+        auto literal = expr.kind.match!(
+            (const FloatLiteral l) => l,
             (_) => assert(0, "only float literals are recorded"),
         );
-        if (type == _types.float32 && value == value && cast(float) value == float.infinity)
+        auto value = literal.value;
+        if (type == _types.float32 && value == value && isInfinity(float32Of(literal)))
         {
             _collector.reportError(DiagnosticCode.LiteralOutOfRange, expr.span,
                 "This float literal doesn't fit in `Float32`; its largest value is about 3.4028235e38");
         }
-        else if (type == _types.float_ && value == double.infinity)
+        else if (type == _types.float_ && isInfinity(value))
         {
             _collector.reportError(DiagnosticCode.LiteralOutOfRange, expr.span,
                 "This float literal doesn't fit in `Float`; its largest value is about 1.7976931348623157e308");

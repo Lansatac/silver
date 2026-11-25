@@ -232,6 +232,8 @@ struct IntLiteral
 struct FloatLiteral
 {
     double value;
+    /// As written, with any sign that touches it, so a `Float32` can be rounded from the text and not from `value`.
+    string text;
 }
 
 /// `"..."`, with escapes already decoded.

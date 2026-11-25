@@ -1823,7 +1823,7 @@ private final class Parser
             return Expr(ids.next!Expr, spanFrom(start), ExprKind(integerLiteral(text(token)[2 .. $], 2)));
         case TokenKind.float_:
             pos++;
-            return Expr(ids.next!Expr, spanFrom(start), ExprKind(FloatLiteral(parseFloat(text(token)))));
+            return Expr(ids.next!Expr, spanFrom(start), ExprKind(FloatLiteral(parseFloat(text(token)), text(token))));
         case TokenKind.stringStart:
             return parseString();
         case TokenKind.char_:
@@ -1836,7 +1836,7 @@ private final class Parser
             auto span = spanFrom(start);
             if (number.kind == TokenKind.float_)
             {
-                return Expr(ids.next!Expr, span, ExprKind(FloatLiteral(parseFloat(source[token.start .. number.end]))));
+                return Expr(ids.next!Expr, span, ExprKind(FloatLiteral(parseFloat(source[token.start .. number.end]), source[token.start .. number.end])));
             }
             auto literal = Expr(ids.next!Expr, span, ExprKind(integerLiteral(text(number), 10)));
             if (token.kind == TokenKind.plus) return literal;
