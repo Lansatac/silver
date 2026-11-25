@@ -3279,7 +3279,7 @@ private final class TypeChecker
     /// other is typed.
     private bool isFittedByShape(const Expr operand)
     {
-        return isShaped(operand) && !isIntLiteral(operand) && operand.kind.match!((const FloatLiteral _) => false, _ => true);
+        return isShaped(operand) && !isIntLiteral(operand) && !isFloatLiteral(operand);
     }
 
     /// An arithmetic operation that means a call of the operator function `name`, chosen as a call

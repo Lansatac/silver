@@ -212,6 +212,19 @@ def opNeg(a: V): V => a
     a.shouldDeclareType(At("dot", 1), "Float");
     a.shouldDeclareType(At("negated", 1), "V");
     a.shouldDeclareType(At("rest", 1), "V");
+
+    auto numbers = analyzed("def main(): Unit {
+    val quotient = -7.0 / 2.0
+    val product = 1.5 * -2.0
+    val twice = -(-1.5) - +2.0
+    val narrow: Float32 = -1.5
+    val beside = narrow * -2.0
+}");
+    numbers.shouldHaveNoDiagnostics();
+    numbers.shouldDeclareType(At("quotient", 1), "Float");
+    numbers.shouldDeclareType(At("product", 1), "Float");
+    numbers.shouldDeclareType(At("twice", 1), "Float");
+    numbers.shouldDeclareType(At("beside", 1), "Float32");
 }
 
 @("an operator with no function that takes its operands is an error naming the operator, the function and the operands, at the first operand that isn't a number")
