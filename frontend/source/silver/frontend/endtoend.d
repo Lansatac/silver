@@ -193,14 +193,14 @@ unittest
     expectRan(run(["hello.ag"]), "the copy\n");
     assert(silver(["hello.ag"], work).status != 0, "the repository's standard library has no std.shipped");
 
+    // Where out/ has LLVM's tools, as a Windows release does, so does the copy; else clang is on the PATH.
+    if (exists(buildPath(root, "out", "llvm"))) copyTree(buildPath(root, "out", "llvm"), buildPath(install, "llvm"));
     auto output = buildPath(work, "hello" ~ exe);
     expectRan(run(["build", "-o", output, "hello.ag"]), "Linking failed:\nThe runtime wasn't found. It's the directory "
         ~ "`runtime` beside the compiler, which would be " ~ buildPath(install, "runtime") ~ ".\n", 1);
 
     // The built runtime alone, with no sources: silverc only links it.
     copyTree(buildPath(root, "out", "runtime"), buildPath(install, "runtime"));
-    // Where out/ has LLVM's tools, as a Windows release does, so does the copy; else clang is on the PATH.
-    if (exists(buildPath(root, "out", "llvm"))) copyTree(buildPath(root, "out", "llvm"), buildPath(install, "llvm"));
     expectRan(run(["build", "-o", output, "hello.ag"]), "");
     expectRan(runIn([output], work), "the copy\n");
     expectRan(run(["build", "-O", "-o", output, "hello.ag"]), "");
