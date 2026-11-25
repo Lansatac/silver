@@ -5848,6 +5848,8 @@ private final class TypeChecker
             bindParams(signature.params[i], type, bindable(), b.bound);
         }
         bool known(size_t i) => !signature.isMutable(i) && !call.isMutable(i) && isBound(signature.params[i], params, b.bound);
+        // A float literal that hasn't had its turn. Integer literals, and what's made of them, wait for it.
+        bool floatPending() => args.length.iota.any!(j => isFloatLiteral(args[j]) && b.typed[j] == Type.init && !b.checked[j] && !known(j));
         bool open() => params.any!(p => p.id !in b.bound);
         void solveBounds()
         {
@@ -5903,6 +5905,7 @@ private final class TypeChecker
                 b.checked[i] = true;
                 continue;
             }
+            if (!call.isMutable(i) && waitsForFloat(arg) && floatPending()) continue;
             if (trial)
             {
                 auto type = defaultType(arg);
@@ -5933,11 +5936,27 @@ private final class TypeChecker
                 }
                 // An integer literal beside a float literal waits, so that `pair(1, 1.5)` is a `Float` pair.
                 else if (isFloatLiteral(arg) || isIntLiteral(arg)
-                    && !args.length.iota.any!(j => isFloatLiteral(args[j]) && b.typed[j] == Type.init && !b.checked[j] && !known(j)))
+                    && !floatPending())
                 {
                     if (trial)
                     {
                         bind(i, isIntLiteral(arg) ? _types.int_ : _types.float_);
+                        b.checked[i] = true;
+                    }
+                    else
+                    {
+                        b.typed[i] = synthesize(arg, ctx);
+                        bind(i, b.typed[i]);
+                    }
+                    progress = true;
+                }
+                else if (!call.isMutable(i) && waitsForFloat(arg) && !floatPending())
+                {
+                    // Nothing has fixed its parameters, so it's typed on its own, as it would have been in the first pass.
+                    if (trial)
+                    {
+                        auto type = defaultType(arg);
+                        if (type != Type.init) bind(i, type);
                         b.checked[i] = true;
                     }
                     else
@@ -7972,6 +7991,29 @@ private final class TypeChecker
                 && isIntLiteral(*unary.operand),
             _ => false,
         );
+    }
+
+    /// An array, tuple, `Some` or dictionary literal made only of literals, with an integer literal in it.
+    /// Where a float literal argument is waiting to bind a type parameter, so does this, since typing it
+    /// first would bind `Int`: `pick(1.5, [2])` is a `[Float]`.
+    private bool waitsForFloat(const Expr arg)
+    {
+        bool onlyLiterals(const Expr e) => isLiteral(e) || e.kind.match!(
+            (const NoneLiteral _) => true,
+            (const ArrayLiteral l) => l.elements.all!(x => onlyLiterals(x)),
+            (const TupleLiteral l) => l.elements.all!(x => onlyLiterals(x)),
+            (const SomeExpr some) => onlyLiterals(*some.value),
+            (const MapLiteral m) => m.keys.all!(x => onlyLiterals(x)) && m.values.all!(x => onlyLiterals(x)),
+            _ => false,
+        );
+        bool hasInteger(const Expr e) => isIntLiteral(e) || e.kind.match!(
+            (const ArrayLiteral l) => l.elements.any!(x => hasInteger(x)),
+            (const TupleLiteral l) => l.elements.any!(x => hasInteger(x)),
+            (const SomeExpr some) => hasInteger(*some.value),
+            (const MapLiteral m) => m.keys.any!(x => hasInteger(x)) || m.values.any!(x => hasInteger(x)),
+            _ => false,
+        );
+        return !isIntLiteral(arg) && onlyLiterals(arg) && hasInteger(arg);
     }
 
     /// A float literal, possibly signed. It's a `Float` unless the type expected of it is `Float32`.

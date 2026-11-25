@@ -389,6 +389,38 @@ def main(): Unit {
     a.shouldHaveNoDiagnostics();
 }
 
+@("integer literals nested in an array, tuple, option or dictionary literal wait for a float literal argument")
+unittest
+{
+    auto a = analyzed(`def pick<T>(x: T, xs: [T]): [T] => xs
+def tup<T>(x: T, t: (T, T)): T => x
+def op<T>(x: T, o: T?): T => x
+def dict<T>(x: T, d: [T: String]): T => x
+def main(): Unit {
+    val ra = pick(1.5, [2])
+    val rb = pick(-1.25, [2, 3])
+    val rc = pick(1.75, [2.5, 3])
+    val rd = tup(1.5, (7, 8))
+    val re = op(1.5, Some(9))
+    val rf = dict(1.5, [4: "a"])
+    val rg = pick(5, [6])
+    val rh = pick(11, [2.5])
+    val ri = pick(Float32(1.0), [12])
+    val rj: [Float32] = pick(1.0625, [13])
+}`);
+    a.shouldDeclareType(At("ra", 1), "[Float]");
+    a.shouldDeclareType(At("rb", 1), "[Float]");
+    a.shouldDeclareType(At("rc", 1), "[Float]");
+    a.shouldDeclareType(At("rd", 1), "Float");
+    a.shouldDeclareType(At("re", 1), "Float");
+    a.shouldDeclareType(At("rf", 1), "Float");
+    a.shouldDeclareType(At("rg", 1), "[Int]");
+    a.shouldDeclareType(At("rh", 1), "[Float]");
+    a.shouldDeclareType(At("ri", 1), "[Float32]");
+    a.shouldHaveType("13", "Float32");
+    a.shouldHaveNoDiagnostics();
+}
+
 @("a float literal never becomes an integer type through a type parameter")
 unittest
 {
