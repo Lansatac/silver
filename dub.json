@@ -31,6 +31,11 @@
 	},
 	"targetType": "executable",
 	"stringImportPaths": ["generated"],
+	"buildTypes": {
+		"silver-release": {
+			"buildOptions": ["optimize", "inline"]
+		}
+	},
 	"targetPath": "build",
 	"configurations": [
 		{

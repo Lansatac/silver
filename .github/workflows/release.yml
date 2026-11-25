@@ -1,0 +1,151 @@
+# On a v* tag: builds the Linux and Windows archives with release/package.sh, smoke tests each from a clean
+# directory with release/smoke.sh, and publishes them with their checksums as a GitHub Release.
+# Toolchain setup follows test.yml (the same pins from the dev container's Dockerfile).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build the image
+        uses: docker/build-push-action@v7
+        with:
+          context: .devcontainer
+          target: build
+          tags: silver-build:ci
+          load: true
+          cache-from: type=gha,scope=build
+          cache-to: type=gha,mode=max,scope=build
+
+      # The version is the tag's, without its v.
+      - name: Package
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/ci-home \
+            -e SILVER_VERSION="${GITHUB_REF_NAME#v}" \
+            -v "$RUNNER_TEMP/home:/ci-home" \
+            -v "$GITHUB_WORKSPACE:/code" \
+            -w /code \
+            --tmpfs /tmp:rw,exec,mode=1777,size=8g \
+            silver-build:ci release/package.sh
+
+      # On the runner itself, which has clang and the C development files and not dmd, as a user does.
+      - name: Smoke test
+        run: release/smoke.sh dist/silver-*-linux-x64.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read pins from the dev container's Dockerfile
+        id: pins
+        run: |
+          echo "dmd=$(sed -n 's/^ARG DMD_VERSION=//p' .devcontainer/Dockerfile)" >> "$GITHUB_OUTPUT"
+          echo "redub=$(sed -n 's/^ARG REDUB_COMMIT=//p' .devcontainer/Dockerfile)" >> "$GITHUB_OUTPUT"
+
+      - name: Enlarge the page file
+        uses: al-cheb/configure-pagefile-action@v1.5
+        with:
+          minimum-size: 16GB
+          maximum-size: 16GB
+          disk-root: "D:"
+
+      - uses: dlang-community/setup-dlang@v2
+        with:
+          compiler: dmd-${{ steps.pins.outputs.dmd }}
+
+      - name: Cache redub
+        id: redub-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/redub/build
+          key: redub-windows-${{ steps.pins.outputs.redub }}-dmd-${{ steps.pins.outputs.dmd }}
+
+      - name: Build redub
+        if: steps.redub-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          git clone --quiet https://github.com/Lansatac/redub.git "$HOME/redub"
+          git -C "$HOME/redub" checkout --quiet ${{ steps.pins.outputs.redub }}
+          Push-Location "$HOME/redub"
+          dub build --quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+
+      # clang.exe and lld-link.exe, which package.sh copies into llvm/ of the archive, are the runner's.
+      - name: Package
+        env:
+          SILVER_VERSION_TAG: ${{ github.ref_name }}
+          SILVER_REDUB_PARALLEL: "no"
+        run: |
+          export SILVER_VERSION="${SILVER_VERSION_TAG#v}"
+          llvm="C:/Program Files/LLVM/bin"
+          release/package.sh --llvm "$llvm"
+
+      # Without clang on the PATH, so the archive's llvm/ does the compiling.
+      - name: Smoke test
+        run: release/smoke.sh dist/silver-*-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag
