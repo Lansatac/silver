@@ -60,9 +60,91 @@ version (unittest)
         return lines;
     }
 
+    /// Why the shared libraries of conformance/clibraries/ couldn't be built, or null once they have been.
+    __gshared string cLibrariesProblem;
+
+    /// Builds each C file in conformance/clibraries/ with clang into a shared library named after it,
+    /// which a case can name in `native library`, once for this process, and makes the directory it's in
+    /// one where the linker, the system's loader and so the interpreter look. Returns why it couldn't, or
+    /// null.
+    string cLibrariesBuilt()
+    {
+        import std.concurrency : initOnce;
+
+        __gshared bool built;
+        initOnce!built({
+            cLibrariesProblem = buildCLibraries();
+            if (cLibrariesProblem !is null)
+            {
+                writeln("    note: ", cLibrariesProblem, " A case calling a library of conformance/clibraries/ fails.");
+            }
+            return true;
+        }());
+        return cLibrariesProblem;
+    }
+
+    string buildCLibraries()
+    {
+        import std.process : execute;
+
+        Toolchain toolchain;
+        if (auto missing = findToolchain(toolchain)) return missing;
+        // The process's own, since a library another process has loaded can't be replaced on Windows.
+        auto directory = buildPath(tempDir, "silver-conformance-clibraries-" ~ thisProcessID.to!string);
+        if (exists(directory)) rmdirRecurse(directory);
+        mkdirRecurse(directory);
+        foreach (entry; dirEntries(buildPath(conformanceDirectory, "clibraries"), "*.c", SpanMode.shallow))
+        {
+            auto name = baseName(entry.name).stripExtension;
+            version (Windows)
+            {
+                // Linked with no C runtime, as the libraries use none, so Visual Studio isn't needed.
+                auto objPath = buildPath(directory, name ~ ".obj");
+                auto compiled = execute([toolchain.clang, "-c", "-ffreestanding", "-o", objPath, entry.name]);
+                if (compiled.status != 0) return "clang couldn't compile " ~ entry.name ~ ":\n" ~ compiled.output;
+                auto linked = execute([toolchain.lld, "/nologo", "/dll", "/noentry", "/nodefaultlib",
+                    "/out:" ~ buildPath(directory, name ~ ".dll"), "/implib:" ~ buildPath(directory, name ~ ".lib"), objPath]);
+                if (linked.status != 0) return "lld-link couldn't link " ~ entry.name ~ ":\n" ~ linked.output;
+            }
+            else
+            {
+                import core.sys.posix.dlfcn : dlopen, RTLD_GLOBAL, RTLD_NOW;
+                import std.string : toStringz;
+
+                auto file = "lib" ~ name ~ ".so";
+                auto path = buildPath(directory, file);
+                auto built = execute([toolchain.clang, "-shared", "-fPIC", "-ffreestanding", "-Wl,-soname," ~ file, "-o",
+                    path, entry.name]);
+                if (built.status != 0) return "clang couldn't build " ~ entry.name ~ ":\n" ~ built.output;
+                // The loader read LD_LIBRARY_PATH when this process started, so the interpreter running in it
+                // finds the library by name only because it's already loaded under that name.
+                if (dlopen(path.toStringz, RTLD_NOW | RTLD_GLOBAL) is null) return "couldn't load " ~ path;
+            }
+        }
+        void putFirst(string variable)
+        {
+            version (Windows) enum separator = ";";
+            else enum separator = ":";
+            auto rest = environment.get(variable, "");
+            environment[variable] = rest.length == 0 ? directory : directory ~ separator ~ rest;
+        }
+        version (Windows)
+        {
+            putFirst("PATH");
+            putFirst("LIB");
+        }
+        else
+        {
+            putFirst("LIBRARY_PATH");
+            putFirst("LD_LIBRARY_PATH");
+        }
+        return null;
+    }
+
     /// Every `*.ag` in `directory` under conformance/ with its `.expected` output, sorted by name.
     Case[] casesIn(string directory)
     {
+        cLibrariesBuilt();
         auto casesDirectory = buildPath(conformanceDirectory, directory);
         Case[] result;
         foreach (entry; dirEntries(casesDirectory, "*.ag", SpanMode.shallow))

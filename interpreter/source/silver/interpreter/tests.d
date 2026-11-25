@@ -122,40 +122,46 @@ unittest
     readText(elsewhere).should.equal("far");
 }
 
-@("calling a native the interpreter doesn't have is a diagnostic, not a crash")
+@("a native that can't be found is an error before main, at its first call, not a panic")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.exception : collectException;
+    import silver.ast : DiagnosticCode, DiagnosticException;
+    import silver.interpreter.errors : RuntimeError;
+    import silver.interpreter.foreign : sharedLibraryFile;
+
+    auto error = collectException!DiagnosticException(run("native def silver_no_such_function(x: Float): Float\n"
+        ~ "def main(): Unit {\n    printl(1)\n    printl(silver_no_such_function(8.0))\n}"));
+    assert(error !is null && cast(RuntimeError) error is null);
+    error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
+    error.diagnostic.message.should.equal("`silver_no_such_function` can't be called when interpreting: "
+        ~ "`silver_no_such_function` is in neither Silver's runtime nor the C library");
+    error.diagnostic.span.start.should.equal(96);
+
+    error = collectException!DiagnosticException(run("native library \"silver_no_such_library\"\nnative def f(): Unit\n"
+        ~ "def main(): Unit => f()"));
+    assert(error !is null && cast(RuntimeError) error is null);
+    error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
+    assert(error.diagnostic.message.canFind(sharedLibraryFile("silver_no_such_library"))
+        && error.diagnostic.message.canFind("can't use a static one"), error.diagnostic.message);
+}
+
+@("a native parameter narrower than C's int is refused when called, as Windows leaves its upper bits undefined")
 unittest
 {
     import std.exception : collectException;
     import silver.ast : DiagnosticCode;
     import silver.interpreter.errors : RuntimeError;
 
-    auto error = collectException!RuntimeError(run("native def cbrt(x: Float): Float\ndef main(): Unit {\n    printl(cbrt(8.0))\n}"));
+    auto error = collectException!RuntimeError(run("native def abs(x: Int8): Int8\ndef main(): Unit {\n"
+        ~ "    printl(abs(-3))\n}"));
     assert(error !is null);
     error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
-    error.diagnostic.message.should.contain("cbrt");
-
-    error = collectException!RuntimeError(run("native def sqrt(x: Int64): Int64\ndef main(): Unit {\n    printl(sqrt(4))\n}"));
-    assert(error !is null);
-    error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
-    error.diagnostic.message.should.contain("as it's declared");
-
-    // `sqrtf` takes a C `float` and `sqrt` a `double`: the other width is refused, not called wrongly.
-    error = collectException!RuntimeError(run("native def sqrtf(x: Float): Float\ndef main(): Unit {\n    printl(sqrtf(4.0))\n}"));
-    assert(error !is null);
-    error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
-    error.diagnostic.message.should.contain("as it's declared");
-
-    error = collectException!RuntimeError(run("native def sqrt(x: Float32): Float32\ndef main(): Unit {\n    printl(sqrt(4.0))\n}"));
-    assert(error !is null);
-    error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
-    error.diagnostic.message.should.contain("as it's declared");
-
-    error = collectException!RuntimeError(run("native def sqrtf(x: Float32): Float\ndef main(): Unit {\n    printl(sqrtf(4.0))\n}"));
-    assert(error !is null);
-    error.diagnostic.code.should.equal(DiagnosticCode.MissingNativeBinding);
+    error.diagnostic.message.should.contain("narrower than C's `int`");
 }
 
-@("a built-in native serves any declaration C passes the same way, a pointer as a 64-bit integer included")
+@("a native can be declared with any types C passes the same way, a pointer as a 64-bit integer included")
 unittest
 {
     run("import std.c\nnative def malloc(size: UInt32): UInt64\nnative def free(address: UInt64): Unit\n"

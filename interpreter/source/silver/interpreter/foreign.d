@@ -1,101 +1,366 @@
-/// The C functions the interpreter can call, by symbol: those the standard library's natives
-/// bind, and a few of the C library's that take and give pointers. The math functions are libm's,
-/// as compiled programs call them, never dmd's `std.math`, whose `sin(1e22)` is `1e22`.
-///
-/// Each is described by its C signature, so the evaluator can serve any declaration that C's
-/// calling convention passes the same way: a pointer can be declared as a native type, an option of
-/// one, or a 64-bit integer, an integer as any integer type, and a `float` as a `Float32` (never a
-/// `Float`, which C passes as a `double`).
+/// Calling C from the interpreter: finding a native's symbol, and calling it as the platform's
+/// convention says, through a trampoline that loads the registers and stack words `describeCall`
+/// gives, so the interpreter passes what compiled code passes. `callC` is the one way in, so libffi
+/// could replace the trampoline without anything else changing.
 module silver.interpreter.foreign;
 
-/// How C passes a parameter or result.
-enum CKind
+import silver.core.abi;
+
+/// What the result registers held when a C function returned: `rax` and `rdx`, and the low 64 bits
+/// of `xmm0` and `xmm1`.
+struct Returned
 {
-    integer,
-    pointer,
-    float_,
-    /// C's `float`: the double a `CValue` holds, narrowed to single precision on the way in.
-    single,
-    /// `void`, as a result.
-    none,
+    ulong[2] integers;
+    ulong[2] floats;
 }
 
-/// A C value of whichever kind the signature says.
-struct CValue
+/// Calls the C function at `address` as `call` describes, with `words` holding the bits of each part
+/// of each argument in order, a narrow integer already extended as the part says and a `float` in the
+/// low 32 bits.
+Returned callC(const(void)* address, const ref CallDescription call, const(ulong)[] words)
 {
-    long integer;
-    void* pointer;
-    double float_;
+    assert(call.convention == hostConvention, "the trampoline follows only the convention it runs under");
+    CallFrame frame;
+    frame.function_ = address;
+    ulong[16] few;
+    auto stack = call.stackWords <= few.length ? few[0 .. call.stackWords] : new ulong[call.stackWords];
+    size_t next;
+    foreach (ref argument; call.arguments)
+    {
+        foreach (part; argument.parts)
+        {
+            auto bits = words[next++];
+            final switch (part.place.where)
+            {
+                case Where.integerRegister:
+                    frame.integers[part.place.index] = bits;
+                    break;
+                case Where.floatRegister:
+                    frame.floats[part.place.index] = bits;
+                    break;
+                case Where.stack:
+                    stack[part.place.index] = bits;
+                    break;
+            }
+        }
+    }
+    assert(next == words.length, "a word for each part");
+    frame.stack = stack.ptr;
+    frame.stackWords = stack.length;
+    trampoline(&frame);
+    return Returned(frame.integerResults, frame.floatResults);
 }
 
-struct ForeignFunction
+/// The registers and stack words of a call. The trampoline reads and writes it by these offsets.
+private struct CallFrame
 {
-    CKind[] params;
-    CKind result;
-    CValue function(CValue[] args) call;
+    const(void)* function_;
+    const(ulong)* stack;
+    size_t stackWords;
+    /// Win64 uses the first four.
+    ulong[6] integers;
+    /// Win64 uses the first four.
+    ulong[8] floats;
+    ulong[2] integerResults;
+    ulong[2] floatResults;
 }
 
-immutable ForeignFunction[string] foreignFunctions;
+static assert(CallFrame.stack.offsetof == 8 && CallFrame.stackWords.offsetof == 16 && CallFrame.integers.offsetof == 24
+    && CallFrame.floats.offsetof == 72 && CallFrame.integerResults.offsetof == 136 && CallFrame.floatResults.offsetof == 152);
 
-private CValue integerValue(long value) => CValue(value, null, 0);
-private CValue pointerValue(void* value) => CValue(0, value, 0);
-private CValue floatValue(double value) => CValue(0, null, value);
-private char* text(CValue value) => cast(char*) value.pointer;
+version (D_InlineAsm_X86_64) {}
+else static assert(0, "calling a native from the interpreter needs dmd's x86-64 assembler");
+
+version (Windows)
+{
+    /// Copies the stack words above 32 bytes of shadow space, loads every argument register, calls,
+    /// and keeps the result registers. RBX holds the frame across the call, as a callee preserves it.
+    private extern (C) void trampoline(CallFrame* frame) nothrow
+    {
+        asm nothrow
+        {
+            naked;
+            push RBP;
+            mov RBP, RSP;
+            push RBX;
+            push RSI;
+            push RDI;
+            push R12;
+            mov RBX, RCX;
+            // 32 bytes of shadow space and the stack words, rounded to keep RSP 16-byte aligned.
+            mov RAX, [RBX + 16];
+            lea RAX, [RAX * 8 + 47];
+            and RAX, -16;
+            sub RSP, RAX;
+            mov RSI, [RBX + 8];
+            mov RCX, [RBX + 16];
+            lea RDI, [RSP + 32];
+        copy:
+            test RCX, RCX;
+            jz copied;
+            mov RAX, [RSI];
+            mov [RDI], RAX;
+            add RSI, 8;
+            add RDI, 8;
+            dec RCX;
+            jmp copy;
+        copied:
+            movq XMM0, [RBX + 72];
+            movq XMM1, [RBX + 80];
+            movq XMM2, [RBX + 88];
+            movq XMM3, [RBX + 96];
+            mov RCX, [RBX + 24];
+            mov RDX, [RBX + 32];
+            mov R8, [RBX + 40];
+            mov R9, [RBX + 48];
+            call qword ptr [RBX];
+            mov [RBX + 136], RAX;
+            mov [RBX + 144], RDX;
+            movq [RBX + 152], XMM0;
+            movq [RBX + 160], XMM1;
+            lea RSP, [RBP - 32];
+            pop R12;
+            pop RDI;
+            pop RSI;
+            pop RBX;
+            pop RBP;
+            ret;
+        }
+    }
+}
+else
+{
+    /// Copies the stack words, loads every argument register, calls, and keeps the result registers.
+    /// RBX holds the frame across the call, as a callee preserves it. AL is an upper bound on the xmm
+    /// registers used, which only a function with variable arguments reads.
+    private extern (C) void trampoline(CallFrame* frame) nothrow
+    {
+        asm nothrow
+        {
+            naked;
+            push RBP;
+            mov RBP, RSP;
+            push RBX;
+            push R12;
+            mov RBX, RDI;
+            mov RAX, [RBX + 16];
+            lea RAX, [RAX * 8 + 15];
+            and RAX, -16;
+            sub RSP, RAX;
+            mov RSI, [RBX + 8];
+            mov RCX, [RBX + 16];
+            mov RDI, RSP;
+        copy:
+            test RCX, RCX;
+            jz copied;
+            mov RAX, [RSI];
+            mov [RDI], RAX;
+            add RSI, 8;
+            add RDI, 8;
+            dec RCX;
+            jmp copy;
+        copied:
+            movq XMM0, [RBX + 72];
+            movq XMM1, [RBX + 80];
+            movq XMM2, [RBX + 88];
+            movq XMM3, [RBX + 96];
+            movq XMM4, [RBX + 104];
+            movq XMM5, [RBX + 112];
+            movq XMM6, [RBX + 120];
+            movq XMM7, [RBX + 128];
+            mov RDI, [RBX + 24];
+            mov RSI, [RBX + 32];
+            mov RDX, [RBX + 40];
+            mov RCX, [RBX + 48];
+            mov R8, [RBX + 56];
+            mov R9, [RBX + 64];
+            mov EAX, 8;
+            call qword ptr [RBX];
+            mov [RBX + 136], RAX;
+            mov [RBX + 144], RDX;
+            movq [RBX + 152], XMM0;
+            movq [RBX + 160], XMM1;
+            lea RSP, [RBP - 16];
+            pop R12;
+            pop RBX;
+            pop RBP;
+            ret;
+        }
+    }
+}
+
+/// The address of the C function `symbol`: in the shared library `library` names, or without one,
+/// in the runtime's natives and then the C library. Null, with `problem` saying why, when it can't
+/// be found.
+const(void)* findNative(string symbol, string library, out string problem)
+{
+    import std.format : format;
+
+    if (library is null)
+    {
+        if (auto runtime = symbol in runtimeNatives) return *runtime;
+        foreach (handle; cLibrary)
+        {
+            if (auto address = symbolIn(handle, symbol)) return address;
+        }
+        problem = "`%s` is in neither Silver's runtime nor the C library".format(symbol);
+        return null;
+    }
+    auto handle = loaded(library);
+    if (handle is null)
+    {
+        problem = "the library `%s` can't be loaded: interpreting needs it as the shared library %s, where the system finds shared libraries, and can't use a static one"
+            .format(library, sharedLibraryFile(library));
+        return null;
+    }
+    if (auto address = symbolIn(handle, symbol)) return address;
+    problem = "`%s` isn't in %s".format(symbol, sharedLibraryFile(library));
+    return null;
+}
+
+/// The file a shared library `name` is in, as the system's loader looks for it.
+string sharedLibraryFile(string name)
+{
+    version (Windows) return name ~ ".dll";
+    else return "lib" ~ name ~ ".so";
+}
+
+/// The runtime's natives, which the interpreter compiles in.
+private immutable const(void)*[string] runtimeNatives;
 
 shared static this()
 {
-    import core.stdc.ctype : isdigit, tolower, toupper;
-    import core.stdc.math : atan, cos, cosf, exp, expf, ilogb, log, pow, powf, sin, sinf, sqrt, sqrtf;
-    import core.stdc.stdlib : abs, free, getenv, malloc;
-    import core.stdc.string : strchr, strcmp, strlen;
+    import silver.runtime.clock : silver_localOffsetSeconds, silver_monotonicNanos, silver_nowNanos;
 
-    static ForeignFunction unary(alias f)()
+    const(void)*[string] table;
+    table["silver_nowNanos"] = &silver_nowNanos;
+    table["silver_monotonicNanos"] = &silver_monotonicNanos;
+    table["silver_localOffsetSeconds"] = &silver_localOffsetSeconds;
+    runtimeNatives = cast(immutable) table;
+}
+
+/// The C library's modules, where a native in a module with no `native library` is looked for:
+/// the C runtime that compiled programs link, on Windows, and the process's own symbols elsewhere,
+/// libc's and libm's among them.
+private const(void*)[] cLibrary()
+{
+    version (Windows) return [loadedFile("ucrtbase.dll"), loadedFile("vcruntime140.dll")];
+    else
     {
-        return ForeignFunction([CKind.float_], CKind.float_, (CValue[] args) => floatValue(f(args[0].float_)));
+        import core.sys.posix.dlfcn : dlopen, RTLD_NOW;
+
+        return [dlopen(null, RTLD_NOW)];
+    }
+}
+
+private void* loaded(string library)
+{
+    return loadedFile(sharedLibraryFile(library));
+}
+
+/// The shared library `file`, loaded by the system's own search, or null. A library stays loaded.
+private void* loadedFile(string file)
+{
+    version (Windows)
+    {
+        import core.sys.windows.winbase : LoadLibraryW;
+        import std.utf : toUTF16z;
+
+        return LoadLibraryW(file.toUTF16z);
+    }
+    else
+    {
+        import core.sys.posix.dlfcn : dlopen, RTLD_NOW;
+        import std.string : toStringz;
+
+        return dlopen(file.toStringz, RTLD_NOW);
+    }
+}
+
+private const(void)* symbolIn(const(void)* handle, string symbol)
+{
+    import std.string : toStringz;
+
+    if (handle is null) return null;
+    version (Windows)
+    {
+        import core.sys.windows.winbase : GetProcAddress;
+        import core.sys.windows.windef : HMODULE;
+
+        return GetProcAddress(cast(HMODULE) handle, symbol.toStringz);
+    }
+    else
+    {
+        import core.sys.posix.dlfcn : dlsym;
+
+        return dlsym(cast(void*) handle, symbol.toStringz);
+    }
+}
+
+@("the trampoline passes each kind of scalar in the registers and stack words the convention gives it")
+unittest
+{
+    import core.stdc.math : pow, sqrtf;
+
+    auto call = describeCall([CType.double_, CType.double_], CType.double_, hostConvention);
+    auto returned = callC(&pow, call, [bitsOf(2.0), bitsOf(10.0)]);
+    assert(*cast(double*) &returned.floats[0] == 1024);
+
+    call = describeCall([CType.float_], CType.float_, hostConvention);
+    returned = callC(&sqrtf, call, [bitsOf(2.0f)]);
+    assert(*cast(float*) &returned.floats[0] == sqrtf(2.0f));
+
+    call = describeCall([CType.int64, CType.double_, CType.int32, CType.float_, CType.int64, CType.double_, CType.int64,
+        CType.float_, CType.int64, CType.double_, CType.int64, CType.int64, CType.int64, CType.double_, CType.double_,
+        CType.double_, CType.double_, CType.double_, CType.float_, CType.int8], CType.double_, hostConvention);
+    assert(call.stackWords > 0);
+    ulong[] words = [1, bitsOf(2.0), cast(uint) -3, bitsOf(4.0f), 5, bitsOf(6.0), 7, bitsOf(8.0f), 9, bitsOf(10.0), 11,
+        12, 13, bitsOf(14.0), bitsOf(15.0), bitsOf(16.0), bitsOf(17.0), bitsOf(18.0), bitsOf(19.0f), cast(ulong) -20L];
+    returned = callC(&weighed, call, words);
+    assert(*cast(double*) &returned.floats[0] == weighedSum);
+}
+
+@("a native is found in the runtime, the C library and a shared library, and a missing one says why")
+unittest
+{
+    import std.algorithm : canFind;
+
+    string problem;
+    assert(findNative("silver_nowNanos", null, problem) !is null && problem is null);
+    assert(findNative("strlen", null, problem) !is null);
+    assert(findNative("sqrtf", null, problem) !is null);
+    assert(findNative("silver_no_such_function", null, problem) is null);
+    assert(problem == "`silver_no_such_function` is in neither Silver's runtime nor the C library", problem);
+    assert(findNative("f", "silver_no_such_library", problem) is null);
+    assert(problem.canFind(sharedLibraryFile("silver_no_such_library")) && problem.canFind("can't use a static one"), problem);
+}
+
+version (unittest)
+{
+    private ulong bitsOf(double value) => *cast(ulong*) &value;
+    private ulong bitsOf(float value) => *cast(uint*) &value;
+
+    /// Each argument times its position, so an argument in the wrong place changes the sum.
+    private extern (C) double weighed(long a, double b, int c, float d, long e, double f, long g, float h, long i,
+        double j, long k, long l, long m, double n, double o, double p, double q, double r, float s, byte t)
+    {
+        double[] all = [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t];
+        double sum = 0;
+        foreach (position, value; all) sum += value * (position + 1);
+        return sum;
     }
 
-    static ForeignFunction unaryFloat(alias f)()
+    private double weighedSum()
     {
-        return ForeignFunction([CKind.single], CKind.single, (CValue[] args) => floatValue(f(cast(float) args[0].float_)));
+        double sum = 0;
+        foreach (position; 0 .. 20)
+        {
+            double value = position + 1;
+            if (position == 2 || position == 19) value = -value;
+            sum += value * (position + 1);
+        }
+        return sum;
     }
-
-    alias integer = CKind.integer, pointer = CKind.pointer, float_ = CKind.float_, none = CKind.none;
-    ForeignFunction[string] table = [
-        "sqrt": unary!sqrt,
-        "exp": unary!exp,
-        "log": unary!log,
-        "sin": unary!sin,
-        "cos": unary!cos,
-        "atan": unary!atan,
-        "pow": ForeignFunction([float_, float_], float_, (CValue[] args) => floatValue(pow(args[0].float_, args[1].float_))),
-        "sqrtf": unaryFloat!sqrtf,
-        "expf": unaryFloat!expf,
-        "sinf": unaryFloat!sinf,
-        "cosf": unaryFloat!cosf,
-        "powf": ForeignFunction([CKind.single, CKind.single], CKind.single,
-            (CValue[] args) => floatValue(powf(cast(float) args[0].float_, cast(float) args[1].float_))),
-        "ilogb": ForeignFunction([float_], integer, (CValue[] args) => integerValue(ilogb(args[0].float_))),
-        "isdigit": ForeignFunction([integer], integer, (CValue[] args) => integerValue(isdigit(cast(int) args[0].integer))),
-        "abs": ForeignFunction([integer], integer, (CValue[] args) => integerValue(abs(cast(int) args[0].integer))),
-        "toupper": ForeignFunction([integer], integer, (CValue[] args) => integerValue(toupper(cast(int) args[0].integer))),
-        "tolower": ForeignFunction([integer], integer, (CValue[] args) => integerValue(tolower(cast(int) args[0].integer))),
-        "silver_nowNanos": ForeignFunction([], integer, (CValue[] _) => integerValue(nowNanos())),
-        "silver_monotonicNanos": ForeignFunction([], integer, (CValue[] _) => integerValue(monotonicNanos())),
-        "silver_localOffsetSeconds": ForeignFunction([integer], integer,
-            (CValue[] args) => integerValue(localOffsetSeconds(args[0].integer))),
-        "strlen": ForeignFunction([pointer], integer, (CValue[] args) => integerValue(cast(long) strlen(text(args[0])))),
-        "strcmp": ForeignFunction([pointer, pointer], integer,
-            (CValue[] args) => integerValue(strcmp(text(args[0]), text(args[1])))),
-        "strchr": ForeignFunction([pointer, integer], pointer,
-            (CValue[] args) => pointerValue(strchr(text(args[0]), cast(int) args[1].integer))),
-        "getenv": ForeignFunction([pointer], pointer, (CValue[] args) => pointerValue(getenv(text(args[0])))),
-        "malloc": ForeignFunction([integer], pointer, (CValue[] args) => pointerValue(malloc(cast(size_t) args[0].integer))),
-        "free": ForeignFunction([pointer], none, (CValue[] args) {
-            free(args[0].pointer);
-            return CValue.init;
-        }),
-    ];
-    foreignFunctions = cast(immutable) table;
 }
 
 /// A copy of `text`'s bytes followed by a NUL, as the runtime's `silver_toCString` makes it. The
@@ -168,39 +433,6 @@ string addressText(const(void)* address)
     import std.format : format;
 
     return format("0x%x", cast(size_t) address);
-}
-
-/// As the runtime's `silver_nowNanos` computes it. `currStdTime` counts 100ns ticks from the year 1.
-private long nowNanos()
-{
-    import std.datetime.systime : Clock;
-
-    return (Clock.currStdTime - 621_355_968_000_000_000L) * 100;
-}
-
-/// As the runtime's `silver_monotonicNanos` computes it.
-private long monotonicNanos()
-{
-    import core.time : MonoTime, ticksToNSecs;
-
-    return ticksToNSecs(MonoTime.currTime.ticks);
-}
-
-/// As the runtime's `silver_localOffsetSeconds` computes it.
-private long localOffsetSeconds(long unixSeconds)
-{
-    import std.algorithm.comparison : clamp;
-    import std.datetime.timezone : LocalTime;
-
-    auto seconds = clamp(unixSeconds, -62_167_219_200L, 253_402_300_799L);
-    return LocalTime().utcOffsetAt(seconds * 10_000_000L + 621_355_968_000_000_000L).total!"seconds";
-}
-
-@("the interpreter calls libm for the math natives")
-unittest
-{
-    assert(foreignFunctions["sin"].call([floatValue(1e22)]).float_ != 1e22);
-    assert(foreignFunctions["pow"].call([floatValue(2.0), floatValue(10.0)]).float_ == 1024);
 }
 
 @("a C string is a copy with a NUL, and comes back only if it's UTF-8")

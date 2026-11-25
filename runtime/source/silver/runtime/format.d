@@ -7,7 +7,7 @@ import core.exception : OutOfMemoryError;
 import std.conv : to;
 
 import silver.runtime.buffer : newString, silver_array_append;
-import silver.runtime.memory : SavedRegisters, silver_save_registers;
+import silver.runtime.registers : SavedRegisters, silver_save_registers;
 import silver.runtime.panic : outOfMemory, panic;
 
 public import silver.runtime.floattext : float32Text, floatText;

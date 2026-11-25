@@ -10,7 +10,7 @@ import std.stdio : readln, stdout;
 
 import silver.runtime.buffer : newString;
 import silver.runtime.format : float32Text, floatText;
-import silver.runtime.memory : SavedRegisters, silver_save_registers;
+import silver.runtime.registers : SavedRegisters, silver_save_registers;
 import silver.runtime.panic : outOfMemory, panic;
 import silver.runtime.testing : testing, testOutput;
 

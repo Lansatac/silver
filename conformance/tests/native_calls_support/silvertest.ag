@@ -1,0 +1,31 @@
+// The functions of conformance/clibraries/silvertest.c, which the harness builds as a shared library.
+module native_calls_support.silvertest
+
+native library "silvertest"
+
+native type Spot
+
+native def add64(a: Int64, b: Int64): Int64
+native def mix64(high: UInt32, low: UInt64): UInt64
+native def negate32(x: Int32): Int32
+native def complement32(x: UInt32): UInt32
+native def low8(x: Int32): Int8
+native def lowUnsigned8(x: Int32): UInt8
+native def low16(x: Int32): Int16
+native def lowUnsigned16(x: Int32): UInt16
+native def both(a: Bool, b: Bool): Bool
+native def isOdd(x: Int64): Bool
+native def scale(x: Float, by: Float32): Float
+native def halve(x: Float32): Float32
+native def narrowed(x: Float): Float32
+native def widened(x: Float32): Float
+native def at(offset: Int64): Spot
+native def nowhere(): Spot?
+native def distance(from: Spot, to: Spot): Int64
+native def isNull(p: Spot?): Bool
+native def weighMixed(a: Int64, b: Float, c: Int32, d: Float32, e: Int64, f: Float, g: Int64, h: Float32, i: Int64,
+    j: Float, k: Int64, l: Int64, m: Int64, n: Float, o: Float, p: Float, q: Float, r: Float, s: Float32, t: UInt32): Float
+native def weighIntegers(a: Int64, b: Int64, c: Int64, d: Int64, e: Int64, f: Int64, g: Int64, h: Int32, i: UInt64,
+    j: Bool): Int64
+native def weighFloats(a: Float32, b: Float32, c: Float32, d: Float32, e: Float32, f: Float32, g: Float32, h: Float32,
+    i: Float32, j: Float): Float32

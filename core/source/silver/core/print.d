@@ -12,7 +12,7 @@ import silver.sema.type : Type, TypeTable;
 /// that share a name print as `x` and `x.1`, since Core tells them apart by identity.
 string print(const Program program)
 {
-    auto printer = Printer(program.types, program.functions);
+    auto printer = Printer(program.types, program.functions, program.natives);
     foreach (library; program.libraries)
     {
         printer.output ~= "library \"%s\"\n\n".format(library);
@@ -31,6 +31,7 @@ private struct Printer
 {
     const TypeTable types;
     const(Function)[] functions;
+    const(Native)[] natives;
     Appender!string output;
     private int _indent;
     private string[const Local] _names;
@@ -170,7 +171,7 @@ private struct Printer
                 output ~= ".capture.%s".format(capture.index);
             },
             (const ForeignCall call) {
-                output ~= "foreign \"%s\"".format(call.symbol);
+                output ~= "foreign \"%s\"".format(natives[call.native].symbol);
                 arguments(call.args);
             },
             (const IntrinsicCall call) {
