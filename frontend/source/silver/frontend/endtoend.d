@@ -921,13 +921,27 @@ void stamped(string stamper, string stamp, string directory)
     assert(result.status == 0, result.output);
 }
 
+/// Removes a directory holding a git repository: on Windows git's objects are read-only, which rmdirRecurse can't delete.
+void removeRepository(string directory)
+{
+    version (Windows)
+    {
+        import core.sys.windows.winnt : FILE_ATTRIBUTE_READONLY;
+        import std.file : dirEntries, setAttributes, SpanMode;
+
+        foreach (entry; dirEntries(directory, SpanMode.depth))
+            if (!entry.isDir) setAttributes(entry.name, entry.attributes & ~FILE_ATTRIBUTE_READONLY);
+    }
+    rmdirRecurse(directory);
+}
+
 @("the version of a repository with no version tag is its commit, whatever other tags it has")
 unittest
 {
     import std.file : readText;
 
     auto directory = makeTree("frontend-version", ["f.txt": "x"]);
-    scope (exit) rmdirRecurse(directory);
+    scope (exit) removeRepository(directory);
     void git(string[] words)
     {
         auto ran = std.process.execute(["git", "-C", directory, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
