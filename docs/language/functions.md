@@ -327,6 +327,7 @@ ps[0] += p                                   // ps[0] is read once, and written 
 - Two built-in numbers are built in, whatever functions are in scope, and keep their own errors: `1 + 1.5` with an `Int` and a `Float` is still an error that values never convert, and not a missing `opAdd`.
 - An operator function whose parameters are all built-in numbers is an error where it's declared, since the operator on them is built in and it could never be called. It can have a parameter of another type, or be generic: `opAdd<T>(a: T, b: T)` is allowed. It's never called for operands known to be two built-in numbers, but inside a generic function whose operands are of a type parameter, `a + b` calls it for any `T`, even when the function is used with numbers.
 - The wrapping operators `+% -% *%` are built in only, and an operator that calls a function isn't allowed in a top-level [constant](bindings.md#top-level-constants), which can't call one.
+- `+` doesn't join strings or arrays, which `~` does. When no `opAdd` takes a String or an array, the error says so.
 - An operator function is an ordinary function. It can be called by name, as `a.opAdd(b)`, be private, and be used as a value.
 
 ### How syntax finds its function

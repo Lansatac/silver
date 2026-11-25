@@ -3,6 +3,8 @@ module silver.sema.operator_tests;
 
 version (unittest):
 
+import std.algorithm : canFind;
+
 import silver.ast : DiagnosticCode;
 import silver.sema.check_tests : shouldDeclareType, shouldTypeEveryExpression;
 import silver.sema.resolution_tests;
@@ -276,6 +278,26 @@ unittest
         .shouldHaveNoDiagnostics();
     analyzed("type V(x: Int)\ndef opAdd(a: V, b: V): V => a\ndef main(): Unit => print(panic(\"y\") + V(1))")
         .shouldHaveNoDiagnostics();
+}
+
+@("a + with no opAdd for a String or an array operand says that ~ joins them, and only then")
+unittest
+{
+    void hints(string source, string text)
+    {
+        auto a = analyzed(source);
+        assert(a.collector.diagnostics.length == 1, source);
+        auto message = a.collector.diagnostics[0].message;
+        assert(a.collector.diagnostics[0].code == DiagnosticCode.InvalidOperand, message);
+        assert(text is null ? !message.canFind("joins") : message.canFind(text), message);
+    }
+    hints("def main(): Unit => print(\"a\" + \"b\")", "`~` joins strings");
+    hints("def main(): Unit {\n    val s = \"a\"\n    print(s + 1)\n}", "`~` joins strings");
+    hints("def main(): Unit => print([1] + [2])", "`~` joins arrays");
+    hints("def main(): Unit {\n    val xs = [1]\n    print(xs + 2)\n}", "`~` joins arrays");
+    hints("def main(): Unit => print(\"a\" - \"b\")", null);
+    hints("def main(): Unit {\n    val o: Int? = None\n    print(o + 1)\n}", null);
+    analyzed("def opAdd(a: String, b: String): String => a\ndef main(): Unit => print(\"a\" + \"b\")").shouldHaveNoDiagnostics();
 }
 
 @("an operator that calls a function can't be in a top-level constant")

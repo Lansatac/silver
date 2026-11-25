@@ -3262,8 +3262,20 @@ private final class TypeChecker
         }
         // An operand that isn't a number is what's reported, as it was when only numbers had operators.
         auto blamed = args.length.iota.filter!(i => operands[i] == Type.init ? isFittedByShape(args[i]) : isNotNumber(operands[i]));
+        // `+` doesn't join strings or arrays, so say what does.
+        string hint;
+        if (name == "opAdd")
+        {
+            auto joined = args.length.iota.map!(i => operands[i] != Type.init ? operands[i] : defaultType(args[i]))
+                .filter!(t => t == _types.string_ || t != Type.init && _types.isArray(t));
+            if (!joined.empty)
+            {
+                auto what = joined.front == _types.string_ ? "strings" : "arrays";
+                hint = "`+` adds numbers, and `~` joins %s, as in `a ~ b`".format(what);
+            }
+        }
         auto at = Expr(id, span, ExprKind(Identifier(name)));
-        auto function_ = syntaxFunction(at, args[blamed.front].span, name, syntax, args, typed, ctx, true, shown);
+        auto function_ = syntaxFunction(at, args[blamed.front].span, name, syntax, args, typed, ctx, true, shown, hint);
         if (!function_.found) return _types.error;
         _typing.operators[id] = function_.use;
         noteSyntaxUse(ctx.site, span, function_);
@@ -6845,7 +6857,7 @@ private final class TypeChecker
     /// failed when finding one reported an error. `shown` is how a missing function is reported
     /// to take its arguments, in place of the first argument's type.
     private SyntaxUse syntaxFunction(const Expr at, Span span, string name, string syntax, const(Expr)[] args,
-        Type[] typed, BodyContext ctx, bool required = true, string[] shown = null)
+        Type[] typed, BodyContext ctx, bool required = true, string[] shown = null, string hint = null)
     {
         SyntaxUse failed;
         failed.failed = true;
@@ -6877,7 +6889,7 @@ private final class TypeChecker
             auto taken = shown is null ? "a `%s`".format(_types.describe(typed[0]))
                 : shown.join(" and ");
             _collector.reportError(DiagnosticCode.InvalidOperand, shown is null && args[0].id.isValid ? args[0].span : span,
-                "%s calls `%s`, and no `%s` here takes %s".format(syntax, name, name, taken));
+                "%s calls `%s`, and no `%s` here takes %s%s".format(syntax, name, name, taken, hint is null ? "" : "; " ~ hint));
             return failed;
         }
         // Each argument with a type of its own is synthesized once, so it's fitted by its type.
