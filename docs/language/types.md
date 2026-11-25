@@ -132,7 +132,7 @@ These types are ordered already:
 - Function values, `Ref`s, [native types](native.md#native-types), maps and error unions aren't ordered.
 - Both sides are one type, as for `==`: an `Int8` isn't compared with an `Int`. A literal written as `Some(...)`, a tuple or an array takes its type from the other side, so with `x: UInt8?`, `x < Some(2)` compares two `UInt8?`s.
 - A value isn't wrapped to meet an option, as it is for `==`. With `age: Int?`, `age < 18` is an error: `None` is before every `Some`, so it would be true for a missing age without saying so. `age < Some(18)` says it, and `age ?? 0 < 18` chooses what a missing one counts as.
-- `<` on two `Float`s or two `Float32`s written outside generic code is the machine's comparison, which is false whenever either is NaN. `compare` on them, and `<` on a type parameter that turns out to be a `Float`, use the total order above, so the two differ only when a NaN is involved.
+- `<` on two `Float`s or two `Float32`s written outside generic code is the machine's comparison, which is false whenever either is NaN. `compare` on them, and `<` on a type parameter that turns out to be a `Float` or a `Float32`, use the total order above, so the two differ only when a NaN is involved.
 - `Ord` is an [interface](interfaces.md) like any other, so a module can order a type it didn't declare, and there is one order for a type in the whole program.
 
 ### An order from the type's shape

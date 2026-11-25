@@ -8,6 +8,8 @@ def main(): Unit {
     printl(Float32(1.0) / Float32(3.0))
     printl(Float32(123456789.0))
     printl(Float32(0.3))
+    printl(Float32(10.0000105))
+    printl(Float(Float32(10.0000105)))
     printl(Float32(16777216.0))
     printl(Float32(8388608.5))
     printl(Float32(3.4028235e38))
