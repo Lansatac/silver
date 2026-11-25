@@ -37,7 +37,27 @@ esac
 dir=$(echo "$work"/unpacked/*)
 export PATH=$dir:$PATH
 
-[ "$(silver$exe --version)" = "silver $(silverc$exe --version | sed 's/^silverc //')" ]
+# Runs a command and prints its output without the carriage returns that programs on Windows write.
+output() { "$@" | tr -d '\r'; }
+# check <description> <expected> <command>...: fails saying which check failed and what it got.
+check() {
+    local what=$1 expected=$2 got status=0
+    shift 2
+    got=$("$@" 2>&1 | tr -d '\r'; exit "${PIPESTATUS[0]}") || status=$?
+    if [ "$status" != 0 ]; then
+        echo "FAILED: $what: exit status $status, output:" >&2
+        echo "$got" >&2
+        exit 1
+    fi
+    if [ "$got" != "$expected" ]; then
+        echo "FAILED: $what: expected '$expected', got:" >&2
+        echo "$got" >&2
+        exit 1
+    fi
+    echo "ok: $what"
+}
+
+check "silver and silverc versions agree" "silver $(output silverc$exe --version | sed 's/^silverc //')" silver$exe --version
 # Read-only, since a release may be installed where nobody can write.
 chmod -R a-w "$dir" 2>/dev/null || true
 
@@ -47,9 +67,9 @@ def main(): Unit {
     printl("hello, silver")
 }
 SRC
-[ "$(silver$exe run hello.ag)" = "hello, silver" ]
-[ "$(silver$exe run -b llvm hello.ag)" = "hello, silver" ]
-[ "$(silver$exe run -b llvm -O hello.ag)" = "hello, silver" ]
-silver$exe build -o "hello$exe" hello.ag
-[ "$("./hello$exe")" = "hello, silver" ]
+check "silver run (interpreter)" "hello, silver" silver$exe run hello.ag
+check "silver run -b llvm" "hello, silver" silver$exe run -b llvm hello.ag
+check "silver run -b llvm -O" "hello, silver" silver$exe run -b llvm -O hello.ag
+check "silver build" "" silver$exe build -o "hello$exe" hello.ag
+check "the built program runs" "hello, silver" "./hello$exe"
 echo "smoke test passed: $(basename "$archive")"

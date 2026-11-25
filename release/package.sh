@@ -44,11 +44,11 @@ if [ "$build" = yes ]; then
     # starts silverc, so it has no build type of its own.
     options=()
     [ -n "${SILVER_REDUB_PARALLEL:-}" ] && options=("--parallel=$SILVER_REDUB_PARALLEL")
-    "$redub" build -b silver-release "${options[@]}"
+    "$redub" build -b silver-release --force "${options[@]}"
 fi
 
-version=$(out/silverc$exe --version | sed 's/^silverc //')
-[ "$(out/silver$exe --version)" = "silver $version" ] || { echo "silver and silverc differ in version" >&2; exit 1; }
+version=$(out/silverc$exe --version | tr -d '\r' | sed 's/^silverc //')
+[ "$(out/silver$exe --version | tr -d '\r')" = "silver $version" ] || { echo "silver and silverc differ in version" >&2; exit 1; }
 name=silver-$version-$os-x64
 stage=$dist/$name
 rm -rf "$stage"
@@ -59,12 +59,9 @@ cp -rL out/stdlib "$stage/stdlib"
 cp -r out/runtime "$stage/runtime"
 cp LICENSE "$stage/licenses/Silver-LICENSE.txt"
 
-# Phobos and druntime are in runtime/ (a Windows one also holds MinGW-w64's libraries).
-dmd=$(readlink -f "$(command -v dmd)")
-dmdroot=$(cd "$(dirname "$dmd")/../.." && pwd)
-[ -d "$dmdroot/src/phobos" ] || dmdroot=$(cd "$(dirname "$dmd")/.." && pwd)
-cp "$dmdroot/src/phobos/LICENSE_1_0.txt" "$stage/licenses/Phobos-druntime-Boost-LICENSE_1_0.txt"
-cp "$dmdroot/src/phobos/etc/c/zlib/LICENSE" "$stage/licenses/zlib-LICENSE.txt"
+# The texts are kept in release/licenses: Phobos and druntime (in runtime/), zlib (which Phobos includes),
+# and for Windows LLVM and MinGW-w64.
+cp release/licenses/Phobos-*.txt release/licenses/zlib-*.txt "$stage/licenses/"
 
 cat > "$stage/licenses/README.txt" <<NOTE
 Silver is MIT licensed (Silver-LICENSE.txt). The executables and runtime/ also carry the D runtime and
@@ -74,10 +71,7 @@ NOTE
 if [ "$os" = windows ]; then
     mkdir "$stage/llvm"
     cp "$llvm/clang.exe" "$llvm/lld-link.exe" "$stage/llvm/"
-    llvmversion=$("$llvm/clang.exe" --version | sed -n 's/.*clang version \([0-9.]*\).*/\1/p' | head -1)
-    curl -fsSL "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-$llvmversion/llvm/LICENSE.TXT" -o "$stage/licenses/LLVM-LICENSE.txt"
-    curl -fsSL "https://raw.githubusercontent.com/mingw-w64/mingw-w64/master/COPYING" -o "$stage/licenses/mingw-w64-COPYING.txt"
-    curl -fsSL "https://raw.githubusercontent.com/mingw-w64/mingw-w64/master/COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt" -o "$stage/licenses/mingw-w64-runtime-COPYING.txt"
+    cp release/licenses/LLVM-*.txt release/licenses/mingw-*.txt "$stage/licenses/"
     cat >> "$stage/licenses/README.txt" <<NOTE
 llvm/ holds clang and lld-link (LLVM, Apache-2.0 with LLVM exceptions: LLVM-LICENSE.txt), and runtime/mingw
 the MinGW-w64 libraries that programs link against (mingw-w64-*.txt).

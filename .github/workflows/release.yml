@@ -1,11 +1,13 @@
-# On a v* tag: builds the Linux and Windows archives with release/package.sh, smoke tests each from a clean
-# directory with release/smoke.sh, and publishes them with their checksums as a GitHub Release.
+# On a v<digit>* tag (as stampversion matches): builds the Linux and Windows archives with release/package.sh, smoke tests each from a clean
+# directory with release/smoke.sh, and publishes them with their checksums as a GitHub Release. Run by hand
+# (workflow_dispatch) it builds and smoke tests only, to try the packaging before a tag.
 # Toolchain setup follows test.yml (the same pins from the dev container's Dockerfile).
 name: release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -31,12 +33,14 @@ jobs:
 
       # The version is the tag's, without its v.
       - name: Package
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: |
           mkdir -p "$RUNNER_TEMP/home"
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             -e HOME=/ci-home \
-            -e SILVER_VERSION="${GITHUB_REF_NAME#v}" \
+            -e SILVER_VERSION="${TAG#v}" \
             -v "$RUNNER_TEMP/home:/ci-home" \
             -v "$GITHUB_WORKSPACE:/code" \
             -w /code \
@@ -102,7 +106,7 @@ jobs:
       # clang.exe and lld-link.exe, which package.sh copies into llvm/ of the archive, are the runner's.
       - name: Package
         env:
-          SILVER_VERSION_TAG: ${{ github.ref_name }}
+          SILVER_VERSION_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           SILVER_REDUB_PARALLEL: "no"
         run: |
           export SILVER_VERSION="${SILVER_VERSION_TAG#v}"
@@ -122,6 +126,7 @@ jobs:
           if-no-files-found: error
 
   publish:
+    if: github.ref_type == 'tag'
     needs: [linux, windows]
     runs-on: ubuntu-latest
     permissions:

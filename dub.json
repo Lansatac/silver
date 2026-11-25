@@ -33,7 +33,7 @@
 	"stringImportPaths": ["generated"],
 	"buildTypes": {
 		"silver-release": {
-			"buildOptions": ["optimize", "inline"]
+			"dflags": ["-O", "-inline"]
 		}
 	},
 	"targetPath": "build",
