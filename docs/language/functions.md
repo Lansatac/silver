@@ -265,6 +265,8 @@ Syntax that isn't a call means a call to a function whose name starts with `op`.
 | `x[i] = v` | `x = opIndexAssign(x, i, v)` |
 | `x[a..b]` | `opIndex(x, a..b)` |
 | `x[a..b] = v` | `x = opIndexAssign(x, a..b, v)` |
+| `a + b`, `a - b`, `a * b`, `a / b`, `a % b` | `opAdd(a, b)`, `opSub(a, b)`, `opMul(a, b)`, `opDiv(a, b)`, `opRem(a, b)`, unless both are built-in numbers |
+| `-a` | `opNeg(a)`, unless `a` is a built-in number |
 | `a == b`, `a != b` | `opEquals(a, b)` |
 | `a < b`, `<=`, `>`, `>=` | `compare(a, b)`, through the type's conformance to [`Ord`](types.md#ordering) |
 | printing, `String(x)`, a string hole | `opString(x)` |
@@ -292,11 +294,46 @@ def opIndex<T>(w: Window<T>, part: Interval<Int>): Window<T> =>
 - An `opIndex` whose index is a type parameter takes an interval as any other key: for a `Table<K, V>` with `K` an `Interval<Int>`, `t[9..11]` looks up the key `9..11`.
 - For an array the syntax is built in, and an integer index is an `Int`. `lang`'s `opIndex` and `opIndexAssign` for arrays do the same where a function is wanted, and its `opIndex` that takes an `Interval<Int>` slices. `x[i]` on an array with an integer index, and `x[a..b]` written out, never call a module's own. With an index of another type, `x[i]` calls `opIndex(x, i)`, as for any type.
 
+### Arithmetic
+
+`+ - * / %` and prefix `-` on two built-in numbers are built in. On anything else they call an operator function, so a type gets them by someone writing the function.
+
+```silver
+type Vec2(x: Float, y: Float)
+
+def opAdd(a: Vec2, b: Vec2): Vec2 => Vec2(a.x + b.x, a.y + b.y)
+def opSub(a: Vec2, b: Vec2): Vec2 => Vec2(a.x - b.x, a.y - b.y)
+def opMul(v: Vec2, k: Float): Vec2 => Vec2(v.x * k, v.y * k)
+def opMul(k: Float, v: Vec2): Vec2 => Vec2(v.x * k, v.y * k)
+def opMul(a: Vec2, b: Vec2): Float => a.x * b.x + a.y * b.y
+def opNeg(v: Vec2): Vec2 => Vec2(-v.x, -v.y)
+
+val p = Vec2(1.0, 2.0) + Vec2(3.0, 4.0)     // opAdd: Vec2(4.0, 6.0)
+p * 2.0                                      // opMul(Vec2, Float)
+2.0 * p                                      // opMul(Float, Vec2): the operands are never swapped
+-p                                           // opNeg
+p - p * 0.5                                  // usual precedence: opSub(p, opMul(p, 0.5))
+p / 2.0                                      // error: `a / b` calls `opDiv`, and no `opDiv` here takes `Vec2` and `Float`
+
+mutable val q = p
+q += p                                       // q = opAdd(q, p)
+mutable val ps = [p, p]
+ps[0] += p                                   // ps[0] is read once, and written back
+```
+
+- The function is chosen where the operator is written, as any call of that name with those operands would be: by overloading, with a generic function or one a [bound](interfaces.md) supplies, with a literal operand taking the type its parameter asks for, as `p * 2` does for `opMul(Vec2, Float)`, and with an operand promoted as an argument is. So the function has to be in scope there, and a module can write one for a type it didn't declare. Each operand is evaluated once, left then right.
+- The result is whatever the function returns, so `p * p` above is a `Float`. An [interface](interfaces.md) is what makes it the operands' type, as `def opAdd(a: Self, b: Self): Self` does.
+- `a op= b` is `a = a op b`, with the place `a` read once, through fields and elements as for a built-in operator. There's no function for a compound assignment. There's no `%=` for anything. `a - b` is never `a + -b`, and operands are never swapped, so each form a type wants is a function of its own.
+- Two built-in numbers are built in, whatever functions are in scope, and keep their own errors: `1 + 1.5` with an `Int` and a `Float` is still an error that values never convert, and not a missing `opAdd`.
+- An operator function whose parameters are all built-in numbers is an error where it's declared, since the operator on them is built in and it could never be called. It can have a parameter of another type, or be generic: `opAdd<T>(a: T, b: T)` is allowed, and is never chosen for two built-in numbers.
+- The wrapping operators `+% -% *%` are built in only, and an operator that calls a function isn't allowed in a top-level [constant](bindings.md#top-level-constants), which can't call one.
+- An operator function is an ordinary function. It can be called by name, as `a.opAdd(b)`, be private, and be used as a value.
+
 ### How syntax finds its function
 
 Syntax finds its function in one of three ways, by what the syntax is for:
 
-- **Indexing is a call.** `x[i]`, `x[i] = v` and slices mean the calls in the table, chosen where they're written as any call is, just as `x.f()` means `f(x)`. So indexing a type needs its `opIndex` in scope, as calling `x.length()` needs `length`, and a module can write one for a type it didn't declare. No [conformance](interfaces.md#conformance) is involved.
+- **Indexing and arithmetic are calls.** `x[i]`, `x[i] = v`, slices, and `+ - * / %` and prefix `-` on anything but two built-in numbers mean the calls in the table, chosen where they're written as any call is, just as `x.f()` means `f(x)`. So indexing a type needs its `opIndex` in scope, as calling `x.length()` needs `length`, and a module can write one for a type it didn't declare. No [conformance](interfaces.md#conformance) is involved.
 - **Looping and ordering go through a conformance.** `for` steps with the `next` of the type's conformance to [`Range`](control-flow.md#for), and `<` compares with the `compare` of its conformance to [`Ord`](types.md#ordering). A conformance is one answer for the whole program, so a loop or a comparison means the same wherever it's written, in a generic function too, where a bound asks for it.
 - **Equality, hashing and printing belong to the type.** Every type has an `opEquals`, an `opHash` and an `opString` already, so generic code needs no bound to use them, and only the type's own module can write one to replace it.
 
@@ -362,6 +399,7 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 - When more than one candidate is left, an `if`, `match` or block is typed before any is chosen, even when its values are all literals, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.
 - Of the arguments compared by their shape, `None` and `[]` count one step wherever they go.
 - Arithmetic on literals isn't compared by its shape yet: it's an `Int`, as [Numbers](numbers.md#current-implementation) describes, so `f(1 + 2)` doesn't fit an `f(x: UInt8)`.
+- An arithmetic operator's literal operand takes the type its operator function's parameter asks for, but arithmetic made of literals doesn't: `p * (1 + 2)` passes an `Int`, so it needs an `opMul` that takes one.
 - A method call's receiver needs a type of its own, so `None.f()` and `[].f()` are errors. An integer literal receiver adapts, as in `(200).f()` with `f(x: UInt8)`.
 - Two native functions of one name in a module have to bind different C symbols, and two intrinsics can't share a name.
 - A `mutable` first parameter is rejected for a method call. A later `mutable` argument is fine.

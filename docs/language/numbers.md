@@ -60,6 +60,8 @@ Each has a compound assignment form (`+=`, `+%=`, `<<=` and so on), except `%`.
 
 All operands must be of one numeric type, and values never convert implicitly. The exception is a shift amount, which can be any integer type, since the result has the type of the value being shifted.
 
+`+ - * / %` and prefix `-` on anything but two built-in numbers call an [operator function](functions.md#operator-functions), so a type of your own can have them.
+
 ## Integer behaviour
 
 An integer operation produces the right answer or stops the program. This is the same for every type and in every build. These panic:
