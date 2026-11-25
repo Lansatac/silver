@@ -28,10 +28,12 @@ Only types with a C equivalent can appear in a native signature:
 | `Float` | `double` |
 | `Bool` | `bool` |
 | `Unit`, as a return type | `void` |
-| A native type | A pointer |
-| An option of a native type | A pointer that may be null |
+| `Float32` | `float` |
+| A native type with no fields | A pointer |
+| An option of a native type with no fields | A pointer that may be null |
+| A native type with fields | A `struct` passed by value |
 
-`String`, arrays, tuples, user types, other options and function types can't cross. A string is converted explicitly, as described below.
+`String`, arrays, tuples, other user types, other options and function types can't cross. A string is converted explicitly, as described below.
 
 C's own integer types differ between platforms: `long` is 32 bits on Windows and 64 on Linux. [`std.c`](../stdlib/c.md) names them (`CInt`, `CLong`, `CSize` and the rest), each an alias for the Silver type of the right width on the platform being compiled for.
 
@@ -61,6 +63,28 @@ A handle is never null. A native that can return a null pointer declares its res
 Nothing checks a native declared to return `File` that returns null. The null handle then prints as `File(0x0)`, and passing it on, to `fromCString` or to a native that doesn't expect null, crashes the program with no message.
 
 Silver doesn't manage what a handle refers to. Releasing it is up to the program, through whatever the library provides.
+
+## Structures
+
+```silver
+module raylib
+native library "raylib"
+
+native type Vector2(x: Float32, y: Float32)
+native type Color(r: UInt8, g: UInt8, b: UInt8, a: UInt8)
+
+native("DrawCircleV") def drawCircle(center: Vector2, radius: Float32, color: Color): Unit
+native("GetMousePosition") def mousePosition(): Vector2
+```
+
+A native type with fields is a C `struct` with those fields in that order, laid out as the platform's C compiler lays it out. A native function takes and returns one by value, as C does.
+
+- Each field's type is one that can cross: an integer, `Float`, `Float32`, `Bool`, a native type, or an option of a native type with no fields. Anything else is an error at the field. A structure inside a structure is held by value, so a native type can't contain itself.
+- It is an ordinary product otherwise. It has a constructor, fields, `with`, patterns, `==`, a hash and a printed form, it can be stored anywhere a value can, and any module can write [operator functions](functions.md#operators) for it.
+- It can't take type parameters or have an invariant, since C can make any value of it.
+- An option of one can't cross: only a pointer can be null.
+
+Silver's own values have no fixed layout, so a structure is put into C's layout as it's passed and read out of it as it comes back. A native that takes a pointer to a structure can't be declared yet.
 
 ## Strings
 
@@ -107,7 +131,10 @@ intrinsic def panic(message: String): Never
 
 - Pointers to Silver data: `Ptr<T>`, passing an array or a string's bytes without copying, and types with a C layout. These wait on generics.
 - Calling Silver from C: exporting a function under a C symbol, and passing one as a callback.
-- Structures passed by value, and functions with variable arguments such as `printf`.
+- Functions with variable arguments such as `printf`.
+- In a structure: a fixed-size array field (`char name[32]`), a union, a bit field, and packing or alignment other than the C compiler's default.
+- Where a library is found. `native library` gives a name, and the linker and the system's loader find it by their own search paths, set through the environment. A library whose file has a different name on each platform, or that isn't on those paths, wants a setting in `silver.toml`.
+- What a binding for a C library looks like as a package: names (a function or value can't start with a capital, so `InitWindow` is bound as `initWindow`), an `enum` (an alias for `CInt` and a constant per member, since C can return a value outside it), and macros.
 - Converting a handle to an integer, or to another native type. A sentinel pointer that isn't null, such as Windows' `INVALID_HANDLE_VALUE` or POSIX's `MAP_FAILED`, arrives as `Some(...)` and can't be told from a real handle, and a `Block` from `malloc` can't become a `CString`. For now such a pointer can be declared as `UInt64`, the integer of its width, which C passes the same way, and compared as a number.
 - Reading `errno`.
 - A tool that writes native declarations from a C header.
@@ -115,6 +142,7 @@ intrinsic def panic(message: String): Never
 ## Current implementation
 
 - `native def`, `native("...")`, `native library`, `native type`, `intrinsic def`, `intrinsic alias` and `intrinsic type` are available.
+- `Float32` in a native signature and native types with fields aren't built: a native type takes no field list, and either in a signature is refused.
 - The platform being compiled for is always the one the compiler runs on.
 - Compiled programs call natives directly. The interpreter can call only the natives it has built in: those that `lang` and the standard library declare, and the C library's `strlen`, `strcmp`, `strchr`, `getenv`, `malloc`, `free`, `abs`, `toupper`, `tolower`, `isdigit` and `ilogb`, each for any declaration C passes the same way as its own signature: a pointer as a native type, an option of one or `UInt64`, an integer parameter as an integer type at least as wide as C's, and an integer result as any integer type or `Bool`. Calling any other native while interpreting, or one of these declared some other way, is an error.
 - A module's `native library` is passed to the linker when the program calls one of that module's natives or uses one as a value.
