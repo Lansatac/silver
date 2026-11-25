@@ -1,10 +1,14 @@
 @echo off
-rem Puts what ships into out/: see ship.sh. Hard links where it can, else copies.
+rem Puts the files and directories named as arguments (paths under build\) into the same place under out\,
+rem copying only what differs, so a running silverc.exe doesn't fail a build that changed nothing. See ship.sh.
 cd /d "%~dp0" || exit /b 1
-if not exist out\runtime mkdir out\runtime
-for %%F in (silver.exe silverc.exe runtime\silver_rt.lib runtime\phobos64.lib) do if exist build\%%F (
-    del /q out\%%F 2>nul
-    mklink /H out\%%F build\%%F >nul 2>&1 || copy /y build\%%F out\%%F >nul || exit /b 1
+:next
+if "%~1"=="" exit /b 0
+if exist "build\%~1\" (
+    robocopy "build\%~1" "out\%~1" /E /NFL /NDL /NJH /NJS /NP >nul
+) else if exist "build\%~1" (
+    robocopy "build\%~dp1." "out\%~dp1." "%~nx1" /NFL /NDL /NJH /NJS /NP >nul
 )
-if exist build\runtime\mingw xcopy /d /y /q /i /s build\runtime\mingw out\runtime\mingw >nul
-exit /b 0
+if errorlevel 8 exit /b 1
+shift
+goto next

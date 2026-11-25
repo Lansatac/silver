@@ -5,6 +5,8 @@
 	"stringImportPaths": ["../generated"],
 	"preGenerateCommands-posix": ["\"$DUB\" build :stampversion --root=\"$PACKAGE_DIR..\" && \"$PACKAGE_DIR../build/stampversion\" \"$PACKAGE_DIR../generated/version.txt\" \"$PACKAGE_DIR..\""],
 	"preGenerateCommands-windows": ["\"$DUB\" build :stampversion --root=\"$PACKAGE_DIR..\" && \"$PACKAGE_DIR..\\build\\stampversion.exe\" \"$PACKAGE_DIR..\\generated\\version.txt\" \"$PACKAGE_DIR..\""],
+	"postBuildCommands-posix": ["\"$PACKAGE_DIR../ship.sh\" silver"],
+	"postBuildCommands-windows": ["\"$PACKAGE_DIR..\\ship.cmd\" silver.exe"],
 	"targetName": "silver",
 	"targetPath": "../build",
 	"configurations": [
