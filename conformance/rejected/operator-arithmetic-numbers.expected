@@ -1,0 +1,1 @@
+T0056: `opAdd` takes only built-in numbers, so the operator on them is built in and could never call it; an operator function is for a type of your own

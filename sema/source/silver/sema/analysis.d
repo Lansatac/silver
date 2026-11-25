@@ -185,6 +185,12 @@ final class Analysis
         return binary in _typing.comparisons;
     }
 
+    /// The operator function the arithmetic `operation` calls, or null if it's on built-in numbers.
+    const(FunctionUse)* operatorOf(Id!Expr operation) const
+    {
+        return operation in _typing.operators;
+    }
+
     /// How the call `call` of `derivedCompare` orders its type.
     const(DerivedOrder)* derivedOrderOf(Id!Expr call) const
     {

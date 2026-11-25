@@ -1,0 +1,6 @@
+// An operator function that takes only built-in numbers could never be called by its operator.
+def opAdd(a: Int, b: Int): Int => a - b
+
+def main(): Unit {
+    printl(1 + 2)
+}

@@ -1,0 +1,8 @@
+// An operator on operands that no operator function takes names the operator, the function it means and the operands.
+type Vec2(x: Float, y: Float)
+def opMul(v: Vec2, k: Float): Vec2 => Vec2(v.x * k, v.y * k)
+
+def main(): Unit {
+    val p = Vec2(1.0, 2.0)
+    printl(p / 2.0)
+}

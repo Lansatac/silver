@@ -1,0 +1,25 @@
+// An operand written as an array, a tuple, an option, a lambda or a literal is typed as the argument of
+// the operator function it calls, as it would be in a call.
+type V(x: Int)
+
+def opSub(a: V, b: [Float]): V => V(a.x - length(b))
+def opMul(a: V, b: (Int, [Float])): V {
+    val (k, items) = b
+    V(a.x * k + length(items))
+}
+def opDiv(a: V, b: (Int8?)?): V => V(if val inner = b => 1 else 0)
+def opDiv(a: V, f: (Int) -> Int): V => V(f(a.x))
+def opAdd(a: V, b: Int8): V => V(a.x + Int(b))
+def opAdd(a: String, b: V): String => a ~ "{b.x}"
+def opNeg(items: [Float]): V => V(length(items))
+
+def main(): Unit {
+    val p = V(10)
+    printl(p - [1, 2.5])
+    printl(p * (3, [1, 2.5]))
+    printl(p / Some(None))
+    printl(p / (x => x + 1))
+    printl(p + 100)
+    printl("n=" + p)
+    printl(-[1, 2.5, 3])
+}

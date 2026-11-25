@@ -1,0 +1,7 @@
+// A private operator function is invisible outside its module, even when the whole module is imported.
+import operator_arithmetic_support.vectors
+
+def main(): Unit {
+    printl(Vec(1, 2) + Vec(3, 4))
+    printl(Vec(1, 2) * Vec(3, 4))
+}

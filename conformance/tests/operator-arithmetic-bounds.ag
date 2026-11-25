@@ -1,0 +1,37 @@
+// Generic code uses `+` on a type parameter through a bound that names the operator function.
+interface Add { def opAdd(a: Self, b: Self): Self }
+interface Scale { def opMul(a: Self, k: Float): Self }
+interface Negate { def opNeg(a: Self): Self }
+
+type Vec2(x: Float, y: Float)
+def opAdd(a: Vec2, b: Vec2): Vec2 => Vec2(a.x + b.x, a.y + b.y)
+def opMul(v: Vec2, k: Float): Vec2 => Vec2(v.x * k, v.y * k)
+def opNeg(v: Vec2): Vec2 => Vec2(-v.x, -v.y)
+conform Vec2: Add & Scale & Negate
+
+type Count(n: Int)
+def opAdd(a: Count, b: Count): Count => Count(a.n + b.n)
+conform Count: Add
+
+def sum<T: Add>(a: T, b: T): T => a + b
+def total<T: Add>(items: [T], start: T): T {
+    mutable val result = start
+    for item in items {
+        result += item
+    }
+    result
+}
+def blend<T: Add & Scale>(a: T, b: T, k: Float): T => a * k + b * (1.0 - k)
+def opposite<T: Negate>(a: T): T => -a
+// The same function is a method and a value inside.
+def viaMethod<T: Add>(a: T, b: T): T => a.opAdd(b)
+
+def main(): Unit {
+    printl(sum(Vec2(1.0, 2.0), Vec2(3.0, 4.0)))
+    printl(sum(Count(2), Count(3)))
+    printl(total([Count(1), Count(2), Count(3)], Count(10)))
+    printl(total([Vec2(1.0, 1.0), Vec2(2.0, 2.0)], Vec2(0.0, 0.0)))
+    printl(blend(Vec2(10.0, 0.0), Vec2(0.0, 10.0), 0.25))
+    printl(opposite(Vec2(1.0, -1.0)))
+    printl(viaMethod(Count(4), Count(5)))
+}

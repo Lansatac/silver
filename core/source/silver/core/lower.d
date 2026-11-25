@@ -184,6 +184,17 @@ private struct Instance
         return instance;
     }
 
+    /// The operator function the arithmetic `operation` calls, with its type arguments for this
+    /// instance, or null if it's on built-in numbers.
+    const(FunctionUse)* operatorOf(Id!(ast.Expr) operation) const
+    {
+        auto use = analysis.operatorOf(operation);
+        if (use is null) return null;
+        auto instance = new FunctionUse;
+        *instance = concrete(*use);
+        return instance;
+    }
+
     /// The functions that build the dictionary literal `literal`, with their type arguments for
     /// this instance.
     DictionaryFunctions dictionaryOf(Id!(ast.Expr) literal) const
@@ -737,7 +748,10 @@ private final class Lowering
             (const ast.CharLiteral literal) => make(ExprKind(IntLit(literal.value))),
             (const ast.InterpolatedString interpolated) => lowerInterpolated(interpolated, span),
             (const ast.Identifier _) => symbolValue(resolved(e), type, span, e.id),
-            (const ast.UnaryExpr unary) => make(lowerUnary(unary, type)),
+            (const ast.UnaryExpr unary) {
+                if (auto called = _analysis.operatorOf(e.id)) return callUse(*called, [lowerExpr(*unary.operand)], span);
+                return make(lowerUnary(unary, type));
+            },
             (const ast.BinaryExpr binary) => lowerBinary(binary, e, type),
             (const ast.IfExpr if_) => lowerIf(e.id, if_, type, span),
             (const ast.BlockExpr block) => lowerBlock(block, type, span),
@@ -1041,6 +1055,10 @@ private final class Lowering
                 if (auto compared = _analysis.comparisonOf(e.id))
                 {
                     return callUse(*compared, [lowerExpr(*binary.left), lowerExpr(*binary.right)], span);
+                }
+                if (auto called = _analysis.operatorOf(e.id))
+                {
+                    return callUse(*called, [lowerExpr(*binary.left), lowerExpr(*binary.right)], span);
                 }
                 return binaryOf(binary.op, lowerExpr(*binary.left), lowerExpr(*binary.right), type, span);
         }

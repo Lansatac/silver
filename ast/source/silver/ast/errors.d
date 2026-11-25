@@ -167,6 +167,9 @@ enum DiagnosticCode : string
     InvalidTypeFunction = "T0054",
     /// A dictionary literal with the same constant written as two of its keys.
     RepeatedKey = "T0055",
+    /// An arithmetic operator function whose parameters are all built-in numbers, which the
+    /// operator does itself.
+    InvalidOperatorFunction = "T0056",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",

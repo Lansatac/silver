@@ -1,0 +1,1 @@
+T0005: `a * b` calls `opMul`, and no `opMul` here takes `Vec` and `Vec`

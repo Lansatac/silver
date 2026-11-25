@@ -3,6 +3,8 @@ module silver.sema.operator_tests;
 
 version (unittest):
 
+import std.algorithm : canFind;
+
 import silver.ast : DiagnosticCode;
 import silver.sema.check_tests : shouldDeclareType, shouldTypeEveryExpression;
 import silver.sema.resolution_tests;
@@ -175,4 +177,133 @@ def main(): Unit {}").shouldHaveNoDiagnostics();
     rejects("def opString<T, U>(b: Box<T>): String => \"box\"");
     rejects("def opEquals(a: Point, b: Point): Bool => true");
     rejects("def opHash(p: Point): UInt => 0");
+}
+
+@("arithmetic on anything but two numbers calls opAdd, opSub, opMul, opDiv, opRem or opNeg, typed by what the function returns")
+unittest
+{
+    enum vec = "type V(x: Float)
+def opAdd(a: V, b: V): V => a
+def opSub(a: V, b: V): V => a
+def opMul(a: V, k: Float): V => a
+def opMul(k: Float, a: V): V => a
+def opMul(a: V, b: V): Float => 1.0
+def opDiv(a: V, k: Float): V => a
+def opRem(a: V, k: Float): V => a
+def opNeg(a: V): V => a
+";
+    auto a = analyzed(vec ~ "def main(): Unit {
+    val p = V(1.0)
+    val sum = p + p
+    val scaled = 2 * p
+    val literal = p * 2
+    val dot = p * p
+    val negated = -p
+    val rest = p / 2.0 % 3.0
+    mutable val q = p
+    q += p
+    q -= p
+}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldTypeEveryExpression();
+    a.shouldDeclareType(At("sum", 1), "V");
+    a.shouldDeclareType(At("scaled", 1), "V");
+    a.shouldDeclareType(At("literal", 1), "V");
+    a.shouldDeclareType(At("dot", 1), "Float");
+    a.shouldDeclareType(At("negated", 1), "V");
+    a.shouldDeclareType(At("rest", 1), "V");
+}
+
+@("an operator with no function that takes its operands is an error naming the operator, the function and the operands, at the first operand that isn't a number")
+unittest
+{
+    enum point = "type P(x: Int)\ndef opMul(p: P, k: Int): P => p\n";
+    analyzed(point ~ "def main(): Unit => print(P(1) / 2)").shouldReport(DiagnosticCode.InvalidOperand, At("P(1)", 1));
+    analyzed(point ~ "def main(): Unit => print(2 * P(1))").shouldReport(DiagnosticCode.InvalidOperand, At("P(1)", 1));
+    analyzed(point ~ "def main(): Unit => print(-P(1))").shouldReport(DiagnosticCode.InvalidOperand, At("P(1)", 1));
+    analyzed(point ~ "def main(): Unit => print(P(1) * 1.5)").shouldReport(DiagnosticCode.NoMatchingOverload, At("P(1) * 1.5", 1));
+    // The wrapping operators have no function, and are as they were.
+    analyzed(point ~ "def main(): Unit => print(P(1) +% P(1))").shouldReport(DiagnosticCode.InvalidOperand, At("P(1)", 1));
+    // Two numbers are built in, whatever functions are in scope.
+    analyzed("def opAdd<T>(a: T, b: T): T => a\ndef main(): Unit {\n    val i = 1\n    val f = 1.5\n    print(i + f)\n}")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("i + f", 1));
+}
+
+@("an arithmetic operator function that takes only built-in numbers is an error, and a generic one isn't")
+unittest
+{
+    analyzed("def opAdd(a: Int, b: Int): Int => a\ndef main(): Unit {}").shouldReport(DiagnosticCode.InvalidOperatorFunction, At("opAdd", 1));
+    analyzed("def opMul(a: Int, b: Float): Float => b\ndef main(): Unit {}").shouldReport(DiagnosticCode.InvalidOperatorFunction, At("opMul", 1));
+    analyzed("def opNeg(a: UInt8): UInt8 => a\ndef main(): Unit {}").shouldReport(DiagnosticCode.InvalidOperatorFunction, At("opNeg", 1));
+    analyzed("def opAdd<T>(a: T, b: T): T => a
+def opMul(a: String, k: Int): String => a
+def opAdd(a: Int, b: String, c: Int): Int => a
+type V(x: Float)
+def opNeg(a: V): V => a
+def main(): Unit => print(1 + 2)").shouldHaveNoDiagnostics();
+}
+
+@("a function of the operator's name with no parameters is not a candidate, for arithmetic or indexing")
+unittest
+{
+    analyzed("type V(x: Int)\ndef opAdd(): Int => 1\ndef main(): Unit => print(V(1) + V(2))")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("V(1)", 1));
+    analyzed("type V(x: Int)\ndef opNeg(): Int => 1\ndef main(): Unit => print(-V(1))")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("V(1)", 1));
+    analyzed("type V(x: Int)\ndef opIndex(): Int => 1\ndef opIndex(v: V, i: Int): Int => i\ndef main(): Unit => print(V(1)[2])")
+        .shouldHaveNoDiagnostics();
+    analyzed("type V(x: Int)\ndef opIndex(): Int => 1\ndef main(): Unit => print(V(1)[2])")
+        .shouldReport(DiagnosticCode.InvalidOperand, At("V(1)", 1));
+}
+
+@("an operand fitted by its shape is typed as the call's argument is, and reported once")
+unittest
+{
+    enum v = "type V(x: Int)\n";
+    analyzed(v ~ "def opSub(a: V, b: [Float]): V => a\ndef main(): Unit => print(V(1) - [1, 2.5])").shouldHaveNoDiagnostics();
+    analyzed(v ~ "def opMul(a: V, b: (Int, [Float])): V => a\ndef main(): Unit => print(V(1) * (1, [1, 2.5]))").shouldHaveNoDiagnostics();
+    analyzed(v ~ "def opDiv(a: V, b: (Int8?)?): V => a\ndef main(): Unit => print(V(1) / Some(None))").shouldHaveNoDiagnostics();
+    analyzed(v ~ "def opDiv(a: V, f: (Int) -> Int): V => a\ndef main(): Unit => print(V(1) / (x => x + 1))").shouldHaveNoDiagnostics();
+    analyzed(v ~ "def opSub(a: V, b: Int8): V => a\ndef main(): Unit => print(V(1) - 100)").shouldHaveNoDiagnostics();
+    analyzed(v ~ "def opSub(a: V, b: Int8): V => a\ndef main(): Unit => print(V(1) - 200)")
+        .shouldReport(DiagnosticCode.LiteralOutOfRange, At("200", 1));
+    analyzed(v ~ "def opNeg(a: [Float]): V => V(1)\ndef main(): Unit => print(-[1, 2.5])").shouldHaveNoDiagnostics();
+    analyzed(v ~ "def opAdd(a: String, b: V): V => b\ndef main(): Unit => print(\"s\" + V(1))").shouldHaveNoDiagnostics();
+}
+
+@("an operand that never returns fits any parameter, as it does in a call")
+unittest
+{
+    analyzed("type V(x: Int)\ndef opAdd(a: V, b: V): V => a\ndef main(): Unit => print(V(1) + panic(\"y\"))")
+        .shouldHaveNoDiagnostics();
+    analyzed("type V(x: Int)\ndef opAdd(a: V, b: V): V => a\ndef main(): Unit => print(panic(\"y\") + V(1))")
+        .shouldHaveNoDiagnostics();
+}
+
+@("a + with no opAdd for a String or an array operand says that ~ joins them, and only then")
+unittest
+{
+    void hints(string source, string text)
+    {
+        auto a = analyzed(source);
+        assert(a.collector.diagnostics.length == 1, source);
+        auto message = a.collector.diagnostics[0].message;
+        assert(a.collector.diagnostics[0].code == DiagnosticCode.InvalidOperand, message);
+        assert(text is null ? !message.canFind("joins") : message.canFind(text), message);
+    }
+    hints("def main(): Unit => print(\"a\" + \"b\")", "`~` joins strings");
+    hints("def main(): Unit {\n    val s = \"a\"\n    print(s + 1)\n}", "`~` joins strings");
+    hints("def main(): Unit => print([1] + [2])", "`~` joins arrays");
+    hints("def main(): Unit {\n    val xs = [1]\n    print(xs + 2)\n}", "`~` joins arrays");
+    hints("def main(): Unit => print(\"a\" - \"b\")", null);
+    hints("def main(): Unit {\n    val o: Int? = None\n    print(o + 1)\n}", null);
+    analyzed("def opAdd(a: String, b: String): String => a\ndef main(): Unit => print(\"a\" + \"b\")").shouldHaveNoDiagnostics();
+}
+
+@("an operator that calls a function can't be in a top-level constant")
+unittest
+{
+    analyzed("def opAdd(a: String, b: String): String => a\nval c: String = \"a\" + \"b\"\ndef main(): Unit => print(c)")
+        .shouldReport(DiagnosticCode.NonConstantInitializer, At("\"a\" + \"b\"", 1));
+    analyzed("val c: Int = 1 + 2 * 3\ndef main(): Unit => print(c)").shouldHaveNoDiagnostics();
 }

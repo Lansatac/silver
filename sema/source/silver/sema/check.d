@@ -335,7 +335,7 @@ private final class TypeChecker
 
         // Last, because an integer literal's type isn't final until everything's been checked.
         _typing.constants = evaluateConstants(programModules, _types, _typing.exprTypes, _resolutions, _unevaluable,
-            _negatedLiterals, _collector, _literalConstructions);
+            _negatedLiterals, _collector, _literalConstructions, _typing.operators);
 
         return _typing;
     }
@@ -714,6 +714,7 @@ private final class TypeChecker
         {
             // A constant expression can't contain a `return`, so nothing reads the return type.
             check(constant.value, type, BodyContext(Site(moduleName), _types.error));
+            requireNoOperatorCall(constant.value);
         }
         if (type == _types.error || _collector.diagnostics.length > reported)
         {
@@ -737,6 +738,27 @@ private final class TypeChecker
             (const Identifier _) => requireConstantName(expr),
             (const MemberAccess _) => requireConstantName(expr),
             (_) => reportNonConstant(expr),
+        );
+    }
+
+    /// Reports the first operator in a checked constant `expr` that means a call, which a constant
+    /// can't contain.
+    private void requireNoOperatorCall(const Expr expr)
+    {
+        if (expr.id in _typing.operators)
+        {
+            _collector.reportError(DiagnosticCode.NonConstantInitializer, expr.span,
+                "This operator calls an operator function, and a top-level constant can't call a function");
+            return;
+        }
+        expr.kind.match!(
+            (const InterpolatedString interpolated) { foreach (part; interpolated.parts) requireNoOperatorCall(part); },
+            (const UnaryExpr unary) { requireNoOperatorCall(*unary.operand); },
+            (const BinaryExpr binary) {
+                requireNoOperatorCall(*binary.left);
+                requireNoOperatorCall(*binary.right);
+            },
+            (_) {},
         );
     }
 
@@ -2064,7 +2086,7 @@ private final class TypeChecker
             (const StringLiteral _) => _types.string_,
             (const CharLiteral _) => _types.char_,
             (const InterpolatedString interpolated) => synthesizeInterpolated(interpolated, ctx),
-            (const UnaryExpr unary) => synthesizeUnary(unary, expr.span, ctx),
+            (const UnaryExpr unary) => synthesizeUnary(expr.id, unary, expr.span, ctx),
             (const BinaryExpr binary) => binary.op == BinaryOp.Concat || binary.op == BinaryOp.Append
                 ? synthesizeConcat(expr, binary, ctx)
                 : synthesizeBinary(expr.id, binary, expr.span, ctx),
@@ -3156,12 +3178,17 @@ private final class TypeChecker
         );
     }
 
-    private Type synthesizeUnary(const UnaryExpr unary, Span span, BodyContext ctx)
+    private Type synthesizeUnary(Id!Expr id, const UnaryExpr unary, Span span, BodyContext ctx)
     {
+        if (unary.op == UnaryOp.Minus && isFittedByShape(*unary.operand))
+        {
+            return synthesizeOperator(id, "opNeg", "`-a`", [*unary.operand], [Type.init], span, ctx);
+        }
         auto operandType = synthesize(*unary.operand, ctx);
         final switch (unary.op)
         {
             case UnaryOp.Minus:
+                if (callsOperator(operandType)) return synthesizeOperator(id, "opNeg", "`-a`", [*unary.operand], [operandType], span, ctx);
                 auto isLiteral = (*unary.operand).kind.match!((const IntLiteral _) => true, _ => false);
                 if (isLiteral)
                 {
@@ -3196,6 +3223,63 @@ private final class TypeChecker
                 requireAssignable(operandType, _types.bool_, unary.operand.span);
                 return _types.bool_;
         }
+    }
+
+    /// Whether arithmetic on operands of these types is a call of an operator function: it is
+    /// unless they're all numbers, which the machine does it for.
+    private bool callsOperator(Type[] operands...)
+    {
+        return !operands.any!(t => t == _types.error) && operands.any!(t => isNotNumber(t));
+    }
+
+    /// Whether `type` is one an arithmetic operator's function is called for: not a number, and
+    /// not `Never`, which fits any parameter.
+    private bool isNotNumber(Type type)
+    {
+        return !isNumeric(type) && type != _types.never;
+    }
+
+    /// An operand of arithmetic that's fitted by its shape rather than typed first, which is every
+    /// one but a number literal, since what a literal beside a number is can't be said until the
+    /// other is typed.
+    private bool isFittedByShape(const Expr operand)
+    {
+        return isShaped(operand) && !isIntLiteral(operand) && operand.kind.match!((const FloatLiteral _) => false, _ => true);
+    }
+
+    /// An arithmetic operation that means a call of the operator function `name`, chosen as a call
+    /// of it with the operands would be, so a literal operand takes the type its parameter asks for.
+    private Type synthesizeOperator(Id!Expr id, string name, string syntax, const(Expr)[] args, Type[] operands, Span span,
+        BodyContext ctx)
+    {
+        auto typed = operands.dup;
+        string[] shown;
+        foreach (i, arg; args)
+        {
+            if (isShaped(arg)) typed[i] = Type.init;
+            auto type = operands[i] != Type.init ? operands[i] : defaultType(arg);
+            shown ~= type == Type.init ? "this operand" : "`" ~ _types.describe(type) ~ "`";
+        }
+        // An operand that isn't a number is what's reported, as it was when only numbers had operators.
+        auto blamed = args.length.iota.filter!(i => operands[i] == Type.init ? isFittedByShape(args[i]) : isNotNumber(operands[i]));
+        // `+` doesn't join strings or arrays, so say what does.
+        string hint;
+        if (name == "opAdd")
+        {
+            auto joined = args.length.iota.map!(i => operands[i] != Type.init ? operands[i] : defaultType(args[i]))
+                .filter!(t => t == _types.string_ || t != Type.init && _types.isArray(t));
+            if (!joined.empty)
+            {
+                auto what = joined.front == _types.string_ ? "strings" : "arrays";
+                hint = "`+` adds numbers, and `~` joins %s, as in `a ~ b`".format(what);
+            }
+        }
+        auto at = Expr(id, span, ExprKind(Identifier(name)));
+        auto function_ = syntaxFunction(at, args[blamed.front].span, name, syntax, args, typed, ctx, true, shown, hint);
+        if (!function_.found) return _types.error;
+        _typing.operators[id] = function_.use;
+        noteSyntaxUse(ctx.site, span, function_);
+        return function_.signature.ret;
     }
 
     /// `Some(x)` or `None`, written out, which takes its type from what it's checked against.
@@ -3335,12 +3419,41 @@ private final class TypeChecker
         {
             synthesizeCompared(binary, leftType, rightType, ctx);
         }
+        else if (operatorFunction(binary.op) !is null)
+        {
+            // An operand fitted by its shape is typed by the call if it's made, as an argument is, so
+            // it isn't synthesized first; neither is a literal that's beside what isn't a number.
+            leftType = isShaped(*binary.left) ? Type.init : synthesize(*binary.left, ctx);
+            rightType = isShaped(*binary.right) ? Type.init : synthesize(*binary.right, ctx);
+            auto calls = isFittedByShape(*binary.left) || isFittedByShape(*binary.right)
+                || (leftType != Type.init && isNotNumber(leftType)) || (rightType != Type.init && isNotNumber(rightType));
+            if (calls)
+            {
+                if (leftType == _types.error || rightType == _types.error)
+                {
+                    foreach (operand; [binary.left, binary.right])
+                    {
+                        if (isShaped(*operand)) checkArgument(*operand, _types.error, ctx);
+                    }
+                    return _types.error;
+                }
+                return synthesizeOperator(id, operatorFunction(binary.op), "`a %s b`".format(cast(string) binary.op),
+                    [*binary.left, *binary.right], [leftType, rightType], span, ctx);
+            }
+            if (leftType == Type.init) leftType = synthesize(*binary.left, ctx);
+            if (rightType == Type.init) rightType = synthesize(*binary.right, ctx);
+        }
         else
         {
             leftType = synthesize(*binary.left, ctx);
             rightType = synthesize(*binary.right, ctx);
         }
         if (leftType == _types.error || rightType == _types.error) return _types.error;
+        if (operatorFunction(binary.op) !is null && callsOperator(leftType, rightType))
+        {
+            return synthesizeOperator(id, operatorFunction(binary.op), "`a %s b`".format(cast(string) binary.op),
+                [*binary.left, *binary.right], [leftType, rightType], span, ctx);
+        }
         // An integer literal takes the type of the number beside it, so `x * 2` and `x == 0` work.
         // Not a Float beside an integer-only operator, or the error would blame the literal.
         with (BinaryOp)
@@ -6741,9 +6854,10 @@ private final class TypeChecker
     /// argument with a type in `typed` has it already: it's been synthesized, or it's a placeholder
     /// for a value with no expression, which the caller checks. The rest are checked against their
     /// parameters. Not found when no function takes them, which is reported when `required`;
-    /// failed when finding one reported an error.
+    /// failed when finding one reported an error. `shown` is how a missing function is reported
+    /// to take its arguments, in place of the first argument's type.
     private SyntaxUse syntaxFunction(const Expr at, Span span, string name, string syntax, const(Expr)[] args,
-        Type[] typed, BodyContext ctx, bool required = true)
+        Type[] typed, BodyContext ctx, bool required = true, string[] shown = null, string hint = null)
     {
         SyntaxUse failed;
         failed.failed = true;
@@ -6763,14 +6877,19 @@ private final class TypeChecker
         {
             auto params = signatureOf(f).params;
             auto typeParams = _resolutions.typeParamsOf(f);
-            return params.length == args.length && typedFit(typed[0], params[0], typeParams, false) != Fit.none;
+            if (params.length != args.length) return false;
+            auto fit = typed[0] == Type.init ? shapeFit(args[0], params[0], typeParams)
+                : typedFit(typed[0], params[0], typeParams, false);
+            return fit != Fit.none;
         }
         if (lookup is null || !lookup.groups.joiner.any!takesFirst)
         {
             if (!required) return SyntaxUse.init;
             typeTheRest();
-            _collector.reportError(DiagnosticCode.InvalidOperand, args[0].id.isValid ? args[0].span : span,
-                "%s calls `%s`, and no `%s` here takes a `%s`".format(syntax, name, name, _types.describe(typed[0])));
+            auto taken = shown is null ? "a `%s`".format(_types.describe(typed[0]))
+                : shown.join(" and ");
+            _collector.reportError(DiagnosticCode.InvalidOperand, shown is null && args[0].id.isValid ? args[0].span : span,
+                "%s calls `%s`, and no `%s` here takes %s%s".format(syntax, name, name, taken, hint is null ? "" : "; " ~ hint));
             return failed;
         }
         // Each argument with a type of its own is synthesized once, so it's fitted by its type.

@@ -298,6 +298,24 @@ enum UnaryOp
     BitNot = "~",
 }
 
+/// The operator function that `op` calls when its operands aren't both built-in numbers, or null
+/// for an operator that has none.
+string operatorFunction(BinaryOp op)
+{
+    switch (op)
+    {
+        case BinaryOp.Add: return "opAdd";
+        case BinaryOp.Subtract: return "opSub";
+        case BinaryOp.Multiply: return "opMul";
+        case BinaryOp.Divide: return "opDiv";
+        case BinaryOp.Modulo: return "opRem";
+        default: return null;
+    }
+}
+
+/// ditto
+string operatorFunction(UnaryOp op) => op == UnaryOp.Minus ? "opNeg" : null;
+
 struct UnaryExpr
 {
     UnaryOp op;

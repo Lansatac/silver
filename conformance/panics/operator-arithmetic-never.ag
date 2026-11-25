@@ -1,0 +1,8 @@
+// An operand that never returns fits any parameter of an operator function, as it does in a call.
+type V(x: Int)
+def opAdd(a: V, b: V): V => V(a.x + b.x)
+
+def main(): Unit {
+    printl(V(1) + V(2))
+    printl(V(1) + panic("never"))
+}

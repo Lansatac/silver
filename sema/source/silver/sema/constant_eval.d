@@ -10,6 +10,7 @@ import silver.ast;
 import silver.sema.constant;
 import silver.sema.resolve;
 import silver.sema.type;
+import silver.sema.typing : FunctionUse;
 
 /// The value of each constant in `modules` that has one. `unevaluable` are the constants whose
 /// initializers already have errors, and `negatedLiterals` the integer literals under a `-`. Each
@@ -17,9 +18,10 @@ import silver.sema.type;
 /// if the invariant is a constant expression that's false for them.
 package SideTable!(Id!ConstDecl, ConstValue) evaluateConstants(M)(M modules, TypeTable types, const SideTable!(Id!Expr, Type) exprTypes,
     const Resolution resolutions, const bool[Id!ConstDecl] unevaluable, const bool[Id!Expr] negatedLiterals,
-    Collector collector, const(Expr)[] literalConstructions)
+    Collector collector, const(Expr)[] literalConstructions, const SideTable!(Id!Expr, FunctionUse) operators)
 {
     auto evaluator = ConstantEvaluator(types, exprTypes, resolutions, unevaluable, negatedLiterals, collector);
+    evaluator._operators = &operators;
     foreach (mod; modules)
     {
         foreach (decl; mod.declarations)
@@ -54,6 +56,8 @@ private struct ConstantEvaluator
     /// reported, since the program panics there anyway.
     private ConstValue[Id!Param] _params;
     private bool _checkingInvariant;
+    /// The operations that call an operator function, which sema can't evaluate.
+    private const(SideTable!(Id!Expr, FunctionUse))* _operators;
 
     /// Reports `call` if it builds a value that breaks its type's invariant, where that invariant
     /// uses only what a constant may and so can be evaluated here.
@@ -104,8 +108,9 @@ private struct ConstantEvaluator
             (const CharLiteral _) => true,
             (const UnitLiteral _) => true,
             (const InterpolatedString interpolated) => interpolated.parts.all!(p => isConstantExpr(p, params)),
-            (const UnaryExpr unary) => isConstantExpr(*unary.operand, params),
-            (const BinaryExpr binary) => isConstantExpr(*binary.left, params) && isConstantExpr(*binary.right, params),
+            (const UnaryExpr unary) => expr.id !in *_operators && isConstantExpr(*unary.operand, params),
+            (const BinaryExpr binary) => expr.id !in *_operators && isConstantExpr(*binary.left, params)
+                && isConstantExpr(*binary.right, params),
             (const Identifier _) => named(expr),
             (const MemberAccess _) => named(expr),
             _ => false,
