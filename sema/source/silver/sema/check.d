@@ -771,18 +771,23 @@ private final class TypeChecker
         return false;
     }
 
-    /// A float literal that adapted to `Float32` must round to a finite value.
+    /// A float literal must round to a finite value of the type it ended up with.
     private void checkFloatLiteralRange(const Expr expr)
     {
-        if (_typing.exprTypes[expr.id] != _types.float32) return;
+        auto type = _typing.exprTypes[expr.id];
         auto value = expr.kind.match!(
             (const FloatLiteral l) => l.value,
             (_) => assert(0, "only float literals are recorded"),
         );
-        if (value == value && cast(float) value == float.infinity)
+        if (type == _types.float32 && value == value && cast(float) value == float.infinity)
         {
             _collector.reportError(DiagnosticCode.LiteralOutOfRange, expr.span,
                 "This float literal doesn't fit in `Float32`; its largest value is about 3.4028235e38");
+        }
+        else if (type == _types.float_ && value == double.infinity)
+        {
+            _collector.reportError(DiagnosticCode.LiteralOutOfRange, expr.span,
+                "This float literal doesn't fit in `Float`; its largest value is about 1.7976931348623157e308");
         }
     }
 

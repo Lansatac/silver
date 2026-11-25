@@ -1,0 +1,13 @@
+val limit: Float = 1.7976931348623157e308
+val over: Float = 1e400
+
+def take(x: Float): Float => x
+
+def main(): Unit {
+    val a: Float = 1e400
+    val b: Float = -1e400
+    val c = 1e400
+    val d = 2.5 + 1e400
+    val e = take(1e400)
+    printl(limit)
+}

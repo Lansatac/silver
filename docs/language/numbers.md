@@ -27,7 +27,7 @@ x + 0.25                 // the literal is a Float32, beside one
 val big: Float32 = 1e40  // error: doesn't fit
 ```
 
-A float literal is rounded to the nearest `Float32`, and one that rounds to infinity is a compile error. A literal too small for a `Float32` rounds to zero, as it does for a `Float`.
+A float literal is rounded to the nearest value of its type, and one that rounds to infinity is a compile error, for a `Float` as for a `Float32`: `1e400` is an error wherever it's a `Float`, and `1e40` is one where a `Float32` is expected. A literal too small for its type rounds to zero. Only a literal is checked: a conversion or arithmetic that leaves the range is infinity, so `Float32(1e40)` and `1e300 * 1e300` are `inf`.
 
 An integer literal takes the type expected of it, or the type of the number beside it, and is checked at compile time to fit. With neither, it is an `Int`. An arm of an `if` or `match` that's a literal takes the type of the other arms in the same way, so with `small: UInt8`, `if c => 1 else small` is a `UInt8`. A sign is an operator applied to a literal, but a negated literal still adapts, so `-128` is a valid `Int8`.
 
@@ -133,12 +133,11 @@ Apart from the infinities and NaN, the text is a Float literal in Silver and a n
 ## Open questions
 
 - Numeric interfaces. Generic code over the integer types, or over both float types, has no bound to ask for: `Ord` is the only interface they share, and `compare` is declared once for each type. A bound such as `T: Floating` over `Float` and `Float32` isn't designed. The two float types have the same operators, conversion spelling and function names, and no width in a function's name, so that one could describe them both.
-- Whether a float literal too large for a `Float` should be a compile error, as it is for a `Float32`.
 - A function for formatting a Float with a given number of places or significant digits.
 
 ## Current implementation
 
-- A float literal too large for a `Float`, such as `1e400`, is `inf` and not an error. For a `Float32` it is an error.
+- A float literal's range is checked once checking is done, since its type isn't final before, so Core and the backends never see an infinite literal.
 - `std.math` is `Float`-only: a `Float32` goes through `Float(x)` and back. `parseFloat` returns a `Float`.
 - A `Float32` can't be in a native function's signature yet.
 - A `Float32` is a 32-bit `float` in compiled code. The interpreter holds it as the `double` it widens to, rounded to a `float` after every operation, so both compute in single precision.

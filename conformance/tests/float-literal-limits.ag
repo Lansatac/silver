@@ -1,0 +1,15 @@
+// A literal that fits is one value, a literal too small rounds to zero, and a conversion or
+// arithmetic that leaves the range is infinity, never a compile error.
+def main(): Unit {
+    printl(1.7976931348623157e308)
+    printl(-1.7976931348623157e308)
+    printl(1e-400)
+    printl(-1e-400)
+    printl(Float32(1e40))
+    printl(Float32(1.7976931348623157e308))
+    printl(1e300 * 1e300)
+    val small: Float32 = 1e-50
+    printl(small)
+    val largest: Float32 = 3.4028235e38
+    printl(largest)
+}

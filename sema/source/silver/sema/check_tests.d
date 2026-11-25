@@ -358,7 +358,21 @@ unittest
     analyzedMain("val x: Float32 = 1e40").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e40", 1));
     analyzedMain("val x: Float32 = -1e40").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e40", 1));
     analyzedMain("val x: Float32? = Some(1e40)").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e40", 1));
-    analyzedMain("val x: Float32 = 3.4028235e38\n    val y: Float32 = 1e-50\n    val z = 1e40").shouldHaveNoDiagnostics();
+    analyzedMain("val x: Float32 = 3.4028235e38\n    val y: Float32 = 1e-50\n    val z = 1e30").shouldHaveNoDiagnostics();
+}
+
+@("a float literal too large for a Float is out of range wherever it's a Float, and the largest one is not")
+unittest
+{
+    analyzedMain("val x: Float = 1e400").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e400", 1));
+    analyzedMain("val x: Float = -1e400").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e400", 1));
+    analyzedMain("val x = 1e400").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e400", 1));
+    analyzedMain("val d = 2.5\n    val x = d + 1e400").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e400", 1));
+    analyzed("def f(x: Float): Unit => ()\ndef main(): Unit => f(1e400)")
+        .shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e400", 1));
+    analyzed("val limit: Float = 1e400\ndef main(): Unit => ()")
+        .shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e400", 1));
+    analyzedMain("val a = 1.7976931348623157e308\n    val b = 1e-400\n    val c = Float32(1e40)").shouldHaveNoDiagnostics();
 }
 
 @("a Float32 isn't an operand of a bit operator, and can't cross into C yet")
