@@ -40,7 +40,7 @@ val greeting: String = "limit is {limit}"
 
 A constant has a lowercase name, a required type annotation, and is reached like a function (`limit`, `some.module.limit`). Top-level bindings can't be mutable. Constants may refer to each other in any order, but not in a cycle.
 
-The type must be `Bool`, an integer type, `Float`, `String` or `Unit`. The initializer may use literals, unary and binary operators, parentheses, string interpolation and other constants. It's evaluated at compile time under the same rules as at runtime, so anything that would panic is a compile error.
+The type must be `Bool`, an integer type, `Float`, `Float32`, `String` or `Unit`. The initializer may use literals, unary and binary operators, parentheses, string interpolation and other constants. It's evaluated at compile time under the same rules as at runtime, so anything that would panic is a compile error.
 
 ## Shadowing
 
