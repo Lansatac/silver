@@ -154,10 +154,10 @@ unittest
         shown.output);
 }
 
-/// Copies the directory `from` and everything under it to `to`.
+/// Copies the directory `from` and everything under it to `to`, keeping execute bits.
 void copyTree(string from, string to)
 {
-    import std.file : copy, dirEntries, mkdirRecurse, SpanMode;
+    import std.file : copy, dirEntries, mkdirRecurse, PreserveAttributes, SpanMode;
     import std.path : relativePath;
 
     mkdirRecurse(to);
@@ -165,7 +165,7 @@ void copyTree(string from, string to)
     {
         auto target = buildPath(to, relativePath(entry.name, from));
         if (entry.isDir) mkdirRecurse(target);
-        else copy(entry.name, target);
+        else copy(entry.name, target, PreserveAttributes.yes);
     }
 }
 
@@ -199,6 +199,8 @@ unittest
 
     // The built runtime alone, with no sources: silverc only links it.
     copyTree(buildPath(root, "out", "runtime"), buildPath(install, "runtime"));
+    // Where out/ has LLVM's tools, as a Windows release does, so does the copy; else clang is on the PATH.
+    if (exists(buildPath(root, "out", "llvm"))) copyTree(buildPath(root, "out", "llvm"), buildPath(install, "llvm"));
     expectRan(run(["build", "-o", output, "hello.ag"]), "");
     expectRan(runIn([output], work), "the copy\n");
     expectRan(run(["build", "-O", "-o", output, "hello.ag"]), "");
