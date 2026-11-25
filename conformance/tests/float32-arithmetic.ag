@@ -1,0 +1,49 @@
+// Float32 arithmetic is done in single precision: each result is rounded to a Float32.
+def main(): Unit {
+    val big = Float32(16777216.0)
+    val one = Float32(1.0)
+    printl(big + one == big)
+    printl(big + one + one == big)
+    printl(Float(big) + Float(one) == Float(big))
+    printl(big + Float32(2.0))
+    printl(big - one)
+
+    val three = Float32(3.0)
+    val third = one / three
+    printl(third)
+    printl(third * three)
+    printl(Float(third))
+    printl(Float(third) == 1.0 / 3.0)
+    printl(Float32(1.0 / 3.0) == third)
+
+    printl(Float32(7.5) % Float32(2.0))
+    printl(Float32(-7.5) % Float32(2.0))
+    printl(Float32(0.1) + Float32(0.2))
+    printl(Float32(0.1) + Float32(0.2) == Float32(0.3))
+    printl(Float32(0.1) * Float32(3.0))
+    printl(Float32(1e20) * Float32(1e20))
+    printl(Float32(1e-30) * Float32(1e-30))
+    printl(Float32(3.4028235e38) + Float32(3.4028235e38))
+
+    val zero = Float32(0.0)
+    printl(one / zero)
+    printl(-one / zero)
+    printl(zero / zero)
+    printl(-zero)
+    printl(-zero == zero)
+    printl(zero / zero == zero / zero)
+    printl(zero / zero != zero / zero)
+
+    mutable val total = Float32(0.0)
+    mutable val i = 0
+    while i < 10 {
+        total += Float32(0.1)
+        i += 1
+    }
+    printl(total)
+    total *= Float32(2.0)
+    total -= Float32(1.0)
+    total /= Float32(4.0)
+    printl(total)
+    printl(Float(total))
+}

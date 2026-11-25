@@ -1,0 +1,6 @@
+def main(): Unit {
+    val x: Float32 = 1.5
+    val d: Float = 2.0
+    printl(x + d)
+    val y: Float32 = d
+}

@@ -1,0 +1,5 @@
+def main(): Unit {
+    printl("before")
+    val zero = Float32(0.0)
+    printl(Int(zero / zero))
+}

@@ -1,0 +1,56 @@
+// A float or integer literal takes the type expected of it when that is a Float32, and a float
+// literal is a Float otherwise. Values never convert implicitly.
+type Particle(x: Float32, y: Float32)
+type Reading = :Float32 | :String
+
+def half(x: Float32): Float32 => x * 0.5
+def scale(x: Float32, by: Float32): Float32 => x * by
+def ratio(): Float32 => 0.75
+def widen(x: Float32): Float => Float(x)
+
+def main(): Unit {
+    val x: Float32 = 1.5
+    val y = 1.5
+    val negative: Float32 = -2.25
+    val whole: Float32 = 3
+    val negativeWhole: Float32 = -4
+    printl(x)
+    printl(y)
+    printl(negative)
+    printl(whole)
+    printl(negativeWhole)
+
+    // Beside a Float32, a literal is a Float32.
+    printl(x + 0.25)
+    printl(0.25 + x)
+    printl(x * 2)
+    printl(x == 1.5)
+    printl(x < 2.0)
+    printl(-x)
+
+    // Where one is expected: arguments, results, fields, elements, options, sums.
+    printl(half(5.0))
+    printl(half(5))
+    printl(scale(1.5, 2.0))
+    printl(scale(1.5, -2))
+    printl(ratio())
+    printl(Particle(0.5, -0.5))
+    val points: [Float32] = [0.5, 1, -2.5]
+    printl(points)
+    val maybe: Float32? = 2.5
+    printl(maybe)
+    val reading: Reading = 3.25
+    printl(reading)
+    val pair: (Float32, Float) = (0.5, 0.5)
+    printl(pair)
+    printl(if x > 1.0 => 1.25 else 0.5)
+
+    // A Float32 holds only what a Float32 can: 0.1 is not 0.1.
+    val tenth: Float32 = 0.1
+    printl(tenth)
+    printl(widen(tenth))
+    printl(widen(tenth) == 0.1)
+    printl(Float(tenth) == Float(Float32(0.1)))
+    printl(0.1 + 0.2)
+    printl(tenth + 0.2)
+}

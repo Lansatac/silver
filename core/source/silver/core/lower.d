@@ -3266,6 +3266,8 @@ unittest
 @("a literal that adapted to Float32 is a float literal, rounded to a Float32")
 unittest
 {
+    import std.sumtype : get;
+
     auto result = loweredFunction(`def f(x: Float32): Float32 => x * 0.1 + 3`, "f");
 
     print(result.program).should.equal(

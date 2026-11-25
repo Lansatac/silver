@@ -1,0 +1,61 @@
+// Float32(d) of a Float rounds to nearest, and is inf when it is out of range, nan for NaN and never
+// a panic. Float(x) of a Float32 is exact. An integer converts both ways as it does for Float.
+def main(): Unit {
+    val zero = 0.0
+    printl(Float32(2.0))
+    printl(Float32(0.1))
+    printl(Float(Float32(0.1)))
+    printl(Float32(0.1) == Float32(0.10000000149011612))
+    printl(Float32(16777217.0))
+    printl(Float32(16777218.0))
+    printl(Float32(16777219.0))
+    printl(Float32(1e300))
+    printl(Float32(-1e300))
+    printl(Float32(1e-300))
+    printl(Float32(-1e-300))
+    printl(Float32(3.4028235e38))
+    printl(Float32(3.40282356e38))
+    printl(Float32(3.4028237e38))
+    printl(Float32(zero / zero))
+    printl(Float32(1.0 / zero))
+    printl(Float32(-1.0 / zero))
+    printl(Float32(-zero))
+
+    // Widening is exact: the Float is the Float32's value, digit for digit.
+    val third: Float32 = Float32(1.0) / Float32(3.0)
+    printl(Float(third))
+    printl(Float32(Float(third)) == third)
+    printl(Float(Float32(3.4028235e38)))
+    printl(Float(Float32(1.0) / Float32(0.0)))
+
+    // Integers.
+    printl(Float32(7))
+    printl(Float32(-7))
+    printl(Float32(16777217))
+    printl(Float32(123456789))
+    val n = 123456789
+    printl(Float32(n))
+    val small: UInt8 = 200
+    printl(Float32(small))
+    val huge: UInt64 = 0xFFFFFFFFFFFFFFFF
+    printl(Float32(huge))
+    printl(Float32(huge) == Float32(18446744073709551616.0))
+    val most: Int = 9223372036854775807
+    printl(Float32(most))
+    printl(Float32(-most))
+
+    // From a Float32 to an integer truncates toward zero, as from a Float.
+    printl(Int(Float32(2.9)))
+    printl(Int(Float32(-2.9)))
+    printl(Int(Float32(0.0)))
+    printl(UInt8(Float32(255.9)))
+    printl(UInt8(Float32(-0.9)))
+    printl(Int8(Float32(-128.9)))
+    printl(Int8(Float32(127.9)))
+    printl(Int32(Float32(-2147483648.0)))
+    printl(Int32(Float32(2147483520.0)))
+    printl(Int(Float32(-9223372036854775808.0)))
+    printl(Int(Float32(9223371487098961920.0)))
+    printl(UInt64(Float32(18446742974197923840.0)))
+    printl(UInt32(Float32(4294967040.0)))
+}

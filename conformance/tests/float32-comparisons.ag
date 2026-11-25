@@ -1,0 +1,35 @@
+// Comparisons of Float32s, with -0.0 equal to 0.0 and NaN equal to nothing, and `compare` as for Float.
+def order(a: Float32, b: Float32): String => "{compare(a, b)} {compare(b, a)}"
+
+def main(): Unit {
+    val zero = Float32(0.0)
+    val nan = zero / zero
+    val infinity = Float32(1.0) / zero
+    printl(Float32(1.5) < Float32(2.5))
+    printl(Float32(1.5) <= Float32(1.5))
+    printl(Float32(2.5) > Float32(1.5))
+    printl(Float32(1.5) >= Float32(2.5))
+    printl(Float32(1.5) == Float32(1.5))
+    printl(Float32(1.5) != Float32(1.5))
+    printl(-zero == zero)
+    printl(nan == nan)
+    printl(nan != nan)
+    printl(nan < zero)
+    printl(nan > zero)
+    printl(infinity > Float32(3.4028235e38))
+    printl(Float32(0.1) == Float32(0.1))
+    printl(Float32(0.1) == Float32(0.10000000001))
+    printl(Float32(16777216.0) == Float32(16777217.0))
+
+    printl(order(Float32(1.5), Float32(2.5)))
+    printl(order(-zero, zero))
+    printl(order(infinity, nan))
+    printl(order(-infinity, infinity))
+    printl(compare(nan, nan))
+    printl(compare(Float32(1.5), Float32(1.5)))
+
+    val values: [Float32] = [2.5, 0.5, 1.5]
+    printl(compare(values, [2.5, 0.5, 1.5]))
+    printl(compare((Float32(1.0), 2), (Float32(1.0), 3)))
+    printl(compare(Some(Float32(1.0)), None))
+}

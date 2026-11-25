@@ -1,0 +1,67 @@
+// A Float32 as a field of a product, an element of an array, a dictionary key, a member of a sum,
+// and through String, equality and the derived `compare`.
+type Vec(x: Float32, y: Float32)
+def compare(a: Vec, b: Vec): Ordering => derivedCompare(a, b)
+conform Vec: Ord
+type Number = :Float32 | :Int
+type Mixed = :Float32 | :Float
+
+def describe(n: Number): String => match n {
+    f: Float32 => "float32 " ~ String(f)
+    i: Int => "int " ~ String(i)
+}
+
+def tell(m: Mixed): String => match m {
+    f: Float32 => "single " ~ String(f)
+    d: Float => "double " ~ String(d)
+}
+
+def main(): Unit {
+    val v = Vec(0.5, 0.1)
+    printl(v)
+    printl(v.y)
+    printl(v == Vec(0.5, 0.1))
+    printl(v == Vec(0.5, 0.2))
+    printl(compare(v, Vec(0.5, 0.2)))
+    printl(compare(Vec(1.0, 0.0), v))
+
+    mutable val xs: [Float32] = [0.1, 0.2]
+    xs ~= [0.3]
+    xs ~= [Float32(0.4)]
+    xs[0] = 1.5
+    printl(xs)
+    printl(xs == [1.5, 0.2, 0.3, 0.4])
+    printl(length(xs))
+
+    val scores: [Float32: String] = [0.5: "half", 0.1: "tenth", -0.0: "zero"]
+    printl(scores[0.5])
+    printl(scores[0.1])
+    printl(scores[0.0])
+    printl(scores[-0.0])
+    printl(scores[0.25])
+    printl(scores)
+    mutable val more = scores
+    more[0.5] = "changed"
+    more[0.75] = "three quarters"
+    printl(more[0.5])
+    printl(more)
+
+    val a: Number = 2.5
+    val b: Number = 7
+    printl(describe(a))
+    printl(describe(b))
+    printl(a == 2.5)
+    printl(a == b)
+    val m: Mixed = 0.1
+    val n: Mixed = Float32(0.1)
+    printl(tell(m))
+    printl(tell(n))
+
+    printl(String(Float32(0.1)))
+    printl("{Float32(0.1)}")
+    printl(Float32(0.1) == Float32(0.1))
+    val none: Float32? = None
+    printl(none)
+    printl(Some(Float32(0.5)) == Some(Float32(0.5)))
+    printl((Float32(1.0), "a") == (Float32(1.0), "a"))
+}

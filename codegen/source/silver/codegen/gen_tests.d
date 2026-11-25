@@ -239,6 +239,25 @@ unittest
     run.output.should.equal("2.5\n-1.5\nfalse\n");
 }
 
+@("codegen holds a Float32 as an LLVM float, rounding a constant and converting with fptrunc and fpext")
+unittest
+{
+    auto source = "def main(): Unit {\n    val a: Float32 = 0.1\n    val d = Float(a)\n    printl(a * 3 - a)\n"
+        ~ "    printl(Float32(d + 1.0))\n    printl(d)\n    printl(Int(a * 20))\n}";
+    auto ir = generateSource(source);
+
+    ir.should.contain("fmul float");
+    ir.should.contain("fsub float");
+    ir.should.contain("fptrunc double");
+    ir.should.contain("fpext float");
+    ir.should.contain("@silver_printl_float32");
+    ir.should.contain("float 0x3FB99999A0000000");
+
+    Run run;
+    if (!compileAndRun(source, run)) return;
+    run.output.should.equal("0.20000002\n1.1\n0.10000000149011612\n2\n");
+}
+
 @("codegen declares a native from its signature and calls it with the C calling convention")
 unittest
 {
