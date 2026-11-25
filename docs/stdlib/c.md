@@ -1,6 +1,6 @@
 # std.c
 
-The names [native declarations](../language/native.md) use for C's types: its integer types, as the Silver type of the same width on the platform being compiled for, and its strings.
+The names [native declarations](../language/native.md) use for C's types: its integer and floating-point types, as the Silver type of the same width on the platform being compiled for, and its strings.
 
 ## Integer types
 
@@ -14,6 +14,15 @@ The names [native declarations](../language/native.md) use for C's types: its in
 | `CSize` | `UInt64` | `size_t` |
 
 Each is an alias, so a `CInt` is an `Int32` and converts and compares as one.
+
+## Floating-point types
+
+| Name | Is | C |
+| --- | --- | --- |
+| `CFloat` | `Float32` | `float` |
+| `CDouble` | `Float` | `double` |
+
+The same on every platform, so each is an alias too.
 
 ## Strings
 

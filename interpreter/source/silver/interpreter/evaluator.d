@@ -989,7 +989,7 @@ final class Evaluator
         {
             auto type = call.params[i];
             if (types.isInteger(type)) args ~= CValue(value.as!long, cast(void*) value.as!long);
-            else if (type == types.float_) args ~= CValue(0, null, value.as!double);
+            else if (type == types.float_ || type == types.float32) args ~= CValue(0, null, value.as!double);
             else if (isNullableHandle(type))
             {
                 auto option = value.as!Record;
@@ -1001,6 +1001,7 @@ final class Evaluator
         auto result = native.call(args);
         if (e.type == types.unit || e.type == types.never) return Value(Unit());
         if (e.type == types.float_) return Value(result.float_);
+        if (e.type == types.float32) return Value(cast(double) cast(float) result.float_);
         if (e.type == types.bool_) return Value(result.integer != 0);
         if (types.isInteger(e.type))
         {
@@ -1012,7 +1013,7 @@ final class Evaluator
     }
 
     /// Whether C passes a value of `type` as a `kind`: a pointer is a native type, an option of one or
-    /// a 64-bit integer, and `void` a result of `Unit` or `Never`. An integer result can be any integer
+    /// a 64-bit integer, `float` a `Float32` and `double` a `Float`, and `void` a result of `Unit` or `Never`. An integer result can be any integer
     /// type or `Bool`, cut down from C's; an integer parameter has to be at least as wide as C's `int`,
     /// since Windows' convention leaves the upper bits of a narrower one undefined.
     private bool accepts(CKind kind, Type type, bool isResult)
@@ -1025,6 +1026,8 @@ final class Evaluator
                 return types.isInteger(type) && types.integerOf(type).bits >= 32;
             case CKind.float_:
                 return type == types.float_;
+            case CKind.single:
+                return type == types.float32;
             case CKind.pointer:
                 return (type in _program.nativeTypes) !is null || isNullableHandle(type)
                     || (types.isInteger(type) && types.integerOf(type).bits == 64);

@@ -442,13 +442,12 @@ unittest
     analyzedMain("val a = 1.7976931348623157e308\n    val b = 1e-400\n    val c = Float32(1e40)").shouldHaveNoDiagnostics();
 }
 
-@("a Float32 isn't an operand of a bit operator, and can't cross into C yet")
+@("a Float32 isn't an operand of a bit operator, and crosses into C as a float")
 unittest
 {
     analyzedMain("val x: Float32 = 1.5\n    printl(x & 1)").shouldReport(DiagnosticCode.InvalidOperand, At("x", 2));
     analyzedMain("val x: Float32 = 1.5\n    printl(~x)").shouldReport(DiagnosticCode.InvalidOperand, At("x", 2));
-    analyzed("native def g(x: Float32): Unit\ndef main(): Unit => ()")
-        .shouldReport(DiagnosticCode.InvalidNativeType, At("Float32", 1));
+    analyzed("native def g(x: Float32): Float32\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
 }
 
 // Operators

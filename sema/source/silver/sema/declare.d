@@ -533,11 +533,12 @@ package final class Declarer
     /// Reports a type in a native's signature that has no C equivalent.
     package void requireNativeType(Type type, Span span, bool isReturn)
     {
-        if (type == _types.error || _types.isInteger(type) || type == _types.float_ || type == _types.bool_) return;
+        if (type == _types.error || _types.isInteger(type) || type == _types.float_ || type == _types.float32
+        || type == _types.bool_) return;
         if (isReturn && (type == _types.unit || type == _types.never)) return;
         if (isNativeType(type) || (_types.isOption(type) && isNativeType(_types.optionInner(type)))) return;
         _collector.reportError(DiagnosticCode.InvalidNativeType, span,
-            "`%s` can't cross into C; a native function takes integers, `Float`, `Bool`, native types and options of native types%s"
+            "`%s` can't cross into C; a native function takes integers, `Float`, `Float32`, `Bool`, native types and options of native types%s"
                 .format(_types.describe(type), isReturn ? ", and can also return `Unit` or `Never`" : ""));
     }
 

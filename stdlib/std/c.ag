@@ -1,4 +1,4 @@
-// C's integer types, as the Silver type of the same width on the platform being compiled for, and C's strings.
+// C's numeric types, as the Silver type of the same width on the platform being compiled for, and C's strings.
 module std.c
 
 // `CLong` and `CULong`, whose width depends on the platform, and `CString` with its conversions.
@@ -14,3 +14,7 @@ alias CUInt = UInt32
 alias CLongLong = Int64
 alias CULongLong = UInt64
 alias CSize = UInt64
+
+// `float` and `double`, the same on every platform.
+alias CFloat = Float32
+alias CDouble = Float

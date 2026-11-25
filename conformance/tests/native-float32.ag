@@ -1,0 +1,29 @@
+import std.c
+
+native def sqrtf(x: Float32): Float32
+native("powf") def power(base: CFloat, exponent: CFloat): CFloat
+native("sqrt") def root(x: CDouble): CDouble
+native def cosf(x: CFloat): CFloat
+native def expf(x: Float32): Float32
+
+def near(a: Float32, b: Float32): Bool => (a - b) * (a - b) < 1e-10
+
+def main(): Unit {
+    printl(sqrtf(16.0))
+    printl(near(sqrtf(2.0), 1.41421356))
+    printl(power(2.0, 10.0))
+    printl(root(2.25))
+    printl(near(cosf(0.0), 1.0))
+    printl(near(expf(1.0), 2.7182817))
+    // The result is a Float32, not a Float that happens to hold the same digits.
+    val d = Float(sqrtf(2.0))
+    printl(d == 1.4142135381698608)
+    val nan = sqrtf(-1.0)
+    printl(nan != nan)
+    val f = sqrtf
+    printl(f(9.0))
+    val g = power
+    printl(g(3.0, 2.0))
+    val n: CFloat = 0.5
+    printl(sqrtf(n * n))
+}

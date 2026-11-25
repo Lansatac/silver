@@ -142,8 +142,8 @@ intrinsic def panic(message: String): Never
 ## Current implementation
 
 - `native def`, `native("...")`, `native library`, `native type`, `intrinsic def`, `intrinsic alias` and `intrinsic type` are available.
-- `Float32` in a native signature and native types with fields aren't built: a native type takes no field list, and either in a signature is refused.
+- `Float32` crosses as a `float`. Native types with fields aren't built: a native type takes no field list.
 - The platform being compiled for is always the one the compiler runs on.
-- Compiled programs call natives directly. The interpreter can call only the natives it has built in: those that `lang` and the standard library declare, and the C library's `strlen`, `strcmp`, `strchr`, `getenv`, `malloc`, `free`, `abs`, `toupper`, `tolower`, `isdigit` and `ilogb`, each for any declaration C passes the same way as its own signature: a pointer as a native type, an option of one or `UInt64`, an integer parameter as an integer type at least as wide as C's, and an integer result as any integer type or `Bool`. Calling any other native while interpreting, or one of these declared some other way, is an error.
+- Compiled programs call natives directly. The interpreter can call only the natives it has built in: those that `lang` and the standard library declare, and the C library's `strlen`, `strcmp`, `strchr`, `getenv`, `malloc`, `free`, `abs`, `toupper`, `tolower`, `isdigit` and `ilogb`, and the `float` functions `sqrtf`, `expf`, `sinf`, `cosf` and `powf`, each for any declaration C passes the same way as its own signature: a pointer as a native type, an option of one or `UInt64`, a `float` as `Float32` (and a `double` as `Float`, never the other way), an integer parameter as an integer type at least as wide as C's, and an integer result as any integer type or `Bool`. Calling any other native while interpreting, or one of these declared some other way, is an error.
 - A module's `native library` is passed to the linker when the program calls one of that module's natives or uses one as a value.
 - An intrinsic with an `Any` parameter, such as `print`, can only be called, not used as a value.
