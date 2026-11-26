@@ -1,3 +1,0 @@
-T0033: No `f` takes these arguments:
-    f(Int) argument 1 is `Bool`, not `Int`
-    f(String) argument 1 is `Bool`, not `String`

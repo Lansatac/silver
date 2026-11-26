@@ -601,10 +601,3 @@ unittest
     analyzedWith("", "    def f(x: Int): Int => x\n    def f(x: String): String => x\n    val g: (Bool) -> Bool = f")
         .shouldReport(DiagnosticCode.NoMatchingOverload, At("f", 3));
 }
-
-@("a nested def hides module-level functions of its name, overloaded or not")
-unittest
-{
-    analyzedWith("def f(x: Bool): Int => 1", "    def f(x: Int): Int => x\n    def f(x: String): String => x\n    val a = f(true)")
-        .shouldReport(DiagnosticCode.NoMatchingOverload, At("f", 4));
-}

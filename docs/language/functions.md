@@ -210,7 +210,7 @@ describe([true])   // describe<T>([T])
   show("a")    // "String a"
   ```
 
-  They hide the module's functions of the name, so a call that none of them fits is an error. A `def` in an inner block of a name an enclosing block has already declared hides it, as any local does, and isn't an overload. A nested `def` sees itself and those of its name declared before it, as a nested function sees what's before it.
+  A `def` in an inner block of a name an enclosing block has already declared hides it, as any local does, and isn't an overload.
 - The type a call is expected to have never makes one function better than another, since functions aren't overloaded on their return type. What it gives a type parameter has to suit the arguments, though, so it can rule a function out.
 - A [bound](interfaces.md#bounds) takes no part. Two functions with the same parameter types are duplicates whatever their bounds, and the bounds of the function chosen are checked afterwards, so one that fails is an error at the call and never passes the call to another function; see [Interfaces](interfaces.md#choosing-a-function).
 - Inside a function with a bound, the functions the bound supplies are among the current module's.
@@ -402,12 +402,24 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 
 - Whether `x.f()` can drop its parentheses.
 - Whether a method call can have a `mutable` receiver.
+- Whether a call that no nested overload fits falls through to the module's functions of the name, as module-level overloading falls through to imports. Today the nested defs hide them:
+
+  ```silver
+  def show(x: Bool): String => "bool"
+  def main(): Unit {
+      def show(x: Int): String => "int"
+      def show(x: String): String => "string"
+      show(true)     // an error today; "bool" if it fell through
+      true.show()    // "bool": a method call finds module-level functions only, so the two differ
+  }
+  ```
+- With overloading, that a nested def can't call one declared after it matters more: nested overloads can't call each other both ways.
 
 ## Current implementation
 
 - A nested function can call itself and those declared before it, but not one declared after it.
 - An `opEquals`, `opHash` or `opString` for `Ref` isn't used.
-- Nested `def`s of one name in a block are overloads of each other, and are the only functions of the name a call in their scope considers: a nested `def` hides the module's functions and imports of its name even when none of the block's fits. They are never found by a method call `x.f()` or by an operator, as a single nested `def` isn't. A nested `def` has no type parameters, so the choice is by the arguments alone, as for any call of non-generic functions. Two that take the same parameter types are `T0035`, a `def` beside a `val` or parameter of the name is `S0001`. As a value, an overloaded nested `def` needs the exact function type expected, as module-level overloads do.
+- Nested `def`s of one name in a block are overloads of each other, and are the only functions of the name a call in their scope considers (see the open question): a nested `def` hides the module's functions and imports of its name even when none of the block's fits. They are never found by a method call `x.f()` or by an operator, as a single nested `def` isn't. A nested `def` has no type parameters, so the choice is by the arguments alone, as for any call of non-generic functions. Two that take the same parameter types are `T0035`, a `def` beside a `val` or parameter of the name is `S0001`. As a value, an overloaded nested `def` needs the exact function type expected, as module-level overloads do.
 - When more than one candidate is left, an `if`, `match` or block is typed before any is chosen, even when its values are all literals, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.
 - Of the arguments compared by their shape, `None` and `[]` count one step wherever they go.
 - Arithmetic on literals isn't compared by its shape yet: it's an `Int`, as [Numbers](numbers.md#current-implementation) describes, so `f(1 + 2)` doesn't fit an `f(x: UInt8)`.

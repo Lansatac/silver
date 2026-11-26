@@ -1,8 +1,0 @@
-// A nested def hides the module's functions of its name, so a call that none of the block's fits is an error.
-def f(x: Bool): String => "bool"
-
-def main(): Unit {
-    def f(x: Int): String => "int"
-    def f(x: String): String => "string"
-    printl(f(true))
-}
