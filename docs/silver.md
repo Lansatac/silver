@@ -241,6 +241,39 @@ The registry isn't built yet. What's decided:
 - What's published stays published. A broken version can be yanked, which keeps a new lock from choosing it while builds that already locked it keep working.
 - The registry holds only what's needed to find a version and check it. The code stays where its author keeps it, such as on GitHub, and is checked against the hash the registry recorded.
 
+## Native libraries
+
+A module's [`native library`](language/native.md#libraries) gives a library's name. A `silver.toml` can say which files that name means on each platform, so a library kept with the project is found without setting anything in the environment.
+
+```toml
+# raylib/silver.toml
+name = "raylib"
+
+[native.raylib.windows]
+link = "vendor/windows/lib/libraylibdll.a"
+load = "vendor/windows/lib/raylib.dll"
+
+[native.raylib.linux]
+link = "vendor/linux/lib/libraylib.so.620"
+load = "vendor/linux/lib/libraylib.so.620"
+```
+
+```silver
+// raylib/package.ag
+module raylib
+native library "raylib"
+```
+
+- `[native.<library>.<platform>]` is for the library that `native library "<library>"` names, in the modules of the packages this file describes. The platforms are `windows` and `linux`.
+- `link` is the file `silver build` links the program against, whatever it's called: an import library or a static one on Windows, a shared or static one on Linux.
+- `load` is the shared library itself. `silver run` loads it when interpreting, and `silver build` copies it beside the executable it writes, under the file's own name, so the built program finds it wherever the two are moved together. Running or testing a compiled program from `silver` finds it too.
+- A path is relative to the `silver.toml` it's written in. An absolute path is refused, since it would only be right on one machine.
+- Either key can be left out, and so can a platform. What isn't given is found as it is without the table: by the library's name, on the linker's and the system's search paths.
+- A file that's named and isn't there is an error at its line in `silver.toml`, before anything runs.
+- Two `silver.toml` files in one program that give the same library and platform are an error naming both.
+
+On Linux a program asks for a shared library by the name recorded inside it, which for `libraylib.so` is `libraylib.so.620`. So `load` names the file of that name, not a link to it, and the copy beside the executable is then the one the program asks for.
+
 ## Scripts
 
 A file with no `module` line is a script: a whole program in one file, which nothing can import.
@@ -276,6 +309,11 @@ And a program can keep scripts under it that never import it, as a test harness 
 - Git submodules in a remote package's repository, which aren't fetched.
 - The registry: the key that gives an entry's registry name, how `silver publish` adds a version, several registries, and a mirror that keeps a package's code when its repository is gone.
 - Whether `std` is versioned apart from the compiler.
+- Native libraries, beyond a file kept with the project:
+  - A library installed on the machine somewhere the search paths don't reach, whose path differs from one machine to the next. That wants a setting outside the committed file, and until then the environment's search paths serve.
+  - The program's project overriding what a package it uses gives for a library.
+  - Whether a remote package may bring a library file at all, since loading one runs code that nobody read.
+  - A library whose recorded name on Linux differs from its file's name.
 - A script that needs a package and sits in no project, or in a project but under none of its packages. A header in the script could say so.
 - What an executable built from a described package is called when its name isn't wanted, as `silverc` for `silver.compiler`. The default name is the last segment of the package's name, which is usually also its directory, so where executables have no extension `silver build compiler` can't write its default output and asks for `-o`, even when that command is the one a message just suggested.
 - Whether a package may have more than one module that declares `main`.
@@ -349,6 +387,7 @@ Where the design leaves it open, `silver` takes the narrower reading:
 Not built:
 
 - Remote packages: `version`, `git`, `tag`, `branch` and `rev` are refused (`F0038`), and there's no `silver.lock`, cache or `silver update`.
+- Native libraries: `[native]` is a field `silver` doesn't know, so a library is found only by its name on the linker's and the system's search paths.
 - A script in no project, or under none of a project's packages, can't say it needs a package.
 - A package can't be used only by tests, and the build can't name another prelude.
 - A program is compiled whole, in one call of `silverc`, rather than a package at a time.
