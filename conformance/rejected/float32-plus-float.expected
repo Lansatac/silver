@@ -1,1 +1,1 @@
-T0005: `Add` can't combine `Float32` and `Float`
+T0005: `+` can't combine `Float32` and `Float`

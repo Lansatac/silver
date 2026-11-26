@@ -1,0 +1,5 @@
+def main(): Unit {
+    val a: Int = 1
+    val b: Float = 2.5
+    printl(a < b)
+}

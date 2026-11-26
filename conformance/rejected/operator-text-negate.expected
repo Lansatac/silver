@@ -1,0 +1,1 @@
+T0005: `-a` calls `opNeg`, and no `opNeg` here takes `Bool`

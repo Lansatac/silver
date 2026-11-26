@@ -3241,7 +3241,7 @@ private final class TypeChecker
                 if (!isNumeric(operandType))
                 {
                     _collector.reportError(DiagnosticCode.InvalidOperand, unary.operand.span,
-                        "`%s` needs a number, got `%s`".format(unary.op, _types.describe(operandType)));
+                        "`%s` needs a number, got `%s`".format(cast(string) unary.op, _types.describe(operandType)));
                     return _types.error;
                 }
                 return operandType;
@@ -3250,7 +3250,7 @@ private final class TypeChecker
                 if (!_types.isInteger(operandType))
                 {
                     _collector.reportError(DiagnosticCode.InvalidOperand, unary.operand.span,
-                        "`%s` needs an integer, got `%s`".format(unary.op, _types.describe(operandType)));
+                        "`%s` needs an integer, got `%s`".format(cast(string) unary.op, _types.describe(operandType)));
                     return _types.error;
                 }
                 return operandType;
@@ -3527,18 +3527,18 @@ private final class TypeChecker
             case BinaryOp.WrappingMultiply:
                 if (!_types.isInteger(leftType))  {
                     _collector.reportError(DiagnosticCode.InvalidOperand, binary.left.span,
-                        "`%s` needs an integer, got `%s`".format(binary.op, _types.describe(leftType)));
+                        "`%s` needs an integer, got `%s`".format(cast(string) binary.op, _types.describe(leftType)));
                     return _types.error;
                 }
                 if (!_types.isInteger(rightType)) {
                     _collector.reportError(DiagnosticCode.InvalidOperand, binary.right.span,
-                        "`%s` needs an integer, got `%s`".format(binary.op, _types.describe(rightType)));
+                        "`%s` needs an integer, got `%s`".format(cast(string) binary.op, _types.describe(rightType)));
                     return _types.error;
                 }
                 if (binary.op != BinaryOp.ShiftLeft && binary.op != BinaryOp.ShiftRight && leftType != rightType)
                 {
                     _collector.reportError(DiagnosticCode.InvalidOperand, span,
-                        "`%s` can't combine `%s` and `%s`".format(binary.op, _types.describe(leftType), _types.describe(rightType)));
+                        "`%s` can't combine `%s` and `%s`".format(cast(string) binary.op, _types.describe(leftType), _types.describe(rightType)));
                     return _types.error;
                 }
                 return leftType;
@@ -3549,18 +3549,18 @@ private final class TypeChecker
             case BinaryOp.Modulo:
                 if (!isNumeric(leftType))  {
                     _collector.reportError(DiagnosticCode.InvalidOperand, binary.left.span,
-                        "`%s` needs a number, got `%s`".format(binary.op, _types.describe(leftType)));
+                        "`%s` needs a number, got `%s`".format(cast(string) binary.op, _types.describe(leftType)));
                     return _types.error;
                 }
                 if (!isNumeric(rightType)) {
                     _collector.reportError(DiagnosticCode.InvalidOperand, binary.right.span,
-                        "`%s` needs a number, got `%s`".format(binary.op, _types.describe(rightType)));
+                        "`%s` needs a number, got `%s`".format(cast(string) binary.op, _types.describe(rightType)));
                     return _types.error;
                 }
                 if (leftType != rightType)
                 {
                     _collector.reportError(DiagnosticCode.InvalidOperand, span,
-                        "`%s` can't combine `%s` and `%s`".format(binary.op, _types.describe(leftType), _types.describe(rightType)));
+                        "`%s` can't combine `%s` and `%s`".format(cast(string) binary.op, _types.describe(leftType), _types.describe(rightType)));
                     return _types.error;
                 }
                 return leftType;
