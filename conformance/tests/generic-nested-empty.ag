@@ -1,0 +1,37 @@
+// An expected type reaches an empty `[]` or `[:]` that is an argument of a generic call nested in
+// another's arguments, through an option, tuple or array as well.
+type Node<K, V> = Empty | Leaf(key: K, value: V) | Branch(bitmap: UInt, children: [Node<K, V>], more: [K: V])
+type Table<K, V>(root: Node<K, V>, count: Int)
+type Pair<A, B>(first: A, second: B)
+type Holder<K, V>(maybe: Node<K, V>?, both: (Node<K, V>, Int), many: [Node<K, V>])
+
+def branch<K, V>(n: UInt, kids: [Node<K, V>]): Node<K, V> => Branch(n, kids, [:])
+def wrap<K, V>(n: Node<K, V>, count: Int): Table<K, V> => Table(n, count)
+def two<T>(a: T, b: T): [T] => [a, b]
+
+def size<K, V>(n: Node<K, V>): Int
+{
+    match n {
+        Empty => 0
+        Leaf(_, _) => 1
+        Branch(_, kids, more) => kids.count() + more.count()
+    }
+}
+
+def main(): Unit {
+    val a: Table<String, Int> = Table(Branch(0, [], [:]), 0)
+    val b: Table<String, Int> = Table(branch(0, []), 1)
+    val c: Table<String, Int> = wrap(branch(0, []), 2)
+    val d: Holder<String, Int> = Holder(Some(branch(0, [])), (branch(1, []), 3), [branch(2, []), Leaf("a", 1)])
+    val e: Pair<Node<Int, Int>, Int> = Pair(branch(0, []), 1)
+    val f: [Node<String, Int>] = two(branch(0, []), Leaf("x", 2))
+    // Nothing expected: another argument decides.
+    val g = Table(Branch(0, [], ["a": 1]), 4)
+    val h = Pair(branch(0, [Leaf(1, 2)]), 1)
+    printl(a.count + b.count + c.count + g.count)
+    printl(size(a.root) + size(b.root) + size(c.root))
+    printl(f.count())
+    printl(size(e.first))
+    printl(size(h.first))
+    printl(d.many.count())
+}

@@ -20,7 +20,7 @@ import silver.sema.hooks : checkTypeHooks;
 import silver.sema.recursion;
 import silver.sema.type;
 import silver.sema.resolve;
-import silver.sema.table : journal;
+import silver.sema.table : Change, journal, SideTable;
 import silver.sema.typing;
 
 // Type checking for Silver programs.
@@ -168,6 +168,10 @@ private final class TypeChecker
     /// What each expression that has no type of its own is with nothing expected, or an error
     /// when it's nothing; the second for a trial, where a lambda's body isn't looked at.
     private Type[Id!Expr][2] _alone;
+    /// The expressions typed with nothing expected whose typing stands, by `typedAlone`, with the
+    /// type each was given, and what that typing wrote, for a check against a type to take back.
+    private SideTable!(Id!Expr, Type) _standing;
+    private Change[][Id!Expr] _standingChanges;
     /// What looking a goal on types with no type parameters up found, by the goal.
     private Conformance[Looked] _lookups;
     /// What a `for` asks the element type of its `Range` to be.
@@ -425,7 +429,7 @@ private final class TypeChecker
     /// Begins an attempt: checking that `takeBack` undoes entirely, or `keep` lets stand.
     private Begun beginAttempt(BodyContext ctx)
     {
-        auto begun = Begun(journal.undo.length, _collector.diagnostics.length, _references.length, journal.recording,
+        auto begun = Begun(journal.changes.length, _collector.diagnostics.length, _references.length, journal.recording,
             ctx.inferred);
         if (ctx.inferred !is null) begun.returned = *ctx.inferred;
         journal.recording = true;
@@ -454,8 +458,8 @@ private final class TypeChecker
         // With nothing around it to take them back, what it wrote stands.
         if (!begun.recording)
         {
-            journal.undo.length = begun.written;
-            journal.undo.assumeSafeAppend();
+            journal.changes.length = begun.written;
+            journal.changes.assumeSafeAppend();
         }
         endAttempt(begun);
     }
@@ -3320,8 +3324,9 @@ private final class TypeChecker
     {
         if (hasOwnType(operand)) return synthesize(operand, ctx);
         if (isIntLiteral(operand) || isFloatLiteral(operand)) return Type.init;
-        auto type = alone(operand, ctx);
-        return type != _types.error && isNumeric(type) ? synthesize(operand, ctx) : Type.init;
+        auto type = aloneType(operand, ctx);
+        if (type == _types.error || !isNumeric(type)) return Type.init;
+        return _trials == 0 ? type : synthesize(operand, ctx);
     }
 
     /// Whether `operand`, which `operandType` gave `type`, is left to an operator function.
@@ -6226,22 +6231,57 @@ private final class TypeChecker
         return type;
     }
 
-    /// `expr` typed with nothing expected, when that gives it a type that can say what a type
-    /// parameter is, and otherwise an error, with nothing recorded or reported.
+    /// `expr`, which has no type of its own, typed with nothing expected, when that gives it a
+    /// type that can say what a type parameter is, and otherwise an error with nothing recorded or
+    /// reported. The typing stands, so it's done once however often it's asked for, until `expr`
+    /// is checked against a type, which takes it back first.
     private Type typedAlone(const Expr expr, BodyContext ctx)
     {
-        if (auto known = expr.id in _alone[0]) return gives(*known) ? synthesize(expr, ctx) : _types.error;
+        if (auto standing = expr.id in _standing) return *standing;
+        if (auto known = expr.id in _alone[0])
+        {
+            if (!gives(*known)) return _types.error;
+        }
         auto begun = beginAttempt(ctx);
         auto type = synthesize(expr, ctx);
         if (failed(begun)) type = _types.error;
         _alone[0][expr.id] = type;
-        if (gives(type))
+        if (!gives(type))
         {
-            keep(begun);
-            return type;
+            takeBack(begun);
+            return _types.error;
         }
-        takeBack(begun);
-        return _types.error;
+        // What it reported or returned can't be taken back later, so then it's typed where it's used.
+        auto returned = begun.returns !is null && (begun.returns.values.length != begun.returned.values.length
+            || begun.returns.nones.length != begun.returned.nones.length
+            || begun.returns.errors.length != begun.returned.errors.length);
+        if (returned || _collector.diagnostics.length != begun.diagnostics)
+        {
+            takeBack(begun);
+            return synthesize(expr, ctx);
+        }
+        _standingChanges[expr.id] = journal.changes[begun.written .. $].dup;
+        keep(begun);
+        _standing[expr.id] = type;
+        return type;
+    }
+
+    /// Takes back the typing of `expr` that `typedAlone` left standing, before it's checked
+    /// against a type.
+    private void takeBackStanding(const Expr expr)
+    {
+        if (!expr.id.isValid || expr.id !in _standing) return;
+        foreach_reverse (change; _standingChanges[expr.id]) change.revert();
+        _standing.remove(expr.id);
+    }
+
+    /// What `expr`, which has no type of its own, is with nothing expected, or an error when
+    /// that's nothing or a bare `None`, `[]` or `[:]`. Outside a trial its typing then stands.
+    private Type aloneType(const Expr expr, BodyContext ctx)
+    {
+        if (_trials == 0) return typedAlone(expr, ctx);
+        auto type = alone(expr, ctx);
+        return gives(type) ? type : _types.error;
     }
 
     /// Whether `type`, found for an expression with nothing expected, is one a type parameter can be.
@@ -6843,8 +6883,11 @@ private final class TypeChecker
             }
             else
             {
-                auto fallback = alone(*object, ctx);
-                if (fallback != _types.error && hasField(fallback, member)) objectType = synthesize(*object, ctx);
+                auto fallback = aloneType(*object, ctx);
+                if (fallback != _types.error && hasField(fallback, member))
+                {
+                    objectType = _trials == 0 ? fallback : synthesize(*object, ctx);
+                }
             }
             return callOn(expr, call, object, member, typeArgs, objectType, ctx, expected);
         }
@@ -7685,6 +7728,7 @@ private final class TypeChecker
     private Type check(const Expr expr, Type expected, BodyContext ctx)
     {
         _cost = 0;
+        takeBackStanding(expr);
         if (isLambda(expr) && _types.isFunction(expected))
         {
             auto data = _types[expected].match!(

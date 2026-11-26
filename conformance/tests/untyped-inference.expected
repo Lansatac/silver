@@ -1,0 +1,25 @@
+same
+same
+[None, Some(5)]
+[None, Some(2)]
+[None, Some(5)]
+wide(UInt8)
+[2, 3, 4]
+ov([Int])
+wide(UInt8)
+Error(x)
+Error(x)
+o8(UInt8) 1
+o8(UInt8) 1
+ob(Box<Int>)
+h([Int])
+show(Float) 2.0
+m8 [a: 1]
+u 1
+ob(Box<Int>)
+k None
+8
+wide(UInt8)
+wide(UInt8)
+saw Some(5)
+saw 5

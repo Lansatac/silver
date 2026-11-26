@@ -6,24 +6,33 @@ import std.sumtype : match;
 
 import silver.ast : Id, ModuleKey;
 
-/// The writes made to side tables while something is being tried, so they can be taken back: each
-/// entry puts one key back as it was. Nothing is kept while `recording` is off.
+/// One write to a side table, which can be taken back.
+interface Change
+{
+    /// Puts the key back as it was, without the journal noting it.
+    void undo();
+    /// Puts the key back as it was by writing to the table, which the journal notes like any write.
+    void revert();
+}
+
+/// The writes made to side tables while something is being tried, so they can be taken back.
+/// Nothing is kept while `recording` is off.
 struct Journal
 {
-    void delegate()[] undo;
+    Change[] changes;
     bool recording;
 
-    /// Takes back every write since there were `mark` entries.
+    /// Takes back every write since there were `mark` changes.
     void rollBack(size_t mark)
     {
         auto was = recording;
         recording = false;
-        while (undo.length > mark)
+        while (changes.length > mark)
         {
-            undo[$ - 1]();
-            undo.length--;
+            changes[$ - 1].undo();
+            changes.length--;
         }
-        undo.assumeSafeAppend();
+        changes.assumeSafeAppend();
         recording = was;
     }
 }
@@ -41,23 +50,41 @@ struct SideTable(K, V)
         return byModule[moduleOf(key)][key];
     }
 
+    private static final class Written : Change
+    {
+        SideTable* table;
+        K key;
+        bool had;
+        V was;
+
+        this(SideTable* table, const K key, bool had, V was)
+        {
+            this.table = table;
+            this.key = cast() key;
+            this.had = had;
+            this.was = was;
+        }
+
+        void undo()
+        {
+            auto home = moduleOf(key);
+            if (had) table.byModule[home][key] = was;
+            else if (auto entries = home in table.byModule) (*entries).remove(key);
+        }
+
+        void revert()
+        {
+            if (had) (*table)[key] = was;
+            else table.remove(key);
+        }
+    }
+
     /// Notes how `key` stands, for the journal to put back.
     private void note(const K key)
     {
         if (!journal.recording) return;
-        auto self = &this;
-        auto home = moduleOf(key);
-        if (auto old = key in this)
-        {
-            auto value = *old;
-            journal.undo ~= () { self.byModule[home][key] = value; };
-        }
-        else
-        {
-            journal.undo ~= () {
-                if (auto table = home in self.byModule) (*table).remove(key);
-            };
-        }
+        auto old = key in this;
+        journal.changes ~= old is null ? new Written(&this, key, false, V.init) : new Written(&this, key, true, *old);
     }
 
     void opIndexAssign(V value, const K key)
@@ -144,12 +171,22 @@ unittest
     table[kept] = [1];
     table[changed] = [2];
     journal.recording = true;
-    auto mark = journal.undo.length;
+    auto mark = journal.changes.length;
     table[changed] ~= 3;
     table[added] = [4];
     table.require(kept) ~= 5;
     table.remove(changed);
+    auto made = journal.changes[mark .. $].dup;
+    journal.rollBack(mark);
+    assert(table[kept] == [1] && table[changed] == [2] && added !in table);
+
+    // A revert is a write like any other, so it can be taken back too.
+    table[added] = [4];
+    table[kept] = [6];
+    mark = journal.changes.length;
+    foreach_reverse (change; made) change.revert();
+    assert(table[kept] == [1] && added !in table);
     journal.rollBack(mark);
     journal.recording = false;
-    assert(table[kept] == [1] && table[changed] == [2] && added !in table);
+    assert(table[kept] == [6] && table[added] == [4]);
 }

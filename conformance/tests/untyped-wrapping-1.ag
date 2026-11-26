@@ -1,0 +1,141 @@
+// Wrapping an expression with no type of its own doesn't change whether it types: where
+// `val v: X = e` works, so do `id(e)`, an argument of a function or of one of several, a
+// receiver, and an argument beside one that has a type (docs/language/types.md, "A type of its own").
+// Part 1 of 4; each function is a row of notes/probes/untyped_matrix.py.
+
+type Box<T>(items: [T])
+type Other(n: Int)
+
+def id<T>(x: T): T => x
+def opt<T>(x: T, y: T?): T? => y
+def none<T>(): T? => None
+def same<T>(a: T, b: T): T => a
+def wrap<T>(x: T): Box<T> => Box([x])
+def dbl(x: Int): Int => x * 2
+def dbl(x: Float): Float => x * 2.0
+
+// a block of a literal
+def take1(x: UInt8): UInt8 => x
+def ov1(x: UInt8): String => "one"
+def ov1(x: Other): String => "other"
+
+def row1(c: Bool): Unit {
+    val t: UInt8 = { 1 }
+    val direct: UInt8 = { 1 }
+    val once: UInt8 = id({ 1 })
+    val twice: UInt8 = id(id({ 1 }))
+    val boxed: Box<UInt8> = wrap({ 1 })
+    val taken = take1({ 1 })
+    val takenOnce = take1(id({ 1 }))
+    val received = ({ 1 }).take1()
+    val beside = same({ 1 }, t)
+    val besideOnce = same(id({ 1 }), t)
+    val chosen = ov1({ 1 })
+    val chosenOnce = ov1(id({ 1 }))
+    printl("( 1 ): {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+    val alone = { 1 }
+    printl("  alone {alone}")
+}
+
+// a generic call of None
+def take2(x: Int?): Int? => x
+def ov2(x: Int?): String => "one"
+def ov2(x: Other): String => "other"
+
+def row2(c: Bool): Unit {
+    val t: Int? = id(None)
+    val direct: Int? = id(None)
+    val once: Int? = id(id(None))
+    val twice: Int? = id(id(id(None)))
+    val boxed: Box<Int?> = wrap(id(None))
+    val taken = take2(id(None))
+    val takenOnce = take2(id(id(None)))
+    val received = (id(None)).take2()
+    val beside = same(id(None), t)
+    val besideOnce = same(id(id(None)), t)
+    val chosen = ov2(id(None))
+    val chosenOnce = ov2(id(id(None)))
+    printl("id(None): {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+}
+
+// an array of literals
+def take3(x: [UInt8]): [UInt8] => x
+def ov3(x: [UInt8]): String => "one"
+def ov3(x: Other): String => "other"
+
+def row3(c: Bool): Unit {
+    val t: [UInt8] = [1, 2]
+    val direct: [UInt8] = [1, 2]
+    val once: [UInt8] = id([1, 2])
+    val twice: [UInt8] = id(id([1, 2]))
+    val boxed: Box<[UInt8]> = wrap([1, 2])
+    val taken = take3([1, 2])
+    val takenOnce = take3(id([1, 2]))
+    val received = ([1, 2]).take3()
+    val beside = same([1, 2], t)
+    val besideOnce = same(id([1, 2]), t)
+    val chosen = ov3([1, 2])
+    val chosenOnce = ov3(id([1, 2]))
+    printl("[1, 2]: {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+    val alone = [1, 2]
+    printl("  alone {alone}")
+}
+
+// an integer literal
+def take4(x: UInt8): UInt8 => x
+def ov4(x: UInt8): String => "one"
+def ov4(x: Other): String => "other"
+
+def row4(c: Bool): Unit {
+    val t: UInt8 = 1
+    val direct: UInt8 = 1
+    val once: UInt8 = id(1)
+    val twice: UInt8 = id(id(1))
+    val boxed: Box<UInt8> = wrap(1)
+    val taken = take4(1)
+    val takenOnce = take4(id(1))
+    val received = (1).take4()
+    val beside = same(1, t)
+    val besideOnce = same(id(1), t)
+    val chosen = ov4(1)
+    val chosenOnce = ov4(id(1))
+    printl("1: {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+    val alone = 1
+    printl("  alone {alone}")
+}
+
+// a float literal
+def take5(x: Float32): Float32 => x
+def ov5(x: Float32): String => "one"
+def ov5(x: Other): String => "other"
+
+def row5(c: Bool): Unit {
+    val t: Float32 = 1.5
+    val direct: Float32 = 1.5
+    val once: Float32 = id(1.5)
+    val twice: Float32 = id(id(1.5))
+    val boxed: Box<Float32> = wrap(1.5)
+    val taken = take5(1.5)
+    val takenOnce = take5(id(1.5))
+    val received = (1.5).take5()
+    val beside = same(1.5, t)
+    val besideOnce = same(id(1.5), t)
+    val chosen = ov5(1.5)
+    val chosenOnce = ov5(id(1.5))
+    printl("1.5: {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+    val alone = 1.5
+    printl("  alone {alone}")
+}
+
+def main(): Unit {
+    row1(true)
+    row2(true)
+    row3(true)
+    row4(true)
+    row5(true)
+}

@@ -1,0 +1,1 @@
+T0039: This `Error` has no error union to take its type from; annotate one, as in `val x: Int ! E = Error(...)`

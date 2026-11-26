@@ -1,0 +1,10 @@
+None: None None None None Box([None])
+  None None None None None one one
+[]: [] [] [] [] Box([[]])
+  [] [] [] [] [] one one
+[:]: [:] [:] [:] [:] Box([[:]])
+  [:] [:] [:] [:] [:] one one
+Error('x'): Error(x) Error(x) Error(x) Error(x) Box([Error(x)])
+  Error(x) Error(x) Error(x) Error(x) Error(x) one one
+x => x + 1: 21 21 21 21 1
+  21 21 21 21 21 one one

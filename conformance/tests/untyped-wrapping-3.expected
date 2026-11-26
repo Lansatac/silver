@@ -1,0 +1,11 @@
+dbl: 40 40 40 40 1
+  40 40 40 40 40 one one
+id: 20 20 20 20 1
+  20 20 20 20 20 one one
+Some(1): Some(1) Some(1) Some(1) Some(1) Box([Some(1)])
+  Some(1) Some(1) Some(1) Some(1) Some(1) one one
+  alone Some(1)
+[None]: [None] [None] [None] [None] Box([[None]])
+  [None] [None] [None] [None] [None] one one
+(1, None): (1, None) (1, None) (1, None) (1, None) Box([(1, None)])
+  (1, None) (1, None) (1, None) (1, None) (1, None) one one

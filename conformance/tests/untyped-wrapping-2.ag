@@ -1,0 +1,133 @@
+// Wrapping an expression with no type of its own doesn't change whether it types: where
+// `val v: X = e` works, so do `id(e)`, an argument of a function or of one of several, a
+// receiver, and an argument beside one that has a type (docs/language/types.md, "A type of its own").
+// Part 2 of 4; each function is a row of notes/probes/untyped_matrix.py.
+
+type Box<T>(items: [T])
+type Other(n: Int)
+
+def id<T>(x: T): T => x
+def opt<T>(x: T, y: T?): T? => y
+def none<T>(): T? => None
+def same<T>(a: T, b: T): T => a
+def wrap<T>(x: T): Box<T> => Box([x])
+def dbl(x: Int): Int => x * 2
+def dbl(x: Float): Float => x * 2.0
+
+// None
+def take6(x: Int?): Int? => x
+def ov6(x: Int?): String => "one"
+def ov6(x: Other): String => "other"
+
+def row6(c: Bool): Unit {
+    val t: Int? = None
+    val direct: Int? = None
+    val once: Int? = id(None)
+    val twice: Int? = id(id(None))
+    val boxed: Box<Int?> = wrap(None)
+    val taken = take6(None)
+    val takenOnce = take6(id(None))
+    val received = (None).take6()
+    val beside = same(None, t)
+    val besideOnce = same(id(None), t)
+    val chosen = ov6(None)
+    val chosenOnce = ov6(id(None))
+    printl("None: {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+}
+
+// an empty array
+def take7(x: [Int]): [Int] => x
+def ov7(x: [Int]): String => "one"
+def ov7(x: Other): String => "other"
+
+def row7(c: Bool): Unit {
+    val t: [Int] = []
+    val direct: [Int] = []
+    val once: [Int] = id([])
+    val twice: [Int] = id(id([]))
+    val boxed: Box<[Int]> = wrap([])
+    val taken = take7([])
+    val takenOnce = take7(id([]))
+    val received = ([]).take7()
+    val beside = same([], t)
+    val besideOnce = same(id([]), t)
+    val chosen = ov7([])
+    val chosenOnce = ov7(id([]))
+    printl("[]: {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+}
+
+// an empty dictionary
+def take8(x: [Int: String]): [Int: String] => x
+def ov8(x: [Int: String]): String => "one"
+def ov8(x: Other): String => "other"
+
+def row8(c: Bool): Unit {
+    val t: [Int: String] = [:]
+    val direct: [Int: String] = [:]
+    val once: [Int: String] = id([:])
+    val twice: [Int: String] = id(id([:]))
+    val boxed: Box<[Int: String]> = wrap([:])
+    val taken = take8([:])
+    val takenOnce = take8(id([:]))
+    val received = ([:]).take8()
+    val beside = same([:], t)
+    val besideOnce = same(id([:]), t)
+    val chosen = ov8([:])
+    val chosenOnce = ov8(id([:]))
+    printl("[:]: {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+}
+
+// a bare Error
+def take9(x: Int ! String): Int ! String => x
+def ov9(x: Int ! String): String => "one"
+def ov9(x: Other): String => "other"
+
+def row9(c: Bool): Unit {
+    val t: Int ! String = Error("x")
+    val direct: Int ! String = Error("x")
+    val once: Int ! String = id(Error("x"))
+    val twice: Int ! String = id(id(Error("x")))
+    val boxed: Box<Int ! String> = wrap(Error("x"))
+    val taken = take9(Error("x"))
+    val takenOnce = take9(id(Error("x")))
+    val received = (Error("x")).take9()
+    val beside = same(Error("x"), t)
+    val besideOnce = same(id(Error("x")), t)
+    val chosen = ov9(Error("x"))
+    val chosenOnce = ov9(id(Error("x")))
+    printl("Error('x'): {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+}
+
+// a lambda
+def take10(x: (Int) -> Int): (Int) -> Int => x
+def ov10(x: (Int) -> Int): String => "one"
+def ov10(x: Other): String => "other"
+
+def row10(c: Bool): Unit {
+    val t: (Int) -> Int = x => x + 1
+    val direct: (Int) -> Int = x => x + 1
+    val once: (Int) -> Int = id(x => x + 1)
+    val twice: (Int) -> Int = id(id(x => x + 1))
+    val boxed: Box<(Int) -> Int> = wrap(x => x + 1)
+    val taken = take10(x => x + 1)
+    val takenOnce = take10(id(x => x + 1))
+    val received = (x => x + 1).take10()
+    val beside = same(x => x + 1, t)
+    val besideOnce = same(id(x => x + 1), t)
+    val chosen = ov10(x => x + 1)
+    val chosenOnce = ov10(id(x => x + 1))
+    printl("x => x + 1: {t(20)} {direct(20)} {once(20)} {twice(20)} {boxed.items.length()}")
+    printl("  {taken(20)} {takenOnce(20)} {received(20)} {beside(20)} {besideOnce(20)} {chosen} {chosenOnce}")
+}
+
+def main(): Unit {
+    row6(true)
+    row7(true)
+    row8(true)
+    row9(true)
+    row10(true)
+}

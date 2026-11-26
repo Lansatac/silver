@@ -1,0 +1,17 @@
+// The `None` in a tuple wrapped in generic calls is what needs a type.
+type Box<T>(items: [T])
+
+def id<T>(x: T): T => x
+def opt<T>(x: T, y: T?): T? => y
+def none<T>(): T? => None
+def same<T>(a: T, b: T): T => a
+def two<T>(a: T, b: T): [T] => [a, b]
+def mp<T, U>(xs: [T], f: (T) -> U): [U] => []
+def dbl(x: Int): Int => x * 2
+def dbl(x: Float): Float => x * 2.0
+def show(x: Float): String => "Float"
+def show(x: String): String => "String"
+
+def main(): Unit {
+    val wrapped = id(id((1, None)))
+}

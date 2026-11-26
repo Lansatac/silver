@@ -1,0 +1,26 @@
+// A nested generic call waits for the expected type only when it can't be typed on its own, so a
+// call that decides its own type keeps its turn, and a marker or a bare empty literal in an
+// option, tuple or array waits as `[]` does.
+type Node<K, V> = Empty | Leaf(key: K, value: V) | Branch(bitmap: UInt, children: [Node<K, V>])
+type Table<K, V>(root: Node<K, V>, count: Int)
+type Box<T>(items: [T], first: T)
+
+def two<T>(a: T, b: T): [T] => [a, b]
+def wrap<K, V>(n: Node<K, V>): Node<K, V> => n
+def mk<T>(first: T, items: [T]): Box<T> => Box(items, first)
+def wrapAll<K, V>(n: Node<K, V>, count: Int): Table<K, V> => Table(n, count)
+
+def main(): Unit {
+    // Typed on its own by the first argument, though `[]` is among its arguments.
+    val y: Box<Float> = Box([], 1.5)
+    val a = two(mk(1, []), mk(2, [3]))
+    printl(a.count())
+    // A marker inside the nested call.
+    val t: Table<String, Int> = wrapAll(wrap(Empty), 5)
+    printl(t.count)
+    // A bare empty literal in a tuple or array, decided by the other argument.
+    val b = two((1, []), (2, [3]))
+    val c = two([[]], [[1]])
+    printl(b.count() + c.count())
+    printl(y.first)
+}

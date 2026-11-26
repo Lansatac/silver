@@ -1,0 +1,10 @@
+if c => 1 else 2: 1 1 1 1 Box([1])
+  1 1 1 1 1 one one
+  alone 1
+Box([]): Box([]) Box([]) Box([]) Box([]) Box([Box([])])
+  Box([]) Box([]) Box([]) Box([]) Box([]) one one
+none(): None None None None Box([None])
+  None None None None None one one
+opt(1, None): None None None None Box([None])
+  None None None None None one one
+  alone None

@@ -1,0 +1,135 @@
+// Wrapping an expression with no type of its own doesn't change whether it types: where
+// `val v: X = e` works, so do `id(e)`, an argument of a function or of one of several, a
+// receiver, and an argument beside one that has a type (docs/language/types.md, "A type of its own").
+// Part 3 of 4; each function is a row of notes/probes/untyped_matrix.py.
+
+type Box<T>(items: [T])
+type Other(n: Int)
+
+def id<T>(x: T): T => x
+def opt<T>(x: T, y: T?): T? => y
+def none<T>(): T? => None
+def same<T>(a: T, b: T): T => a
+def wrap<T>(x: T): Box<T> => Box([x])
+def dbl(x: Int): Int => x * 2
+def dbl(x: Float): Float => x * 2.0
+
+// an overloaded function's name
+def take11(x: (Int) -> Int): (Int) -> Int => x
+def ov11(x: (Int) -> Int): String => "one"
+def ov11(x: Other): String => "other"
+
+def row11(c: Bool): Unit {
+    val t: (Int) -> Int = dbl
+    val direct: (Int) -> Int = dbl
+    val once: (Int) -> Int = id(dbl)
+    val twice: (Int) -> Int = id(id(dbl))
+    val boxed: Box<(Int) -> Int> = wrap(dbl)
+    val taken = take11(dbl)
+    val takenOnce = take11(id(dbl))
+    val received = (dbl).take11()
+    val beside = same(dbl, t)
+    val besideOnce = same(id(dbl), t)
+    val chosen = ov11(dbl)
+    val chosenOnce = ov11(id(dbl))
+    printl("dbl: {t(20)} {direct(20)} {once(20)} {twice(20)} {boxed.items.length()}")
+    printl("  {taken(20)} {takenOnce(20)} {received(20)} {beside(20)} {besideOnce(20)} {chosen} {chosenOnce}")
+}
+
+// a generic function's name
+def take12(x: (Int) -> Int): (Int) -> Int => x
+def ov12(x: (Int) -> Int): String => "one"
+def ov12(x: Other): String => "other"
+
+def row12(c: Bool): Unit {
+    val t: (Int) -> Int = id
+    val direct: (Int) -> Int = id
+    val once: (Int) -> Int = id(id)
+    val twice: (Int) -> Int = id(id(id))
+    val boxed: Box<(Int) -> Int> = wrap(id)
+    val taken = take12(id)
+    val takenOnce = take12(id(id))
+    val received = (id).take12()
+    val beside = same(id, t)
+    val besideOnce = same(id(id), t)
+    val chosen = ov12(id)
+    val chosenOnce = ov12(id(id))
+    printl("id: {t(20)} {direct(20)} {once(20)} {twice(20)} {boxed.items.length()}")
+    printl("  {taken(20)} {takenOnce(20)} {received(20)} {beside(20)} {besideOnce(20)} {chosen} {chosenOnce}")
+}
+
+// Some of a literal
+def take13(x: UInt8?): UInt8? => x
+def ov13(x: UInt8?): String => "one"
+def ov13(x: Other): String => "other"
+
+def row13(c: Bool): Unit {
+    val t: UInt8? = Some(1)
+    val direct: UInt8? = Some(1)
+    val once: UInt8? = id(Some(1))
+    val twice: UInt8? = id(id(Some(1)))
+    val boxed: Box<UInt8?> = wrap(Some(1))
+    val taken = take13(Some(1))
+    val takenOnce = take13(id(Some(1)))
+    val received = (Some(1)).take13()
+    val beside = same(Some(1), t)
+    val besideOnce = same(id(Some(1)), t)
+    val chosen = ov13(Some(1))
+    val chosenOnce = ov13(id(Some(1)))
+    printl("Some(1): {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+    val alone = Some(1)
+    printl("  alone {alone}")
+}
+
+// an array of None
+def take14(x: [Int?]): [Int?] => x
+def ov14(x: [Int?]): String => "one"
+def ov14(x: Other): String => "other"
+
+def row14(c: Bool): Unit {
+    val t: [Int?] = [None]
+    val direct: [Int?] = [None]
+    val once: [Int?] = id([None])
+    val twice: [Int?] = id(id([None]))
+    val boxed: Box<[Int?]> = wrap([None])
+    val taken = take14([None])
+    val takenOnce = take14(id([None]))
+    val received = ([None]).take14()
+    val beside = same([None], t)
+    val besideOnce = same(id([None]), t)
+    val chosen = ov14([None])
+    val chosenOnce = ov14(id([None]))
+    printl("[None]: {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+}
+
+// a tuple with a None
+def take15(x: (UInt8, Int?)): (UInt8, Int?) => x
+def ov15(x: (UInt8, Int?)): String => "one"
+def ov15(x: Other): String => "other"
+
+def row15(c: Bool): Unit {
+    val t: (UInt8, Int?) = (1, None)
+    val direct: (UInt8, Int?) = (1, None)
+    val once: (UInt8, Int?) = id((1, None))
+    val twice: (UInt8, Int?) = id(id((1, None)))
+    val boxed: Box<(UInt8, Int?)> = wrap((1, None))
+    val taken = take15((1, None))
+    val takenOnce = take15(id((1, None)))
+    val received = ((1, None)).take15()
+    val beside = same((1, None), t)
+    val besideOnce = same(id((1, None)), t)
+    val chosen = ov15((1, None))
+    val chosenOnce = ov15(id((1, None)))
+    printl("(1, None): {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+}
+
+def main(): Unit {
+    row11(true)
+    row12(true)
+    row13(true)
+    row14(true)
+    row15(true)
+}

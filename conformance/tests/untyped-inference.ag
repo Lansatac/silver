@@ -1,0 +1,96 @@
+// An expression with no type of its own takes its turn after the arguments that have one and
+// after the expected type, is tried against each of several functions by the check it would get,
+// and is a receiver like any first argument (docs/language/types.md, "A type of its own").
+
+type Box<T>(items: [T])
+type Other(n: Int)
+
+def id<T>(x: T): T => x
+def opt<T>(x: T, y: T?): T? => y
+def none<T>(): T? => None
+def same<T>(a: T, b: T): String => "same"
+def two<T>(a: T, b: T): [T] => [a, b]
+def mp<T, U>(xs: [T], f: (T) -> U): [U] {
+    mutable val made: [U] = []
+    for x in xs {
+        made ~= [f(x)]
+    }
+    made
+}
+def ap(f: (Int) -> Int, x: Int): Int => f(x)
+
+def dbl(x: Int): Int => x * 2
+def dbl(x: Float): Float => x * 2.0
+def ov(xs: [Int]): String => "ov([Int])"
+def ov(s: String): String => "ov(String)"
+def o8(x: UInt8): String => "o8(UInt8) {x}"
+def o8(x: Other): String => "o8(Other)"
+def ob(b: Box<Int>): String => "ob(Box<Int>)"
+def ob(o: Other): String => "ob(Other)"
+def h(xs: [Int]): String => "h([Int])"
+def h(xs: [Int]?): String => "h([Int]?)"
+def show(x: Float): String => "show(Float) {x}"
+def show(x: String): String => "show(String)"
+def m8(d: [String: Int8]): String => "m8 {d}"
+def u(x: UInt8): String => "u {x}"
+def k(x: Int?): String => "k {x}"
+def wide(x: Int): String => "wide(Int)"
+def wide(x: UInt8): String => "wide(UInt8)"
+
+def describe<T>(x: T): T {
+    printl("saw {x}")
+    x
+}
+
+def main(): Unit {
+    val c = true
+    val n = 5
+    val small: UInt8 = 3
+    val xs = [1, 2, 3]
+    val t: Int ! String = Ok(1)
+
+    // Beside an argument with a type, which decides first.
+    printl(same(Error("x"), t))
+    printl(same(Box([]), Box([1])))
+    printl(two(opt(n, None), n))
+    printl(two(opt(1, None), 2))
+    printl(two(opt(1, None), Some(n)))
+
+    // A call whose result only a lambda decides.
+    val bytes: [UInt8] = mp(xs, x => 1)
+    printl(wide(bytes[0]))
+    printl(mp(xs, x => x + 1))
+    printl(ov(mp(xs, x => x + 1)))
+
+    // Through a generic call, to a range literal and a bare `Error`.
+    val d: Interval<UInt8> = id(1..5)
+    printl(wide(d.from))
+    val failed: Int ! String = id(Error("x"))
+    val failedTwice: Int ! String = id(id(Error("x")))
+    printl(failed)
+    printl(failedTwice)
+
+    // Tried against each of several functions.
+    printl(o8(id(1)))
+    printl(o8(if c => 1 else 2))
+    printl(ob(Box([])))
+    printl(h([]))
+    printl(show(dbl(1.0)))
+
+    // As a receiver.
+    printl(["a": 1].m8())
+    printl((if c => 1 else 2).u())
+    printl(Box([]).ob())
+    printl(none().k())
+    printl(dbl.ap(4))
+
+    // With nothing expected, the part with a type of its own decides.
+    val branch = if c => 1 else small
+    val elements = [1, small]
+    printl(wide(branch))
+    printl(wide(elements[0]))
+
+    // A literal is promoted on its way in, a value on its way out.
+    val a: Int? = describe(5)
+    val b: Int? = describe(n)
+}

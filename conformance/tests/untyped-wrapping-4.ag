@@ -1,0 +1,114 @@
+// Wrapping an expression with no type of its own doesn't change whether it types: where
+// `val v: X = e` works, so do `id(e)`, an argument of a function or of one of several, a
+// receiver, and an argument beside one that has a type (docs/language/types.md, "A type of its own").
+// Part 4 of 4; each function is a row of notes/probes/untyped_matrix.py.
+
+type Box<T>(items: [T])
+type Other(n: Int)
+
+def id<T>(x: T): T => x
+def opt<T>(x: T, y: T?): T? => y
+def none<T>(): T? => None
+def same<T>(a: T, b: T): T => a
+def wrap<T>(x: T): Box<T> => Box([x])
+def dbl(x: Int): Int => x * 2
+def dbl(x: Float): Float => x * 2.0
+
+// an if of literals
+def take16(x: UInt8): UInt8 => x
+def ov16(x: UInt8): String => "one"
+def ov16(x: Other): String => "other"
+
+def row16(c: Bool): Unit {
+    val t: UInt8 = if c => 1 else 2
+    val direct: UInt8 = if c => 1 else 2
+    val once: UInt8 = id(if c => 1 else 2)
+    val twice: UInt8 = id(id(if c => 1 else 2))
+    val boxed: Box<UInt8> = wrap(if c => 1 else 2)
+    val taken = take16(if c => 1 else 2)
+    val takenOnce = take16(id(if c => 1 else 2))
+    val received = (if c => 1 else 2).take16()
+    val beside = same(if c => 1 else 2, t)
+    val besideOnce = same(id(if c => 1 else 2), t)
+    val chosen = ov16(if c => 1 else 2)
+    val chosenOnce = ov16(id(if c => 1 else 2))
+    printl("if c => 1 else 2: {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+    val alone = if c => 1 else 2
+    printl("  alone {alone}")
+}
+
+// a generic call of an empty array
+def take17(x: Box<Int>): Box<Int> => x
+def ov17(x: Box<Int>): String => "one"
+def ov17(x: Other): String => "other"
+
+def row17(c: Bool): Unit {
+    val t: Box<Int> = Box([])
+    val direct: Box<Int> = Box([])
+    val once: Box<Int> = id(Box([]))
+    val twice: Box<Int> = id(id(Box([])))
+    val boxed: Box<Box<Int>> = wrap(Box([]))
+    val taken = take17(Box([]))
+    val takenOnce = take17(id(Box([])))
+    val received = (Box([])).take17()
+    val beside = same(Box([]), t)
+    val besideOnce = same(id(Box([])), t)
+    val chosen = ov17(Box([]))
+    val chosenOnce = ov17(id(Box([])))
+    printl("Box([]): {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+}
+
+// a generic call nothing reaches
+def take18(x: Int?): Int? => x
+def ov18(x: Int?): String => "one"
+def ov18(x: Other): String => "other"
+
+def row18(c: Bool): Unit {
+    val t: Int? = none()
+    val direct: Int? = none()
+    val once: Int? = id(none())
+    val twice: Int? = id(id(none()))
+    val boxed: Box<Int?> = wrap(none())
+    val taken = take18(none())
+    val takenOnce = take18(id(none()))
+    val received = (none()).take18()
+    val beside = same(none(), t)
+    val besideOnce = same(id(none()), t)
+    val chosen = ov18(none())
+    val chosenOnce = ov18(id(none()))
+    printl("none(): {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+}
+
+// a generic call of literals
+def take19(x: UInt8?): UInt8? => x
+def ov19(x: UInt8?): String => "one"
+def ov19(x: Other): String => "other"
+
+def row19(c: Bool): Unit {
+    val t: UInt8? = opt(1, None)
+    val direct: UInt8? = opt(1, None)
+    val once: UInt8? = id(opt(1, None))
+    val twice: UInt8? = id(id(opt(1, None)))
+    val boxed: Box<UInt8?> = wrap(opt(1, None))
+    val taken = take19(opt(1, None))
+    val takenOnce = take19(id(opt(1, None)))
+    val received = (opt(1, None)).take19()
+    val beside = same(opt(1, None), t)
+    val besideOnce = same(id(opt(1, None)), t)
+    val chosen = ov19(opt(1, None))
+    val chosenOnce = ov19(id(opt(1, None)))
+    printl("opt(1, None): {t} {direct} {once} {twice} {boxed}")
+    printl("  {taken} {takenOnce} {received} {beside} {besideOnce} {chosen} {chosenOnce}")
+    val alone = opt(1, None)
+    printl("  alone {alone}")
+}
+
+def main(): Unit {
+    row16(true)
+    row17(true)
+    row18(true)
+    row19(true)
+}
