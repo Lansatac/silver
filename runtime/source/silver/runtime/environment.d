@@ -59,7 +59,8 @@ string environmentValue(const(char)[] name) nothrow
             if (found is null) return null;
             auto value = found.fromStringz.idup;
             validate(value);
-            return value;
+            // An empty array's copy is null, which would say the variable isn't set.
+            return value.length == 0 ? "" : value;
         }
     }
     catch (Exception)

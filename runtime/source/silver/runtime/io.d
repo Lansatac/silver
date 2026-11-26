@@ -149,6 +149,10 @@ bool silver_exists(const(char)* path, size_t length)
     return false;
 }
 
+// With C's linkage a helper takes its name from the C library: `write` here was the one files.d's
+// `write` called on Linux.
+extern (D):
+
 /// `text` without the `\n` or `\r\n` that ends it.
 private string withoutEnding(string text)
 {

@@ -977,7 +977,9 @@ void buildNumLibrary(string directory, int factor = 2)
     auto source = buildPath(directory, "num.c");
     write(source, "#ifdef _WIN32\n__declspec(dllexport)\n#endif\nlong long twice(long long x) { return " ~ text(factor)
         ~ " * x; }\n");
-    auto clang = std.process.environment.get("SILVER_CLANG", "clang");
+    // As silverc finds it: a release's bundled one, in llvm beside the executables, before the PATH's.
+    auto bundled = buildPath(root, "out", "llvm", "clang" ~ exe);
+    auto clang = std.process.environment.get("SILVER_CLANG", exists(bundled) ? bundled : "clang");
     version (Windows)
     {
         // Linked as the conformance harness links its libraries: with no C runtime, by lld-link beside clang.
