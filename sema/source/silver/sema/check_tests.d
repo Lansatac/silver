@@ -3137,10 +3137,11 @@ unittest
         .shouldReport(DiagnosticCode.NotCallable, At("qq.n()", 1));
 }
 
-@("a receiver needs a type of its own")
+@("a receiver with no type of its own is fitted by its shape, as a first argument is")
 unittest
 {
-    analyzed("def f(x: Int?): Int => 1\ndef main(): Unit {\n    val r = None.f()\n}")
+    analyzed("def f(x: Int?): Int => 1\ndef main(): Unit {\n    val r = None.f()\n}").shouldHaveNoDiagnostics();
+    analyzed("def f<T>(x: T?): Int => 1\ndef main(): Unit {\n    val r = None.f()\n}")
         .shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
 }
 
