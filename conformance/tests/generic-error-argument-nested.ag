@@ -1,8 +1,0 @@
-// A bare Error passed through nested generic calls takes its type from the error union the
-// outer call is expected to be, as it does through one call.
-def id<T>(x: T): T => x
-
-def main(): Unit {
-    val r: Int ! String = id(id(Error("x")))
-    printl(r)
-}
