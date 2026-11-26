@@ -20,6 +20,18 @@ class ProgramFailed : Exception
     }
 }
 
+/// The program called `exit`. It ends with `status`, after what it printed is written out.
+class ProgramExited : Exception
+{
+    ubyte status;
+
+    this(ubyte status, string file = __FILE__, size_t line = __LINE__)
+    {
+        super("exit", file, line);
+        this.status = status;
+    }
+}
+
 /// What ends a program given `arguments` before its `main` starts, as an error from `main` would be
 /// reported, or null when every argument is UTF-8. On Windows, an argument with an unpaired surrogate
 /// arrives here as invalid UTF-8 too. The front end and the runtime keep copies, which a test compares.

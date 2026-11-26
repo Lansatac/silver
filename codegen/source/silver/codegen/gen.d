@@ -1747,6 +1747,10 @@ private final class Generator
             case Intrinsic.exists:
                 auto path = emitExpr(call.args[0]);
                 return path.then(callRuntime("silver_exists", operandsOf(call.args[0], path.operands, 2)));
+            case Intrinsic.readEnvironment:
+                return emitWithStatus("silver_readEnvironment", call);
+            case Intrinsic.exit:
+                return emitExit(call.args[0], call.args[1]);
             case Intrinsic.panic:
                 return emitExplicitPanic(call.args[0], e.span);
             case Intrinsic.exitWithError:
@@ -1901,6 +1905,18 @@ private final class Generator
             .then(callRuntime("silver_panic_message", cString(located(span)) ~ operandsOf(message, text.operands, 2)))
             .then(Fragment.unreachable())
             .then(Fragment.label(_function.newLabel("after.panic")))
+            .withValue(null);
+    }
+
+    /// `exit(status)`: the runtime writes out the program's output and ends it. `location` is where it was called.
+    private Fragment emitExit(const Expr status, const Expr location)
+    {
+        auto value = emitExpr(status);
+        auto where = emitExpr(location);
+        return value.then(where)
+            .then(callRuntime("silver_exit", operandsOf(status, value.operands, 1) ~ operandsOf(location, where.operands, 2)))
+            .then(Fragment.unreachable())
+            .then(Fragment.label(_function.newLabel("after.exit")))
             .withValue(null);
     }
 
@@ -2350,7 +2366,7 @@ private final class Generator
         import std.algorithm : startsWith;
         import std.string : indexOf;
 
-        static immutable noReturn = ["@silver_panic(", "@silver_panic_message(", "@silver_exit_error(",
+        static immutable noReturn = ["@silver_panic(", "@silver_panic_message(", "@silver_exit_error(", "@silver_exit(",
             "@silver_test_stopped("];
         foreach (line; code.code)
         {

@@ -1,0 +1,7 @@
+FAIL "exit fails the test, and the run goes on" at exit-in-test.ag(3,6)
+    exit-in-test.ag(5,5): exit(3) called in a test
+    Output:
+        before
+FAIL "exit inside panics fails the test too" at exit-in-test.ag(11,6)
+    exit-in-test.ag(12,38): exit(5) called in a test
+1 passed, 2 failed

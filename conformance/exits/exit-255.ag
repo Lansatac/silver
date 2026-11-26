@@ -1,0 +1,6 @@
+import std.process
+
+def main(): Unit ! IoError {
+    printl("done")
+    exit(255)
+}

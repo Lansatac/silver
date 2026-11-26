@@ -1,0 +1,12 @@
+import std.process
+
+def pick(n: Int): Int => if n > 0 => n else exit(7)
+
+def main(args: [String]): Unit {
+    printl(pick(2))
+    val list = [1, 2, 3]
+    for x in list {
+        printl(pick(x - 1))
+    }
+    printl("never")
+}

@@ -1,0 +1,10 @@
+import std.process
+
+def main(): Unit {
+    printl(environment("PATH") != None)
+    printl(environment("SILVER_SURELY_NOT_SET_IN_ANY_ENVIRONMENT"))
+    printl(environment("") ?? "none")
+    printl(environment("A=B") ?? "none")
+    val home = environment("SILVER_SURELY_NOT_SET_IN_ANY_ENVIRONMENT") ?? "."
+    printl(home)
+}

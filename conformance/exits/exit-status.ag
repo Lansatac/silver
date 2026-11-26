@@ -1,0 +1,8 @@
+import std.process
+
+def main(): Unit {
+    printl("before")
+    print("no newline")
+    exit(3)
+    printl("never")
+}

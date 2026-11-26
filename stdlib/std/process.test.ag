@@ -1,0 +1,14 @@
+import std.process
+
+test "a variable every system has is a value, and one nothing sets is none" {
+    val path = environment("PATH")
+    expect(path != None)
+    expect(length(bytes(path ?? "")) > 0)
+    expect(environment("SILVER_SURELY_NOT_SET_IN_ANY_ENVIRONMENT") == None)
+}
+
+test "a name no variable can have is none" {
+    expect(environment("") == None)
+    expect(environment("PA=TH") == None)
+    expect(environment("PA\u{0}TH") == None)
+}

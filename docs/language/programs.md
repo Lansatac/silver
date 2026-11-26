@@ -102,9 +102,10 @@ A failure to write to standard error is ignored.
 - A word starting `--DRT-`, which a D program's runtime would take as its own option, is the program's like any other, for `silver`, `silverc` and a compiled program.
 - `eprint` and `eprintl` are in `lang.io` beside `print` and `printl`, generic over what they write, and a failed write is ignored. A compiled program writes to C's standard error, which C leaves unbuffered, so it appears at once, without waiting for what standard output holds. Where the two go to one place, as a pipe both are redirected to, the order is therefore not defined: standard output, buffered, may come out after later standard error. When interpreted, standard output is flushed after each write, so the two come out in the order they were written.
 
+[Exit status](#exit-status)'s `exit` and [The environment](#the-environment) are built, as [`std.process`](../stdlib/process.md#current-implementation) says.
+
 The rest of this document's additions aren't built:
 
-- There is no `exit` or `environment`, and no `std.process`.
 - `print` panics when the write fails, and when interpreted a closed pipe ends the program with the interpreter's own error.
 
 The exit statuses, and an error from `main`, are as described.

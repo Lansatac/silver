@@ -16,7 +16,7 @@ version (unittest)
     import silver.ast : DiagnosticException, formatDiagnostic, Program, SourceContext;
     import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, Toolchain;
     import silver.core : lowerProgram, CoreProgram = Program;
-    import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed;
+    import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramExited, ProgramFailed;
     import silver.loader : describePackages, describeScriptHomes, isCompanionFile, load, Packages, standardLibraryPath,
         standardPrelude, withStandardLibrary;
     import silver.sema : analyze, Analysis, Target;
@@ -44,6 +44,8 @@ version (unittest)
         /// The `.stderr` file, which holds what the program writes to standard error. Null when the case has
         /// none, and then standard error is mixed into the output a case compares.
         string standardErrorPath;
+        /// The status the program exits with, from `.status`. Only `exits/` cases have one.
+        int exitStatus = -1;
     }
 
     /// Why `actual` isn't what `c` expects on standard error, or null if it is or the case doesn't say.
@@ -254,7 +256,7 @@ version (unittest)
         foreach (pattern; filter)
         {
             bool found;
-            foreach (directory; ["tests", "panics", "errors", "rejected", "testing"])
+            foreach (directory; ["tests", "panics", "errors", "exits", "rejected", "testing"])
             {
                 found = found || caseNames(directory).canFind!(name => selected(directory, name, [pattern]));
             }
@@ -286,9 +288,11 @@ version (unittest)
             auto inputPath = buildPath(casesDirectory, name ~ ".stdin");
             auto argumentsPath = buildPath(casesDirectory, name ~ ".args");
             auto standardErrorPath = buildPath(casesDirectory, name ~ ".stderr");
+            auto statusPath = buildPath(casesDirectory, name ~ ".status");
             result ~= Case(name, entry.name, readText(expectedPath).normalizeNewlines, panicMessage, errorMessage,
                 exists(inputPath) ? inputPath : null, exists(argumentsPath) ? argumentsIn(argumentsPath) : null,
-                exists(standardErrorPath) ? standardErrorPath : null);
+                exists(standardErrorPath) ? standardErrorPath : null,
+                exists(statusPath) ? readText(statusPath).strip.to!int : -1);
         }
         assert(result.length > 0 || filter.length > 0, "No conformance .ag files were found in " ~ directory);
         return result.sort!((a, b) => a.name < b.name).release;
@@ -312,6 +316,13 @@ version (unittest)
     Case[] errorCases()
     {
         return casesIn("errors");
+    }
+
+    /// Programs that call `exit`. Both backends must print the same output and exit with the status
+    /// in `.status`, which may be any, 0 and 1 included.
+    Case[] exitCases()
+    {
+        return casesIn("exits");
     }
 
     /// Programs sema rejects, whose `.expected` is the first error as `code: message`, with each path
@@ -816,6 +827,55 @@ version (unittest)
         return compareOutput(c, run.output, c.expected ~ "error: " ~ c.errorMessage ~ "\n");
     }
 
+    /// Compiles and runs the exit case `c`, and returns why it didn't exit as expected, or null.
+    string runCompiledExit(Case c, const Build build, string workDirectory)
+    {
+        CompiledRun run;
+        if (auto failure = compileAndRun(c, build, workDirectory, run))
+        {
+            return failure;
+        }
+        if (run.status != c.exitStatus)
+        {
+            return "expected exit status " ~ c.exitStatus.to!string ~ ", got " ~ run.status.to!string ~ ":\n" ~ run.output;
+        }
+        return compareOutput(c, run.output);
+    }
+
+    /// Interprets the exit case `c`, and returns why it didn't exit as expected, or null.
+    string runInterpretedExit(Case c)
+    {
+        auto context = new SourceContext();
+        Program program;
+        CoreProgram lowered;
+        if (auto failure = prepare(c, context, program, lowered))
+        {
+            return failure;
+        }
+
+        auto directory = newRunDirectory();
+        // A file a case left open mustn't fail the case here.
+        scope (exit) collectException(rmdirRecurse(directory));
+        auto evaluator = new Evaluator(lowered, false, c.arguments, directory);
+        try
+        {
+            runWithInput(c, evaluator);
+        }
+        catch (ProgramExited e)
+        {
+            if (e.status != c.exitStatus)
+            {
+                return "expected exit status " ~ c.exitStatus.to!string ~ ", got " ~ e.status.to!string;
+            }
+            return compareOutput(c, evaluator.output);
+        }
+        catch (DiagnosticException e)
+        {
+            return "the program failed at runtime: " ~ formatDiagnostic(e.diagnostic, context.sources);
+        }
+        return "expected exit status " ~ c.exitStatus.to!string ~ ", but the program finished";
+    }
+
     /// Interprets the error case `c`, and returns why `main` didn't return the expected error, or null.
     string runInterpretedError(Case c)
     {
@@ -1012,6 +1072,16 @@ version (unittest)
         finish(pendingProblems(described("error", optimization), all, failed, compiledPending), workDirectory);
     }
 
+    void checkCompiledExits(Optimization optimization)
+    {
+        Build build;
+        if (!findBuild("compiled exit conformance", optimization, build)) return;
+        auto workDirectory = workDirectoryFor("exits", optimization);
+        auto all = exitCases;
+        auto failed = failuresByName(all, inParallel(all, (Case c) => runCompiledExit(c, build, workDirectory)));
+        finish(pendingProblems(described("exit", optimization), all, failed, compiledPending), workDirectory);
+    }
+
     void checkCompiledTesting(Optimization optimization)
     {
         Build build;
@@ -1151,6 +1221,27 @@ unittest
 unittest
 {
     checkCompiledErrors(Optimization.full);
+}
+
+@("Interpreted programs that call exit end with its status after printing what came before")
+unittest
+{
+    auto all = exitCases;
+    auto failed = failuresByName(all, inParallel(all, (Case c) => runInterpretedExit(c)));
+    auto problems = pendingProblems("Interpreted exit", all, failed, interpretedPending);
+    assert(problems is null, problems);
+}
+
+@("Compiled programs that call exit end with its status after printing what came before")
+unittest
+{
+    checkCompiledExits(Optimization.none);
+}
+
+@("Optimized programs that call exit end with its status after printing what came before")
+unittest
+{
+    checkCompiledExits(Optimization.full);
 }
 
 @("Programs that sema rejects report the expected error")

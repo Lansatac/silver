@@ -1,0 +1,8 @@
+import std.process
+
+def main(): Unit {
+    val stop = (code: UInt8) => exit(code)
+    printl("one")
+    stop(42)
+    printl("never")
+}

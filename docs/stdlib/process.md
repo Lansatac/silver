@@ -36,4 +36,5 @@ val home = environment("HOME") ?? "."
 
 ## Current implementation
 
-- Not built: there is no `std.process`, so no `exit` or `environment`.
+- Everything above is built, on both backends. `exit` is an intrinsic: the compiled program's runtime writes out what it has printed (C's `stdout`) and calls C's `exit`, and the interpreter ends with the status after flushing its own output. In a test, on either backend, it fails the test with `file(line,column): exit(3) called in a test` and the run goes on, also when the call is inside a `panics`, which hands that message back.
+- `environment` reads the system's environment each time it's called. On Windows it asks for the name as UTF-16, so a name that isn't ASCII works, a name's case doesn't matter (`path` finds `Path`), and a value with an unpaired surrogate is `None`, as a value that isn't UTF-8 is elsewhere. Elsewhere a name's case matters. An empty name, and one with a `=` or a NUL, is `None` on every system. A variable set to the empty string is `Some("")`, not `None`.

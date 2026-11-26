@@ -30,6 +30,8 @@ enum Intrinsic
     readWhole,
     writeWhole,
     exists,
+    exit,
+    readEnvironment,
     length,
     panic,
     assert_,

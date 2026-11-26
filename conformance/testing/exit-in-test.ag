@@ -1,0 +1,14 @@
+import std.process
+
+test "exit fails the test, and the run goes on" {
+    printl("before")
+    exit(3)
+    printl("never")
+}
+
+test "after it, tests still run" => expect(1 + 1 == 2)
+
+test "exit inside panics fails the test too" {
+    val message = panics((): Unit => exit(5))
+    expect(true)
+}

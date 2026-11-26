@@ -1,0 +1,12 @@
+import std.process
+
+def finish(found: Bool): Unit {
+    if found { exit(0) }
+}
+
+def main(): Unit {
+    finish(false)
+    printl("not found")
+    finish(true)
+    printl("never")
+}

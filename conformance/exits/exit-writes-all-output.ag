@@ -1,0 +1,9 @@
+import std.process
+
+def main(): Unit {
+    for i in 0..3000 {
+        printl(i)
+    }
+    print("last")
+    exit(9)
+}

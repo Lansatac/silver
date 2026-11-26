@@ -1,0 +1,3 @@
+module std.process
+
+forward import lang.process

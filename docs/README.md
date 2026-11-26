@@ -62,7 +62,7 @@ The modules of `std` are described in `stdlib/`, one file to a module, in the sa
 | [std.file](stdlib/file.md) | Reading and writing a file whole | Implemented |
 | [std.json](stdlib/json.md) | Parsing, finding things in and writing JSON | Implemented, without decoding into your own types |
 | [std.toml](stdlib/toml.md) | Reading TOML 1.1, with its dates and times as std.time's | Implemented, without writing |
-| [std.process](stdlib/process.md) | `exit` and the environment | Not built |
+| [std.process](stdlib/process.md) | `exit` and the environment | Implemented |
 | [std.c](stdlib/c.md) | C's integer and floating-point types, and strings, for native declarations | Implemented |
 
 ## Not designed yet

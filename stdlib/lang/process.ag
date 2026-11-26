@@ -1,0 +1,14 @@
+module lang.process
+
+// Writes out what the program has printed and ends it with `status`. In a test it fails the test.
+intrinsic def exit(status: UInt8): Never
+
+// The value of the environment variable `name`, or `None` when it isn't set or its value isn't UTF-8.
+def environment(name: String): String? {
+    val (status, value) = readEnvironment(name)
+    if status == 0 => Some(value)
+    else None
+}
+
+// 0 and the value, or 1 when there is none.
+private intrinsic def readEnvironment(name: String): (Int32, String)

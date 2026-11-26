@@ -116,6 +116,24 @@ void panicInTest(const(char)* location, const(char)* message, size_t length) @no
     leave();
 }
 
+/// `exit` called in a test, which fails the test and ends it, or the `panics` call it's inside, rather than
+/// the program the test runner is. Returns if no test is running.
+void exitInTest(ubyte status, const(char)* location, size_t locationLength) @nogc
+{
+    if (!inTest) return;
+    static __gshared char[512] message;
+    auto length = cast(size_t) snprintf(message.ptr, message.length, "%.*s: exit(%u) called in a test",
+        cast(int) locationLength, location, cast(uint) status);
+    if (length >= message.length) length = message.length - 1;
+    record('F', message.ptr, length);
+    if (panicsDepth > 0)
+    {
+        caughtMessage = message.ptr;
+        caughtLength = length;
+    }
+    leave();
+}
+
 /// Starts a `panics` call, keeping the guard that `jump` holds while the call's own is there.
 void silver_panics_enter(void** jump)
 {

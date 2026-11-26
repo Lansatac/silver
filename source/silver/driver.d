@@ -10,7 +10,7 @@ import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, 
 import silver.codegen : copyBeside, executablePath, findingLibraries, findToolchain, generate, linkExecutable, Optimization,
     optimizeIr, sharedLibrariesOf, Toolchain;
 import silver.core : lowerProgram, printCore = print;
-import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed, RuntimeError;
+import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramExited, ProgramFailed, RuntimeError;
 import silver.loader : describeNativeFiles, describePackageFiles, describePackages, describeScriptHomes, describeSilver, load,
     missingStandardLibrary, NativeFiles, nativesOf, Packages, programStart, standardPrelude, undeclared;
 import silver.sema : analyze, Analysis, Target;
@@ -76,6 +76,11 @@ int interpret(string programFile, const Packages packages, bool emitCore = false
         stdout.flush();
         stderr.writeln("error: ", e.msg);
         return 1;
+    }
+    catch (ProgramExited e)
+    {
+        stdout.flush();
+        return e.status;
     }
     catch (DiagnosticException e)
     {

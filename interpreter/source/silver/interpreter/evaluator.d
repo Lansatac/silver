@@ -14,6 +14,7 @@ import silver.interpreter.frames : FrameStack;
 import silver.interpreter.stack : runOnLargeStack, stackNearlyFull, stackOverflow;
 import silver.interpreter.foreign : addressText, callC, findNative, fromCString, toCString;
 import silver.interpreter.values;
+import silver.runtime.environment : environmentValue;
 import silver.runtime.files : pathExists, readWhole, writeWhole;
 import silver.runtime.floattext : float32Text, floatText;
 
@@ -1171,6 +1172,14 @@ final class Evaluator
                 return withStatus(written.status, written.text);
             case Intrinsic.exists:
                 return Value(pathExists(located(args[0].as!string)));
+            case Intrinsic.readEnvironment:
+                auto value = environmentValue(args[0].as!string);
+                return value is null ? withStatus(1, "") : withStatus(0, value);
+            case Intrinsic.exit:
+                auto status = cast(ubyte) args[0].as!long;
+                // A test is failed; the run it's in goes on.
+                if (_testing) throw new TestStop("%s: exit(%s) called in a test".format(args[1].as!string, status));
+                throw new ProgramExited(status);
             case Intrinsic.panic:
                 throw panicAt(e.span, DiagnosticCode.ExplicitPanic, args[0].as!string);
             case Intrinsic.exitWithError:

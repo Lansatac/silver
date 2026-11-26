@@ -2383,8 +2383,11 @@ private final class Lowering
                 assert(0, "only the wrapper lowering makes for `main` calls `exitWithError` and `programArguments`");
             case Intrinsic.print, Intrinsic.printl, Intrinsic.eprint, Intrinsic.eprintl:
                 return Expr(types.unit, span, ExprKind(IntrinsicCall(intrinsic, [formatted(args[0])])));
+            case Intrinsic.exit:
+                // Where it was called, for the failure it is in a test.
+                return Expr(signature.ret, span, ExprKind(IntrinsicCall(intrinsic, args ~ stringLiteral(located(span), span))));
             case Intrinsic.readLine, Intrinsic.panic, Intrinsic.panics:
-            case Intrinsic.readWhole, Intrinsic.writeWhole, Intrinsic.exists:
+            case Intrinsic.readWhole, Intrinsic.writeWhole, Intrinsic.exists, Intrinsic.readEnvironment:
             case Intrinsic.bytes, Intrinsic.uncheckedString, Intrinsic.toCString, Intrinsic.fromCString:
                 break;
         }
