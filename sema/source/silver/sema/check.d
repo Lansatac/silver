@@ -3690,14 +3690,16 @@ private final class TypeChecker
         auto candidates = call.callee.id in _resolutions.overloads;
         scope (exit) if (candidates !is null) noteOtherCounts(reported, call, distinct(*candidates));
         auto generic = genericUse(expr);
-        if (generic.found) return applyGeneric(expr, generic, call, expected, ctx, typed);
+        auto overloaded = candidates !is null && distinct(*candidates).count > 1;
+        if (generic.found) return applyGeneric(expr, generic, call, expected, ctx, typed, false, overloaded);
         // A function named directly is called, not used as a value, so an intrinsic can be.
         if (auto function_ = calleeOf(expr.id))
         {
             rejectTypeArguments(typeArgsOf(*call.callee), spelling(*call.callee), call.callee.span);
             auto calleeType = symbolType(SymbolId(*function_));
             _typing.exprTypes[call.callee.id] = calleeType;
-            return applyCallee(calleeType, call, expr.span, ctx, typed);
+            return applyCallee(calleeType, call, expr.span, ctx, typed,
+                CalleeInfo(*function_, spelling(*call.callee), false, overloaded));
         }
         return applyCallee(synthesize(*call.callee, ctx), call, expr.span, ctx);
     }
@@ -4338,6 +4340,48 @@ private final class TypeChecker
     private FunctionData signatureOf(Type functionType)
     {
         return _types[functionType].match!((const FunctionData data) => data, _ => FunctionData.init);
+    }
+
+    /// What a wrong-count report says about the function called.
+    private struct CalleeInfo
+    {
+        /// The function, when the call names one, which gives the parameters' names and the module.
+        Id!FunctionDecl func;
+        string spelled;
+        bool hasReceiver;
+        bool overloaded;
+    }
+
+    /// `repeat` takes 1 argument (value: T), but this call gives 2: the receiver and 1 in parentheses.
+    /// A function that's overloaded or imported is named with its module.
+    private string wrongCountMessage(const CalleeInfo info, const FunctionData signature, size_t given, Site site)
+    {
+        auto taken = signature.params.length;
+        string count(size_t n, string none) => n == 0 ? none : "%s argument%s".format(n, n == 1 ? "" : "s");
+        string name = info.spelled;
+        string[] params;
+        if (info.func.isValid)
+        {
+            auto decl = _resolutions.declarations.functions[info.func];
+            auto home = _resolutions.declarations.functionModules[info.func];
+            if ((info.overloaded || home != site.module_) && !name.canFind('.')) name = home ~ "." ~ name;
+            foreach (i; 0 .. taken)
+            {
+                auto type = (signature.isMutable(i) ? "mutable " : "") ~ _types.describe(signature.params[i]);
+                params ~= i < decl.params.length && !decl.params[i].takenApart ? decl.params[i].name ~ ": " ~ type : type;
+            }
+        }
+        else
+        {
+            foreach (i; 0 .. taken) params ~= _types.describe(signature.params[i]);
+        }
+        auto message = "`%s` takes %s%s, but this call gives %s".format(name, count(taken, "no arguments"),
+            taken == 0 ? "" : " (" ~ params.join(", ") ~ ")", count(given, "none"));
+        if (info.hasReceiver && given > 0)
+        {
+            message ~= ": the receiver %s".format(given == 1 ? "alone" : "and %s in parentheses".format(given - 1));
+        }
+        return message;
     }
 
     /// `f(Int, String)`, or `lib.f<T: Json>(mutable T)` for a function of another module.
@@ -6155,9 +6199,10 @@ private final class TypeChecker
 
     /// A call of `g` with `call`'s arguments, whose type arguments are written or inferred. With a
     /// `receiver`, the first argument is a method call's, already synthesized.
-    /// `pretyped` is as for `applyCallee`. `hasReceiver` says the first argument is the `x` of `x.f()`.
+    /// `pretyped` is as for `applyCallee`. `hasReceiver` says the first argument is the `x` of `x.f()`,
+    /// and `overloaded` that there are other functions the call could have meant.
     private Type applyGeneric(const Expr expr, const Generic g, const CallExpr call, Type expected, BodyContext ctx,
-        const(Type)[] pretyped = null, bool hasReceiver = false)
+        const(Type)[] pretyped = null, bool hasReceiver = false, bool overloaded = false)
     {
         auto args = call.args;
         auto sum = g.owner != Type.init && !buildsMember(g, expected);
@@ -6186,7 +6231,7 @@ private final class TypeChecker
         {
             typeTheRest();
             _collector.reportError(DiagnosticCode.WrongArgumentCount, expr.span,
-                "Expected %s arguments, got %s".format(signature.params.length, args.length));
+                wrongCountMessage(CalleeInfo(g.func, g.spelled, hasReceiver, overloaded), signature, args.length, ctx.site));
             return _types.error;
         }
 
@@ -6399,9 +6444,16 @@ private final class TypeChecker
         return _types.substitute(shape, bound);
     }
 
+    /// A call through a value, which has only the name it's written with.
+    private CalleeInfo valueCallee(const Expr callee)
+    {
+        return CalleeInfo(Id!FunctionDecl.init, spelling(callee));
+    }
+
     /// `typed` has the type of each argument that has already been given one, and is otherwise
-    /// `Type.init`, or empty when none has.
-    private Type applyCallee(Type calleeType, const CallExpr call, Span span, BodyContext ctx, const(Type)[] typed = null)
+    /// `Type.init`, or empty when none has. `info` says which function is called, for an error about the call.
+    private Type applyCallee(Type calleeType, const CallExpr call, Span span, BodyContext ctx, const(Type)[] typed = null,
+        CalleeInfo info = CalleeInfo.init)
     {
         Type typeOf(size_t i) => i < typed.length ? typed[i] : Type.init;
         // Each argument is checked against its parameter when there is one, and synthesized
@@ -6424,7 +6476,7 @@ private final class TypeChecker
                 {
                     synthesizeArgs();
                     _collector.reportError(DiagnosticCode.WrongArgumentCount, span,
-                        "Expected %s arguments, got %s".format(funcData.params.length, call.args.length));
+                        wrongCountMessage(info.spelled is null ? valueCallee(*call.callee) : info, funcData, call.args.length, ctx.site));
                     return _types.error;
                 }
                 string[][] places;
@@ -6642,10 +6694,11 @@ private final class TypeChecker
             g.writable = decl.typeParams.length;
             g.func = function_;
             g.type = functionType;
-            return applyGeneric(expr, g, *rewritten, expected, ctx, typed, true);
+            return applyGeneric(expr, g, *rewritten, expected, ctx, typed, true, lookup.count > 1);
         }
         rejectTypeArguments(typeArgs, member, call.callee.span);
-        return applyCallee(functionType, *rewritten, expr.span, ctx, typed);
+        return applyCallee(functionType, *rewritten, expr.span, ctx, typed,
+            CalleeInfo(function_, member, true, lookup.count > 1));
     }
 
     /// Whether a receiver of type `receiver` can be the first argument of a function of type

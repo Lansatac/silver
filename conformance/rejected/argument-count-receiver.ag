@@ -1,0 +1,5 @@
+def two(a: Int, b: Int): Int => a
+
+def main(): Unit {
+    printl(1.two(2, 3))
+}

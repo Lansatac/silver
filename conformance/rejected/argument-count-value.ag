@@ -1,0 +1,4 @@
+def main(): Unit {
+    val f = (x: Int) => x
+    printl(f(1, 2))
+}

@@ -1,0 +1,5 @@
+import std.range
+
+def main(): Unit {
+    printl("a".repeat(1, 2))
+}

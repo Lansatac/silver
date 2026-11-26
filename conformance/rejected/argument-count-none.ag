@@ -1,0 +1,5 @@
+def none(): Int => 1
+
+def main(): Unit {
+    printl(none(1))
+}
