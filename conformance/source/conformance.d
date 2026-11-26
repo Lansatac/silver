@@ -869,6 +869,10 @@ version (unittest)
             }
             return compareOutput(c, evaluator.output);
         }
+        catch (ProgramFailed e)
+        {
+            return "expected exit status " ~ c.exitStatus.to!string ~ ", but main returned the error `" ~ e.msg ~ "`";
+        }
         catch (DiagnosticException e)
         {
             return "the program failed at runtime: " ~ formatDiagnostic(e.diagnostic, context.sources);

@@ -28,6 +28,8 @@ private __gshared Jump escape;
 private __gshared size_t firstTest;
 /// How many `panics` calls are running, each inside the one before.
 private __gshared size_t panicsDepth;
+/// Where the guard in use is kept, as the last `panics` call was given it.
+private __gshared void** guardBuffer;
 /// The guard each of them runs under, `jumpSize` pointers apiece.
 private __gshared void** outerGuards;
 private __gshared size_t outerGuardsRoom;
@@ -116,8 +118,9 @@ void panicInTest(const(char)* location, const(char)* message, size_t length) @no
     leave();
 }
 
-/// `exit` called in a test, which fails the test and ends it, or the `panics` call it's inside, rather than
-/// the program the test runner is. Returns if no test is running.
+/// `exit` called in a test, which fails the test and ends it, rather than the program the test runner is.
+/// A `panics` call it's inside doesn't catch it: the test's own guard is put back and every `panics` call
+/// is forgotten. Returns if no test is running.
 void exitInTest(ubyte status, const(char)* location, size_t locationLength) @nogc
 {
     if (!inTest) return;
@@ -128,8 +131,9 @@ void exitInTest(ubyte status, const(char)* location, size_t locationLength) @nog
     record('F', message.ptr, length);
     if (panicsDepth > 0)
     {
-        caughtMessage = message.ptr;
-        caughtLength = length;
+        // The test's guard is the first one kept, and the one in the buffer is a `panics` call's.
+        guardBuffer[0 .. jumpSize] = outerGuards[0 .. jumpSize];
+        panicsDepth = 0;
     }
     leave();
 }
@@ -144,6 +148,7 @@ void silver_panics_enter(void** jump)
         if (outerGuards is null) abort();
     }
     outerGuards[panicsDepth * jumpSize .. (panicsDepth + 1) * jumpSize] = jump[0 .. jumpSize];
+    guardBuffer = jump;
     panicsDepth++;
 }
 
