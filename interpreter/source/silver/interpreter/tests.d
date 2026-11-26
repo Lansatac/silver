@@ -159,6 +159,17 @@ unittest
     error.diagnostic.code.should.equal(DiagnosticCode.NotImplemented);
     error.diagnostic.message.should.contain("`llabs`");
 
+    // A narrow result is extended differently as signed and as unsigned.
+    error = collectException!DiagnosticException(run("native(\"abs\") def a(x: Int32): Int8\n"
+        ~ "native(\"abs\") def b(x: Int32): UInt8\ndef main(): Unit {\n    printl(a(-1))\n    printl(b(-1))\n}"));
+    assert(error !is null);
+    error.diagnostic.code.should.equal(DiagnosticCode.NotImplemented);
+
+    // A 32- or 64-bit integer crosses alike whether it's signed or not.
+    run("native(\"llabs\") def a(x: Int64): Int64\nnative(\"llabs\") def b(x: UInt64): UInt64\n"
+        ~ "native(\"abs\") def c(x: Int32): Int32\nnative(\"abs\") def d(x: UInt32): UInt32\ndef main(): Unit {\n"
+        ~ "    printl(a(-5))\n    printl(b(5))\n    printl(c(-6))\n    printl(d(6))\n}").should.equal("5\n5\n6\n6\n");
+
     // Aliases of one type, and handles of two types, are passed alike.
     run("import std.c\nnative type A\nnative type B\nnative(\"strchr\") def a(s: CString, c: CInt): A?\n"
         ~ "native(\"strchr\") def b(s: CString, c: Int32): B?\ndef main(): Unit {\n"

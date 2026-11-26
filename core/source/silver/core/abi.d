@@ -150,16 +150,46 @@ CallDescription describeCall(const(CType)[] params, CType result, Convention con
     return call;
 }
 
-/// Whether C passes the parameters and result of `a` and `b` alike, and neither or both never return.
-bool sameCSignature(const ref Program program, const ref Native a, const ref Native b)
+/// Whether calls of `a` and `b` pass the same things the same way under `convention`, and neither or
+/// both never return: each part in the same place, of the same machine type and extended alike. So
+/// signedness matters only where it decides the extension, and `Int64` and `UInt64` cross alike while
+/// `Int8` and `UInt8`, or a pointer and a `UInt64`, don't.
+bool crossesAlike(const ref Program program, const ref Native a, const ref Native b, Convention convention)
 {
-    if (a.params.length != b.params.length) return false;
-    foreach (i, param; a.params)
+    bool alike(const Crossing x, const Crossing y)
     {
-        if (cTypeOf(program, param) != cTypeOf(program, b.params[i])) return false;
+        if (x.passing != y.passing || x.parts.length != y.parts.length) return false;
+        foreach (i, part; x.parts)
+        {
+            auto other = y.parts[i];
+            if (part.place != other.place || part.extension != other.extension
+                || machineType(part.type) != machineType(other.type)) return false;
+        }
+        return true;
+    }
+
+    auto x = describeCall(program, a, convention);
+    auto y = describeCall(program, b, convention);
+    if (x.arguments.length != y.arguments.length || !alike(x.result, y.result)) return false;
+    foreach (i, argument; x.arguments)
+    {
+        if (!alike(argument, y.arguments[i])) return false;
     }
     auto never = program.types.never;
-    return cTypeOf(program, a.result) == cTypeOf(program, b.result) && (a.result == never) == (b.result == never);
+    return (a.result == never) == (b.result == never);
+}
+
+/// `type` with the signedness of an integer left out, which only its extension says.
+private CType machineType(CType type)
+{
+    switch (type)
+    {
+        case CType.uint8: return CType.int8;
+        case CType.uint16: return CType.int16;
+        case CType.uint32: return CType.int32;
+        case CType.uint64: return CType.int64;
+        default: return type;
+    }
 }
 
 /// The C type of `type`, which sema allows in a native's signature.

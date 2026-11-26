@@ -329,28 +329,31 @@ version (linux)
     /// every word that names a `.so` file, those under `AS_NEEDED` included, and no static library.
     private string[] sharedLibrariesOfScript(string script)
     {
-        import std.algorithm : canFind, splitter;
-        import std.array : replace;
-        import std.string : indexOf;
+        import std.algorithm : canFind, countUntil, endsWith, splitter;
 
+        // Bytes, not UTF-8: the file may be neither ELF nor text.
+        auto bytes = cast(const(ubyte)[]) script;
         // Comments, which may hold any words, go first.
-        string text;
-        while (script.length > 0)
+        ubyte[] text;
+        while (bytes.length > 0)
         {
-            auto start = script.indexOf("/*");
+            auto start = bytes.countUntil(cast(const(ubyte)[]) "/*");
             if (start < 0)
             {
-                text ~= script;
+                text ~= bytes;
                 break;
             }
-            text ~= script[0 .. start];
-            auto end = script[start .. $].indexOf("*/");
-            script = end < 0 ? null : script[start + end + 2 .. $];
+            text ~= bytes[0 .. start];
+            auto end = bytes[start .. $].countUntil(cast(const(ubyte)[]) "*/");
+            bytes = end < 0 ? null : bytes[start + end + 2 .. $];
         }
         string[] named;
-        foreach (word; text.replace("(", " ").replace(")", " ").replace(",", " ").splitter!(c => c == ' ' || c == '\n' || c == '\t' || c == '\r'))
+        foreach (word; text.splitter!(c => c == ' ' || c == '\n' || c == '\t' || c == '\r' || c == '(' || c == ')' || c == ','))
         {
-            if (word.length > 0 && (word.canFind(".so.") || (word.length > 3 && word[$ - 3 .. $] == ".so"))) named ~= word;
+            if (word.canFind(cast(const(ubyte)[]) ".so.") || (word.length > 3 && word.endsWith(cast(const(ubyte)[]) ".so")))
+            {
+                named ~= (cast(const(char)[]) word).idup;
+            }
         }
         return named;
     }

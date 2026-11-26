@@ -9,7 +9,7 @@ import std.typecons : Rebindable, rebindable;
 
 import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
-import silver.core.abi : sameCSignature;
+import silver.core.abi : crossesAlike, hostConvention;
 import silver.core.nodes;
 import silver.core.slots : numberLocals;
 import silver.sema : Analysis, DerivedOrder, DerivedPart, DictionaryFunctions, FunctionUse, IndexFunctions, LoopFunctions, SafeCall, ConstChar, ConstFloat32, float32Of, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
@@ -90,7 +90,7 @@ private void checkNatives(const ref Program program)
     {
         foreach (ref earlier; program.natives[0 .. i])
         {
-            if (earlier.symbol != later.symbol || sameCSignature(program, earlier, later)) continue;
+            if (earlier.symbol != later.symbol || crossesAlike(program, earlier, later, hostConvention)) continue;
             throw new DiagnosticException(Diagnostic(DiagnosticCode.NotImplemented, later.span,
                 "Natives that bind `%s` with different signatures can't both be called".format(later.symbol)));
         }
