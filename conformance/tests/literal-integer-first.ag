@@ -1,0 +1,71 @@
+// An integer literal is an integer first: an Int if an Int fits, otherwise another integer type,
+// and the float literal of its value only where no integer type fits, a Float before a Float32.
+type N = :Float32 | :Float
+type V(x: Float)
+type Oops(code: Int)
+
+val hugeConstant: Float32 = 0x10000000000000000
+
+def f(x: Int): String => "Int"
+def f(x: Float): String => "Float"
+def h(x: Int8): String => "Int8"
+def h(x: Float): String => "Float"
+def k(x: Float32): String => "Float32"
+def k(x: Float): String => "Float"
+def o(x: Int16?): String => "Int16?"
+def o(x: Float?): String => "Float?"
+def e(x: UInt8 ! Oops): String => "UInt8 ! Oops"
+def e(x: Float32 ! Oops): String => "Float32 ! Oops"
+def a(xs: [Float32]): String => "[Float32]"
+def a(xs: [Float]): String => "[Float]"
+def m(x: Int8?): String => "Int8?"
+def m(x: Float): String => "Float"
+def id<T>(x: T): T => x
+
+def opMul(k: Int, v: V): V => V(v.x * 2.0)
+def opMul(k: Float, v: V): V => V(v.x * 3.0)
+
+def show(n: N): String => match n {
+    x: Float => "Float {x}"
+    x: Float32 => "Float32 {x}"
+}
+
+def main(): Unit {
+    printl(f(1))
+    printl(h(1))
+    printl(h(-1))
+    printl(k(1))
+    printl(k(-1))
+    printl(o(1))
+    printl(e(1))
+    printl(a([1, 2]))
+    // Fewer steps still come first: the option is a step more than the Float.
+    printl(m(1))
+
+    val s: N = 1
+    val t: N? = -2
+    printl(show(s))
+    printl(show(t!))
+
+    val zero: Float = 0
+    printl(zero)
+    val v: Float = 1.5
+    val w: Float32 = 2.5
+    printl(v * 2)
+    printl(w * 2)
+    printl((2 * V(1.0)).x)
+
+    // A literal doesn't fix a type parameter; with nothing else, it's an Int.
+    val i = id(3)
+    printl(i + 1)
+    val g: Float32 = id(3)
+    printl(g / 2)
+
+    // Too large for any integer type where only a float fits, it's the float literal of its value.
+    val big: Float = 99999999999999999999
+    val bigger: Float32 = -0x10000000000000000
+    printl(big)
+    printl(bigger)
+    printl(k(100000000000000000000001))
+    printl(hugeConstant)
+}

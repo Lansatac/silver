@@ -1,0 +1,21 @@
+Int
+Int8
+Int8
+Float
+Float
+Int16?
+UInt8 ! Oops
+[Float]
+Float
+Float 1.0
+Float -2.0
+0.0
+3.0
+5.0
+2.0
+4
+1.5
+1e20
+-1.8446744e19
+Float
+1.8446744e19

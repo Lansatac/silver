@@ -37,6 +37,29 @@ val tooBig: UInt8 = 256    // error
 val next = byte + 1        // UInt8
 ```
 
+Where an integer literal could become more than one type, as an argument of overloaded functions or a value of a sum, it's an integer first: an `Int` if an `Int` fits, otherwise another integer type, and only where no integer type fits is it read as the float literal of the same value, `1` as `1.0`, which is a `Float` before a `Float32`. A negated literal is read the same way.
+
+```silver
+def f(x: Int): String     def f(x: Float): String
+f(1)                      // f(Int)
+
+def h(x: Int8): String    def h(x: Float): String
+h(1)                      // h(Int8): an integer type fits, so the floats aren't considered
+
+def k(x: Float32): String def k(x: Float): String
+k(1)                      // k(Float), as k(1.0) is
+
+def g(x: Int8): String    def g(x: Int16): String
+g(1)                      // error: two integer types, and neither is the default
+
+type N = :Float32 | :Float
+val s: N = 1              // a Float, as 1.0 is
+```
+
+Overload choice [counts steps](functions.md#overloading) first, so how a literal is read decides only between functions that fit a call equally well otherwise: with `m(x: Int8?)` and `m(x: Float)`, `m(1)` calls `m(Float)`, a step fewer than the option.
+
+An integer literal too large for every integer type is the float literal of its value where only a float fits it, so `val x: Float = 99999999999999999999` is `1e20`. Where an integer type fits, it's an integer, and too large.
+
 Adaptation goes through arithmetic. An arithmetic or bitwise operator passes the type expected of it to its operands, and an operand made only of literals takes the type of the operand beside it, on either side:
 
 ```silver

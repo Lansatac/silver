@@ -3197,6 +3197,35 @@ unittest
     analyzed("type V = :Int8 | :String\ndef main(): Unit {\n    val v: V = 300\n}").shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
 }
 
+@("an integer literal in a sum with no integer member is the float literal of its value, a Float before a Float32")
+unittest
+{
+    auto a = analyzed("type N = :Float32 | :Float\ntype M = :Float32 | :String\ntype I = :Int8 | :Float\n"
+        ~ "def main(): Unit {\n    val s: N = 1\n    val o: N? = -2\n    val m: M = 3\n    val i: I = 4\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("1", "Float");
+    a.shouldPromoteTo("1", 1, "N");
+    a.shouldHaveType("2", "Float");
+    a.shouldHaveType("3", "Float32");
+    a.shouldHaveType("4", "Int8");
+}
+
+@("an integer literal too large for 64 bits is the float literal of its value where only a float fits")
+unittest
+{
+    auto a = analyzed("def f(x: Float32): Unit => ()\ndef main(): Unit {\n    val x: Float = 99999999999999999999\n"
+        ~ "    val y: Float32? = -0x10000000000000000\n    f(100000000000000000000001)\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("99999999999999999999", "Float");
+    analyzedMain("val x = 99999999999999999999").shouldReport(DiagnosticCode.LiteralOutOfRange, At("99999999999999999999", 1));
+    analyzedMain("val x: Int = 99999999999999999999").shouldReport(DiagnosticCode.LiteralOutOfRange, At("99999999999999999999", 1));
+    analyzedMain("val x: Float32 = 1000000000000000000000000000000000000000")
+        .shouldReport(DiagnosticCode.LiteralOutOfRange, At("1000000000000000000000000000000000000000", 1));
+    // Where an integer type fits as well, it's an integer, so it's still too large.
+    analyzed("def h(x: Int8): Unit => ()\ndef h(x: Float): Unit => ()\ndef main(): Unit => h(99999999999999999999)")
+        .shouldReport(DiagnosticCode.LiteralOutOfRange, At("99999999999999999999", 1));
+}
+
 @("promotion into a sum is one step, under any option and error-union layers")
 unittest
 {

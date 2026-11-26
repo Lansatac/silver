@@ -1,0 +1,7 @@
+// Each function reads one literal as an integer and the other as a float, so neither reads them earlier.
+def r(x: Int8, y: Float): String => "Int8, Float"
+def r(x: Float, y: Int8): String => "Float, Int8"
+
+def main(): Unit {
+    printl(r(1, 2))
+}

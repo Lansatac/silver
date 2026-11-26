@@ -227,6 +227,9 @@ struct IntLiteral
     ulong value;
     /// The text doesn't fit 64 bits, whatever the type.
     bool tooLarge;
+    /// For one that's `tooLarge`, its digits without a prefix or `_`, so it can be read as a float.
+    string digits;
+    uint radix = 10;
 }
 
 struct FloatLiteral

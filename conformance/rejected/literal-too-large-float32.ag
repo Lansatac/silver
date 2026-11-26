@@ -1,0 +1,5 @@
+// Read as a float, an integer literal is range-checked as the float literal of its value is.
+def main(): Unit {
+    val x: Float32 = 1000000000000000000000000000000000000000
+    printl(x)
+}

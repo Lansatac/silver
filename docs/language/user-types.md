@@ -102,7 +102,7 @@ Common types: a member and its sum join to the sum. Otherwise a sum is never inv
 
 ### Promotion into a sum
 
-Promotion into a sum takes a member to the sum, and then on through any option or error-union layers around it, as other promotions do. Under an error union that lists the member as an error, it isn't promoted, and has to be written as `Ok(...)` or `Error(...)` (see [Errors](errors.md#values)). A literal adapts when exactly one member can take it. A `1` against `Int8 | String` adapts to `Int8`. Against `Int8 | Int` it's an error, and against `Int? | String` it's also an error that says to write `Some(1)`.
+Promotion into a sum takes a member to the sum, and then on through any option or error-union layers around it, as other promotions do. Under an error union that lists the member as an error, it isn't promoted, and has to be written as `Ok(...)` or `Error(...)` (see [Errors](errors.md#values)). An integer literal adapts to the sum's one integer member, or with none to its `Float` member, then its `Float32` one, as it's [an integer first](numbers.md#literals). A `1` against `Int8 | String` adapts to `Int8`, against `Int8 | Float` to `Int8`, and against `Float32 | Float` to `Float`. Against `Int8 | Int` it's an error, and against `Int? | String` it's also an error that says to write `Some(1)`.
 
 ### Using sum values
 

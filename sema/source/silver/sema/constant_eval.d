@@ -7,7 +7,7 @@ import std.sumtype;
 
 import silver.ast;
 import silver.sema.constant;
-import silver.sema.floatliteral : float32Of;
+import silver.sema.floatliteral : float32Of, floatOfInteger;
 import silver.sema.resolve;
 import silver.sema.type;
 
@@ -169,6 +169,16 @@ private struct ConstantEvaluator
     {
         auto type = _exprTypes[expr.id];
         auto negated = (expr.id in _negatedLiterals) !is null;
+        if (literal.tooLarge && _types.isFloat(type))
+        {
+            auto asFloat = floatOfInteger(literal);
+            if (type == _types.float32)
+            {
+                float single = float32Of(asFloat);
+                return boxedConstant(ConstValue(ConstFloat32(negated ? -single : single)));
+            }
+            return boxedConstant(ConstValue(negated ? -asFloat.value : asFloat.value));
+        }
         if (literal.tooLarge) return null;
         if (!_types.isInteger(type))
         {

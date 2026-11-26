@@ -2,10 +2,28 @@
 /// has the same bits wherever it's used.
 module silver.sema.floatliteral;
 
-import std.bigint : BigInt;
+import std.bigint : BigInt, toDecimalString;
 import std.math : abs, copysign, frexp, ldexp, nextDown, nextUp;
 
-import silver.ast : FloatLiteral;
+import silver.ast : FloatLiteral, IntLiteral;
+
+/// The float literal of the same value as `literal`, an integer literal too large for 64 bits, for
+/// where only a float type fits it: its digits in decimal, read as a float literal's are, so it's
+/// rounded once to whichever float type it becomes.
+FloatLiteral floatOfInteger(const IntLiteral literal)
+{
+    import core.stdc.stdlib : strtod;
+    import std.string : toStringz;
+
+    BigInt value = 0;
+    foreach (c; literal.digits)
+    {
+        auto digit = c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10;
+        value = value * literal.radix + digit;
+    }
+    auto text = value.toDecimalString;
+    return FloatLiteral(strtod(text.toStringz, null), text);
+}
 
 /// The `Float32` nearest the text of `literal`, rounded once from the text. The lexer's `double` is
 /// the nearest `double` to the text, and rounding that to a `float` is the nearest `float` to the
@@ -180,4 +198,18 @@ unittest
     auto odd = BigInt(2) ^^ 53 + 3;
     odd *= BigInt(5) ^^ 53;
     assert(literalOf(odd, -53).value == nextUp(nextUp(1.0)));
+}
+
+unittest
+{
+    import std.array : replicate;
+
+    // An integer literal too large for 64 bits is the float literal of its value, in any base.
+    auto decimal = floatOfInteger(IntLiteral(0, true, "99999999999999999999", 10));
+    assert(decimal.text == "99999999999999999999" && decimal.value == 1e20);
+    assert(floatOfInteger(IntLiteral(0, true, "100000000000000000000", 16)).value == 2.0 ^^ 80);
+    assert(floatOfInteger(IntLiteral(0, true, "1" ~ "0".replicate(64), 2)).value == 2.0 ^^ 64);
+    // 2^64 + 2^40 + 1 is past the midpoint between two floats, so it rounds up from its text.
+    auto above = floatOfInteger(IntLiteral(0, true, "1" ~ "0".replicate(23) ~ "1" ~ "0".replicate(39) ~ "1", 2));
+    assert(float32Of(above) == nextUp(cast(float) 2.0 ^^ 64));
 }

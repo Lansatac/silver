@@ -15,7 +15,7 @@ import silver.sema.abi : CallDescription, Convention, crossesAlike, cTypeOf, des
 import silver.sema.constant_eval;
 import silver.sema.coverage;
 import silver.sema.declare;
-import silver.sema.floatliteral : float32Of;
+import silver.sema.floatliteral : float32Of, floatOfInteger;
 import silver.sema.hooks : checkTypeHooks;
 import silver.sema.recursion;
 import silver.sema.type;
@@ -731,16 +731,21 @@ private final class TypeChecker
             (const FloatLiteral l) => l,
             (_) => assert(0, "only float literals are recorded"),
         );
+        checkFloatRange(literal, type, expr.span);
+    }
+
+    private void checkFloatRange(const FloatLiteral literal, Type type, Span span, string what = "float literal")
+    {
         auto value = literal.value;
         if (type == _types.float32 && value == value && isInfinity(float32Of(literal)))
         {
-            _collector.reportError(DiagnosticCode.LiteralOutOfRange, expr.span,
-                "This float literal doesn't fit in `Float32`; its largest value is about 3.4028235e38");
+            _collector.reportError(DiagnosticCode.LiteralOutOfRange, span,
+                "This %s doesn't fit in `Float32`; its largest value is about 3.4028235e38".format(what));
         }
         else if (type == _types.float_ && isInfinity(value))
         {
-            _collector.reportError(DiagnosticCode.LiteralOutOfRange, expr.span,
-                "This float literal doesn't fit in `Float`; its largest value is about 1.7976931348623157e308");
+            _collector.reportError(DiagnosticCode.LiteralOutOfRange, span,
+                "This %s doesn't fit in `Float`; its largest value is about 1.7976931348623157e308".format(what));
         }
     }
 
@@ -750,13 +755,15 @@ private final class TypeChecker
             (const IntLiteral l) => l,
             (_) => assert(0, "only integer literals are recorded"),
         );
+        auto type = _typing.exprTypes[expr.id];
+        // Where only a float fits, it's the float literal of its value.
+        if (literal.tooLarge && _types.isFloat(type)) return checkFloatRange(floatOfInteger(literal), type, expr.span, "integer literal");
         if (literal.tooLarge)
         {
             _collector.reportError(DiagnosticCode.LiteralOutOfRange, expr.span,
                 "This integer literal doesn't fit in 64 bits");
             return;
         }
-        auto type = _typing.exprTypes[expr.id];
         if (!_types.isInteger(type)) return;
 
         auto info = _types.integerOf(type);
@@ -2129,16 +2136,17 @@ private final class TypeChecker
         string floatKey(double value) { return format("f%016x", value == 0 ? 0UL : *cast(ulong*) &value); }
         string float32Key(float value) { return format("s%08x", value == 0 ? 0U : *cast(uint*) &value); }
         string number(double value, float single) { return type == _types.float32 ? float32Key(single) : floatKey(value); }
+        string floatLiteralKey(const FloatLiteral f)
+        {
+            auto single = float32Of(f);
+            if (isInfinity(f.value) || type == _types.float32 && isInfinity(single)) return null;
+            return negated ? number(-f.value, -single) : number(f.value, single);
+        }
         return key.kind.match!(
-            (const FloatLiteral f)
-            {
-                auto single = float32Of(f);
-                if (isInfinity(f.value) || type == _types.float32 && isInfinity(single)) return null;
-                return negated ? number(-f.value, -single) : number(f.value, single);
-            },
+            (const FloatLiteral f) => floatLiteralKey(f),
             (const IntLiteral i)
             {
-                if (i.tooLarge) return null;
+                if (i.tooLarge) return _types.isFloat(type) ? floatLiteralKey(floatOfInteger(i)) : null;
                 if (_types.isInteger(type) || type == Type.init)
                     return negated && i.value != 0 ? "-" ~ i.value.to!string : i.value.to!string;
                 return negated ? number(-cast(double) i.value, -cast(float) i.value)
@@ -3558,6 +3566,8 @@ private final class TypeChecker
     {
         Id!FunctionDecl func;
         Fit[] fits;
+        /// How each argument's integer literals read, by `literalReading`.
+        int[] readings;
         /// Why it doesn't fit, or null when it does.
         string problem;
         /// Whether what doesn't fit is an argument, against what the expected type binds.
@@ -3712,6 +3722,7 @@ private final class TypeChecker
 
         auto plain = bindAgainst(Type.init);
         trial.fits = new Fit[call.args.length];
+        trial.readings = new int[call.args.length];
         foreach (i, arg; call.args)
         {
             if (call.isMutable(i) != signature.isMutable(i))
@@ -3729,6 +3740,7 @@ private final class TypeChecker
                 return;
             }
             trial.fits[i] = fit;
+            if (byShape(i)) trial.readings[i] = literalReading(arg, param);
         }
 
         auto binding = plain;
@@ -3999,6 +4011,48 @@ private final class TypeChecker
         );
     }
 
+    /// How the integer literals in `arg`, one that `isShaped`, read as `param`: 0 as integers (or
+    /// when there are none), 1 when one becomes a `Float`, and 2 a `Float32`. An integer literal is
+    /// an integer first, and a float only where no integer type fits, so of two functions that fit
+    /// a call alike the one reading its literals no later is chosen.
+    private int literalReading(const Expr arg, Type param)
+    {
+        auto core = layerCore(param);
+        int reading(Type number) => number == _types.float32 ? 2 : _types.isFloat(number) ? 1 : 0;
+        if (isIntLiteral(arg))
+        {
+            if (!_declarer.isSum(core)) return reading(core);
+            auto numbers = _declarer.membersOf(core).filter!(m => isNumeric(m));
+            return numbers.empty ? 0 : numbers.map!(m => reading(m)).fold!min;
+        }
+        int worst(R)(R readings) => readings.fold!max(0);
+        return arg.kind.match!(
+            (const ArrayLiteral literal) => _types.isArray(core)
+                ? worst(literal.elements.map!(e => literalReading(e, _types.arrayElement(core)))) : 0,
+            (const TupleLiteral literal) => _types.isTuple(core) && _types.tupleElements(core).length == literal.elements.length
+                ? worst(literal.elements.length.iota.map!(i => literalReading(literal.elements[i], _types.tupleElements(core)[i])))
+                : 0,
+            (const SomeExpr some) => literalReading(*some.value, core),
+            (const RangeExpr range) => range.start !is null && range.end !is null && isInterval(core)
+                ? max(literalReading(*range.start, _types.nominalArgs(core)[0]),
+                    literalReading(*range.end, _types.nominalArgs(core)[0]))
+                : 0,
+            _ => 0,
+        );
+    }
+
+    /// Whether `a` reads every argument's integer literals no later than `b` and one of them earlier.
+    private static bool readsEarlier(const Trial a, const Trial b)
+    {
+        bool earlier, later;
+        foreach (i; 0 .. a.readings.length)
+        {
+            if (a.readings[i] < b.readings[i]) earlier = true;
+            if (a.readings[i] > b.readings[i]) later = true;
+        }
+        return earlier && !later;
+    }
+
     /// The type of a literal that has only one, or `Type.init` for anything else.
     private Type literalType(const Expr arg)
     {
@@ -4074,16 +4128,20 @@ private final class TypeChecker
     }
 
     /// Whether `a` fits a call better than `b`: at least as well for every argument and better for
-    /// one, or, when they fit every argument alike, by being the more specific function.
+    /// one, or, when they fit every argument alike, by being the more specific function, and
+    /// last by reading its integer literals earlier.
     private bool beats(const Trial a, const Trial b)
     {
         if (fitsBetter(a, b)) return true;
         if (a.fits != b.fits) return false;
         auto aGeneric = isGenericFunction(a.func), bGeneric = isGenericFunction(b.func);
         if (aGeneric != bGeneric) return bGeneric;
-        if (!aGeneric) return false;
-        auto aTakes = accepts(a.func, b.func), bTakes = accepts(b.func, a.func);
-        return bTakes && !aTakes;
+        if (aGeneric)
+        {
+            auto aTakes = accepts(a.func, b.func), bTakes = accepts(b.func, a.func);
+            if (aTakes != bTakes) return bTakes;
+        }
+        return readsEarlier(a, b);
     }
 
     /// Whether `a` fits every argument at least as well as `b` and one of them better.
@@ -4284,6 +4342,7 @@ private final class TypeChecker
     {
         Id!VarDecl local;
         Fit[] fits;
+        int[] readings;
         /// Why it doesn't fit, or null when it does.
         string problem;
 
@@ -4328,6 +4387,7 @@ private final class TypeChecker
             if (!trial.fitsAll) continue;
             auto lambda = lambdaOf(trial.local);
             trial.fits = new Fit[args.length];
+            trial.readings = new int[args.length];
             foreach (i, arg; args)
             {
                 auto param = quietlyResolved(lambda.params[i].type);
@@ -4350,6 +4410,7 @@ private final class TypeChecker
                     break;
                 }
                 trial.fits[i] = fit;
+                if (byShape) trial.readings[i] = literalReading(arg, param);
             }
         }
         auto fitting = trials.filter!(t => t.fitsAll).array;
@@ -4373,15 +4434,19 @@ private final class TypeChecker
         return Id!VarDecl.init;
     }
 
+    /// Whether `a` fits at least as well as `b` for every argument and better for one, or fits
+    /// them alike and reads its integer literals earlier.
     private static bool fitsBetterLocal(const LocalTrial a, const LocalTrial b)
     {
-        bool better, worse;
+        bool better, worse, earlier, later;
         foreach (i; 0 .. a.fits.length)
         {
             if (a.fits[i] > b.fits[i]) better = true;
             if (a.fits[i] < b.fits[i]) worse = true;
+            if (a.readings[i] < b.readings[i]) earlier = true;
+            if (a.readings[i] > b.readings[i]) later = true;
         }
-        return better && !worse;
+        return better ? !worse : !worse && earlier && !later;
     }
 
     /// An overloaded nested `def` used as a value, chosen by the function type it's expected to be.
@@ -7732,7 +7797,8 @@ private final class TypeChecker
         }
     }
 
-    /// An integer literal in a sum takes the type of its only integer member, or else of a Float one.
+    /// An integer literal in a sum takes the type of its only integer member, or else of its
+    /// `Float` member, or else of its `Float32` one.
     private Type injectLiteral(const Expr expr, Type sum)
     {
         auto integers = _declarer.membersOf(sum).filter!(m => _types.isInteger(m)).array;
@@ -7744,13 +7810,7 @@ private final class TypeChecker
             return _types.error;
         }
         auto floats = floatMembers(sum);
-        if (integers.empty && floats.length > 1)
-        {
-            _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
-                "`%s` has more than one float member; convert this to the one you mean, as in `%s(...)`"
-                    .format(_types.describe(sum), _types.describe(floats[0])));
-            return _types.error;
-        }
+        if (floats.length > 1) floats = [_types.float_];
         auto numbers = integers.length == 1 ? integers : floats;
         if (numbers.length == 1)
         {

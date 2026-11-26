@@ -1,0 +1,7 @@
+// Two integer types still tie for an integer literal: neither is its default.
+def g(x: Int8): String => "Int8"
+def g(x: Int16): String => "Int16"
+
+def main(): Unit {
+    printl(g(1))
+}

@@ -12,7 +12,7 @@ import silver.ast : discardName, Id, Span;
 import silver.core.abi : crossesAlike, hostConvention;
 import silver.core.nodes;
 import silver.core.slots : numberLocals;
-import silver.sema : Analysis, DerivedOrder, DerivedPart, DictionaryFunctions, FunctionUse, IndexFunctions, LoopFunctions, SafeCall, ConstChar, ConstFloat32, float32Of, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
+import silver.sema : Analysis, DerivedOrder, DerivedPart, DictionaryFunctions, FunctionUse, IndexFunctions, LoopFunctions, SafeCall, ConstChar, ConstFloat32, float32Of, floatOfInteger, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
     Bound, Substitution, SymbolId, Type, TypeTable, Witness;
 
 /// A parameter's local name. Discarded ones get a name no Silver identifier can have, so several
@@ -758,7 +758,7 @@ private final class Lowering
         return e.kind.match!(
             (const ast.UnitLiteral _) => make(ExprKind(UnitLit())),
             (const ast.BoolLiteral literal) => make(ExprKind(BoolLit(literal.value))),
-            (const ast.IntLiteral literal) => make(numberLiteral(literal.value, false, type)),
+            (const ast.IntLiteral literal) => make(numberLiteral(literal, false, type)),
             (const ast.FloatLiteral literal) => make(floatLiteral(literal, type)),
             (const ast.StringLiteral literal) => make(ExprKind(StringLit(literal.value))),
             (const ast.CharLiteral literal) => make(ExprKind(IntLit(literal.value))),
@@ -994,8 +994,11 @@ private final class Lowering
     }
 
     /// A literal of `type`, which may be `Float` when an integer literal adapted to one.
-    private ExprKind numberLiteral(ulong magnitude, bool negative, Type type)
+    private ExprKind numberLiteral(const ast.IntLiteral literal, bool negative, Type type)
     {
+        // Sema has reported one too large for 64 bits unless only a float fits it.
+        if (literal.tooLarge) return floatLiteral(floatOfInteger(literal), type, negative);
+        auto magnitude = literal.value;
         if (type == types.float32)
         {
             float value = magnitude;
@@ -1033,7 +1036,7 @@ private final class Lowering
             case ast.UnaryOp.Minus:
                 // A negated literal is one value: `-128` is an Int8, though `128` alone isn't.
                 auto negated = unary.operand.kind.match!(
-                    (const ast.IntLiteral literal) => [numberLiteral(literal.value, true, type)],
+                    (const ast.IntLiteral literal) => [numberLiteral(literal, true, type)],
                     (const ast.FloatLiteral literal) => [floatLiteral(literal, type, true)],
                     _ => null,
                 );

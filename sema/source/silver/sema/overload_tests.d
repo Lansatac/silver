@@ -283,6 +283,55 @@ unittest
         .shouldReport(DiagnosticCode.AmbiguousOverload, At("f", 3));
 }
 
+@("an integer literal is an integer first, and a float only where no integer type fits")
+unittest
+{
+    auto a = analyzedWith("def f(x: Int): Unit => ()\ndef f(x: Float): Unit => ()\n"
+        ~ "def h(x: Int8): Unit => ()\ndef h(x: Float): Unit => ()\n"
+        ~ "def k(x: Float32): Unit => ()\ndef k(x: Float): Unit => ()\n"
+        ~ "def p(x: Int8?): Unit => ()\ndef p(x: Float32?): Unit => ()\n"
+        ~ "def q(x: [Float32]): Unit => ()\ndef q(x: [UInt16]): Unit => ()",
+        "    f(1)\n    h(1)\n    h(-1)\n    k(1)\n    k(-1)\n    p(1)\n    q([1, 2])");
+    a.shouldHaveNoDiagnostics();
+    a.shouldCall(At("f", 3), At("f", 1));
+    a.shouldCall(At("h", 3), At("h", 1));
+    a.shouldCall(At("h", 4), At("h", 1));
+    a.shouldCall(At("k", 3), At("k", 2));
+    a.shouldCall(At("k", 4), At("k", 2));
+    a.shouldCall(At("p", 3), At("p", 1));
+    a.shouldCall(At("q", 3), At("q", 2));
+    a.shouldHaveType("1", 4, "Float");
+
+    // Two integer types still tie, and so do two functions that each read a different argument as a float.
+    analyzedWith("def g(x: Int8, y: Float): Unit => ()\ndef g(x: Float, y: Int8): Unit => ()", "    g(1, 2)")
+        .shouldReport(DiagnosticCode.AmbiguousOverload, At("g", 3));
+}
+
+@("how a literal reads only decides between functions that fit a call alike")
+unittest
+{
+    // Fewer steps first: the option is a step more than the Float.
+    auto a = analyzedWith("def m(x: Int8?): Unit => ()\ndef m(x: Float): Unit => ()\n"
+        ~ "def n(x: Float): Unit => ()\ndef n<T>(x: T?): Unit => ()\n"
+        ~ "def s(x: Int8, y: String?): Unit => ()\ndef s(x: Float, y: String): Unit => ()",
+        "    m(1)\n    n(1)\n    s(1, \"a\")");
+    a.shouldHaveNoDiagnostics();
+    a.shouldCall(At("m", 3), At("m", 2));
+    // A function that isn't generic is chosen over one that is before literals are read.
+    a.shouldCall(At("n", 3), At("n", 1));
+    a.shouldCall(At("s", 3), At("s", 2));
+}
+
+@("nested overloads read an integer literal as an integer first")
+unittest
+{
+    auto a = analyzed("def main(): Unit {\n    def h(x: Int8): Unit => ()\n    def h(x: Float): Unit => ()\n"
+        ~ "    def k(x: Float32): Unit => ()\n    def k(x: Float): Unit => ()\n    h(1)\n    k(1)\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("1", 1, "Int8");
+    a.shouldHaveType("1", 2, "Float");
+}
+
 @("a call is ambiguous when no overload fits every argument at least as well as the others")
 unittest
 {

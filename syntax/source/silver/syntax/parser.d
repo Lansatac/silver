@@ -2274,13 +2274,14 @@ private IntLiteral integerLiteral(string digits, uint radix)
     import std.array : replace;
     import std.conv : ConvOverflowException, to;
 
+    auto plain = digits.replace("_", "");
     try
     {
-        return IntLiteral(digits.replace("_", "").to!ulong(radix));
+        return IntLiteral(plain.to!ulong(radix));
     }
     catch (ConvOverflowException)
     {
-        return IntLiteral(0, true);
+        return IntLiteral(0, true, plain, radix);
     }
 }
 
