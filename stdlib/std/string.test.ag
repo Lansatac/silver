@@ -1,0 +1,508 @@
+import std.char
+import std.string
+
+test "join joins strings with separator" {
+    expect(join(["a", "b", "c"], ", ") == "a, b, c")
+    expect(join(["a", "b", "c"], "") == "abc")
+    val none: [String] = []
+    expect(join(none, ", ") == "")
+    expect([1, 2, 3].map(n => "{n}").join("+") == "1+2+3")
+}
+
+test "contains finds a part anywhere" {
+    expect(contains("silver", "sil"))
+    expect(contains("silver", "lve"))
+    expect(contains("silver", "ver"))
+    expect(contains("silver", "silver"))
+    expect("silver".contains("r"))
+}
+
+test "contains rejects what isn't there" {
+    expect(!contains("silver", "gold"))
+    expect(!contains("silver", "silvers"))
+    expect(!contains("silver", "sv"))
+    expect(!contains("silver", "Silver"))
+    expect(!contains("", "a"))
+}
+
+test "contains matches after a partial match" {
+    expect(contains("aaab", "aab"))
+    expect(contains("abababc", "ababc"))
+    expect(!contains("ababab", "ababc"))
+}
+
+test "startsWith looks only at the beginning" {
+    expect(startsWith("silver", "sil"))
+    expect(startsWith("silver", "silver"))
+    expect("silver".startsWith("s"))
+    expect(!startsWith("silver", "ilv"))
+    expect(!startsWith("silver", "ver"))
+    expect(!startsWith("sil", "silver"))
+    expect(!startsWith("", "a"))
+}
+
+test "endsWith looks only at the end" {
+    expect(endsWith("silver", "ver"))
+    expect(endsWith("silver", "silver"))
+    expect("silver".endsWith("r"))
+    expect(!endsWith("silver", "lve"))
+    expect(!endsWith("silver", "sil"))
+    expect(!endsWith("ver", "silver"))
+    expect(!endsWith("", "a"))
+}
+
+test "the empty string is in every string" {
+    expect(contains("silver", ""))
+    expect(startsWith("silver", ""))
+    expect(endsWith("silver", ""))
+    expect(contains("", ""))
+    expect(startsWith("", ""))
+    expect(endsWith("", ""))
+}
+
+test "text beyond ASCII matches by whole characters" {
+    val text = "caf\u{e9} cr\u{e8}me \u{1f600}"
+    expect(contains(text, "\u{e9} cr"))
+    expect(startsWith(text, "caf\u{e9}"))
+    expect(endsWith(text, "\u{1f600}"))
+    expect(!contains(text, "\u{ea}"))
+    expect(!endsWith(text, "\u{1f601}"))
+}
+
+test "a NUL byte doesn't end a string" {
+    val text = "left\0right"
+    expect(contains(text, "\0r"))
+    expect(endsWith(text, "right"))
+    expect(!endsWith("left\0", "left"))
+    expect(startsWith(text, "left\0"))
+}
+
+test "strings built at runtime are searched like literals" {
+    val name = "report"
+    val path = "docs/" ~ name ~ ".txt"
+    expect(path.startsWith("docs/"))
+    expect(path.endsWith(".txt"))
+    expect(path.contains("/{name}."))
+}
+
+test "each question works as a function value" {
+    val checks: [(String, String) -> Bool] = [contains, startsWith, endsWith]
+    mutable val passed = 0
+    for check in checks {
+        if check("aba", "a") {
+            passed += 1
+        }
+    }
+    expect(passed == 3)
+}
+
+test "isEmpty is true only of the empty string" {
+    expect(isEmpty(""))
+    expect(!isEmpty(" "))
+    expect(!isEmpty("\0"))
+}
+
+test "stripPrefix and stripSuffix take a matching end off" {
+    expect(stripPrefix("v1.2", "v") == Some("1.2"))
+    expect(stripPrefix("v1.2", "x") == None)
+    expect(stripPrefix("v1.2", "") == Some("v1.2"))
+    expect(stripPrefix("v", "v") == Some(""))
+    expect(stripPrefix("\u{e9}t\u{e9}", "\u{e9}") == Some("t\u{e9}"))
+    expect(stripSuffix("notes.txt", ".txt") == Some("notes"))
+    expect(stripSuffix("notes.txt", ".md") == None)
+    expect(stripSuffix("notes.txt", "") == Some("notes.txt"))
+    expect(stripSuffix("\u{e9}t\u{e9}", "\u{e9}") == Some("\u{e9}t"))
+}
+
+test "splitOnce cuts at the first separator" {
+    expect(splitOnce("key=value", "=") == Some(("key", "value")))
+    expect(splitOnce("a=b=c", "=") == Some(("a", "b=c")))
+    expect(splitOnce("=x", "=") == Some(("", "x")))
+    expect(splitOnce("x=", "=") == Some(("x", "")))
+    expect(splitOnce("a -> b", " -> ") == Some(("a", "b")))
+    expect(splitOnce("na\u{ef}ve", "\u{ef}") == Some(("na", "ve")))
+    expect(splitOnce("plain", "=") == None)
+    expect(splitOnce("", "=") == None)
+    expect(splitOnce("abc", "") == Some(("", "abc")))
+}
+
+test "splitWhile keeps the characters accepted at the beginning" {
+    expect(splitWhile("42abc", isDigit) == ("42", "abc"))
+    expect(splitWhile("abc", isDigit) == ("", "abc"))
+    expect(splitWhile("123", isDigit) == ("123", ""))
+    expect(splitWhile("", isDigit) == ("", ""))
+    expect(splitWhile("12a34", isDigit) == ("12", "a34"))
+    expect(splitWhile("\u{e9}\u{e9}x\u{e9}", c => c == '\u{e9}') == ("\u{e9}\u{e9}", "x\u{e9}"))
+}
+
+test "trimming removes white space at the ends only" {
+    expect(trim("  hi  ") == "hi")
+    expect(trim("\t\n hi there \r\n") == "hi there")
+    expect(trim("hi") == "hi")
+    expect(trim("") == "")
+    expect(trim("   ") == "")
+    expect(trimStart("  hi  ") == "hi  ")
+    expect(trimEnd("  hi  ") == "  hi")
+    expect(trimEnd("   ") == "")
+}
+
+test "trimming knows white space beyond ASCII" {
+    expect(trim("\u{a0}\u{3000}caf\u{e9}\u{2003}\u{a0}") == "caf\u{e9}")
+    expect(trimEnd("caf\u{e9}") == "caf\u{e9}")
+    expect(trimEnd("\u{1f600} ") == "\u{1f600}")
+    // A zero-width space isn't white space.
+    expect(trim("\u{200b}a\u{200b}") == "\u{200b}a\u{200b}")
+}
+
+test "split gives the pieces between separators" {
+    expect(split("a,b,c", ",") == ["a", "b", "c"])
+    expect(split("a,,c", ",") == ["a", "", "c"])
+    expect(split(",a,", ",") == ["", "a", ""])
+    expect(split("abc", ",") == ["abc"])
+    expect(split("", ",") == [""])
+    expect(split("a, b, c", ", ") == ["a", "b", "c"])
+    expect(split("aXXbXXXc", "XX") == ["a", "b", "Xc"])
+}
+
+test "split on an empty separator gives each character" {
+    expect(split("a\u{e9}\u{1f600}", "") == ["a", "\u{e9}", "\u{1f600}"])
+    expect(length(split("", "")) == 0)
+}
+
+test "lines ends each line at a newline" {
+    expect(lines("one\ntwo\nthree") == ["one", "two", "three"])
+    expect(lines("one\ntwo\n") == ["one", "two"])
+    expect(lines("one\r\ntwo\r\n") == ["one", "two"])
+    expect(lines("one\n\ntwo") == ["one", "", "two"])
+    expect(lines("\n") == [""])
+    expect(lines("one") == ["one"])
+    expect(length(lines("")) == 0)
+    expect(lines("a\rb\n") == ["a\rb"])
+}
+
+test "decode takes well-formed UTF-8" {
+    expect(decode(bytes("caf\u{e9} \u{20ac} \u{1f600}")) == Some("caf\u{e9} \u{20ac} \u{1f600}"))
+    expect(decode([104, 105]) == Some("hi"))
+    expect(decode([]) == Some(""))
+    expect(decode([0xC3, 0xA9]) == Some("\u{e9}"))
+    expect(decode([0xED, 0x9F, 0xBF]) == Some("\u{d7ff}"))
+    expect(decode([0xF4, 0x8F, 0xBF, 0xBF]) == Some("\u{10ffff}"))
+    expect(decode([0]) == Some("\0"))
+}
+
+test "decode refuses bytes that aren't UTF-8" {
+    // A continuation byte with nothing before it, and a first byte with nothing after.
+    expect(decode([0x80]) == None)
+    expect(decode([0xC3]) == None)
+    expect(decode([0xE2, 0x82]) == None)
+    expect(decode([0xC3, 0x41]) == None)
+    // Encodings longer than they need to be.
+    expect(decode([0xC0, 0xAF]) == None)
+    expect(decode([0xE0, 0x80, 0xAF]) == None)
+    expect(decode([0xF0, 0x80, 0x80, 0xAF]) == None)
+    // A surrogate, and a value past 10FFFF.
+    expect(decode([0xED, 0xA0, 0x80]) == None)
+    expect(decode([0xF4, 0x90, 0x80, 0x80]) == None)
+    expect(decode([0xF5, 0x80, 0x80, 0x80]) == None)
+    expect(decode([0xFF]) == None)
+    expect(decode([104, 0xFF, 105]) == None)
+}
+
+test "parseInt reads decimal digits with an optional minus" {
+    expect(parseInt("0") == Some(0))
+    expect(parseInt("42") == Some(42))
+    expect(parseInt("-42") == Some(-42))
+    expect(parseInt("007") == Some(7))
+    expect(parseInt("-0") == Some(0))
+    expect(parseInt("9223372036854775807") == Some(9223372036854775807))
+    expect(parseInt("-9223372036854775808") == Some(-9223372036854775808))
+}
+
+test "parseInt refuses anything else" {
+    expect(parseInt("") == None)
+    expect(parseInt("-") == None)
+    expect(parseInt("+1") == None)
+    expect(parseInt(" 1") == None)
+    expect(parseInt("1 ") == None)
+    expect(parseInt("1_000") == None)
+    expect(parseInt("1.5") == None)
+    expect(parseInt("12a") == None)
+    expect(parseInt("--1") == None)
+    expect(parseInt("\u{661}") == None)
+    expect(parseInt("9223372036854775808") == None)
+    expect(parseInt("-9223372036854775809") == None)
+    expect(parseInt("99999999999999999999999") == None)
+}
+
+test "parseBool reads true and false in any case" {
+    expect(parseBool("true") == Some(true))
+    expect(parseBool("false") == Some(false))
+    expect(parseBool("True") == Some(true))
+    expect(parseBool("TRUE") == Some(true))
+    expect(parseBool("fAlSe") == Some(false))
+    expect(parseBool("") == None)
+    expect(parseBool("yes") == None)
+    expect(parseBool("t") == None)
+    expect(parseBool("truer") == None)
+    expect(parseBool("TR\u{dc}E") == None)
+    expect(parseBool("true ") == None)
+    expect(parseBool("1") == None)
+}
+
+test "parseFloat reads digits, a fraction and an exponent" {
+    expect(parseFloat("0") == Some(0.0))
+    expect(parseFloat("42") == Some(42.0))
+    expect(parseFloat("-42") == Some(-42.0))
+    expect(parseFloat("007.50") == Some(7.5))
+    expect(parseFloat("3.141592653589793") == Some(3.141592653589793))
+    expect(parseFloat("0.1") == Some(0.1))
+    expect(parseFloat("-0.000001") == Some(-0.000001))
+    expect(parseFloat("1e3") == Some(1000.0))
+    expect(parseFloat("1E3") == Some(1000.0))
+    expect(parseFloat("1.5e+3") == Some(1500.0))
+    expect(parseFloat("1.5e-3") == Some(0.0015))
+    expect(parseFloat(".5") == Some(0.5))
+    expect(parseFloat("-.5") == Some(-0.5))
+    expect(parseFloat("5.") == Some(5.0))
+    expect(parseFloat("1.e3") == Some(1000.0))
+    expect(parseFloat(".5e1") == Some(5.0))
+    expect(parseFloat("123456789012345e22") == Some(123456789012345e22))
+    expect(parseFloat("0.000e999999999999999999999") == Some(0.0))
+    expect(String(parseFloat("-0")!) == String(-0.0))
+}
+
+test "parseFloat refuses anything else" {
+    expect(parseFloat("") == None)
+    expect(parseFloat("-") == None)
+    expect(parseFloat("+1") == None)
+    expect(parseFloat(" 1") == None)
+    expect(parseFloat("1 ") == None)
+    expect(parseFloat(".") == None)
+    expect(parseFloat("-.") == None)
+    expect(parseFloat(".e3") == None)
+    expect(parseFloat("e3") == None)
+    expect(parseFloat("1e") == None)
+    expect(parseFloat("1e+") == None)
+    expect(parseFloat("1e1.5") == None)
+    expect(parseFloat("1_000.0") == None)
+    expect(parseFloat("1.2.3") == None)
+    expect(parseFloat("0x10") == None)
+    expect(parseFloat("inf") == None)
+    expect(parseFloat("NaN") == None)
+    expect(parseFloat("\u{661}") == None)
+}
+
+test "parseFloat gives the nearest Float, ties to even" {
+    expect(parseFloat("0.30000000000000004") == Some(0.1 + 0.2))
+    expect(parseFloat("9007199254740993") == Some(9007199254740992.0))
+    expect(parseFloat("9007199254740993.0000000000000000000000001") == Some(9007199254740994.0))
+    expect(parseFloat("9007199254740995") == Some(9007199254740996.0))
+    expect(parseFloat("8.41e21") == Some(8.41e21))
+    expect(parseFloat("1e23") == Some(1e23))
+    expect(parseFloat("123456789012345678901234567890") == Some(123456789012345678901234567890.0))
+    expect(parseFloat("0.000000000000000000000000000001234567890123456789") == Some(1.234567890123456789e-30))
+    expect(parseFloat("1.7976931348623157e308") == Some(1.7976931348623157e308))
+    expect(parseFloat("2.2250738585072014e-308") == Some(2.2250738585072014e-308))
+    // 2^-1074, the smallest Float above zero, and the numbers either side of half of it.
+    val smallest = 2.2250738585072014e-308 / 4503599627370496.0
+    expect(smallest > 0.0)
+    expect(parseFloat("5e-324") == Some(smallest))
+    expect(parseFloat("2.4703282292062328e-324") == Some(smallest))
+    expect(parseFloat("2.4703282292062327e-324") == Some(0.0))
+    expect(parseFloat("7.4109846876186982e-324") == Some(smallest * 2.0))
+    // The largest Float below 2^-1022, where fewer bits are kept.
+    expect(parseFloat("2.2250738585072011e-308") == Some(2.2250738585072014e-308 - smallest))
+}
+
+test "parseFloat is None past the largest Float and zero below the smallest" {
+    expect(parseFloat("1.7976931348623158e308") == Some(1.7976931348623157e308))
+    expect(parseFloat("1.7976931348623159e308") == None)
+    expect(parseFloat("-1.7976931348623159e308") == None)
+    expect(parseFloat("1e309") == None)
+    expect(parseFloat("1e999999999999999999999") == None)
+    expect(parseFloat("1e-400") == Some(0.0))
+    expect(parseFloat("1e-999999999999999999999") == Some(0.0))
+    mutable val zeros = ""
+    for n in 0..400 {
+        zeros ~= "0"
+    }
+    expect(parseFloat("0.{zeros}1e400") == Some(0.1))
+    expect(parseFloat("1{zeros}e-400") == Some(1.0))
+}
+
+test "parseFloat reads 16 to 19 significant digits" {
+    expect(parseFloat("0.1234567890123456") == Some(0.1234567890123456))
+    expect(parseFloat("1.2345678901234567e-300") == Some(1.2345678901234567e-300))
+    expect(parseFloat("123456789012345678") == Some(123456789012345678.0))
+    expect(parseFloat("9999999999999999999") == Some(9999999999999999999.0))
+    expect(parseFloat("-1844674407370955.161e-3") == Some(-1844674407370955.161e-3))
+    expect(parseFloat("4.940656458412465442e-300") == Some(4.940656458412465442e-300))
+    expect(parseFloat("6.02214076e23") == Some(6.02214076e23))
+    expect(parseFloat("0.000000000000000000000001660539066605") == Some(1.660539066605e-24))
+    expect(parseFloat("2.718281828459045235") == Some(2.718281828459045235))
+    expect(parseFloat("1797693134862315708e290") == Some(1.7976931348623157e308))
+}
+
+test "parseFloat rounds 16 to 19 digits halfway and near it" {
+    // 2^53 + 1 and 2^54 + 2 are halfway between two Floats, and go to the even one.
+    expect(parseFloat("9007199254740993") == Some(9007199254740992.0))
+    expect(parseFloat("18014398509481986") == Some(18014398509481984.0))
+    expect(parseFloat("18014398509481990") == Some(18014398509481992.0))
+    expect(parseFloat("9007199254740992.5") == Some(9007199254740992.0))
+    expect(parseFloat("9007199254740993.1") == Some(9007199254740994.0))
+    // 1 + 2^-53, 1.00000000000000011102..., is halfway between 1 and the next Float.
+    expect(parseFloat("1.000000000000000112") == Some(1.0000000000000002))
+    expect(parseFloat("1.000000000000000111") == Some(1.0))
+    expect(parseFloat("1.110223024625156540e-16") == Some(1.110223024625156540e-16))
+    expect(parseFloat("2.225073858507201136e-308") == Some(2.225073858507201136e-308))
+}
+
+test "parseFloat reads subnormal Floats" {
+    val smallest = 2.2250738585072014e-308 / 4503599627370496.0
+    expect(parseFloat("4.9406564584124654e-324") == Some(smallest))
+    expect(parseFloat("2.2250738585072009e-308") == Some(2.2250738585072009e-308))
+    expect(parseFloat("1e-310") == Some(1e-310))
+    expect(parseFloat("1.234567890123456789e-315") == Some(1.234567890123456789e-315))
+    expect(parseFloat("-9.8813129168249309e-324") == Some(-2.0 * smallest))
+}
+
+test "parseFloat reads the largest Float and is None past it" {
+    expect(parseFloat("1.797693134862315708e308") == Some(1.7976931348623157e308))
+    expect(parseFloat("179769313486231570.8e291") == Some(1.7976931348623157e308))
+    expect(parseFloat("1.797693134862315808e308") == None)
+    expect(parseFloat("1.8e308") == None)
+    expect(parseFloat("9999999999999999999e290") == None)
+    expect(parseFloat("-9999999999999999999e300") == None)
+}
+
+test "eiselLemire is None where it can't tell, and parseFloat falls back to exact arithmetic" {
+    expect(eiselLemire(1, 0) == Some(1.0))
+    expect(eiselLemire(1234567890123456789, -27) == Some(1.234567890123456789e-9))
+    // The low half of the power carries into the bits that round.
+    expect(eiselLemire(3514612255364326691, -32) == Some(3514612255364326691e-32))
+    expect(eiselLemire(4646332099948074464, 81) == Some(4646332099948074464e81))
+    // Halfway, subnormal, too large, and past the table.
+    expect(eiselLemire(9007199254740993, 0) == None)
+    expect(eiselLemire(1, -310) == None)
+    expect(eiselLemire(18, 307) == None)
+    expect(eiselLemire(1, -343) == None)
+    expect(parseFloat("9007199254740993") == Some(9007199254740992.0))
+    expect(parseFloat("1e-310") == Some(1e-310))
+    expect(parseFloat("18e307") == None)
+}
+
+// A pseudo-random sequence, so that the tests below see the same numbers every run.
+def nextState(state: UInt64): UInt64 => state *% 6364136223846793005 +% 1442695040888963407
+
+test "parseFloat reads back every Float as it prints" {
+    mutable val state: UInt64 = 1
+    mutable val count = 0
+    while count < 1500 {
+        state = nextState(state)
+        // Up to 53 bits and a power of two from -1074 up, so that some are subnormal.
+        val bits = Int((state >> 32) % 54)
+        val mantissa = (state >> 11) >> (53 - bits)
+        state = nextState(state)
+        val power = Int((state >> 33) % 2046) - 1074
+        val x = Float(mantissa) * twoTo(power)
+        if x <= 1.7976931348623157e308 {
+            expect(parseFloat(String(x)) == Some(x))
+            expect(parseFloat(String(-x)) == Some(-x))
+        }
+        count += 1
+    }
+}
+
+test "eiselLemire agrees with exact arithmetic wherever it answers" {
+    mutable val state: UInt64 = 2
+    mutable val count = 0
+    while count < 200 {
+        state = nextState(state)
+        val digits = state % 10000000000000000000 + 1
+        state = nextState(state)
+        val power = Int((state >> 33) % 651) - 342
+        if val fast = eiselLemire(digits, power) {
+            val exact = [Int(digits & 4294967295), Int(digits >> 32)]
+            expect(Some(fast) == nearestFloat(if exact[1] == 0 => exact[..1] else exact, power))
+        }
+        count += 1
+    }
+}
+
+// The table of powers of five checked against exact arithmetic, as its comment describes it.
+test "each power of five in eiselLemire's table is as fast_float computes it" {
+    val data = bytes(powersOfFive)
+    expect(length(data) == 651 * 32)
+    mutable val five: [Int] = [1]
+    mutable val q = 0
+    while q <= 308 {
+        val entry = tableEntry(data, q)
+        expect(bigBits(entry) == 128)
+        // Truncated: entry * 2^s <= 5^q < (entry + 1) * 2^s.
+        val s = bigBits(five) - 128
+        val scaled = if s < 0 => bigShiftLeft(five, -s) else five
+        val low = bigShiftLeft(entry, if s > 0 => s else 0)
+        val high = bigShiftLeft(bigTimesPlus(entry, 1, 1), if s > 0 => s else 0)
+        expect(bigAtLeast(scaled, low) && !bigAtLeast(scaled, high))
+        five = bigTimesPlus(five, 5, 0)
+        q += 1
+    }
+    five = [5]
+    q = -1
+    while q >= -342 {
+        val entry = tableEntry(data, q)
+        expect(bigBits(entry) == 128)
+        // With f = floor(2^b / 5^-q), entry = floor((f + 1) / 2^s), so
+        // (entry * 2^s - 1) * 5^-q <= 2^b < ((entry + 1) * 2^s - 1) * 5^-q.
+        val z = bigBits(five)
+        val b = if q >= -27 => z + 127 else 2 * z + 128
+        val s = if q >= -27 => 0 else z + 1
+        val power = bigShiftLeft([1], b)
+        val product = bigShiftLeft(bigTimes(five, entry), s)
+        val low = bigMinus(product, five)
+        val high = bigPlus(low, bigShiftLeft(five, s))
+        expect(bigAtLeast(power, low) && !bigAtLeast(power, high))
+        five = bigTimesPlus(five, 5, 0)
+        q -= 1
+    }
+}
+
+def tableEntry(data: [UInt8], q: Int): [Int] {
+    val at = (q + 342) * 32
+    val high = hexWord(data, at)
+    val low = hexWord(data, at + 16)
+    [Int(low & 4294967295), Int(low >> 32), Int(high & 4294967295), Int(high >> 32)]
+}
+
+// `a * b`, a pass over `a` for each 16 bits of `b`.
+def bigTimes(a: [Int], b: [Int]): [Int] {
+    mutable val result: [Int] = []
+    mutable val shift = 0
+    for part in b {
+        // A zero factor would leave zeros at the top, which no number here has.
+        if (part & 65535) != 0 {
+            result = bigPlus(result, bigShiftLeft(bigTimesPlus(a, part & 65535, 0), shift))
+        }
+        if (part >> 16) != 0 {
+            result = bigPlus(result, bigShiftLeft(bigTimesPlus(a, part >> 16, 0), shift + 16))
+        }
+        shift += 32
+    }
+    result
+}
+
+def bigPlus(a: [Int], b: [Int]): [Int] {
+    mutable val result: [Int] = []
+    mutable val carry = 0
+    mutable val i = 0
+    while i < length(a) || i < length(b) {
+        val sum = (if i < length(a) => a[i] else 0) + (if i < length(b) => b[i] else 0) + carry
+        result ~= [sum & 4294967295]
+        carry = sum >> 32
+        i += 1
+    }
+    if carry > 0 {
+        result ~= [carry]
+    }
+    result
+}

@@ -35,5 +35,6 @@ import std.string
 
 ## Current implementation
 
-- Everything above is built, in plain Silver in `stdlib/std/string.ag`.
+- Everything above is built, in plain Silver in `stdlib/std/string.ag`, with its tests in `string.test.ag`.
+- `parseFloat` reads up to 15 significant digits with a power of ten up to 22 by one Float operation, and up to 19 by the Eisel-Lemire algorithm, which multiplies by a 128-bit power of ten from a table. The rest, and what Eisel-Lemire can't decide (a tie, a subnormal result, overflow), go through exact arithmetic on whole numbers of any size, which is about a hundred times slower.
 - `decode` is declared in `lang`, which `std.string` forwards. `lang.string` also has `slice(text, from, to)`, which cuts a String at two byte offsets and panics unless both fall between characters. It exists so that `std.string` can cut a String without an unchecked conversion, and isn't part of the language's surface: the rule above, that no function takes an offset into a String, is still the one to follow.
