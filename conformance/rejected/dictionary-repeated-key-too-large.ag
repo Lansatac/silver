@@ -1,0 +1,4 @@
+// Two different integer literals too large for 64 bits aren't one key: only their size is reported.
+def main(): Unit {
+    printl([99999999999999999999: 1, 99999999999999999998: 2])
+}
