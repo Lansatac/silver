@@ -244,7 +244,7 @@ Ran runOutput(string program)
     return Ran(result.status, result.output.replace("\r\n", "\n"));
 }
 
-@("a locked package stays at its commit when its tag or branch moves, an entry that changes is fetched again alone, and one no longer reached is dropped")
+@("a locked package stays at its commit when its tag or branch moves, an entry that changes is fetched again alone, one nothing uses stays locked, and one no silver.toml names is dropped")
 unittest
 {
     import std.file : remove;
@@ -287,10 +287,16 @@ unittest
     assert(lockOf(app) == gamesLocked ~ "\n" ~ locked("deck", "../deck.git", "tag = \"v2\"\n", moved,
         lockedHash(app, "deck")), lockOf(app));
 
-    // One no longer reached is dropped.
-    write(buildPath(scene.directory, "app", "silver.toml"), "name = \"app\"\nuses = [\"deck\"]\n" ~ entry("deck", deck,
-        "tag = \"v2\"\n") ~ entry("cardgames.cards", games, "path = \"cards\"\n"));
+    // An entry nothing uses is still the file's, so it stays locked.
+    auto lockedNow = lockOf(app);
+    write(buildPath(app, "silver.toml"), "name = \"app\"\nuses = [\"deck\"]\n" ~ entry("deck", deck, "tag = \"v2\"\n")
+        ~ entry("cardgames.cards", games, "path = \"cards\"\nbranch = \"main\"\n"));
     write(buildPath(app, "main.ag"), "module app.main\n\n" ~ importDeck ~ "\ndef main(): Unit {\n    printl(deckName())\n}\n");
+    expectRan(scene.silver(["main.ag"], app), "v1 moved\n");
+    assert(lockOf(app) == lockedNow, lockOf(app));
+
+    // One no silver.toml names is dropped.
+    write(buildPath(app, "silver.toml"), "name = \"app\"\nuses = [\"deck\"]\n" ~ entry("deck", deck, "tag = \"v2\"\n"));
     expectRan(scene.silver(["main.ag"], app), "v1 moved\n");
     assert(lockOf(app) == locked("deck", "../deck.git", "tag = \"v2\"\n", moved, lockedHash(app, "deck")), lockOf(app));
 
@@ -352,6 +358,25 @@ unittest
     assert(ran.status == 0 && ran.output.canFind("\ntable of v1\n") && ran.output.count("Fetching") == 2, ran.output);
     assert(lockOf(app) == locked("deck", "../deck.git", "tag = \"v1\"\n", v1, deckHash) ~ "\n"
         ~ locked("table", "../table.git", "", table.head(), lockedHash(app, "table")), lockOf(app));
+
+    // Every run locks what the files name, whatever the command: here a package listed by its path, which
+    // nothing the program uses, names a remote package that only its tests would use.
+    import std.file : mkdirRecurse;
+
+    auto withTools = buildPath(scene.directory, "withtools");
+    mkdirRecurse(buildPath(scene.directory, "tools"));
+    mkdirRecurse(withTools);
+    write(buildPath(scene.directory, "tools", "silver.toml"), "name = \"tools\"\nuses = [\"table\"]\n" ~ entry("table", table));
+    write(buildPath(withTools, "silver.toml"), "name = \"withtools\"\nuses = [\"deck\"]\n" ~ entry("deck", deck,
+        "tag = \"v1\"\n") ~ "\n[[package]]\npath = \"../tools\"\n");
+    write(buildPath(withTools, "main.ag"), "module withtools.main\n\n" ~ importDeck ~ "\ndef main(): Unit {\n"
+        ~ "    printl(deckName())\n}\n");
+    expectRan(scene.silver(["run"], withTools), "v1\n");
+    auto toolsLock = locked("deck", "../deck.git", "tag = \"v1\"\n", v1, deckHash) ~ "\n"
+        ~ locked("table", "../table.git", "", table.head(), lockedHash(app, "table"));
+    assert(lockOf(withTools) == toolsLock, lockOf(withTools));
+    expectRan(scene.silver(["test"], withTools), "No tests found\n");
+    assert(lockOf(withTools) == toolsLock, lockOf(withTools));
 
     // The same package at the same commit, written another way, agrees.
     auto agreeing = scene.app("agreeing", entry("table", table) ~ entry("deck", deck, "rev = \"" ~ v1 ~ "\"\n"), ["table", "deck"],

@@ -296,6 +296,7 @@ bool readProject(string file, out Project project, out Mistake mistake, Remotes 
     auto reader = ProjectReader();
     reader.remotes = remotes is null ? new Remotes(root.file) : remotes;
     if (!reader.add(root, mistake)) return false;
+    if (!reader.fetchAll(root, mistake)) return false;
     if (remotes is null && !reader.remotes.finish(mistake)) return false;
     project = Project(root.file, reader.packages, reader.natives);
     return true;
@@ -616,6 +617,7 @@ bool readTestRun(string file, string directory, out TestRun run, out Mistake mis
     auto reader = ProjectReader();
     reader.remotes = remotes is null ? new Remotes(root.file) : remotes;
     if (!reader.add(root, mistake)) return false;
+    if (!reader.fetchAll(root, mistake)) return false;
     directory = buildNormalizedPath(absolutePath(directory));
 
     // A directory tested, and the directories under it that aren't tested with it.
@@ -1684,6 +1686,63 @@ struct ProjectReader
                 return false;
             }
             if (!reach(file, *entry, mistake)) return false;
+        }
+        return true;
+    }
+
+    /// Fetches every remote package the files reachable from `root` name, whether or not anything uses
+    /// it: `root`'s entries, and in turn those of each package file they lead to, fetched or not. So what
+    /// the lock holds depends only on the package files, never on the command.
+    bool fetchAll(const ref PackageFile root, out Mistake mistake)
+    {
+        PackageFile[] pending = [cast(PackageFile) root];
+        // How each file was reached, when it was fetched, for a mistake in it.
+        string[] reachedBy = [null];
+        string[] seen = [root.file];
+        Reached[string] byName;
+        void visit(string file, string by)
+        {
+            foreach (f; seen)
+            {
+                if (samePath(f, file)) return;
+            }
+            seen ~= file;
+            PackageFile found;
+            Mistake ignored;
+            immutable ok = fileAt(file, found, ignored);
+            assert(ok, "a file reached is read when it's reached");
+            pending ~= found;
+            reachedBy ~= by;
+        }
+        for (size_t k = 0; k < pending.length; k++)
+        {
+            auto file = pending[k];
+            bool fail()
+            {
+                if (reachedBy[k] !is null && mistake.file !is null && checkoutHolding(mistake.file) !is null)
+                    mistake.message ~= "\nIt was fetched for " ~ reachedBy[k];
+                return false;
+            }
+            Reached[] listed;
+            if (!resolve(file, listed, mistake)) return fail();
+            foreach (ref r; listed) visit(r.file, reachedBy[k]);
+            foreach (ref remote; file.remotes)
+            {
+                Reached r;
+                if (!fetch(file, remote, r, mistake)) return fail();
+                if (auto earlier = remote.name.name in byName)
+                {
+                    if (!samePath(earlier.home, r.home))
+                    {
+                        mistake = Mistake(file.file, ProjectCode.RemoteConflict, remote.gitSpan, quoted(r.name)
+                            ~ " is reached by " ~ r.fetched ~ ", and already by " ~ earlier.fetched ~ "; a program "
+                            ~ "holds one package of a name, from one source at one commit");
+                        return fail();
+                    }
+                }
+                else byName[remote.name.name] = r;
+                visit(r.file, r.fetched);
+            }
         }
         return true;
     }
