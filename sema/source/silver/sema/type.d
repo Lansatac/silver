@@ -1,6 +1,6 @@
 module silver.sema.type;
 
-import std.algorithm : all, any, map, maxElement;
+import std.algorithm : all, any, equal, map, maxElement;
 import std.range : iota;
 import std.array : join;
 static import std.array;
@@ -78,39 +78,83 @@ final class TypeTable
         return registerTypeData(TypeData(ErrorUnionData(success, error)));
     }
 
-    private struct DirectMembers
+    /// A member of a declared sum that's a declared type: its declaration, and once they're known,
+    /// its type arguments, written in the sum's type parameters.
+    private struct NamedMember
+    {
+        Id!TypeDecl decl;
+        immutable(Type)[] args;
+        bool known;
+    }
+
+    private struct NamedMembers
     {
         immutable(Id!TypeParam)[] params;
-        immutable(Type)[] members;
+        NamedMember[] members;
     }
 
-    private DirectMembers[Id!TypeDecl] _direct;
+    /// Each declared sum's members that are declared types, which is all a list needs to leave one
+    /// out beside its sum.
+    private NamedMembers[Id!TypeDecl] _namedMembers;
 
-    /// Records the members of the declared sum `decl` that are named types, which is all a list
-    /// needs to leave one out beside the sum. It's known before any type that might hold a list is
-    /// built, and holds nothing that mentions a list itself.
-    void declareDirectMembers(Id!TypeDecl decl, const(Id!TypeParam)[] params, const(Type)[] members)
+    /// The named members whose type arguments `isDirectMember` is substituting, by sum and index.
+    private bool[NamedMemberAt] _comparing;
+
+    private struct NamedMemberAt
     {
-        _direct[decl] = DirectMembers(params.idup, members.idup);
+        Id!TypeDecl sum;
+        size_t index;
     }
 
-    /// The named members of the sum `t`, with its type arguments filled in; none for any other type.
-    const(Type)[] directMembers(Type t)
+    /// Records that the sum `sum` has a member of each of `decls`, in order, before any type that
+    /// can hold a list is built. A member written with no type arguments is known already; the
+    /// others are filled in by `declareMemberArguments` once what they name is known.
+    void declareNamedMembers(Id!TypeDecl sum, const(Id!TypeParam)[] params, const(Id!TypeDecl)[] decls,
+        const(bool)[] known)
     {
-        return _types[t.index].match!(
-            (const NominalData nominal) {
-                auto found = nominal.decl in _direct;
-                if (found is null) return (const(Type)[]).init;
-                if (nominal.args.length == 0) return found.members;
-                Substitution substitution;
-                foreach (i, param; found.params)
-                {
-                    if (i < nominal.args.length) substitution[param] = nominal.args[i];
-                }
-                return cast(const(Type)[]) std.array.array(found.members.map!(m => substitute(m, substitution)));
-            },
-            _ => (const(Type)[]).init,
-        );
+        NamedMember[] members;
+        foreach (i, decl; decls) members ~= NamedMember(decl, null, known[i]);
+        _namedMembers[sum] = NamedMembers(params.idup, members);
+    }
+
+    /// The type arguments of the `index`th named member of the sum `sum`.
+    void declareMemberArguments(Id!TypeDecl sum, size_t index, const(Type)[] args)
+    {
+        auto member = &_namedMembers[sum].members[index];
+        member.args = args.idup;
+        member.known = true;
+    }
+
+    /// Whether `member` is one of the members of the declared sum `sum`, with its type arguments
+    /// filled in. The declarations are compared first, so a member's type arguments are only
+    /// substituted for one of the same declaration.
+    bool isDirectMember(Type member, Type sum)
+    {
+        auto m = _types[member.index].match!((const NominalData n) => n, _ => NominalData.init);
+        auto s = _types[sum.index].match!((const NominalData n) => n, _ => NominalData.init);
+        if (!m.decl.isValid || !s.decl.isValid) return false;
+        auto found = s.decl in _namedMembers;
+        if (found is null) return false;
+        foreach (i, named; found.members)
+        {
+            if (named.decl != m.decl || !named.known || named.args.length != m.args.length) continue;
+            if (named.args.length == 0) return true;
+            // Substituting can build a list beside the same sum, which asks about this member again.
+            // A member's type argument can't hold that member itself, so the inner question's
+            // answer is no, and answering it so ends what a sum naming itself in a member's list
+            // would otherwise repeat without end.
+            auto at = NamedMemberAt(s.decl, i);
+            if (at in _comparing) continue;
+            _comparing[at] = true;
+            scope (exit) _comparing.remove(at);
+            Substitution substitution;
+            foreach (p, param; found.params)
+            {
+                if (p < s.args.length) substitution[param] = s.args[p];
+            }
+            if (named.args.map!(a => substitute(a, substitution)).equal(m.args)) return true;
+        }
+        return false;
     }
 
     /// The error list of `members`, which is its one member when there's only one. A member that's
@@ -119,7 +163,7 @@ final class TypeTable
     /// however a list was built it has one form.
     Type errorList(const(Type)[] members)
     {
-        import std.algorithm : canFind, filter, sort, uniq;
+        import std.algorithm : filter, sort, uniq;
         import std.algorithm : anyOf = any;
 
         Type[] flat;
@@ -128,10 +172,10 @@ final class TypeTable
             flat ~= listed(member);
         }
         auto sorted = std.array.array(flat.sort!((a, b) => a.index < b.index).uniq);
-        if (_direct.length > 0 && sorted.length > 1)
+        if (_namedMembers.length > 0 && sorted.length > 1)
         {
             auto listedTypes = sorted;
-            sorted = std.array.array(listedTypes.filter!(m => !listedTypes.anyOf!(t => t != m && directMembers(t).canFind(m))));
+            sorted = std.array.array(listedTypes.filter!(m => !listedTypes.anyOf!(t => t != m && isDirectMember(m, t))));
         }
         if (sorted.length == 1) return sorted[0];
         return registerTypeData(TypeData(ErrorListData(sorted.idup)));

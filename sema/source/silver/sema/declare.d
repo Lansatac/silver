@@ -30,10 +30,9 @@ package final class Declarer
     package const Resolution _resolutions;
     package Collector _collector;
     package Type[Id!AliasDecl] _aliasTypes;
-    /// What the members of sums written as a type name resolved to, so that `declareSum` doesn't
-    /// resolve them, or report them, a second time.
+    /// What sums' members with type arguments resolved to when those were recorded, so that
+    /// `declareSum` doesn't resolve them, or report them, a second time.
     private Type[typeof(TypeExpr.id)] _memberTypes;
-    private Type[][Id!TypeDecl] _directMembers;
     /// The sum that declared each member it owns, which is what its constructor produces.
     package Type[Id!TypeDecl] _owners;
 
@@ -113,16 +112,16 @@ package final class Declarer
                     "`%s` is already listed".format(_types.describe(type)));
                 failed = true;
             }
-            else if (errors.any!(e => _types.directMembers(e).canFind(type)))
+            else if (errors.any!(e => _types.isDirectMember(type, e)))
             {
-                _collector.reportError(DiagnosticCode.InvalidErrorType, w.span,
-                    "`%s` is already listed, as a member of `%s`".format(_types.describe(type), _types.describe(errors.find!(e => _types.directMembers(e).canFind(type)).front)));
+                _collector.reportError(DiagnosticCode.InvalidErrorType, w.span, "`%s` is already listed, as a member of `%s`"
+                    .format(_types.describe(type), _types.describe(errors.find!(e => _types.isDirectMember(type, e)).front)));
                 failed = true;
             }
-            else if (errors.any!(e => _types.directMembers(type).canFind(e)))
+            else if (errors.any!(e => _types.isDirectMember(e, type)))
             {
-                _collector.reportError(DiagnosticCode.InvalidErrorType, w.span,
-                    "`%s` is already listed, and a member of `%s`".format(_types.describe(errors.find!(e => _types.directMembers(type).canFind(e)).front), _types.describe(type)));
+                _collector.reportError(DiagnosticCode.InvalidErrorType, w.span, "`%s` is already listed, and a member of `%s`"
+                    .format(_types.describe(errors.find!(e => _types.isDirectMember(e, type)).front), _types.describe(type)));
                 failed = true;
             }
             errors ~= type;
@@ -590,43 +589,120 @@ package final class Declarer
                 .format(_types.describe(type)));
     }
 
-    /// Resolves the members of the sum `decl` that are written as a type name, and records them
-    /// with the type table. Those that can't build an error list go first, for every sum, so that
-    /// the ones that can (`afterLists`: an alias, a type argument with a list in it) find the
-    /// members of every sum when they build one.
-    package void declareDirectMembers(const TypeDecl decl, bool afterLists)
+    /// The declared type a sum's member names, directly or through aliases, with the type arguments
+    /// written for it; an invalid declaration for a member that isn't one.
+    private struct Head
     {
-        auto direct = _directMembers.get(decl.id, null);
-        foreach (member; decl.members)
-        {
-            if (!member.type.kind.match!((const NamedType _) => true, _ => false)) continue;
-            if (mayBuildList(member.type) != afterLists) continue;
-            auto type = resolveType(member.type);
-            _memberTypes[member.type.id] = type;
-            if (type != _types.error) direct ~= type;
-        }
-        _directMembers[decl.id] = direct;
-        _types.declareDirectMembers(decl.id, decl.typeParams.map!(p => p.id).array, direct);
+        Id!TypeDecl decl;
+        const(TypeExpr)[] args;
     }
 
-    /// Whether resolving `type` can build an error list: it has one written in it, or names an alias,
-    /// which may.
-    private bool mayBuildList(const TypeExpr type)
+    private Head headOf(const TypeExpr type, size_t aliasesLeft)
     {
+        auto symbol = type.id in _resolutions.typeResolutions;
+        if (symbol is null || type.id in _resolutions.sugarParams) return Head.init;
         return type.kind.match!(
+            (const NamedType named) => (*symbol).match!(
+                (const Id!TypeDecl decl) => Head(decl, named.args),
+                (const Id!AliasDecl a) => aliasesLeft == 0 || named.args.length > 0 ? Head.init
+                    : headOf(_resolutions.declarations.aliases[a].target, aliasesLeft - 1),
+                _ => Head.init,
+            ),
+            _ => Head.init,
+        );
+    }
+
+    private Head headOf(const TypeExpr type)
+    {
+        return headOf(type, _resolutions.declarations.aliases.length);
+    }
+
+    /// Records with the type table which of the sum `decl`'s members are declared types, from name
+    /// resolution alone, so it's known for every sum before any type that can hold a list is built.
+    package void declareNamedMembers(const TypeDecl decl)
+    {
+        Id!TypeDecl[] decls;
+        bool[] known;
+        foreach (member; decl.members)
+        {
+            auto head = headOf(member.type);
+            if (!head.decl.isValid) continue;
+            decls ~= head.decl;
+            known ~= head.args.length == 0;
+        }
+        _types.declareNamedMembers(decl.id, decl.typeParams.map!(p => p.id).array, decls, known);
+    }
+
+    /// The sums whose named members' type arguments are known (true) or being resolved (false).
+    private bool[Id!TypeDecl] _memberArguments;
+
+    /// Resolves the type arguments of the sum `decl`'s named members and records them with the
+    /// type table, after doing the same for each sum they name, so that a list written in them knows
+    /// those sums' members whatever order they're declared in. A sum met again while its own are
+    /// being resolved, as one naming itself there is, has those members unknown until then.
+    package void declareMemberArguments(const TypeDecl decl)
+    {
+        if (decl.id in _memberArguments) return;
+        _memberArguments[decl.id] = false;
+        foreach (member; decl.members)
+        {
+            auto head = headOf(member.type);
+            if (!head.decl.isValid || head.args.length == 0) continue;
+            bool[Id!AliasDecl] seen;
+            eachDeclaration(member.type, seen, (Id!TypeDecl named) {
+                auto declared = _resolutions.declarations.types[named];
+                if (declared.members.length > 0) declareMemberArguments(*declared);
+            });
+        }
+        size_t index;
+        foreach (member; decl.members)
+        {
+            auto head = headOf(member.type);
+            if (!head.decl.isValid) continue;
+            auto at = index++;
+            if (head.args.length == 0) continue;
+            auto type = resolveType(member.type);
+            _memberTypes[member.type.id] = type;
+            _types[type].match!(
+                (const NominalData n) { if (n.decl == head.decl) _types.declareMemberArguments(decl.id, at, n.args); },
+                (_) {},
+            );
+        }
+        _memberArguments[decl.id] = true;
+    }
+
+    /// Calls `visit` with each declared type that `type` names, in it or in the aliases it names.
+    private void eachDeclaration(const TypeExpr type, ref bool[Id!AliasDecl] seen, scope void delegate(Id!TypeDecl) visit)
+    {
+        void each(const(TypeExpr)[] types)
+        {
+            foreach (t; types) eachDeclaration(t, seen, visit);
+        }
+
+        type.kind.match!(
             (const NamedType named) {
-                auto symbol = type.id in _resolutions.typeResolutions;
-                if (symbol !is null && (*symbol).match!((const Id!AliasDecl _) => true, _ => false)) return true;
-                return named.args.any!(a => mayBuildList(a));
+                if (auto symbol = type.id in _resolutions.typeResolutions)
+                {
+                    (*symbol).match!(
+                        (const Id!TypeDecl decl) { visit(decl); },
+                        (const Id!AliasDecl a) {
+                            if (a in seen) return;
+                            seen[a] = true;
+                            eachDeclaration(_resolutions.declarations.aliases[a].target, seen, visit);
+                        },
+                        (_) {},
+                    );
+                }
+                each(named.args);
             },
-            (const OptionType option) => mayBuildList(*option.inner),
-            (const ArrayType array) => mayBuildList(*array.element),
-            (const DictionaryType dictionary) => mayBuildList(*dictionary.key) || mayBuildList(*dictionary.value),
-            (const FunctionType func) => func.params.any!(p => mayBuildList(p)) || mayBuildList(*func.returnType),
-            (const UnitType _) => false,
-            (const TupleType tuple) => tuple.elements.any!(e => mayBuildList(e)),
-            (const ErrorUnionType _) => true,
-            (const JoinedType _) => true,
+            (const OptionType option) => each([*option.inner]),
+            (const ArrayType array) => each([*array.element]),
+            (const DictionaryType dictionary) => each([*dictionary.key, *dictionary.value]),
+            (const FunctionType func) => each(func.params ~ *func.returnType),
+            (const UnitType _) {},
+            (const TupleType tuple) => each(tuple.elements),
+            (const ErrorUnionType u) => each(*u.success ~ u.errors),
+            (const JoinedType joined) => each(joined.parts),
         );
     }
 

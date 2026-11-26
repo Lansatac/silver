@@ -366,3 +366,45 @@ def main(): Unit {
     printl(b)
 }`).shouldHaveNoDiagnostics();
 }
+
+@("a list in a sum's member's type argument knows the members of a sum whose own member has a list in its type argument, in either order")
+unittest
+{
+    auto outer = "type Outer = :String | :Holder<Int ! Inner | Holder<Int ! Bad>>\n";
+    auto inner = "type Inner = :Empty | :Holder<Int ! Bad>\n";
+    auto types = "type Bad(n: Int)\ntype Empty\ntype Holder<T>(v: T)\n";
+    analyzed(types ~ outer ~ inner ~ "def main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidErrorType, At("Holder", 3));
+    analyzed(types ~ inner ~ outer ~ "def main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidErrorType, At("Holder", 4));
+    analyzed(types ~ "alias Inner = Int ! Box | Holder<Int ! Bad>\ntype Box = :Empty | :H\nalias H = Holder<Int ! Bad>\n"
+        ~ "def main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidErrorType, At("Holder", 2));
+}
+
+@("type checking a sum that names one of its own members in a list in that member's type argument ends")
+unittest
+{
+    // Asking whether Holder<Int> is a member of Box<Int> substitutes the member's type argument,
+    // which builds the same list again.
+    analyzed(`type Bad(n: Int)
+type Holder<T>(v: T)
+type Box<E> = :Bad | :Holder<Int ! Holder<E> | Box<E>>
+def f(): Int ! Holder<Int> | Box<Int> => 1
+def main(): Unit {
+    val b: Box<Int> = Bad(1)
+    printl(b)
+}`).shouldHaveNoDiagnostics();
+}
+
+@("type checking a sum that names ever larger instances of itself in a list in a member's type argument ends")
+unittest
+{
+    // Asking whether Holder<Int> is a member of Box<Int> substitutes the member's type argument,
+    // whose list asks the same of Box<Box<Int>>, and so on.
+    analyzed(`type Bad(n: Int)
+type Holder<T>(v: T)
+type Box<E> = :Bad | :Holder<Int ! Box<Box<E>> | Holder<E>>
+def f(): Int ! Holder<Int> | Box<Int> => 1
+def main(): Unit => ()`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("Box", 1));
+}

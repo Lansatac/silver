@@ -190,30 +190,23 @@ private final class TypeChecker
         _types.writeAsDictionary(_declarer.dictionaryDecl());
 
         // Before anything that can build an error list, which leaves a member out beside the sum that
-        // holds it, and so needs to know the named members of each.
-        foreach (mod; programModules)
+        // holds it, and so needs to know each sum's members: first which declarations they are, then
+        // their type arguments, which can have lists in them.
+        foreach (pass; 0 .. 2)
         {
-            foreach (decl; mod.declarations)
+            foreach (mod; programModules)
             {
-                decl.kind.match!(
-                    (const TypeDecl t) {
-                        if (t.members.length > 0) _declarer.declareDirectMembers(t, false);
-                    },
-                    (_) {},
-                );
-            }
-        }
-
-        foreach (mod; programModules)
-        {
-            foreach (decl; mod.declarations)
-            {
-                decl.kind.match!(
-                    (const TypeDecl t) {
-                        if (t.members.length > 0) _declarer.declareDirectMembers(t, true);
-                    },
-                    (_) {},
-                );
+                foreach (decl; mod.declarations)
+                {
+                    decl.kind.match!(
+                        (const TypeDecl t) {
+                            if (t.members.length == 0) return;
+                            if (pass == 0) _declarer.declareNamedMembers(t);
+                            else _declarer.declareMemberArguments(t);
+                        },
+                        (_) {},
+                    );
+                }
             }
         }
 
@@ -228,7 +221,6 @@ private final class TypeChecker
                 );
             }
         }
-
 
         foreach (mod; programModules)
         {
