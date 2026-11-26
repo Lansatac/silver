@@ -15,10 +15,9 @@
 /// `readln`) has to be copied in first. `newString` does that.
 module silver.runtime.buffer;
 
-import core.memory : GC;
 import core.stdc.string : memcpy;
 
-import silver.runtime.memory : collectable;
+import silver.runtime.memory : BlkAttr, blockOf, collectable;
 
 private struct Header
 {
@@ -34,9 +33,10 @@ static assert(Header.sizeof == 16);
 /// The bytes at a block's end that no element uses.
 private enum slack = 1;
 
-/// The last block looked up or allocated, since the lookup takes the GC lock and an append in a
-/// loop keeps asking about the same one. Thread-local, and as a GC root it keeps the block alive,
-/// so its memory can't be reused for a block with other bounds while it's cached.
+/// The last block looked up or allocated, since an append in a loop keeps asking about the same
+/// one and the collector's lookup costs several times this check. Thread-local, and as a GC root
+/// it keeps the block alive, so its memory can't be reused for a block with other bounds while
+/// it's cached.
 private Header* lastBlock;
 
 private char* elementsOf(Header* header) nothrow @nogc
@@ -52,9 +52,9 @@ private Header* headerOf(const(void)* data) nothrow
     {
         return cached;
     }
-    auto block = GC.query(cast(void*) data);
-    if (block.base is null) return null;
-    lastBlock = cast(Header*) block.base;
+    auto block = blockOf(data);
+    if (block is null) return null;
+    lastBlock = cast(Header*) block;
     return lastBlock;
 }
 
@@ -95,7 +95,7 @@ void silver_array_append(const(void)* data, size_t length, const(void)* source, 
 
     auto total = existing + added;
     // A block of single bytes can't hold a pointer, so the GC needn't look through a String's text.
-    auto attributes = elementSize == 1 ? GC.BlkAttr.NO_SCAN : GC.BlkAttr.NONE;
+    auto attributes = elementSize == 1 ? BlkAttr.NO_SCAN : BlkAttr.NONE;
     auto block = collectable(Header.sizeof + (grow ? total * 2 : total) + slack, attributes);
     auto header = cast(Header*) block.base;
     header.used = total;

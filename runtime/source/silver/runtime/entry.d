@@ -104,7 +104,9 @@ private extern (C) int runMain(char[][] args)
     import core.stdc.stdio : fprintf, stderr;
     import core.thread : Thread;
     import silver.runtime.arguments : takeArguments;
+    import silver.runtime.memory : takeHeap;
 
+    takeHeap();
     // As an error returned from `main` is reported.
     if (auto mistake = takeArguments(cast(string[]) args))
     {
