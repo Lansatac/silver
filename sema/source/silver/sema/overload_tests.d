@@ -86,6 +86,32 @@ native("f") def b(): Never` ~ main).shouldReport(DiagnosticCode.NativeSymbolMism
     analyzed("import std.time\nnative(\"silver_nowNanos\") def now(): Int" ~ main).shouldHaveNoDiagnostics();
 }
 
+@("a native that binds a symbol the standard library binds differently is reported at the program's own declaration")
+unittest
+{
+    import std.algorithm : endsWith;
+
+    // `aaa` sorts before `lang.time`, but the standard library's declaration isn't the user's to change.
+    auto a = analyzed("import std.time
+import aaa
+def main(): Unit => ()",
+        ["aaa.ag": "module aaa
+native(\"silver_nowNanos\") def now(): Int32"]);
+    a.shouldReport(DiagnosticCode.NativeSymbolMismatch, At("now", 1, "aaa"));
+    assert(a.collector.diagnostics[0].span.file.endsWith("aaa.ag"), a.collector.diagnostics[0].span.file);
+}
+
+@("a third native that binds a symbol like the first isn't reported against the second, already reported")
+unittest
+{
+    analyzed("native(\"abs\") def a(x: Int32): Int32
+native(\"abs\") def b(x: Int8): Int8
+"
+        ~ "native(\"abs\") def c(x: Int32): Int32
+def main(): Unit => ()")
+        .shouldReport(DiagnosticCode.NativeSymbolMismatch, At("b", 1));
+}
+
 @("two natives of one name need different symbols")
 unittest
 {
