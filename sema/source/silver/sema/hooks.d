@@ -125,7 +125,7 @@ package void checkTypeHooks(Modules)(Modules modules, ref Typing typing, const r
         auto params = types[*declared].match!((const FunctionData data) => data.params, _ => null);
         if (params.length != arity || !params.all!(p => types.isInteger(p) || types.isFloat(p))) return;
         collector.reportError(DiagnosticCode.InvalidOperatorFunction, f.nameSpan,
-            "`%s` takes only built-in numbers, so the operator on them is built in and could never call it; an operator function is for a type of your own"
+            "`%s` takes only built-in numbers, which no operator calls a function for; an operator function is for a type of your own"
                 .format(f.name));
     }
 

@@ -1,0 +1,13 @@
+module operator_bitwise_support.bits
+
+type Bit(value: Int)
+
+def opAnd(a: Bit, b: Bit): Bit => Bit(a.value & b.value)
+def opOr(a: Bit, b: Bit): Bit => Bit(a.value | b.value)
+def opXor(a: Bit, b: Bit): Bit => Bit(a.value ^ b.value)
+def opNot(a: Bit): Bit => Bit(~a.value)
+def opShl(a: Bit, n: Int): Bit => Bit(a.value << n)
+
+// Private, so this module's `overlap` uses it and nothing outside can.
+private def opAnd(a: Bit, b: Int): Int => a.value & b
+def overlap(a: Bit, b: Bit): Int => a & b.value

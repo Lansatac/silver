@@ -1,0 +1,34 @@
+// Generic code uses the bitwise operators on a type parameter through a bound that names the operator function.
+interface Bits { def opAnd(a: Self, b: Self): Self
+    def opOr(a: Self, b: Self): Self
+    def opXor(a: Self, b: Self): Self
+    def opNot(a: Self): Self }
+interface Shift { def opShl(a: Self, n: Int): Self
+    def opShr(a: Self, n: Int): Self }
+
+type Flags(bits: UInt32)
+def opAnd(a: Flags, b: Flags): Flags => Flags(a.bits & b.bits)
+def opOr(a: Flags, b: Flags): Flags => Flags(a.bits | b.bits)
+def opXor(a: Flags, b: Flags): Flags => Flags(a.bits ^ b.bits)
+def opNot(a: Flags): Flags => Flags(~a.bits)
+def opShl(a: Flags, n: Int): Flags => Flags(a.bits << n)
+def opShr(a: Flags, n: Int): Flags => Flags(a.bits >> n)
+conform Flags: Bits & Shift
+
+def union<T: Bits>(a: T, b: T): T => a | b
+def without<T: Bits>(a: T, b: T): T => a & ~b
+def toggled<T: Bits>(a: T, b: T): T {
+    mutable val r = a
+    r ^= b
+    r
+}
+def widened<T: Shift>(a: T, n: Int): T => a << n >> 1
+def viaMethod<T: Bits>(a: T, b: T): T => a.opOr(b)
+
+def main(): Unit {
+    printl(union(Flags(1), Flags(2)).bits)
+    printl(without(Flags(7), Flags(2)).bits)
+    printl(toggled(Flags(5), Flags(1)).bits)
+    printl(widened(Flags(3), 4).bits)
+    printl(viaMethod(Flags(8), Flags(1)).bits)
+}

@@ -1,0 +1,22 @@
+// A bitwise operator function is found where the operator is written, so a module can write one for a type
+// it didn't declare, and a type's own module's are there once imported.
+import operator_bitwise_support.flags : Mask
+import operator_bitwise_support.bits
+
+def opOr(a: Mask, b: Mask): Mask => Mask(a.value | b.value)
+def opShl(a: Mask, n: Int): Mask => Mask(a.value << n)
+def opNot(a: Mask): Mask => Mask(~a.value)
+
+def main(): Unit {
+    printl(Mask(1) | Mask(4))
+    printl(Mask(1) << 3)
+    printl(~Mask(0))
+    printl(Bit(5) & Bit(3))
+    printl(Bit(5) ^ Bit(3))
+    printl(Bit(1) << 2)
+    printl(~Bit(0))
+    printl(overlap(Bit(6), Bit(3)))
+    mutable val b = Bit(1)
+    b |= Bit(2)
+    printl(b)
+}

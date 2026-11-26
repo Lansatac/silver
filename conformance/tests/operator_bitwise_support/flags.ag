@@ -1,0 +1,4 @@
+module operator_bitwise_support.flags
+
+// A type with no operators of its own: a user of it writes them.
+type Mask(value: Int)

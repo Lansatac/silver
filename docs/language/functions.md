@@ -278,9 +278,9 @@ Syntax that isn't a call means a call to a function whose name starts with `op`.
 | `x[a..b] = v` | `x = opIndexAssign(x, a..b, v)` |
 | `a + b`, `a - b`, `a * b`, `a / b`, `a % b` | `opAdd(a, b)`, `opSub(a, b)`, `opMul(a, b)`, `opDiv(a, b)`, `opRem(a, b)`, unless both are built-in numbers |
 | `-a` | `opNeg(a)`, unless `a` is a built-in number |
-| `a & b`, `a \| b`, `a ^ b` | `opAnd(a, b)`, `opOr(a, b)`, `opXor(a, b)`, unless both are built-in integers |
-| `a << n`, `a >> n` | `opShl(a, n)`, `opShr(a, n)`, unless both are built-in integers |
-| `~a` | `opNot(a)`, unless `a` is a built-in integer |
+| `a & b`, `a \| b`, `a ^ b` | `opAnd(a, b)`, `opOr(a, b)`, `opXor(a, b)`, unless both are built-in numbers |
+| `a << n`, `a >> n` | `opShl(a, n)`, `opShr(a, n)`, unless both are built-in numbers |
+| `~a` | `opNot(a)`, unless `a` is a built-in number |
 | `a == b`, `a != b` | `opEquals(a, b)` |
 | `a < b`, `<=`, `>`, `>=` | `compare(a, b)`, through the type's conformance to [`Ord`](types.md#ordering) |
 | printing, `String(x)`, a string hole | `opString(x)` |
@@ -339,7 +339,7 @@ ps[0] += p                                   // ps[0] is read once, and written 
 - The result is whatever the function returns, so `p * p` above is a `Float`. An [interface](interfaces.md) is what makes it the operands' type, as `def opAdd(a: Self, b: Self): Self` does.
 - `a op= b` is `a = a op b`, with the place `a` read once, through fields and elements as for a built-in operator. There's no function for a compound assignment. There's no `%=` for anything. `a - b` is never `a + -b`, and operands are never swapped, so each form a type wants is a function of its own.
 - Two built-in numbers are built in, whatever functions are in scope, and keep their own errors: `1 + 1.5` with an `Int` and a `Float` is still an error that values never convert, and not a missing `opAdd`.
-- An operator function whose parameters are all built-in numbers is an error where it's declared, since the operator on them is built in and it could never be called. Only that case is refused: an operator function on a built-in type that isn't a number, such as `def opAdd(a: String, b: String): String`, is allowed, and is called where it's in scope. It can have a parameter of another type, or be generic: `opAdd<T>(a: T, b: T)` is allowed. It's never called for operands known to be two built-in numbers, but inside a generic function whose operands are of a type parameter, `a + b` calls it for any `T`, even when the function is used with numbers.
+- An operator function whose parameters are all built-in numbers is an error where it's declared, since no operator calls a function for two built-in numbers, so it could never be called. Only that case is refused: an operator function on a built-in type that isn't a number, such as `def opAdd(a: String, b: String): String`, is allowed, and is called where it's in scope. It can have a parameter of another type, or be generic: `opAdd<T>(a: T, b: T)` is allowed. It's never called for operands known to be two built-in numbers, but inside a generic function whose operands are of a type parameter, `a + b` calls it for any `T`, even when the function is used with numbers.
 - The wrapping operators `+% -% *%` are built in only, and an operator that calls a function isn't allowed in a top-level [constant](bindings.md#top-level-constants), which can't call one.
 - `+` doesn't join strings or arrays, which `~` does. When no `opAdd` takes a String or an array, the error says so.
 - An operator function is an ordinary function. It can be called by name, as `a.opAdd(b)`, be private, and be used as a value.
@@ -367,7 +367,7 @@ f |= vsync                          // f = opOr(f, vsync)
 f <<= 1                             // f = opShl(f, 1)
 ```
 
-- Everything under [Arithmetic](#arithmetic) holds: two built-in integers are built in, so a function that takes only integers is an error where it's declared, any other operands call the function chosen where the operator is written, operands are never swapped, and `a op= b` is `a = a op b`. There's no function for a compound assignment, and a `~=` is still concatenation.
+- Everything under [Arithmetic](#arithmetic) holds: two built-in numbers are built in (a Float operand of a bitwise operator is its own error), so a function that takes only built-in numbers is an error where it's declared, any other operands call the function chosen where the operator is written, operands are never swapped, and `a op= b` is `a = a op b`. There's no function for a compound assignment, and a `~=` is still concatenation.
 - A shift amount has its own type, as it does for built-in integers, so `opShl` and `opShr` can take any type for it: `opShl(a: Flags, n: Int)`, `opShl(a: Flags, n: UInt8)` and `opShl(a: Flags, c: Count)` are overloads of one name, chosen by the amount, and nothing requires `a` and `n` to be alike.
 - The other operands of `& | ^` aren't required to be alike either: `opOr(a: Flags, b: UInt32)` is its own function, and `a | b` on a `Flags` and a `UInt32` is an error without it.
 - Prefix `~` is bitwise not and binary `~` is concatenation, so only the prefix form is `opNot`. `&&`, `||` and `!` aren't operator functions. A `Float` is a built-in number, so `&` on one keeps its own error whatever functions are in scope.
@@ -454,8 +454,8 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 - When more than one candidate is left, an `if`, `match` or block is typed before any is chosen, even when its values are all literals, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.
 - Of the arguments compared by their shape, `None` and `[]` count one step wherever they go.
 - Arithmetic on literals isn't compared by its shape yet: it's an `Int`, as [Numbers](numbers.md#current-implementation) describes, so `f(1 + 2)` doesn't fit an `f(x: UInt8)`.
-- An arithmetic operator's literal operand takes the type its operator function's parameter asks for, but arithmetic made of literals doesn't: `p * (1 + 2)` passes an `Int`, so it needs an `opMul` that takes one.
-- An operator finds the module-level functions and a bound's, as `x[i]` does, so a nested `def opAdd` or a local `val opMul` holding a function is found by a written call `opAdd(a, b)` but not by `a + b`. An `opAdd` of another arity is an ordinary function, and a nested `def` of an operator function's name isn't checked for taking only numbers.
+- An arithmetic or bitwise operator's literal operand takes the type its operator function's parameter asks for, but arithmetic made of literals doesn't: `p * (1 + 2)` passes an `Int`, so it needs an `opMul` that takes one.
+- An operator finds the module-level functions and a bound's, as `x[i]` does, so a nested `def opAdd` or a local `val opMul` holding a function is found by a written call `opAdd(a, b)` but not by `a + b`, and likewise for the bitwise operators. An `opAdd` of another arity is an ordinary function, and a nested `def` of an operator function's name isn't checked for taking only numbers.
 - A method call's receiver needs a type of its own, so `None.f()` and `[].f()` are errors. An integer literal receiver adapts, as in `(200).f()` with `f(x: UInt8)`.
 - Two native functions of one name in a module have to bind different C symbols, and two intrinsics can't share a name.
 - A `mutable` first parameter is rejected for a method call. A later `mutable` argument is fine.

@@ -1,1 +1,1 @@
-T0056: `opShl` takes only built-in numbers, so the operator on them is built in and could never call it; an operator function is for a type of your own
+T0056: `opShl` takes only built-in numbers, which no operator calls a function for; an operator function is for a type of your own
