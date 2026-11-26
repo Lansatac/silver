@@ -83,6 +83,13 @@ EXPORT int64_t weighHelds(Held a, Held b, Held c, Held d)
     return heldDistance(a) + heldDistance(b) * 2 + heldDistance(c) * 3 + heldDistance(d) * 4 + spotOffset(d) * 5;
 }
 
+// Enough structures passed in memory that the interpreter keeps their copies off its own stack.
+EXPORT int64_t weighFives(Five a, Five b, Five c, Five d, Five e, Five f, Five g, Five h, Five i, Five j, Five k)
+{
+    return weighFive(a) + weighFive(b) * 2 + weighFive(c) * 3 + weighFive(d) * 4 + weighFive(e) * 5 + weighFive(f) * 6
+        + weighFive(g) * 7 + weighFive(h) * 8 + weighFive(i) * 9 + weighFive(j) * 10 + weighFive(k) * 11;
+}
+
 // Structures mixed with scalars, after enough doubles that one structure no longer fits in the xmm
 // registers left and goes on the stack, while the float after it still has one.
 EXPORT double weighMixedCall(int64_t a, Vector2 b, double c, Color d, Five e, float f, DoubleLong g, int32_t h,

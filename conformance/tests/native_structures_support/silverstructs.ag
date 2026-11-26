@@ -45,6 +45,7 @@ native def reverseFive(f: Five): Five
 native def hold(offset: Int64, second: Bool): Held
 native def heldDistance(h: Held): Int64
 native def weighRectangles(a: Rectangle, b: Rectangle, c: Rectangle, d: Rectangle, e: Rectangle): Float32
+native def weighFives(a: Five, b: Five, c: Five, d: Five, e: Five, f: Five, g: Five, h: Five, i: Five, j: Five, k: Five): Int64
 native def weighHelds(a: Held, b: Held, c: Held, d: Held): Int64
 native def weighMixedCall(a: Int64, b: Vector2, c: Float, d: Color, e: Five, f: Float32, g: DoubleLong, h: Int32,
     i: Float, j: Float, k: Float, m: Rectangle, n: Rectangle, o: Float32): Float

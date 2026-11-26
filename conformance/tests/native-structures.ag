@@ -39,6 +39,9 @@ def main(): Unit {
 
     printl(weighRectangles(Rectangle(1.0, 2.0, 3.0, 4.0), Rectangle(5.0, 6.0, 7.0, 8.0), Rectangle(9.0, 10.0, 11.0, 12.0),
         Rectangle(13.0, 14.0, 15.0, 16.0), Rectangle(17.0, 18.0, 19.0, 20.0)))
+    printl(weighFives(Five(1, 1, 1, 1, 1), Five(2, 2, 2, 2, 2), Five(3, 3, 3, 3, 3), Five(4, 4, 4, 4, 4), Five(5, 5, 5, 5, 5),
+        Five(6, 6, 6, 6, 6), Five(7, 7, 7, 7, 7), Five(8, 8, 8, 8, 8), Five(9, 9, 9, 9, 9), Five(10, 10, 10, 10, 10),
+        Five(11, 11, 11, 11, 11)))
     printl(weighHelds(hold(0, true), hold(1, false), hold(2, true), hold(5, true)))
     printl(weighMixedCall(1, Vector2(2.0, 5.0), 3.0, Color(1, 0, 0, 0), Five(1, 1, 1, 1, 1), 0.5, DoubleLong(2.0, 3), 4,
         1.0, 2.0, 3.0, Rectangle(1.0, 2.0, 3.0, 4.0), Rectangle(5.0, 6.0, 7.0, 8.0), 2.0))

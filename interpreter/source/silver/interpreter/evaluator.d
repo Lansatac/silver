@@ -41,6 +41,11 @@ final class Evaluator
         CallDescription description;
         /// How many words its arguments' parts take.
         size_t words;
+        /// Where each structure argument's C image is in a call's one buffer of `imageBytes`, by
+        /// argument, and the result's when it's a structure; each a multiple of 8 bytes.
+        uint[] imageAt;
+        uint resultImageAt;
+        uint imageBytes;
         /// Why calling it is refused, or null.
         string refusal;
     }
@@ -136,7 +141,17 @@ final class Evaluator
                     "`%s` can't be called when interpreting: %s".format(native.symbol, problem)));
             }
             callable.description = describeCall(_program, native, hostConvention);
-            foreach (ref argument; callable.description.arguments) callable.words += argument.parts.length;
+            foreach (ref argument; callable.description.arguments)
+            {
+                callable.words += argument.parts.length;
+                callable.imageAt ~= callable.imageBytes;
+                if (argument.type.kind == CKind.structure) callable.imageBytes += wordBytes(argument.type);
+            }
+            callable.resultImageAt = callable.imageBytes;
+            if (callable.description.result.type.kind == CKind.structure)
+            {
+                callable.imageBytes += wordBytes(callable.description.result.type);
+            }
             foreach (param; native.params)
             {
                 if (types.isInteger(param) && types.integerOf(param).bits < 32)
@@ -1019,6 +1034,13 @@ final class Evaluator
         if (jump.has!Jump) return jump;
         ulong[16] few;
         auto words = native.words <= few.length ? few[0 .. native.words] : new ulong[native.words];
+        // Every structure's C image, in one buffer that lives until the call returns: on this stack
+        // when it's small, or else held by `held`, since `words`, which may hold an address into it,
+        // isn't scanned by the collector.
+        ulong[32] fewImages;
+        auto held = native.imageBytes <= fewImages.sizeof ? fewImages[0 .. (native.imageBytes + 7) / 8]
+            : new ulong[](native.imageBytes / 8);
+        auto images = cast(ubyte[]) held;
         size_t next;
         foreach (i, value; values)
         {
@@ -1028,7 +1050,7 @@ final class Evaluator
                 words[next++] = bitsOf(value, crossing.parts[0].type);
                 continue;
             }
-            auto image = cImage(crossing.type);
+            auto image = images[native.imageAt[i] .. native.imageAt[i] + wordBytes(crossing.type)];
             pack(value, _program.natives[call.native].params[i], crossing.type, image, 0);
             if (crossing.passing == Passing.copy)
             {
@@ -1040,14 +1062,18 @@ final class Evaluator
 
         auto result = &native.description.result;
         ubyte[] resultImage;
-        if (result.passing == Passing.hidden) resultImage = cImage(result.type);
-        auto returned = callC(native.address, native.description, words, resultImage.ptr);
+        if (result.type.kind == CKind.structure)
+        {
+            resultImage = images[native.resultImageAt .. native.resultImageAt + wordBytes(result.type)];
+        }
+        auto returned = callC(native.address, native.description, words,
+            result.passing == Passing.hidden ? resultImage.ptr : null);
+        keepAlive(held.ptr);
         if (result.passing == Passing.nothing) return Value(Unit());
         if (result.type.kind == CKind.structure)
         {
             if (result.passing == Passing.value)
             {
-                resultImage = cImage(result.type);
                 foreach (part; result.parts)
                 {
                     auto bits = part.place.where == Where.floatRegister ? returned.floats[part.place.index]
@@ -1065,10 +1091,18 @@ final class Evaluator
         return valueOf(bits, part.type, e.type);
     }
 
-    /// Room for a C structure of `type`, rounded up to whole 8-byte words so a part is read whole.
-    private static ubyte[] cImage(const CType type)
+    /// The room a C structure of `type` takes in a call's buffer, rounded up to whole 8-byte words so
+    /// a part is read whole.
+    private static uint wordBytes(const CType type)
     {
-        return new ubyte[(type.size + 7) / 8 * 8];
+        return (type.size + 7) / 8 * 8;
+    }
+
+    /// Keeps what `pointer` points to from being collected before this is reached.
+    pragma(inline, false)
+    private static void keepAlive(const(void)* pointer) nothrow @nogc
+    {
+        asm nothrow @nogc { nop; }
     }
 
     /// The `size` bytes at `offset` in `image`, as the low bytes of a word.
