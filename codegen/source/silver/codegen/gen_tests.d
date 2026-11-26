@@ -794,11 +794,20 @@ unittest
 @("a recursion calling a chain of unchecked frames bigger than the margin overflows as a panic")
 unittest
 {
-    // `down`'s own 4 KB result makes it deep enough in a few thousand calls, and it calls the
-    // chain every 16 of them.
-    auto source = temporariesChain(40)
-        ~ "def down(n: Int): Int {\n    if n < 0 { return c(n).h.h.a }\n"
-        ~ "    val here = if n % 16 == 0 => link1(n) else 0\n    here + down(n + 1)\n}\n"
+    // Each link holds a sum whose other variant is 32 KB, so its slot is that big, though only
+    // one line of IR makes it: 40 links are 1.3 MB.
+    auto source = "type A(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int)\n"
+        ~ "type B(a: A, b: A, c: A, d: A, e: A, f: A, g: A, h: A)\n"
+        ~ "type C(a: B, b: B, c: B, d: B, e: B, f: B, g: B, h: B)\n"
+        ~ "type D(a: C, b: C, c: C, d: C, e: C, f: C, g: C, h: C)\n"
+        ~ "type E = Small(k: Int) | Big(d: D)\n";
+    foreach (i; 1 .. 41)
+    {
+        source ~= ("def link%s(n: Int): Int {\n    val e = Small(n)\n"
+            ~ "    val k = match e {\n        Small(k) => k\n        Big(d) => d.a.a.a.a\n    }\n    k + %s\n}\n")
+            .format(i, i == 40 ? "0" : "link%s(n)".format(i + 1));
+    }
+    source ~= "def down(n: Int): Int {\n    val here = if n % 16 == 0 => link1(n) else 0\n    here + down(n + 1)\n}\n"
         ~ "def main(): Unit {\n    printl(\"before\")\n    printl(down(0))\n}";
     Run run;
     if (!compileAndRun(source, run)) return;

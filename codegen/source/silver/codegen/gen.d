@@ -6,7 +6,7 @@ import std.format : format;
 import std.sumtype : match;
 
 import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException, SourceMap, Span;
-import silver.codegen.frames : CallGraph, checkedFunctions, frameBound;
+import silver.codegen.frames : CallGraph, checkedFunctions, definitionBound, frameBound;
 import silver.codegen.runtime_bindings : runtime;
 import silver.core;
 import silver.sema : FunctionData, IntegerInfo, Intrinsic, Type;
@@ -456,6 +456,8 @@ private final class Generator
         EmittedFunction[] emitted;
         foreach (i, ref func; _program.functions) emitted ~= emitFunction(i, func);
         auto checked = checkedFunctions(callGraph(emitted.map!(f => f.frame).array));
+        // The checks are made outside any function's emission, so none of their state.
+        _function = new FunctionState(Slots.init, null);
         string[] functions;
         foreach (i, ref func; _program.functions)
         {
@@ -2656,6 +2658,11 @@ private final class Generator
         }
         foreach (i; reached.byKey) graph.reached[i] = true;
         foreach (i; _recursive.byKey) graph.recursive[i] = true;
+        foreach (definition; _thunkDefinitions)
+        {
+            auto frame = definitionBound(definition, _structFields);
+            if (frame > graph.thunkFrame) graph.thunkFrame = frame;
+        }
         return graph;
     }
 

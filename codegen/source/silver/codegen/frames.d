@@ -25,6 +25,10 @@ struct CallGraph
     bool[] reached;
     /// Whether each function is on a cycle of direct calls.
     bool[] recursive;
+    /// The biggest frame of the code a call the graph can't see may pass through on its way to a
+    /// function: a thunk adapting a function to a closure's convention, or comparing or hashing
+    /// closures, or the `panics` guard.
+    size_t thunkFrame;
 }
 
 /// The functions that check the stack on entry. Only recursion can overflow it, and every cycle of
@@ -43,10 +47,11 @@ bool[] checkedFunctions(const CallGraph graph, size_t threshold = uncheckedChain
         if (!graph.reached[i]) continue;
         if (graph.opaque[i] || graph.callees[i].length > 0) checked[i] = true;
         // A call the graph can't see lands in one of these, which checks if it calls anything, so
-        // its own frame is all it adds. Natives and the runtime are left to what the margin has
-        // beyond the threshold.
+        // its own frame is all it adds, besides a thunk's on the way. Natives and the runtime are
+        // left to what the margin has beyond the threshold.
         opaqueFrame = max(opaqueFrame, graph.frames[i]);
     }
+    opaqueFrame += graph.thunkFrame;
 
     // Below each function that doesn't check: its frame and the longest chain under it. Those
     // functions are on no cycle, so this ends.
@@ -109,7 +114,7 @@ size_t frameBound(const string[] lines, size_t parameters, const(string)[][strin
             bytes += roundUp(bytesOf(type, structs), alignment);
             continue;
         }
-        auto call = callIn(instruction);
+        auto call = callIn(instruction, structs);
         if (call.found)
         {
             arguments = max(arguments, call.area);
@@ -117,6 +122,13 @@ size_t frameBound(const string[] lines, size_t parameters, const(string)[][strin
             continue;
         }
         if (!defines) continue;
+        // A phi's own slot, and the copy made for it where each predecessor ends.
+        if (instruction.startsWith("phi "))
+        {
+            auto type = instruction["phi ".length .. $];
+            bytes += 2 * max(8, roundUp(bytesOf(type[0 .. typeLength(type)], structs), 8));
+            continue;
+        }
         if (instruction.startsWith("load "))
         {
             auto type = instruction["load ".length .. $];
@@ -130,10 +142,40 @@ size_t frameBound(const string[] lines, size_t parameters, const(string)[][strin
     return roundUp(bytes + arguments, 16);
 }
 
+/// `frameBound` of a whole function `definition`, from its `define` line to its closing brace.
+size_t definitionBound(string definition, const(string)[][string] structs)
+{
+    import std.string : lineSplitter;
+    import std.array : array;
+
+    auto lines = definition.strip.lineSplitter.array;
+    auto head = lines[0];
+    // The name may be quoted and hold parentheses, as a generic instance's does.
+    auto name = head.indexOf("@");
+    if (head[name + 1] == '"') name = name + 2 + head[name + 2 .. $].indexOf('"');
+    auto open = name + head[name .. $].indexOf('(');
+    size_t parameters = 0;
+    size_t depth = 0;
+    foreach (i, c; head[open + 1 .. $])
+    {
+        if (c == '(' || c == '{' || c == '[' || c == '<') depth++;
+        else if (c == ')' || c == '}' || c == ']' || c == '>')
+        {
+            if (depth == 0)
+            {
+                parameters = splitFields(head[open + 1 .. open + 1 + i]).length;
+                break;
+            }
+            depth--;
+        }
+    }
+    return frameBound(lines[1 .. $], parameters, structs);
+}
+
 /// The result type of the call `instruction` makes, if it is one, and the outgoing argument area it
-/// needs: Windows' shadow space and 8 bytes an argument. An inline `asm`'s operands are in
-/// registers, so it needs none.
-private auto callIn(string instruction)
+/// needs: Windows' shadow space and 8 bytes an argument, or a `byval` C structure's size, which
+/// SysV copies there. An inline `asm`'s operands are in registers, so it needs none.
+private auto callIn(string instruction, const(string)[][string] structs)
 {
     struct Call
     {
@@ -161,20 +203,34 @@ private auto callIn(string instruction)
         if (callee.startsWith("asm ")) return Call(true, result, 0);
         auto open = callee.indexOf('(');
         if (open < 0) return Call(true, result, shadowSpace);
-        size_t depth = 0, count = 0;
-        bool any = false;
-        foreach (c; callee[open + 1 .. $])
+        auto arguments = callee[open + 1 .. $];
+        size_t depth = 0;
+        foreach (i, c; arguments)
         {
             if (c == '(' || c == '{' || c == '[' || c == '<') depth++;
             else if (c == ')' || c == '}' || c == ']' || c == '>')
             {
-                if (depth == 0) break;
+                if (depth == 0)
+                {
+                    arguments = arguments[0 .. i];
+                    break;
+                }
                 depth--;
             }
-            else if (c == ',' && depth == 0) count++;
-            else if (c != ' ') any = true;
         }
-        return Call(true, result, shadowSpace + 8 * (any ? count + 1 : 0));
+        size_t area = shadowSpace;
+        foreach (argument; splitFields(arguments))
+        {
+            auto byval = argument.indexOf("byval(");
+            if (byval < 0)
+            {
+                area += 8;
+                continue;
+            }
+            auto type = argument[byval + "byval(".length .. $];
+            area += roundUp(bytesOf(type[0 .. typeLength(type)], structs), 16);
+        }
+        return Call(true, result, area);
     }
     return Call(false, null, 0);
 }
@@ -305,6 +361,24 @@ unittest
     // 8,912 bytes, 16 a phi, against a bound of 5,320.
     auto lines = ["  %.t0 = phi i64 [ 1, %.then.0 ], [ 2, %.else.1 ]", "  %.t1 = phi i64 [ 3, %.then.0 ], [ 4, %.else.1 ]"];
     assert(frameBound(lines, 0, null) == 64 + 2 * 16);
+}
+
+@("a C structure passed byval takes its size in the argument area, and a whole definition counts its parameters")
+unittest
+{
+    // SysV copies the structure into the outgoing area: 32 of shadow space, 24 rounded to 32, and 8.
+    assert(frameBound(["  call void @f(ptr byval([24 x i8]) align 8 %.c0, i64 1)"], 0, null) == roundUp(64 + 32 + 32 + 8, 16));
+    // A generic instance's name holds parentheses; the parameters are the two after it.
+    auto thunk = "define private i64 @\"g<(Int)>.3\"(i64 %x, ptr %.env) #0 {\n.entry:\n  %.r = add i64 %x, 1\n  ret i64 %.r\n}\n";
+    assert(definitionBound(thunk, null) == roundUp(64 + 2 * 8 + 8, 16));
+}
+
+@("a call the call graph can't see adds the biggest thunk's frame too")
+unittest
+{
+    auto graph = CallGraph([10, 70], [[], []], [true, false], [false, true], [false, false], 30);
+    assert(checkedFunctions(graph, 109) == [true, false]);
+    assert(checkedFunctions(graph, 110) == [false, false]);
 }
 
 @("a function on no cycle checks the stack only where the chain of unchecked frames below it passes the threshold")
