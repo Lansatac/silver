@@ -1,0 +1,7 @@
+// An overloaded nested def used as a value needs a function type to choose by.
+def main(): Unit {
+    def f(x: Int): String => "int"
+    def f(x: String): String => "string"
+    val g = f
+    printl(g("a"))
+}

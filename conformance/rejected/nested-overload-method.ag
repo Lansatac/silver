@@ -1,0 +1,6 @@
+// A method call finds module-level functions only, so nested overloads are called by their names.
+def main(): Unit {
+    def f(x: Int): String => "int"
+    def f(x: String): String => "string"
+    printl(1.f())
+}

@@ -139,6 +139,12 @@ package struct Resolution
     /// For `x.f` where `x` is a local named like an imported module that has an `f`, that module,
     /// by the member access. A local hides a module, so this is only for saying so when `x.f` fails.
     SideTable!(Id!Expr, string) hiddenModules;
+    /// Names that could be more than one nested `def` of a block, by the name's expression: those
+    /// declared before the use, in order. The type checker chooses, so these have no entry in
+    /// `resolutions`, and module-level functions of the name take no part.
+    SideTable!(Id!Expr, Id!VarDecl[]) localOverloads;
+    /// For a nested `def` that shares its name with earlier ones in its block, those.
+    SideTable!(Id!VarDecl, Id!VarDecl[]) earlierLocalOverloads;
 
     /// The type parameters of `func`: those it declares, then its hidden ones.
     const(TypeParam)[] typeParamsOf(Id!FunctionDecl func) const
@@ -396,6 +402,8 @@ package final class Scope
     private TypeSymbol[string] _typeTable;
     /// Every function of each name, in declaration order, for a module's scope.
     private Id!FunctionDecl[][string] _functions;
+    /// Every nested `def` of each name declared so far, for a block's scope.
+    private Id!VarDecl[][string] _localFunctions;
     /// For a generic function's scope, the functions its bounds supply, by name.
     private Id!FunctionDecl[][string] _boundFunctions;
     /// The lambda this is the outermost scope of, if any, and the local that lambda is bound to
@@ -547,6 +555,20 @@ package final class Scope
         _functions[name] ~= func;
     }
 
+    /// Notes that the nested `def` `local` is declared here, after any of its name.
+    void declareLocalFunction(string name, Id!VarDecl local)
+    {
+        _localFunctions[name] ~= local;
+    }
+
+    /// The nested `def`s named `name` that have been declared so far in the block that declares the
+    /// nearest local of that name.
+    Id!VarDecl[] localFunctionsNamed(string name) const
+    {
+        if (name in _scopeTable) return _localFunctions.get(name, null).dup;
+        return _parent is null ? null : _parent.localFunctionsNamed(name);
+    }
+
     Id!FunctionDecl[] functionsNamed(string name) const
     {
         return _functions.get(name, null).dup;
@@ -641,6 +663,8 @@ private final class NameResolver
     private SideTable!(Id!ConformDecl, Id!FunctionDecl) _conformances;
     private SideTable!(Id!Expr, Test) _tests;
     private SideTable!(Id!Expr, string) _hiddenModules;
+    private SideTable!(Id!Expr, Id!VarDecl[]) _localOverloads;
+    private SideTable!(Id!VarDecl, Id!VarDecl[]) _earlierLocalOverloads;
     /// The module-level function whose body is being resolved.
     private Id!FunctionDecl _bodyOf;
     /// Where the nodes resolution makes up get their IDs.
@@ -705,7 +729,7 @@ private final class NameResolver
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
             _operatorLookups, _declarations, _nativeLibraries, cast(const(Scope)[string]) _moduleScopes, _hiddenParams, _sugarParams,
             _resultFloors, _lambdaFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances, _forwardImports, _listedImports, _conformances, _tests,
-            _hiddenModules);
+            _hiddenModules, _localOverloads, _earlierLocalOverloads);
     }
 
     /// Works out what every module forwards. A blanket forward passes on what its module forwards
@@ -2417,8 +2441,19 @@ private final class NameResolver
                 auto recursive = varDecl.value.kind.match!((const Lambda l) => l.self == varDecl.id, _ => false);
                 if (recursive)
                 {
-                    declareLocal(varDecl.name, varDecl.nameSpan, SymbolId(varDecl.id), scopeTable,
-                        DiagnosticCode.DuplicateDeclaration, "'%s' is already declared in this scope");
+                    // Nested `def`s of one name in a block are overloads of each other.
+                    auto taken = scopeTable.resolveLocal(varDecl.name) !is null;
+                    auto earlier = taken ? scopeTable.localFunctionsNamed(varDecl.name) : null;
+                    if (earlier.length > 0)
+                    {
+                        _earlierLocalOverloads[varDecl.id] = earlier;
+                    }
+                    else
+                    {
+                        declareLocal(varDecl.name, varDecl.nameSpan, SymbolId(varDecl.id), scopeTable,
+                            DiagnosticCode.DuplicateDeclaration, "'%s' is already declared in this scope");
+                    }
+                    if (!taken || earlier.length > 0) scopeTable.declareLocalFunction(varDecl.name, varDecl.id);
                 }
                 resolveExpr(varDecl.value, scopeTable);
                 if (!recursive && varDecl.name != discardName)
@@ -2776,6 +2811,13 @@ private final class NameResolver
             {
                 auto own = supplied ~ _moduleScopes[_currentModule].functionsNamed(name);
                 return recordFunctions(expr, name, candidatesFor(name, own, scopeTable));
+            }
+            auto nested = scopeTable.localFunctionsNamed(name);
+            if (nested.length > 1)
+            {
+                foreach (sibling; nested) recordCapture(SymbolId(sibling), name, expr.span, scopeTable);
+                _localOverloads[expr.id] = nested;
+                return Path(Path.Kind.Value);
             }
             recordCapture(*local, name, expr.span, scopeTable);
             return recordValue(expr, name, *local);

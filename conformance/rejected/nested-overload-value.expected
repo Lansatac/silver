@@ -1,0 +1,1 @@
+T0034: `f` is overloaded, so as a value it needs a function type to choose by, as in `val f: (Int) -> String = f`

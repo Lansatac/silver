@@ -547,3 +547,64 @@ unittest
     a.shouldHaveNoDiagnostics();
     a.shouldHaveType("g(Box(1))", "String");
 }
+
+// Nested defs
+
+@("nested defs of one name are overloads when their parameter types differ")
+unittest
+{
+    auto a = analyzedWith("", "    def f(x: Int): Int => x\n    def f(x: String): String => x\n    def f(x: Int, y: Int): Int => x + y\n"
+        ~ "    val a = f(1)\n    val b = f(\"s\")\n    val c = f(1, 2)");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("f(1)", "Int");
+    a.shouldHaveType("f(\"s\")", "String");
+}
+
+@("two nested defs of one name can't take the same parameter types, and a def can't join a val")
+unittest
+{
+    analyzedWith("", "    def f(x: Int): Int => x\n    def f(y: Int): String => \"a\"").shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    analyzedWith("", "    def f(x: Int): Int => x\n    def f(mutable y: Int): Int => y").shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    analyzedWith("", "    val f = 1\n    def f(y: Int): Int => y").shouldReport(DiagnosticCode.DuplicateDeclaration, At("f", 2));
+}
+
+@("a nested def of a name an enclosing block has already declared is shadowing, not an overload")
+unittest
+{
+    analyzedWith("", "    def f(x: Int): Int => x\n    {\n        def f(x: String): String => x\n    }")
+        .shouldReport(DiagnosticCode.ShadowedDeclaration, At("f", 2));
+}
+
+@("a call of nested overloads that fits none is reported, and a literal adapts to the one it can")
+unittest
+{
+    analyzedWith("", "    def f(x: Int): Int => x\n    def f(x: String): String => x\n    val a = f(true)")
+        .shouldReport(DiagnosticCode.NoMatchingOverload, At("f", 3));
+    analyzedWith("", "    def f(x: UInt8): Int => 1\n    def f(x: Bool): Int => 2\n    val a = f(1)").shouldHaveNoDiagnostics();
+}
+
+@("nested overloads see themselves and what's before them, and the later ones aren't there yet")
+unittest
+{
+    analyzedWith("", "    def f(x: Int): Int => x\n    def f(x: String): Int => f(1)\n    val a = f(\"s\")").shouldHaveNoDiagnostics();
+    analyzedWith("", "    def f(x: Int): Int => f(\"s\")\n    def f(x: String): Int => 1")
+        .shouldReport(DiagnosticCode.TypeMismatch, At("\"s\"", 1));
+}
+
+@("an overloaded nested def used as a value is chosen by its expected type")
+unittest
+{
+    analyzedWith("", "    def f(x: Int): Int => x\n    def f(x: String): String => x\n    val g: (String) -> String = f")
+        .shouldHaveNoDiagnostics();
+    analyzedWith("", "    def f(x: Int): Int => x\n    def f(x: String): String => x\n    val g = f")
+        .shouldReport(DiagnosticCode.AmbiguousOverload, At("f", 3));
+    analyzedWith("", "    def f(x: Int): Int => x\n    def f(x: String): String => x\n    val g: (Bool) -> Bool = f")
+        .shouldReport(DiagnosticCode.NoMatchingOverload, At("f", 3));
+}
+
+@("a nested def hides module-level functions of its name, overloaded or not")
+unittest
+{
+    analyzedWith("def f(x: Bool): Int => 1", "    def f(x: Int): Int => x\n    def f(x: String): String => x\n    val a = f(true)")
+        .shouldReport(DiagnosticCode.NoMatchingOverload, At("f", 4));
+}

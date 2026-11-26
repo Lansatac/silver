@@ -1,0 +1,6 @@
+// Nested defs of one name can't take the same parameter types, whatever their results.
+def main(): Unit {
+    def f(x: Int): String => "a"
+    def f(y: Int): Int => y
+    printl(f(1))
+}

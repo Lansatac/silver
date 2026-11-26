@@ -1,0 +1,90 @@
+// Nested defs of one name in a block are overloads: chosen by their arguments, each closing over what it uses.
+
+def apply(f: (Int) -> String, x: Int): String => f(x)
+def apply(f: (String) -> String, x: String): String => f(x)
+
+def counters(step: Int, label: String): (Int) -> String {
+    def show(x: Int): String => "{label}{x + step}"
+    def show(x: String): String => "{label}{x}"
+    def show(x: Bool): String => if x => show("yes") else show(step)
+    show
+}
+
+def pick(flag: Bool): (String) -> String {
+    val suffix = "?"
+    def show(x: Int): String => "int {x}"
+    def show(x: String): String => "{x}{suffix}"
+    if flag => show else (s: String) => show(1) ~ s
+}
+
+def main(): Unit {
+    val k = 5
+    val tag = "!"
+    def f(x: Int): String => "Int {x + k}"
+    def f(x: String): String => "String {x}{tag}"
+    def f(x: Int, y: Int): String => "two {f(x)} {f(y)}"
+    def f(x: Bool): String {
+        if x => f("yes") else f(0)
+    }
+    def f(xs: [Int]): String => "{length(xs)} ints"
+    def f(x: Int?): String => if val v = x => "some {v}" else "none"
+    printl(f(1))
+    printl(f("a"))
+    printl(f(1, 2))
+    printl(f(true))
+    printl(f([1, 2, 3]))
+    printl(f(Some(4)))
+    printl(f(None))
+
+    // As a value, an overloaded def is the one whose type is the expected one.
+    val h: (String) -> String = f
+    printl(h("v"))
+    printl(apply(f, 7))
+    printl(apply(f, "w"))
+    val both: [(Int) -> String] = [f, f]
+    printl(both[0](9))
+
+    // A lambda uses the set too, and chooses at its own calls.
+    val twice = (n: Int) => f(n) ~ " " ~ f("again")
+    printl(twice(1))
+
+    // The closures outlive the function that made them, each with what it captured.
+    val a = counters(10, "a")
+    val b = counters(20, "b")
+    printl(a(1))
+    printl(b(2))
+    printl(pick(true)("p"))
+    printl(pick(false)("q"))
+
+    // Sibling blocks have sets of their own.
+    {
+        def g(x: Int): Int => x + 1
+        def g(x: Float): Float => x * 2.0
+        printl(g(1))
+        printl(g(1.5))
+    }
+    {
+        def g(x: String): String => x ~ "!"
+        printl(g("hi"))
+    }
+
+    // A literal takes the type of the one parameter it can.
+    def small(x: UInt8): String => "UInt8 {x}"
+    def small(x: Bool): String => "Bool {x}"
+    printl(small(200))
+    printl(small(true))
+
+    // Nested inside another nested def, and recursive through its own name.
+    def outer(n: Int): String {
+        def count(x: Int): Int => if x <= 0 => 0 else 1 + count(x - 1)
+        def count(x: String): Int => 99
+        "{count(n)} {count("abc")}"
+    }
+    printl(outer(4))
+
+    // Overloads that take a function.
+    def run(g: (Int) -> Int): Int => g(3)
+    def run(g: (Int, Int) -> Int): Int => g(3, 4)
+    printl(run((x: Int) => x * 2))
+    printl(run((x: Int, y: Int) => x + y))
+}

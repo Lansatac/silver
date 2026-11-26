@@ -199,7 +199,18 @@ describe([true])   // describe<T>([T])
   ```
 
   A call that leaves out `mutable` reaches the other function rather than an error, which the result's type almost always catches: the pure form has to give back the new value, and a result that's dropped is an error.
-- A local or parameter holding a function wins outright and isn't overloaded.
+- A local or parameter holding a function wins outright and isn't overloaded. Nested `def`s are the exception: those of one name in a block are overloads of each other, chosen as module-level functions are, and each closes over what it uses.
+
+  ```silver
+  val k = 5
+  def show(x: Int): String => "Int {x + k}"
+  def show(x: String): String => "String {x}"
+
+  show(1)      // "Int 6"
+  show("a")    // "String a"
+  ```
+
+  They hide the module's functions of the name, so a call that none of them fits is an error. A `def` in an inner block of a name an enclosing block has already declared hides it, as any local does, and isn't an overload. A nested `def` sees itself and those of its name declared before it, as a nested function sees what's before it.
 - The type a call is expected to have never makes one function better than another, since functions aren't overloaded on their return type. What it gives a type parameter has to suit the arguments, though, so it can rule a function out.
 - A [bound](interfaces.md#bounds) takes no part. Two functions with the same parameter types are duplicates whatever their bounds, and the bounds of the function chosen are checked afterwards, so one that fails is an error at the call and never passes the call to another function; see [Interfaces](interfaces.md#choosing-a-function).
 - Inside a function with a bound, the functions the bound supplies are among the current module's.
@@ -396,7 +407,7 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 
 - A nested function can call itself and those declared before it, but not one declared after it.
 - An `opEquals`, `opHash` or `opString` for `Ref` isn't used.
-- Only module-level functions can be overloaded. Two nested `def`s of one name in a block are an error.
+- Nested `def`s of one name in a block are overloads of each other, and are the only functions of the name a call in their scope considers: a nested `def` hides the module's functions and imports of its name even when none of the block's fits. They are never found by a method call `x.f()` or by an operator, as a single nested `def` isn't. A nested `def` has no type parameters, so the choice is by the arguments alone, as for any call of non-generic functions. Two that take the same parameter types are `T0035`, a `def` beside a `val` or parameter of the name is `S0001`. As a value, an overloaded nested `def` needs the exact function type expected, as module-level overloads do.
 - When more than one candidate is left, an `if`, `match` or block is typed before any is chosen, even when its values are all literals, so it doesn't adapt to the chosen parameter: `f(if c => 1 else 2)` gives an `Int` even if the only `f` it could fit takes a `UInt8`. A literal written directly as the argument does adapt.
 - Of the arguments compared by their shape, `None` and `[]` count one step wherever they go.
 - Arithmetic on literals isn't compared by its shape yet: it's an `Int`, as [Numbers](numbers.md#current-implementation) describes, so `f(1 + 2)` doesn't fit an `f(x: UInt8)`.

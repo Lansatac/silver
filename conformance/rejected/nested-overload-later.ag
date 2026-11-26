@@ -1,0 +1,6 @@
+// A nested def sees the ones of its name declared before it, so it can't call one declared after.
+def main(): Unit {
+    def f(x: Int): String => f("a")
+    def f(x: String): String => x
+    printl(f(1))
+}

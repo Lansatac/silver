@@ -1915,6 +1915,8 @@ unittest
     val f = (x: Int) => x`).shouldReport(DiagnosticCode.ShadowedDeclaration, At("x", 2));
     analyzedMain(`val f = () => f()`).shouldReport(DiagnosticCode.UnknownName, At("f", 2));
     analyzedMain(`def f(): Int => 1
+    def f(): Int => 2`).shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    analyzedMain(`val f = 1
     def f(): Int => 2`).shouldReport(DiagnosticCode.DuplicateDeclaration, At("f", 2));
     analyzedMain(`native def f(): Int`).shouldReport(DiagnosticCode.InternalError, At("f", 1));
 }

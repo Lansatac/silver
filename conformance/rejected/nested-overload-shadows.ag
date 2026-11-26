@@ -1,0 +1,8 @@
+// A def in an inner block with the name of one in an enclosing block hides it, as for any local, so it isn't an overload.
+def main(): Unit {
+    def f(x: Int): String => "int"
+    {
+        def f(x: String): String => "string"
+        printl(f("a"))
+    }
+}
