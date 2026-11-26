@@ -1,0 +1,9 @@
+// A written error list can't list a sum's member after the sum that holds it either.
+
+type Bad(n: Int)
+type Empty
+type ParseError = :Bad | :Empty
+
+def b(): Int ! Bad | ParseError => 1
+
+def main(): Unit => ()

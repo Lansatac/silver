@@ -1,0 +1,34 @@
+// A list that substitution builds is normalized whatever is declared before the sum that holds its
+// member: an alias and a sum's member, both declared ahead of ParseError, take such a list.
+
+type Bad(n: Int)
+type Empty
+alias Failure = Int ! ParseError
+type Wrapped = :String | :(Int ! ParseError)
+type ParseError = :Bad | :Empty
+
+def pick<E, F>(c: Bool, x: Int ! E, y: Int ! F): Int ! E | F => if c => x else y
+
+def parsed(x: Int): Int ! ParseError => if x > 0 => x else if x == 0 => Error(Empty) else Error(Bad(x))
+def badOnly(x: Int): Int ! Bad => Error(Bad(x))
+
+def viaAlias(x: Int): Failure => pick(x > 0, parsed(x), badOnly(x))
+
+def described(r: Failure): String => match r {
+    Ok(v) => "ok {v}"
+    Error(Bad(n)) => "bad {n}"
+    Error(Empty) => "empty"
+}
+
+def wrapped(w: Wrapped): String => match w {
+    s: String => "text {s}"
+    r: Int ! ParseError => described(r)
+}
+
+def main(): Unit {
+    printl(described(viaAlias(1)))
+    printl(described(viaAlias(0)))
+    printl(described(viaAlias(-2)))
+    printl(wrapped("hi"))
+    printl(wrapped(pick(false, parsed(0), badOnly(3))))
+}

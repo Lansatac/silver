@@ -189,6 +189,21 @@ private final class TypeChecker
         qualifyShadowedLibraryTypes(program.prelude);
         _types.writeAsDictionary(_declarer.dictionaryDecl());
 
+        // Before anything that can build an error list, which leaves a member out beside the sum that
+        // holds it, and so needs to know the named members of each.
+        foreach (mod; programModules)
+        {
+            foreach (decl; mod.declarations)
+            {
+                decl.kind.match!(
+                    (const TypeDecl t) {
+                        if (t.members.length > 0) _declarer.declareDirectMembers(t);
+                    },
+                    (_) {},
+                );
+            }
+        }
+
         // Before anything that can name one, and even if nothing does, so a bad target is reported.
         foreach (mod; programModules)
         {
@@ -201,19 +216,6 @@ private final class TypeChecker
             }
         }
 
-        // Before any error list is built, which leaves a member out beside the sum that holds it.
-        foreach (mod; programModules)
-        {
-            foreach (decl; mod.declarations)
-            {
-                decl.kind.match!(
-                    (const TypeDecl t) {
-                        if (t.members.length > 0) _declarer.declareSum(t);
-                    },
-                    (_) {},
-                );
-            }
-        }
 
         foreach (mod; programModules)
         {
@@ -224,7 +226,7 @@ private final class TypeChecker
                         _declarer.declareSignature(f);
                     },
                     (const TypeDecl decl) {
-                        if (decl.members.length == 0) _declarer.declareConstructor(decl);
+                        _declarer.declareConstructor(decl);
                     },
                     (const ConstDecl c) {
                         declareConstant(c);

@@ -35,7 +35,7 @@ def factorial(n: Int): Int ! Negative | Overflow
 
 - Each name is a type that's already declared. A list never declares one, so a misspelt name is an error.
 - A type can't be listed twice, and the order doesn't matter: `Int ! Negative | Overflow` and `Int ! Overflow | Negative` are the same type.
-- A member of a declared sum that's listed too is left out, as it's there already: `Int ! ParseError | Empty` is `Int ! ParseError`. The same goes for a list that type arguments make, so a generic `Int ! E | F` with `E = ParseError` and `F = Empty` is the same type.
+- A list can't name a type and a declared sum that holds it as a member: `Int ! ParseError | Empty` is an error, since `Empty` is listed already as a member of `ParseError`. A list that [type arguments](generics.md) or [meeting errors](#where-errors-meet) make can come out that way, and there the member is left out, so a generic `Int ! E | F` with `E = ParseError` and `F = Empty` is `Int ! ParseError`.
 - A list is written only after `!`. It's also what an error union gets where errors of different types [meet](#where-errors-meet).
 
 ### Widening
@@ -310,4 +310,5 @@ Two proposals build on this: [checked operations](../proposals/checked-operation
 
 The implementation matches this description, except:
 
+- Refusing a written list that names a type beside a sum holding it (and leaving it out of a list that type arguments make) is provisional, pending a decision: the alternative is leaving the member out of a written list too, as of a list made by substitution.
 - `Ok` and `Error` can't be passed as function values, as `Some` can't.

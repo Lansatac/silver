@@ -1,0 +1,9 @@
+// A written error list can't list a type beside a sum that holds it, even through an alias that is
+// resolved before the sum is declared.
+
+type Bad(n: Int)
+type Empty
+alias Failure = Int ! ParseError | Bad
+type ParseError = :Bad | :Empty
+
+def main(): Unit => ()

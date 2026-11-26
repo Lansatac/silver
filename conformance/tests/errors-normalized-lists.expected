@@ -10,3 +10,5 @@ bad 2
 ok 3
 other x
 parse Empty
+other y
+parse Bad(1)

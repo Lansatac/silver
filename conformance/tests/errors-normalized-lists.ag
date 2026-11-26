@@ -1,5 +1,5 @@
 // An error list leaves out a member beside the sum that holds it, however the list was built:
-// written, substituted for type parameters, or passed through several generic layers.
+// substituted for type parameters, or passed through several generic layers (a written one is refused).
 
 type Bad(n: Int)
 type Empty
@@ -16,23 +16,25 @@ def parseFails(): Int ! ParseError => Error(Bad(1))
 def badFails(): Int ! Bad => Error(Bad(2))
 def emptyFails(): Int ! ParseError => Error(Empty)
 
-def written(r: Int ! ParseError | Bad): String => match r {
+def written(r: Int ! ParseError): String => match r {
     Ok(v) => "ok {v}"
     Error(Bad(n)) => "bad {n}"
     Error(Empty) => "empty"
 }
 
-def route(r: Int ! ParseError | Bad): String => match r {
+def route(r: Int ! ParseError): String => match r {
     Ok(v) => "ok {v}"
     Error(Bad(n)) => "bad {n}"
     Error(_) => "other"
 }
 
-def nested(r: Int ! Outer | ParseError | Other): String => match r {
+def nested(r: Int ! Outer): String => match r {
     Ok(v) => "ok {v}"
     Error(e: ParseError) => "parse {e}"
     Error(Other(s)) => "other {s}"
 }
+
+def outerFails(): Int ! Outer => Error(Other("y"))
 
 def main(): Unit {
     printl(route(pick(true, parseFails(), badFails())))
@@ -50,4 +52,6 @@ def main(): Unit {
     val pe: ParseError = Empty
     val p: Int ! Outer = Error(pe)
     printl(nested(p))
+    printl(nested(pick(true, outerFails(), parseFails())))
+    printl(nested(pick(false, outerFails(), parseFails())))
 }

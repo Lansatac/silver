@@ -1,0 +1,9 @@
+// A written error list can't list a type beside a sum that holds it.
+
+type Bad(n: Int)
+type Empty
+type ParseError = :Bad | :Empty
+
+def a(): Int ! ParseError | Bad => 1
+
+def main(): Unit => ()

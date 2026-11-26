@@ -23,7 +23,6 @@ package final class Declarer
         _typing = typing;
         _resolutions = resolutions;
         _collector = collector;
-        _types.sumMembers = &membersOf;
     }
 
     package TypeTable _types;
@@ -31,6 +30,9 @@ package final class Declarer
     package const Resolution _resolutions;
     package Collector _collector;
     package Type[Id!AliasDecl] _aliasTypes;
+    /// What the members of sums written as a type name resolved to, so that `declareSum` doesn't
+    /// resolve them, or report them, a second time.
+    private Type[typeof(TypeExpr.id)] _memberTypes;
     /// The sum that declared each member it owns, which is what its constructor produces.
     package Type[Id!TypeDecl] _owners;
 
@@ -108,6 +110,18 @@ package final class Declarer
             {
                 _collector.reportError(DiagnosticCode.InvalidErrorType, w.span,
                     "`%s` is already listed".format(_types.describe(type)));
+                failed = true;
+            }
+            else if (errors.any!(e => _types.directMembers(e).canFind(type)))
+            {
+                _collector.reportError(DiagnosticCode.InvalidErrorType, w.span,
+                    "`%s` is already listed, as a member of `%s`".format(_types.describe(type), _types.describe(errors.find!(e => _types.directMembers(e).canFind(type)).front)));
+                failed = true;
+            }
+            else if (errors.any!(e => _types.directMembers(type).canFind(e)))
+            {
+                _collector.reportError(DiagnosticCode.InvalidErrorType, w.span,
+                    "`%s` is already listed, and a member of `%s`".format(_types.describe(errors.find!(e => _types.directMembers(type).canFind(e)).front), _types.describe(type)));
                 failed = true;
             }
             errors ~= type;
@@ -575,6 +589,21 @@ package final class Declarer
                 .format(_types.describe(type)));
     }
 
+    /// Resolves the members of the sum `decl` that are written as a type name, and records them
+    /// with the type table, ahead of every type that may be an error list.
+    package void declareDirectMembers(const TypeDecl decl)
+    {
+        Type[] direct;
+        foreach (member; decl.members)
+        {
+            if (!member.type.kind.match!((const NamedType _) => true, _ => false)) continue;
+            auto type = resolveType(member.type);
+            _memberTypes[member.type.id] = type;
+            if (type != _types.error) direct ~= type;
+        }
+        _types.declareDirectMembers(decl.id, decl.typeParams.map!(p => p.id).array, direct);
+    }
+
     package void declareSum(const TypeDecl decl)
     {
         auto sum = _typing.nominalTypes[decl.id];
@@ -585,7 +614,7 @@ package final class Declarer
         Type[] members;
         foreach (member; decl.members)
         {
-            auto type = resolveType(member.type);
+            auto type = member.type.id in _memberTypes ? _memberTypes[member.type.id] : resolveType(member.type);
             if (type == _types.error) continue;
             string problem;
             if (type == _types.any || type == _types.never) problem = "A sum can't have `%s` as a member".format(_types.describe(type));

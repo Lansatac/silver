@@ -305,15 +305,49 @@ unittest
         ~ "def c(): H2 ! Missing => 1\n").shouldHaveNoDiagnostics();
 }
 
-@("type checking a generic sum with an error list member that lists the sum itself ends")
+@("an error list can't list a type beside a sum that holds it, in either order, through an alias or in a sum's member")
 unittest
 {
-    // Normalizing the member's list at an instance asks the instance's members, which substitutes
-    // the member's list again.
+    auto sums = "type Bad(n: Int)
+type Empty
+type ParseError = :Bad | :Empty
+";
+    analyzed(sums ~ "def f(): Int ! ParseError | Bad => 1
+def main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidErrorType, At("Bad", 3));
+    analyzed(sums ~ "def f(): Int ! Bad | ParseError => 1
+def main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidErrorType, At("ParseError", 2));
+    analyzed("type Bad(n: Int)
+type Empty
+alias F = Int ! ParseError | Bad
+type ParseError = :Bad | :Empty
+def main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidErrorType, At("Bad", 2));
+    analyzed("type Bad(n: Int)
+type Empty
+type W = :String | :(Int ! ParseError | Bad)
+type ParseError = :Bad | :Empty
+def main(): Unit => ()")
+        .shouldReport(DiagnosticCode.InvalidErrorType, At("Bad", 2));
+    analyzed(sums ~ "def f(): Int ! Empty | Bad => 1
+def main(): Unit => ()").shouldHaveNoDiagnostics();
+}
+
+@("type checking a generic sum with an error list member that names the sum ends")
+unittest
+{
+    // A list's named members are known without substituting the members that aren't named types,
+    // so a list at an instance doesn't ask the instance's members again.
     analyzed(`type Bad(n: Int)
-type Box<E> = :Bad | :(Int ! Box<E> | Bad)
+type Other(s: String)
+type Box<E> = :Bad | :(Int ! Box<E> | Other)
+def pick<E, F>(c: Bool, x: Int ! E, y: Int ! F): Int ! E | F => if c => x else y
+def a(): Int ! Box<Int> => Error(Bad(1))
+def b(): Int ! Bad => Error(Bad(2))
+def c(): Int ! Box<Int> => pick(true, a(), b())
 def main(): Unit {
-    val b: Box<Int> = Bad(1)
-    printl(b)
+    val v: Box<Int> = Bad(1)
+    printl(v)
 }`).shouldHaveNoDiagnostics();
 }

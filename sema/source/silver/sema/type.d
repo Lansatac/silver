@@ -78,9 +78,40 @@ final class TypeTable
         return registerTypeData(TypeData(ErrorUnionData(success, error)));
     }
 
-    /// What a declared sum can be, set by whoever knows the declarations, so that `errorList` can
-    /// leave out a member beside the sum that holds it.
-    const(Type)[] delegate(Type) sumMembers;
+    private struct DirectMembers
+    {
+        immutable(Id!TypeParam)[] params;
+        immutable(Type)[] members;
+    }
+
+    private DirectMembers[Id!TypeDecl] _direct;
+
+    /// Records the members of the declared sum `decl` that are named types, which is all a list
+    /// needs to leave one out beside the sum. It's known before any type that might hold a list is
+    /// built, and holds nothing that mentions a list itself.
+    void declareDirectMembers(Id!TypeDecl decl, const(Id!TypeParam)[] params, const(Type)[] members)
+    {
+        _direct[decl] = DirectMembers(params.idup, members.idup);
+    }
+
+    /// The named members of the sum `t`, with its type arguments filled in; none for any other type.
+    const(Type)[] directMembers(Type t)
+    {
+        return _types[t.index].match!(
+            (const NominalData nominal) {
+                auto found = nominal.decl in _direct;
+                if (found is null) return (const(Type)[]).init;
+                if (nominal.args.length == 0) return found.members;
+                Substitution substitution;
+                foreach (i, param; found.params)
+                {
+                    if (i < nominal.args.length) substitution[param] = nominal.args[i];
+                }
+                return cast(const(Type)[]) std.array.array(found.members.map!(m => substitute(m, substitution)));
+            },
+            _ => (const(Type)[]).init,
+        );
+    }
 
     /// The error list of `members`, which is its one member when there's only one. A member that's
     /// a list itself, as a type parameter can become, contributes its own members, order and
@@ -97,10 +128,10 @@ final class TypeTable
             flat ~= listed(member);
         }
         auto sorted = std.array.array(flat.sort!((a, b) => a.index < b.index).uniq);
-        if (sumMembers !is null && sorted.length > 1)
+        if (_direct.length > 0 && sorted.length > 1)
         {
             auto listedTypes = sorted;
-            sorted = std.array.array(listedTypes.filter!(m => !listedTypes.anyOf!(t => t != m && sumMembers(t).canFind(m))));
+            sorted = std.array.array(listedTypes.filter!(m => !listedTypes.anyOf!(t => t != m && directMembers(t).canFind(m))));
         }
         if (sorted.length == 1) return sorted[0];
         return registerTypeData(TypeData(ErrorListData(sorted.idup)));
