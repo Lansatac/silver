@@ -1,0 +1,1 @@
+T0057: `nowAsInt` binds the C symbol `silver_nowNanos` as `() -> Int32`, but `lang.time.nowNanos` binds it as `() -> Int`, which C passes differently on some platform; a symbol has one signature, so give one of them another with `native("...")`

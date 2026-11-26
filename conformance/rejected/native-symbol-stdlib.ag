@@ -1,0 +1,7 @@
+// `silver_nowNanos` is the runtime's, which `lang.time` declares as returning an Int64, so the
+// program's own declaration is the one reported.
+import std.time
+
+native("silver_nowNanos") def nowAsInt(): Int32
+
+def main(): Unit { }

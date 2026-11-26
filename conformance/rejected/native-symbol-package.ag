@@ -1,5 +1,5 @@
 // A native of another package binds `abs` as well, so the two natives are in different modules. The
-// one in the package, whose module sorts later, is the one reported.
+// one in the package being built is the one reported, not the dependency's.
 import natives.bytes
 
 native("abs") def absolute(x: Int32): Int32

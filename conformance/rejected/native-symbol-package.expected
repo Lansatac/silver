@@ -1,1 +1,1 @@
-T0057: `absoluteByte` binds the C symbol `abs` as `(Int8) -> Int8`, but `native-symbol-package.absolute` at native-symbol-package.ag(5) binds it as `(Int32) -> Int32`, which C passes differently; a symbol has one signature, so give one of them another with `native("...")`
+T0057: `absolute` binds the C symbol `abs` as `(Int32) -> Int32`, but `natives.bytes.absoluteByte` at packages_fixtures/natives/bytes.ag(3) binds it as `(Int8) -> Int8`, which C passes differently on some platform; a symbol has one signature, so give one of them another with `native("...")`

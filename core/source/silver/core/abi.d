@@ -36,6 +36,9 @@ bool crossesAlike(const ref Program program, const ref Native a, const ref Nativ
 CType cTypeOf(const ref Program program, Type type)
 {
     const(Program)* held = &program;
-    return silver.sema.abi.cTypeOf(program.types, type, (Type t) => (t in held.nativeStructures) !is null,
+    auto result = silver.sema.abi.cTypeOf(program.types, type, (Type t) => (t in held.nativeStructures) !is null,
         (Type t) => held.recordFields[t]);
+    auto handle = program.types.isOption(type) ? program.types.optionInner(type) : type;
+    assert(result.kind != CKind.pointer || (handle in program.nativeTypes) !is null, "sema lets only these types cross into C");
+    return result;
 }

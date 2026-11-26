@@ -77,6 +77,19 @@ native("abs") def b(x: Float): Float` ~ main).onlyMessage(DiagnosticCode.NativeS
 native("f") def b(x: Int, y: Int): Int` ~ main).shouldReport(DiagnosticCode.NativeSymbolMismatch, At("b", 1));
     analyzed(`native("f") def a(): Unit
 native("f") def b(): Never` ~ main).shouldReport(DiagnosticCode.NativeSymbolMismatch, At("b", 1));
+    // A narrow result is extended differently as signed and as unsigned.
+    analyzed(`native("abs") def a(x: Int32): Int8
+native("abs") def b(x: Int32): UInt8` ~ main).shouldReport(DiagnosticCode.NativeSymbolMismatch, At("b", 1));
+    // Structures by value: of different sizes, and one that crosses like a 64-bit integer on Windows
+    // but in a float register on System V, so a program can't depend on the platform.
+    enum structures = "native type P(a: Int32, b: Int32)\nnative type Q(a: Int32, b: Int32, c: Int32)\n"
+        ~ "native type F(a: Float32, b: Float32)\n";
+    analyzed(structures ~ `native("s") def sa(x: P): Int
+native("s") def sb(x: Q): Int` ~ main).shouldReport(DiagnosticCode.NativeSymbolMismatch, At("sb", 1));
+    analyzed(structures ~ `native("s") def sa(x: F): Int
+native("s") def sb(x: Int): Int` ~ main).shouldReport(DiagnosticCode.NativeSymbolMismatch, At("sb", 1));
+    analyzed(structures ~ `native("s") def sa(x: P): Int
+native("s") def sb(x: P): Int` ~ main).shouldHaveNoDiagnostics();
     // Across modules, including the standard library's: `lang.time` binds the runtime's `silver_nowNanos`.
     auto lib = ["lib.ag": "module lib\nnative(\"abs\") def a(x: Int8): Int8"];
     analyzed("import lib\nnative(\"abs\") def b(x: Int32): Int32" ~ main, lib)

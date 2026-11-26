@@ -10,7 +10,8 @@ import std.string;
 
 
 import silver.ast;
-import silver.sema.abi : CallDescription, crossesAlike, cTypeOf, describeCall, hostConvention;
+import std.traits : EnumMembers;
+import silver.sema.abi : CallDescription, Convention, crossesAlike, cTypeOf, describeCall;
 import silver.sema.constant_eval;
 import silver.sema.coverage;
 import silver.sema.declare;
@@ -4554,22 +4555,40 @@ private final class TypeChecker
     }
 
     /// Reports each native that binds a C symbol another native, in any module, binds with a signature
-    /// C passes differently, at the later one, since a C function has one signature. A pair is checked
-    /// whether or not the program reaches them. Two of one name in a module are `DuplicateOverload`'s.
+    /// C passes differently under any supported convention, at the later one, since a C function has
+    /// one signature. Each is compared with the first to bind the symbol, which is the one in the
+    /// standard library if there is one, then in another package, then in the package being built,
+    /// and within these by module name, so the error is in the code the user can change. A pair is
+    /// checked whether or not the program reaches them. Two of one name in a module are
+    /// `DuplicateOverload`'s.
     private void checkNativeSymbols(R)(R modules, const Program program)
     {
         struct Binding
         {
             string module_, name;
+            bool standard;
             Id!FunctionDecl id;
             Span span;
-            CallDescription call;
+            CallDescription[] calls;
             bool never;
         }
 
-        Binding[][string] bound;
-        foreach (mod; modules)
+        enum standardPackageName = "std";
+        auto entryPackage = program.packageOf.get(program.entryModule, null);
+        uint ownership(const Module mod)
         {
+            auto package_ = program.packageOf.get(mod.name, null);
+            if (isInLang(mod.name) || package_ == standardPackageName) return 0;
+            return package_ == entryPackage ? 2 : 1;
+        }
+
+        auto listed = modules.array;
+        auto order = listed.length.iota.array.sort!((a, b) => ownership(listed[a]) != ownership(listed[b])
+            ? ownership(listed[a]) < ownership(listed[b]) : listed[a].name < listed[b].name);
+        Binding[string] bound;
+        foreach (i; order)
+        {
+            auto mod = listed[i];
             foreach (decl; mod.declarations)
             {
                 decl.kind.match!(
@@ -4582,23 +4601,26 @@ private final class TypeChecker
                         const(Type)[] fields(Type t) => _types[t].match!(
                             (const NominalData n) => _typing.fields[n.decl].map!(x => x.type).array,
                             (_) => (const(Type)[]).init);
-                        auto call = describeCall(signature.params.map!(p => cTypeOf(_types, p, &structure, &fields)).array,
-                            cTypeOf(_types, signature.ret, &structure, &fields), hostConvention);
-                        auto binding = Binding(mod.name, f.name, f.id, f.nameSpan, call, signature.ret == _types.never);
-                        scope (exit) bound[f.symbol] ~= binding;
-                        foreach (earlier; bound.get(f.symbol, null))
+                        auto paramTypes = signature.params.map!(p => cTypeOf(_types, p, &structure, &fields)).array;
+                        auto resultType = cTypeOf(_types, signature.ret, &structure, &fields);
+                        CallDescription[] calls;
+                        foreach (convention; [EnumMembers!Convention]) calls ~= describeCall(paramTypes, resultType, convention);
+                        auto binding = Binding(mod.name, f.name, ownership(mod) == 0, f.id, f.nameSpan, calls, signature.ret == _types.never);
+                        auto first = f.symbol in bound;
+                        if (first is null)
                         {
-                            if (earlier.module_ == mod.name && earlier.name == f.name) continue;
-                            if (crossesAlike(earlier.call, earlier.never, call, binding.never)) continue;
-                            auto place = program.sources is null || !program.sources.has(earlier.span.file) ? earlier.span.file
-                                : "%s(%s)".format(earlier.span.file, program.sources.locate(earlier.span).line);
-                            _collector.reportError(DiagnosticCode.NativeSymbolMismatch, f.nameSpan,
-                                ("`%s` binds the C symbol `%s` as `%s`, but `%s.%s` at %s binds it as `%s`, which C passes differently; "
-                                    ~ "a symbol has one signature, so give one of them another with `native(\"...\")`").format(
-                                    f.name, f.symbol, _types.describe(_typing.symbolTypes[SymbolId(f.id)]), earlier.module_, earlier.name, place,
-                                    _types.describe(_typing.symbolTypes[SymbolId(earlier.id)])));
-                            break;
+                            bound[f.symbol] = binding;
+                            return;
                         }
+                        if (first.module_ == mod.name && first.name == f.name) return;
+                        if (calls.length.iota.all!(i => crossesAlike(first.calls[i], first.never, calls[i], binding.never))) return;
+                        auto place = first.standard || program.sources is null || !program.sources.has(first.span.file) ? ""
+                            : " at %s(%s)".format(first.span.file, program.sources.locate(first.span).line);
+                        _collector.reportError(DiagnosticCode.NativeSymbolMismatch, f.nameSpan,
+                            ("`%s` binds the C symbol `%s` as `%s`, but `%s.%s`%s binds it as `%s`, which C passes differently "
+                                ~ "on some platform; a symbol has one signature, so give one of them another with `native(\"...\")`").format(
+                                f.name, f.symbol, _types.describe(_typing.symbolTypes[SymbolId(f.id)]), first.module_, first.name, place,
+                                _types.describe(_typing.symbolTypes[SymbolId(first.id)])));
                     },
                     (_) {},
                 );

@@ -1,1 +1,1 @@
-T0057: `absoluteByte` binds the C symbol `abs` as `(Int8) -> Int8`, but `native-symbol-mismatch.absolute` at native-symbol-mismatch.ag(3) binds it as `(Int32) -> Int32`, which C passes differently; a symbol has one signature, so give one of them another with `native("...")`
+T0057: `absoluteByte` binds the C symbol `abs` as `(Int8) -> Int8`, but `native-symbol-mismatch.absolute` at native-symbol-mismatch.ag(3) binds it as `(Int32) -> Int32`, which C passes differently on some platform; a symbol has one signature, so give one of them another with `native("...")`
