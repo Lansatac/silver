@@ -127,9 +127,11 @@ LinkResult optimizeIr(const Toolchain toolchain, string irPath, string outputPat
 }
 
 /// Compiles the IR at `irPath` and links it with the runtime and `libraries`, which are named as
-/// `native library` names them, into the executable `outputPath`.
+/// `native library` names them, into the executable `outputPath`. A library that `linkFiles` gives a
+/// file is linked against that file, and the others by name. With `besideItself`, the program looks
+/// for shared libraries in its own directory, which on Windows it does anyway.
 LinkResult linkExecutable(const Toolchain toolchain, string irPath, string outputPath, const string[] libraries = [],
-    Optimization optimization = Optimization.none)
+    Optimization optimization = Optimization.none, const string[string] linkFiles = null, bool besideItself = false)
 {
     if (auto missing = findRuntime())
     {
@@ -147,19 +149,21 @@ LinkResult linkExecutable(const Toolchain toolchain, string irPath, string outpu
         return LinkResult(false, compiled.output);
     }
 
-    auto linked = execute(linkCommand(toolchain, objPath, runtimePath, libraries, outputPath));
+    auto linked = execute(linkCommand(toolchain, objPath, runtimePath, libraries, outputPath, linkFiles, besideItself));
     return LinkResult(linked.status == 0, linked.output);
 }
 
 version (Windows) private enum runtimeLibraries = ["silver_rt.lib", "phobos64.lib"];
 else private enum runtimeLibraries = ["libsilver_rt.a", "libphobos2.a"];
 
-/// The command that links `objPath` with the libraries in `runtime` and `libraries` into `outputPath`.
+/// The command that links `objPath` with the libraries in `runtime` and `libraries` into `outputPath`,
+/// each of `libraries` by the file `linkFiles` gives it, if any, and otherwise by name.
 string[] linkCommand(const Toolchain toolchain, string objPath, string runtime, const string[] libraries,
-    string outputPath)
+    string outputPath, const string[string] linkFiles = null, bool besideItself = false)
 {
     import std.algorithm : filter, map, splitter;
     import std.array : array;
+    import std.path : baseName;
 
     auto linked = runtimeLibraries.map!(l => buildPath(runtime, l)).array;
     version (Windows)
@@ -170,16 +174,85 @@ string[] linkCommand(const Toolchain toolchain, string objPath, string runtime, 
         // `/OPT:NOICF` is dmd's: folding identical functions would merge ones D expects to be distinct.
         auto searched = ["/libpath:" ~ buildPath(runtime, "mingw")]
             ~ environment.get("LIB", "").splitter(';').filter!(d => d.length).map!(d => "/libpath:" ~ d).array;
+        // lld-link takes a file of any name, a MinGW import library `libX.dll.a` among them.
         return [toolchain.lld, "/nologo", "/lldignoreenv", "/opt:noicf"] ~ searched ~ [objPath] ~ linked
-            ~ libraries.map!(l => l ~ ".lib").array ~ ["/out:" ~ outputPath];
+            ~ libraries.map!(l => l in linkFiles ? linkFiles[l] : l ~ ".lib").array ~ ["/out:" ~ outputPath];
     }
     else
     {
         auto linker = toolchain.lld ? ["-fuse-ld=lld"] : [];
+        // A file is named by `-l:` from its directory rather than by its path, so a shared library with no
+        // soname is recorded as its name, not as the path it was linked from.
+        string[] named;
+        foreach (l; libraries)
+        {
+            if (auto file = l in linkFiles) named ~= ["-L" ~ dirName(*file), "-l:" ~ baseName(*file)];
+            else named ~= "-l" ~ l;
+        }
+        // `$ORIGIN` is the linker's, which the command, an array of words, keeps from any shell.
+        auto beside = besideItself ? ["-Wl,-rpath,$ORIGIN"] : [];
         // What dmd adds when it links, for Phobos.
-        return [toolchain.clang] ~ linker ~ [objPath] ~ linked ~ libraries.map!(l => "-l" ~ l).array
+        return [toolchain.clang] ~ linker ~ [objPath] ~ linked ~ named ~ beside
             ~ ["-lpthread", "-lm", "-lrt", "-ldl", "-o", outputPath];
     }
+}
+
+/// The shared libraries `loadFiles` gives for `libraries`, which a program linked with them loads.
+string[] sharedLibrariesOf(const string[] libraries, const string[string] loadFiles)
+{
+    string[] files;
+    foreach (l; libraries)
+    {
+        if (auto file = l in loadFiles) files ~= *file;
+    }
+    return files;
+}
+
+/// The environment a compiled program started from here is run with so that it finds `sharedLibraries`
+/// where they are: their directories first in `PATH` on Windows and in `LD_LIBRARY_PATH` elsewhere. Null
+/// when there are none, as the program then needs nothing added.
+string[string] findingLibraries(const string[] sharedLibraries)
+{
+    import std.algorithm : canFind;
+    import std.array : join;
+    import std.path : absolutePath;
+
+    if (sharedLibraries.length == 0) return null;
+    version (Windows) enum variable = "PATH", separator = ";";
+    else enum variable = "LD_LIBRARY_PATH", separator = ":";
+    string[] directories;
+    foreach (file; sharedLibraries)
+    {
+        auto directory = dirName(absolutePath(file));
+        if (!directories.canFind(directory)) directories ~= directory;
+    }
+    auto rest = environment.get(variable, "");
+    return [variable: directories.join(separator) ~ (rest.length > 0 ? separator ~ rest : "")];
+}
+
+/// Copies each of `sharedLibraries` into the directory of the executable `outputPath` under its own name,
+/// unless the same file is there already. Returns why one couldn't be copied, or null.
+string copyBeside(const string[] sharedLibraries, string outputPath)
+{
+    import std.file : copy, FileException, read;
+    import std.path : absolutePath, baseName, buildNormalizedPath, filenameCmp;
+
+    auto directory = dirName(absolutePath(outputPath));
+    foreach (file; sharedLibraries)
+    {
+        auto target = buildPath(directory, baseName(file));
+        try
+        {
+            if (filenameCmp(buildNormalizedPath(absolutePath(file)), buildNormalizedPath(target)) == 0) continue;
+            if (exists(target) && read(target) == read(file)) continue;
+            copy(file, target);
+        }
+        catch (FileException e)
+        {
+            return "The shared library " ~ file ~ " couldn't be copied beside the executable, to " ~ target ~ ": " ~ e.msg;
+        }
+    }
+    return null;
 }
 
 /// Checks that the runtime's libraries are there, which programs link whether or not they're optimized.
@@ -305,4 +378,63 @@ unittest
             command.to!string);
         assert(linkCommand(Toolchain("clang"), "main.o", "rt", [], "main")[0 .. 2] == ["clang", "main.o"]);
     }
+}
+
+@("a library given a file is linked against that file under its own name, and the others by name")
+unittest
+{
+    import std.algorithm : canFind, find;
+
+    auto files = ["ray": buildPath("vendor", "libraylibdll.a"), "unused": "x.a"];
+    version (Windows)
+    {
+        auto command = linkCommand(Toolchain("clang", "lld"), "main.obj", "rt", ["ray", "m"], "main", files, true);
+        assert(command.find("main.obj")[3 .. $] == [buildPath("vendor", "libraylibdll.a"), "m.lib", "/out:main"],
+            command.to!string);
+    }
+    else
+    {
+        auto command = linkCommand(Toolchain("clang"), "main.o", "rt", ["ray", "m"], "main", files, true);
+        assert(command.find("main.o")[3 .. 8] == ["-Lvendor", "-l:libraylibdll.a", "-lm", "-Wl,-rpath,$ORIGIN",
+            "-lpthread"], command.to!string);
+        assert(!linkCommand(Toolchain("clang"), "main.o", "rt", ["ray"], "main", files).canFind("-Wl,-rpath,$ORIGIN"));
+    }
+}
+
+@("a compiled program run from here finds its shared libraries' directories first, and nothing is added without them")
+unittest
+{
+    import std.algorithm : startsWith;
+    import std.path : absolutePath;
+
+    assert(findingLibraries(null) is null);
+    auto added = findingLibraries([buildPath("a", "x.dll"), buildPath("a", "y.dll"), buildPath("b", "z.dll")]);
+    version (Windows) enum variable = "PATH", separator = ";";
+    else enum variable = "LD_LIBRARY_PATH", separator = ":";
+    assert(added.length == 1 && added[variable].startsWith(absolutePath("a") ~ separator ~ absolutePath("b")),
+        added.to!string);
+    assert(sharedLibrariesOf(["ray", "m"], ["ray": "r.dll", "other": "o.dll"]) == ["r.dll"]);
+}
+
+@("a shared library is copied beside the executable under its own name, unless it's there already")
+unittest
+{
+    import std.file : mkdirRecurse, readText, rmdirRecurse, tempDir, write;
+
+    auto directory = buildPath(tempDir, "silver-toolchain-beside");
+    if (exists(directory)) rmdirRecurse(directory);
+    mkdirRecurse(buildPath(directory, "vendor"));
+    mkdirRecurse(buildPath(directory, "out"));
+    scope (exit) rmdirRecurse(directory);
+    auto library = buildPath(directory, "vendor", "libx.so.1");
+    write(library, "one");
+    auto executable = buildPath(directory, "out", "main");
+    assert(copyBeside([library], executable) is null);
+    assert(readText(buildPath(directory, "out", "libx.so.1")) == "one");
+    write(library, "two");
+    assert(copyBeside([library], executable) is null);
+    assert(readText(buildPath(directory, "out", "libx.so.1")) == "two");
+    // Built into the directory the library is in, there's nothing to copy.
+    assert(copyBeside([library], buildPath(directory, "vendor", "main")) is null);
+    assert(copyBeside([buildPath(directory, "gone.so")], executable) !is null);
 }

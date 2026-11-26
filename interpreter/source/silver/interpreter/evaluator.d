@@ -34,6 +34,8 @@ final class Evaluator
     private string _directory;
     /// How to call each of the program's `natives`, found and described before anything runs.
     private Callable[] _natives;
+    /// The shared library to load for a `native library` name, where one is given.
+    private const(string[string]) _libraryFiles;
 
     private static struct Callable
     {
@@ -52,13 +54,16 @@ final class Evaluator
 
     /// With `useStdOut`, output goes straight to standard output; otherwise it's kept for `output`.
     /// `directory` stands in for the directory the program was started in, so programs in one process
-    /// can each have their own.
-    this(Program program, bool useStdOut = false, string[] arguments = null, string directory = null)
+    /// can each have their own. `libraryFiles` gives the file to load for a `native library` name, which
+    /// is otherwise found by the system's search.
+    this(Program program, bool useStdOut = false, string[] arguments = null, string directory = null,
+        const string[string] libraryFiles = null)
     {
         _program = program;
         _useStdOut = useStdOut;
         _arguments = arguments;
         _directory = directory;
+        _libraryFiles = libraryFiles;
     }
 
     /// Everything the program has printed so far.
@@ -134,7 +139,8 @@ final class Evaluator
         {
             string problem;
             auto callable = &_natives[i];
-            callable.address = findNative(native.symbol, native.library, problem);
+            auto file = native.library is null ? null : native.library in _libraryFiles;
+            callable.address = findNative(native.symbol, native.library, problem, file is null ? null : *file);
             if (callable.address is null)
             {
                 throw new DiagnosticException(Diagnostic(DiagnosticCode.MissingNativeBinding, native.span,

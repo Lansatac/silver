@@ -12,10 +12,11 @@ import std.path : baseName, buildPath, dirName, extension, stripExtension;
 import std.string : lineSplitter, strip;
 
 import silver.ast : DiagnosticException, formatDiagnostic, Program, SourceContext, SourceMap, Span;
-import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, Toolchain;
+import silver.codegen : executablePath, findingLibraries, findToolchain, generate, linkExecutable, Optimization,
+    sharedLibrariesOf, Toolchain;
 import silver.core : lowerTests, CoreProgram = Program;
 import silver.interpreter.evaluator : Evaluator;
-import silver.loader : companionModuleFile, companionOf, isCompanionFile, load, Packages, standardPrelude,
+import silver.loader : companionModuleFile, companionOf, isCompanionFile, load, NativeFiles, Packages, standardPrelude,
     withStandardLibrary;
 import silver.sema : analyze, Analysis, Target;
 
@@ -138,13 +139,13 @@ FileRun runFile(string file, const Packages packages, TestBackend backend, strin
     TestResult[] compiledResults;
     if (backend != TestBackend.interpreter)
     {
-        run.problem = compiled(lowered, context.sources, file, workDirectory, optimization, compiledResults);
+        run.problem = compiled(lowered, context.sources, file, workDirectory, optimization, packages.natives, compiledResults);
         if (run.problem !is null) return run;
     }
     TestResult[] interpretedResults;
     if (backend != TestBackend.llvm)
     {
-        try interpretedResults = interpreted(lowered, context.sources);
+        try interpretedResults = interpreted(lowered, context.sources, packages.natives);
         catch (DiagnosticException e)
         {
             run.diagnostics ~= formatDiagnostic(e.diagnostic, context.sources);
@@ -167,9 +168,9 @@ FileRun runFile(string file, const Packages packages, TestBackend backend, strin
     return run;
 }
 
-private TestResult[] interpreted(CoreProgram lowered, const SourceMap sources)
+private TestResult[] interpreted(CoreProgram lowered, const SourceMap sources, const NativeFiles natives)
 {
-    auto runs = new Evaluator(lowered).runTests();
+    auto runs = new Evaluator(lowered, false, null, null, natives.load).runTests();
     TestResult[] results;
     foreach (i, test; lowered.tests)
     {
@@ -188,7 +189,7 @@ private TestResult[] interpreted(CoreProgram lowered, const SourceMap sources)
 /// Compiles the tests in `lowered` and runs them, setting `results`. Returns why that couldn't
 /// be done, or null. A test that crashes is reported as one, and the run carries on after it.
 private string compiled(const CoreProgram lowered, const SourceMap sources, string file, string workDirectory,
-    Optimization optimization, out TestResult[] results)
+    Optimization optimization, const NativeFiles natives, out TestResult[] results)
 {
     import std.parallelism : task;
     import std.process : Config, pipe, spawnProcess, thisProcessID, wait;
@@ -210,18 +211,20 @@ private string compiled(const CoreProgram lowered, const SourceMap sources, stri
     auto irPath = base ~ ".ll", exePath = executablePath(base);
     write(irPath, ir);
     scope (exit) remove(irPath);
-    auto linked = linkExecutable(toolchain, irPath, exePath, lowered.libraries, optimization);
+    auto linked = linkExecutable(toolchain, irPath, exePath, lowered.libraries, optimization, natives.link);
     if (!linked.succeeded) return "linking failed:\n" ~ linked.output;
     scope (exit) remove(exePath);
 
     results = lowered.tests.map!(t => declared(t.name, t.span, sources)).array;
+    auto finding = findingLibraries(sharedLibrariesOf(lowered.libraries, natives.load));
     size_t next = 0;
     while (next < results.length)
     {
         auto output = pipe();
         auto errors = pipe();
-        auto pid = spawnProcess([exePath], File(nullDevice), output.writeEnd, errors.writeEnd,
-            ["SILVER_TEST_FROM": next.to!string], Config.none);
+        auto environment = finding.dup;
+        environment["SILVER_TEST_FROM"] = next.to!string;
+        auto pid = spawnProcess([exePath], File(nullDevice), output.writeEnd, errors.writeEnd, environment, Config.none);
         output.writeEnd.close();
         errors.writeEnd.close();
         // A pipe rather than a temp file: on Windows a handle to a file open here can leak into a child

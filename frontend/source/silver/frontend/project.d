@@ -61,6 +61,34 @@ enum ProjectCode : string
     DescribesItself = "F0037",
     /// A key of a remote package, which isn't built.
     RemotePackage = "F0038",
+    /// An absolute path in a `[native.<library>.<platform>]` table.
+    AbsoluteNativePath = "F0050",
+    /// A file a `[native.<library>.<platform>]` table names for this platform that isn't there.
+    NoNativeFile = "F0051",
+    /// Two package files of one run that give one library and platform.
+    NativeGivenTwice = "F0052",
+}
+
+/// The platforms a `[native.<library>.<platform>]` table can be for.
+immutable nativePlatforms = ["windows", "linux"];
+
+/// The platform `silver` runs on, as a `[native]` table names it, or null where none is for it.
+version (Windows) enum hostPlatform = "windows";
+else version (linux) enum hostPlatform = "linux";
+else enum string hostPlatform = null;
+
+/// A `[native.<library>.<platform>]` table: the files `native library "<library>"` means there.
+struct NativeTable
+{
+    string library;
+    string platform;
+    /// The package file it's in, absolute.
+    string file;
+    /// Where its platform is written, in its header.
+    Span span;
+    /// `link` and `load`, absolute, or null when not given.
+    string link;
+    string load;
 }
 
 /// One mistake in a package file, or in reading one.
@@ -130,6 +158,7 @@ struct PackageFile
     Named[] uses;
     Described[] described;
     Listed[] listed;
+    NativeTable[] natives;
 }
 
 /// The facts the compiler is given about one package.
@@ -154,6 +183,8 @@ struct Project
 {
     string file;
     Facts[] packages;
+    /// The `[native]` tables of the package files whose packages were reached, for every platform.
+    NativeTable[] natives;
 }
 
 /// The package file in `directory` or in the nearest directory above it, absolute, or null.
@@ -218,7 +249,7 @@ bool readProject(string file, out Project project, out Mistake mistake)
     if (!readPackageFile(file, root, mistake)) return false;
     auto reader = ProjectReader();
     if (!reader.add(root, mistake)) return false;
-    project = Project(root.file, reader.packages);
+    project = Project(root.file, reader.packages, reader.natives);
     return true;
 }
 
@@ -451,7 +482,7 @@ bool readTestRun(string file, string directory, out TestRun run, out Mistake mis
         if (!reached) run.tested ~= c.directory;
     }
     run.skipped = run.skipped.filter!(s => run.tested.any!(t => within(s, t) && !samePath(s, t))).array;
-    run.project = Project(root.file, reader.packages);
+    run.project = Project(root.file, reader.packages, reader.natives);
     return true;
 }
 
@@ -479,6 +510,12 @@ string[] compilerOptions(const Project project, string delegate(string) shown, c
         options ~= ["--package-file", p.name ~ "=" ~ shown(p.file)];
     }
     foreach (ref p; homes) options ~= ["--scripts-in", p.name ~ "=" ~ shown(p.home)];
+    foreach (ref n; project.natives)
+    {
+        if (n.platform != hostPlatform) continue;
+        if (n.link !is null) options ~= ["--native-link", n.library ~ "=" ~ shown(n.link)];
+        if (n.load !is null) options ~= ["--native-load", n.library ~ "=" ~ shown(n.load)];
+    }
     return options;
 }
 
@@ -621,6 +658,9 @@ struct Checker
                 case "package":
                     if (!entries(entry.value)) return false;
                     break;
+                case "native":
+                    if (!natives(entry.value)) return false;
+                    break;
                 case "paths":
                     return fail(ProjectCode.UnknownField, entry.keySpan, "`[paths]` is replaced by `[[package]]`: a "
                         ~ "package elsewhere is an entry whose `path` is its directory, as [[package]] path = "
@@ -629,7 +669,8 @@ struct Checker
                     return fail(ProjectCode.UnknownField, entry.keySpan, "`[[part]]` is replaced by `[[package]]`, an "
                         ~ "entry with the same `name`, `path`, `source` and `uses`");
                 default:
-                    return unknown(entry, "A package file has `name`, `source`, `uses` and `[[package]]`");
+                    return unknown(entry, "A package file has `name`, `source`, `uses`, `[[package]]` and "
+                        ~ "`[native.<library>.<platform>]`");
             }
         }
         if (result.name.name is null)
@@ -866,6 +907,74 @@ struct Checker
         return true;
     }
 
+    /// Checks `[native]`: a table for each library, of a table for each platform, of `link` and `load`, each a
+    /// path relative to the file's directory, which for this platform has to be a file that's there.
+    bool natives(const ref Value value)
+    {
+        import std.algorithm : canFind;
+        import std.path : buildNormalizedPath, buildPath;
+
+        enum shape = "`native` is a table for each library, with a table for each platform that gives the library's "
+            ~ "files there, written as [native.raylib.windows]";
+        if (value.kind != ValueKind.table) return fail(ProjectCode.WrongType, value.span, shape);
+        foreach (ref library; value.table.entries)
+        {
+            if (library.value.kind != ValueKind.table) return fail(ProjectCode.WrongType, library.value.span, shape);
+            immutable named = "native." ~ library.key;
+            foreach (ref platform; library.value.table.entries)
+            {
+                if (!nativePlatforms.canFind(platform.key))
+                {
+                    return fail(ProjectCode.UnknownField, platform.keySpan, "`" ~ platform.key ~ "` isn't a platform of `["
+                        ~ named ~ "]`: the platforms are `windows` and `linux`");
+                }
+                immutable header = "[" ~ named ~ "." ~ platform.key ~ "]";
+                if (platform.value.kind != ValueKind.table)
+                {
+                    return fail(ProjectCode.WrongType, platform.value.span, "`" ~ named ~ "." ~ platform.key ~ "` is a "
+                        ~ "table of the library's files, `link` and `load`, written under " ~ header);
+                }
+                auto table = NativeTable(library.key, platform.key, file, platform.keySpan);
+                foreach (ref field; platform.value.table.entries)
+                {
+                    if (field.key != "link" && field.key != "load")
+                    {
+                        return fail(ProjectCode.UnknownField, field.keySpan, "`" ~ field.key ~ "` isn't a field of "
+                            ~ header ~ ", which has `link`, the file a program is linked against, and `load`, the "
+                            ~ "shared library itself");
+                    }
+                    if (!str(field.value, "`" ~ field.key ~ "`, a path relative to this file,")) return false;
+                    immutable written = field.value.text;
+                    if (absolute(written))
+                    {
+                        return fail(ProjectCode.AbsoluteNativePath, field.value.span, "`" ~ field.key ~ "` is a path "
+                            ~ "relative to this file's directory, and \"" ~ written ~ "\" is absolute, which would only be "
+                            ~ "right on one machine");
+                    }
+                    auto path = buildNormalizedPath(buildPath(result.directory, written));
+                    if (platform.key == hostPlatform && (written.length == 0 || !isFile(path)))
+                    {
+                        return fail(ProjectCode.NoNativeFile, field.value.span, "`" ~ field.key ~ "` for the library '"
+                            ~ library.key ~ "' is " ~ path ~ ", which isn't a file");
+                    }
+                    if (field.key == "link") table.link = path;
+                    else table.load = path;
+                }
+                result.natives ~= table;
+            }
+        }
+        return true;
+    }
+
+    /// Whether `path` is absolute on any platform: from a root, from a drive, or a share.
+    static bool absolute(string path)
+    {
+        import std.ascii : isAlpha;
+
+        return path.length > 0 && (path[0] == '/' || path[0] == '\\'
+            || (path.length >= 2 && isAlpha(path[0]) && path[1] == ':'));
+    }
+
     /// Checks that the file's own package and those it describes have different names and paths, and
     /// that no entry with only a `path` leads to one of them.
     bool names()
@@ -938,6 +1047,7 @@ struct ProjectReader
 {
     Facts[] packages;
     PackageFile[] read;
+    NativeTable[] natives;
 
     const(Facts)* named(string name) const
     {
@@ -983,6 +1093,18 @@ struct ProjectReader
         }
         if (!declare(file.name, file.directory, file.modules, file.uses, file.described.map!(d => d.name.name).array))
             return false;
+        foreach (ref n; file.natives)
+        {
+            foreach (ref other; natives)
+            {
+                if (other.library != n.library || other.platform != n.platform) continue;
+                mistake = Mistake(file.file, ProjectCode.NativeGivenTwice, n.span, "The library '" ~ n.library ~ "' on "
+                    ~ n.platform ~ " is given here and in " ~ other.file ~ ", at line " ~ decimal(other.span.line)
+                    ~ ", and both are part of this program; one silver.toml gives a library's files");
+                return false;
+            }
+            natives ~= n;
+        }
         foreach (ref d; file.described)
         {
             if (!declare(d.name, d.directory, d.modules, d.uses, null)) return false;
@@ -1414,6 +1536,84 @@ unittest
         ~ "`uses`", part.message);
 }
 
+@("a [native.<library>.<platform>] table gives `link` and `load` relative to the file, and this platform's have to be there")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.conv : to;
+
+    auto directory = makeTree("project-natives", ["lib/ray.a": "", "lib/ray.dll": "", "lib/dir/": ""]);
+    scope (exit) rmdirRecurse(directory);
+    enum other = hostPlatform == "windows" ? "linux" : "windows";
+
+    auto file = checked(directory, "name = \"g\"\n[native.ray." ~ hostPlatform ~ "]\nlink = \"lib/ray.a\"\n"
+        ~ "load = \"./lib/../lib/ray.dll\"\n[native.ray." ~ other ~ "]\nload = \"lib/gone.so\"\n"
+        ~ "[native.sdl." ~ hostPlatform ~ "]\nload = \"lib/ray.dll\"");
+    assert(file.natives.length == 3, file.natives.to!string);
+    auto ray = file.natives[0];
+    assert(ray.library == "ray" && ray.platform == hostPlatform && ray.file == buildPath(directory, packageFileName)
+        && ray.span.line == 2 && ray.span.column == 13, ray.to!string);
+    assert(ray.link == buildPath(directory, "lib", "ray.a") && ray.load == buildPath(directory, "lib", "ray.dll"),
+        ray.to!string);
+    // Another platform's files aren't read here, so they needn't be there.
+    assert(file.natives[1].load == buildPath(directory, "lib", "gone.so") && file.natives[1].link is null);
+    // Inline tables are tables too.
+    assert(checked(directory, "name = \"g\"\nnative = { ray = { " ~ hostPlatform ~ " = { load = \"lib/ray.dll\" } } }")
+        .natives.length == 1);
+
+    alias m = (string text, string code, uint line, uint column) => mistakeIn(directory, "name = \"g\"\n" ~ text, code, line,
+        column);
+    auto platform = m("[native.ray.macos]\nload = \"lib/ray.dll\"", ProjectCode.UnknownField, 2, 13);
+    assert(platform.message == "`macos` isn't a platform of `[native.ray]`: the platforms are `windows` and `linux`",
+        platform.message);
+    auto key = m("[native.ray." ~ hostPlatform ~ "]\nfile = \"lib/ray.dll\"", ProjectCode.UnknownField, 3, 1);
+    assert(key.message.canFind("`file` isn't a field of [native.ray." ~ hostPlatform ~ "], which has `link`"), key.message);
+    m("[native.ray." ~ hostPlatform ~ "]\nload = 1", ProjectCode.WrongType, 3, 8);
+    m("native = \"ray\"", ProjectCode.WrongType, 2, 10);
+    m("native.ray = 1", ProjectCode.WrongType, 2, 14);
+    m("native.ray." ~ hostPlatform ~ " = \"lib/ray.dll\"", ProjectCode.WrongType, 2, 15 + cast(uint) hostPlatform.length);
+    foreach (absolute; ["/usr/lib/libray.so", `C:\\lib\\ray.dll`, "c:/lib/ray.dll", `\\\\server\\ray.dll`])
+    {
+        auto refused = m("[native.ray." ~ other ~ "]\nlink = \"" ~ absolute ~ "\"", ProjectCode.AbsoluteNativePath, 3, 8);
+        assert(refused.message.canFind("is absolute, which would only be right on one machine"), refused.message);
+    }
+    auto missing = m("[native.ray." ~ hostPlatform ~ "]\nlink = \"lib/ray.a\"\nload = \"lib/gone.dll\"", ProjectCode.NoNativeFile,
+        4, 8);
+    assert(missing.message == "`load` for the library 'ray' is " ~ buildPath(directory, "lib", "gone.dll")
+        ~ ", which isn't a file", missing.message);
+    m("[native.ray." ~ hostPlatform ~ "]\nlink = \"lib/dir\"", ProjectCode.NoNativeFile, 3, 8);
+    m("[native.ray." ~ hostPlatform ~ "]\nlink = \"\"", ProjectCode.NoNativeFile, 3, 8);
+}
+
+@("two package files of one program can't give one library and platform, and only this platform's files reach the compiler")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.conv : to;
+
+    auto directory = makeTree("project-natives-twice", [
+        "app/silver.toml": "name = \"app\"\nuses = [\"ray\"]\n[[package]]\npath = \"../ray\"\n\n[native.ray." ~ hostPlatform
+            ~ "]\nload = \"r.dll\"\n",
+        "app/r.dll": "",
+        "ray/silver.toml": "name = \"ray\"\n[native.ray." ~ hostPlatform ~ "]\nlink = \"r.a\"\nload = \"r.dll\"\n",
+        "ray/r.a": "",
+        "ray/r.dll": "",
+        "solo/silver.toml": "name = \"solo\"\nuses = [\"ray\"]\n[[package]]\npath = \"../ray\"\n",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto twice = projectMistake(buildPath(directory, "app", "silver.toml"), ProjectCode.NativeGivenTwice);
+    assert(twice.file == buildPath(directory, "ray", "silver.toml") && twice.span.line == 2, formatMistake(twice));
+    assert(twice.message == "The library 'ray' on " ~ hostPlatform ~ " is given here and in " ~ buildPath(directory, "app",
+        "silver.toml") ~ ", at line 6, and both are part of this program; one silver.toml gives a library's files",
+        twice.message);
+
+    auto solo = project(buildPath(directory, "solo", "silver.toml"));
+    auto options = compilerOptions(solo, (string path) => path);
+    assert(options.canFind("--native-link") && options.canFind("ray=" ~ buildPath(directory, "ray", "r.a")), options.to!string);
+    assert(options.canFind("ray=" ~ buildPath(directory, "ray", "r.dll")), options.to!string);
+}
+
 @("a package's name has the segments a module's name has, wherever a silver.toml writes one")
 unittest
 {
@@ -1445,8 +1645,8 @@ unittest
     Mistake mistake;
     assert(!readPackageFile(file, read, mistake));
     assert(formatMistake(mistake, (string path) => shownFrom(directory, path)) == "silver.toml(2,1): Error F0016: "
-        ~ "`other` isn't a field of a package file. A package file has `name`, `source`, `uses` and `[[package]]`",
-        formatMistake(mistake));
+        ~ "`other` isn't a field of a package file. A package file has `name`, `source`, `uses`, `[[package]]` and "
+        ~ "`[native.<library>.<platform>]`", formatMistake(mistake));
     assert(!readPackageFile(buildPath(directory, "missing", "silver.toml"), read, mistake));
     assert(mistake.code == ProjectCode.Unreadable && mistake.span.line == 0);
     auto shown = formatMistake(mistake, (string path) => shownFrom(directory, path));
