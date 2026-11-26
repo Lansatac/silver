@@ -722,34 +722,6 @@ def over(xs: [Int]): Range<Int> => xs").onlyMessage(DiagnosticCode.AmbiguousOver
 @("a floored function's body is checked as a body whatever needed its result first")
 unittest
 {
-    // An invariant's `else` reaches `pick`, whose body builds a type whose `else` comes later.
-    enum pick = "\ndef pick(xs: [Int]): Range<Int> {\n    val built = Even(2)\n    val maker = Even\n    xs\n}";
-    enum small = "type Small(n: Int) invariant n < 10 else Bad(pick([n])[0])\n";
-    enum even = "type Even(n: Int) invariant n % 2 == 0 else Bad(n)\n";
-    foreach (order; [small ~ even, even ~ small])
-    {
-        auto a = analyzedModule(ranges ~ "type Bad(n: Int)\n" ~ order ~ pick);
-        a.shouldHaveNoDiagnostics();
-        a.shouldDeclareType(At("built", 1), "Even ! Bad");
-        a.shouldDeclareType(At("maker", 1), "(Int) -> Even ! Bad");
-    }
-    // One that leads back to its own type has nothing to go on.
-    analyzedModule(ranges ~ "type Bad(n: Int)\n" ~ small ~ "def pick(xs: [Int]): Range<Int> {\n    val s = Small(1)\n    xs\n}")
-        .shouldReport(DiagnosticCode.NotSupportedYet, At("Small(1)", 1));
-    analyzedModule(ranges ~ "type Bad(n: Int)
-" ~ small ~ "def pick(xs: [Int]): Range<Int> {
-    val build = Small
-    xs
-}")
-        .onlyMessage(DiagnosticCode.NotSupportedYet).should.endWith("that `else` leads to `pick`, whose result type is worked out "
-            ~ "from this body; write the type `pick` returns in place of `Range<Int>`, so the `else` doesn't need its body");
-    analyzedModule(ranges ~ "type Bad(n: Int)
-" ~ small ~ "def pick(xs: [Int]): [Int] {
-    val s = Small(1)
-    xs
-}")
-        .shouldHaveNoDiagnostics();
-
     // A test's body allows `expect`, and a function it needs the result of still doesn't.
     analyzed(ranges ~ "test \"t\" {\n    val r = helper([1])\n}\ndef helper(xs: [Int]): Range<Int> {\n    expect(true)\n    xs\n}\nconform [T]: Range<T>",
         null, Target.host, true).shouldReport(DiagnosticCode.ExpectOutsideTest, At("expect(true)", 1));

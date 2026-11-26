@@ -1,0 +1,52 @@
+// A type whose values are checked is built through a function that gives the value or an error:
+// from another module, for a generic type and a member a sum declares inline, and as a function value.
+
+import checked_construction_support.bounds
+
+type Reversed(low: Int, high: Int)
+type Empty
+type NotPositive(radius: Float)
+
+type Span(low: Int, high: Int)
+type NonEmpty<T>(items: [T])
+type Shape = Circle(radius: Float) | Nothing
+
+def span(low: Int, high: Int): Span ! Reversed => if low <= high => Span(low, high) else Error(Reversed(low, high))
+def nonEmpty<T>(items: [T]): NonEmpty<T> ! Empty => if length(items) > 0 => NonEmpty(items) else Error(Empty)
+def circle(radius: Float): Circle ! NotPositive => if radius > 0.0 => Circle(radius) else Error(NotPositive(radius))
+
+def describe(shape: Shape): String => match shape {
+    Circle(r) => "circle {r}"
+    Nothing => "nothing"
+}
+
+def widened(s: Span, by: Int): Span ! Reversed => span(s.low - by, s.high + by)
+
+def checked(low: Int, high: Int): String => match span(low, high) {
+    Ok(s) => "fine: {s}"
+    Error(Reversed(a, b)) => "{a} is above {b}"
+}
+
+def build(make: (Int, Int) -> Span ! Reversed, low: Int, high: Int): Span ! Reversed => make(low, high)
+
+def main(): Unit {
+    printl(span(1, 2))
+    printl(span(3, 2))
+    printl(percent(40))
+    printl(percent(101))
+    printl(checked(1, 5))
+    printl(checked(5, 1))
+
+    printl(widened(span(1, 2)!, 3))
+    printl(widened(span(1, 2)!, -3))
+    printl(percent(150) ?? percent(100)!)
+
+    val words: [String] = []
+    printl(nonEmpty(["x"]))
+    printl(nonEmpty(words))
+    printl(circle(2.0))
+    printl(circle(-1.0))
+    printl(describe(circle(2.0)!))
+    printl(build(span, 3, 4))
+    printl(build(span, 4, 3))
+}

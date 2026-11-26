@@ -3,10 +3,6 @@ type Oops(n: Int)
 type Odd(n: Int)
 type Parse = :Odd | :Blank
 type Blank
-type Reversed(low: Int, high: Int)
-type Span(low: Int, high: Int) invariant low <= high else Reversed(low, high)
-type TooEarly
-type Meeting(time: Span, title: String) invariant time.low >= 0 else TooEarly
 
 def count(ok: Bool): Int ! Oops => if ok => 8 else Error(Oops(1))
 def half(x: Int): Int ! Odd => if x % 2 == 0 => x / 2 else Error(Odd(x))
@@ -49,12 +45,4 @@ def main(): Unit {
         Error(Odd(k)) => printl("odd {k}")
         Error(Blank) => printl("blank")
     }
-
-    // A `with` that checks two invariants.
-    val meeting = Meeting(Span(1, 2)!, "a")!
-    printl(meeting with (time = Span(0, 4)!))
-    val reversed = meeting with (time.high = 0)
-    printl(reversed)
-    val early = meeting with (time.low = -1)
-    printl(early)
 }

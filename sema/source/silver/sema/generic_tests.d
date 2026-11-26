@@ -335,91 +335,6 @@ def tries<E>(r: Int ! E, n: Int): Int ! E | Oops {
 }`).shouldHaveNoDiagnostics();
 }
 
-@("a generic function that builds a larger instance of a type whose invariant calls it needs endlessly many instances")
-unittest
-{
-    analyzedModule(`
-type Bad
-type W<T>(items: [T]) invariant ok(items) else Bad
-def ok<U>(xs: [U]): Bool {
-    if length(xs) > 0 { return true }
-    match W([xs]) {
-        Ok(_) => true
-        Error(_) => false
-    }
-}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("W", 2));
-}
-
-@("a constructor used as a value builds the instance it returns, not one its parameters mention")
-unittest
-{
-    analyzedModule(`
-type Bad
-type W<T>(fixed: W<Int>?, items: [T]) invariant ok(items) else Bad
-def ok<U>(xs: [U]): Bool {
-    if length(xs) > 0 { return true }
-    val mk: (W<Int>?, [[U]]) -> W<[U]> ! Bad = W
-    match mk(None, [xs]) {
-        Ok(_) => true
-        Error(_) => false
-    }
-}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("W", 5));
-    analyzedModule(`
-type Bad
-type W<T>(items: [T]) invariant ok(items) else Bad
-def ok<U>(xs: [U]): Bool {
-    if length(xs) > 0 { return true }
-    val mk: ([[U]]) -> W<[U]> ! Bad = W
-    match mk([xs]) {
-        Ok(_) => true
-        Error(_) => false
-    }
-}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("W", 3));
-}
-
-@("a `with` that a type's invariant checks needs the invariant at the instance it changes")
-unittest
-{
-    analyzedModule(`
-type Bad
-type W<T>(items: [T], n: Int) invariant ok(items, n) else Bad
-type Holder<T>(w: W<[T]>?)
-def ok<U>(xs: [U], n: Int): Bool => n > 0 || poke(Holder<U>(None))
-def poke<U>(h: Holder<U>): Bool => match h.w {
-    None => false
-    Some(w) => match w with (n = 0) {
-        Ok(_) => true
-        Error(_) => false
-    }
-}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("w with", 1));
-}
-
-@("the invariant of a member a generic sum declares inline is needed at the sum's arguments it mentions")
-unittest
-{
-    analyzedModule(`
-type Bad
-type S<A, B> = M(b: [B]) invariant (ok(b)) else (Bad) | Stop(a: A)
-def ok<U>(xs: [U]): Bool {
-    if length(xs) > 0 { return true }
-    val s: S<Int, [U]> ! Bad = M([xs])
-    match s {
-        Ok(_) => true
-        Error(_) => false
-    }
-}`).shouldReport(DiagnosticCode.PolymorphicRecursion, At("M([xs])", 1));
-    // Growing only the parameter the member doesn't mention needs no larger invariant.
-    analyzedModule(`
-type Bad
-type S<A, B> = M(b: [B]) invariant (ok(b)) else (Bad) | Stop(a: A)
-def ok<U>(xs: [U]): Bool => true
-def grows<A>(a: A, n: Int): Int {
-    if n == 0 { return 0 }
-    val s: S<[A], Int> ! Bad = M([1])
-    grows(a, n - 1)
-}`).shouldHaveNoDiagnostics();
-}
-
 @("an error list grows when it holds a type parameter inside another member")
 unittest
 {
@@ -649,41 +564,6 @@ unittest
     analyzedGeneric("    val xs = [Box, Box<Int>(1)]").shouldReport(DiagnosticCode.CannotInferTypeArgument, At("Box", 2));
 }
 
-@("`!` and `?` pass what's expected on to a generic sum's member with an invariant, to build the member or infer the sum")
-unittest
-{
-    enum many = "type Empty\ntype Nums<T> = Many(xs: [T]) invariant (length(xs) > 0) else (Empty) | Blank\n";
-    auto a = analyzed(many ~ "def f(): Many<Int> ! Empty {\n    val q: Many<Int> = Many([])?\n    q\n}\n"
-        ~ "def main(): Unit {\n    val m: Many<Int> = Many<Int>([8, 9])!\n    val n: Many<Int>? = Many([8])!\n"
-        ~ "    val k: Nums<Int> = Many([])!\n    val s = Many([1])!\n}");
-    a.shouldHaveNoDiagnostics();
-    a.shouldHaveType("Many([])", 1, "Many<Int> ! Empty");
-    a.shouldHaveType("Many<Int>([8, 9])", "Many<Int> ! Empty");
-    a.shouldHaveType("Many([8])", "Many<Int> ! Empty");
-    a.shouldHaveType("Many([])", 2, "Nums<Int> ! Empty");
-    a.shouldDeclareType(At("s", 1), "Nums<Int>");
-}
-
-@("`?` in a function returning a generic member's error union builds the member, as for a non-generic member")
-unittest
-{
-    enum many = "type Empty\ntype Nums<T> = Many(xs: [T]) invariant (length(xs) > 0) else (Empty) | Blank\n";
-    auto a = analyzed(many ~ "def f(): Many<Int> ! Empty => Many([1, 2])?\n"
-        ~ "def g(): Many<Int> ! Empty {\n    val n: Many<Int> ! Empty = Many([3])!\n    n\n}\n"
-        ~ "def main(): Unit {}");
-    a.shouldHaveNoDiagnostics();
-    a.shouldHaveType("Many([1, 2])", "Many<Int> ! Empty");
-}
-
-@("`!` passes what's expected on to a generic product with an invariant, as it does to a generic sum's member")
-unittest
-{
-    enum nonEmpty = "type Empty\ntype NonEmpty<T>(items: [T]) invariant length(items) > 0 else Empty\n";
-    auto a = analyzed(nonEmpty ~ "def main(): Unit {\n    val s: NonEmpty<Int> = NonEmpty([])!\n}");
-    a.shouldHaveNoDiagnostics();
-    a.shouldHaveType("NonEmpty([])", "NonEmpty<Int> ! Empty");
-}
-
 @("branches whose shapes differ outside an already reported error are still reported as a mismatch")
 unittest
 {
@@ -701,29 +581,26 @@ unittest
 @("`!` and `?` type their operand toward an option or error union of what's expected, through branches and nesting")
 unittest
 {
-    enum unwrapping = "type Oops\ntype Shape = Circle(r: Float) invariant (r > 0.0) else (\"no\") | Nothing\n"
+    enum unwrapping = "type Oops\n"
         ~ "def mk<T>(): T ! Oops => Error(Oops)\ndef maybe<T>(): T? => None\ndef nested<T>(): T? ! Oops => Ok(None)\n"
         ~ "def none<T>(): T => panic(\"none\")\n"
         ~ "def f(): Int ! Oops {\n    val x: Int = mk()?\n    x\n}\n"
         ~ "def g(): Int? {\n    val x: Int = maybe()?\n    Some(x)\n}\n";
     auto a = analyzed(unwrapping ~ "def main(): Unit {\n    val b = true\n    val x: Int = mk()!\n"
-        ~ "    val c: Circle = (if b => Circle(1.0) else Circle(2.0))!\n"
-        ~ "    val m: Circle = (match b {\n        true => Circle(3.0)\n        false => { Circle(4.0) }\n    })!\n"
+        ~ "    val c: Int = (if b => mk() else mk())!\n"
+        ~ "    val m: Int = (match b {\n        true => mk()\n        false => { mk() }\n    })!\n"
         ~ "    val o: Int? = maybe()!!\n    val n: Int = nested()!!\n}");
     a.shouldHaveNoDiagnostics();
     a.shouldHaveType("mk()", 1, "Int ! Oops");
     a.shouldHaveType("maybe()", 1, "Int?");
     a.shouldHaveType("mk()", 2, "Int ! Oops");
-    a.shouldHaveType("if b => Circle(1.0) else Circle(2.0)", "Circle ! String");
-    a.shouldHaveType("Circle(4.0)", "Circle ! String");
+    a.shouldHaveType("if b => mk() else mk()", "Int ! Oops");
+    a.shouldHaveType("mk()", 6, "Int ! Oops");
     a.shouldHaveType("maybe()", 2, "(Int?)?");
     a.shouldHaveType("nested()", "Int? ! Oops");
     // With `!` the error isn't known, so nothing says whether `T` is an option or an error union.
     analyzed(unwrapping ~ "def main(): Unit {\n    val y: Int = none()!\n}")
         .shouldReport(DiagnosticCode.CannotInferTypeArgument, At("none()", 1));
-    // A field's object has nothing expected of it, so this builds the sum.
-    analyzed(unwrapping ~ "def main(): Unit {\n    val r = Circle(1.0)!.r\n}")
-        .shouldReport(DiagnosticCode.UnknownMember, At("Circle(1.0)!.r", 1));
 }
 
 @("`?` with a known error types a bare type parameter toward the whole option or error union, as the docs say")

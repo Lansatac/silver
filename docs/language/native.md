@@ -81,7 +81,7 @@ A native type with fields is a C `struct` with those fields in that order, laid 
 
 - Each field's type is one that can cross: an integer, `Float`, `Float32`, `Bool`, a native type, or an option of a native type with no fields. Anything else is an error at the field. A structure inside a structure is held by value, so a native type can't contain itself.
 - It is an ordinary product otherwise. It has a constructor, fields, `with`, patterns, `==`, a hash and a printed form, it can be stored anywhere a value can, and any module can write [operator functions](functions.md#operators) for it.
-- It can't take type parameters or have an invariant, since C can make any value of it.
+- It can't take type parameters.
 - An option of one can't cross: only a pointer can be null.
 
 Silver's own values have no fixed layout, so a structure is put into C's layout as it's passed and read out of it as it comes back. A native that takes a pointer to a structure can't be declared yet.

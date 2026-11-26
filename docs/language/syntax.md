@@ -93,4 +93,3 @@ The condition of an `if` or `while`, the iterable of a `for` and the subject of 
 ## Current implementation
 
 - `tail` isn't reserved yet.
-- `invariant` is still reserved, until [invariants](user-types.md#current-implementation) are removed.

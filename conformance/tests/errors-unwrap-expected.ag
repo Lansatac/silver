@@ -1,17 +1,10 @@
-// What's expected of `x!` or `x?` reaches `x`: it binds type arguments and builds a sum's member.
+// What's expected of `x!` or `x?` reaches `x`: it binds type arguments, through branches too.
 type Oops
-type Empty
-type Shape = Circle(radius: Float) invariant (radius > 0.0) else ("not positive") | Nothing
-type Nums<T> = Many(items: [T]) invariant (length(items) > 0) else (Empty) | Blank
 
 def parsed<T>(fallback: T, ok: Bool): T ! Oops => if ok => fallback else Error(Oops)
 def found<T>(value: T, present: Bool): T? => if present => Some(value) else None
+def none<T>(): T? => None
 def zero<T>(): T? ! Oops => Ok(None)
-
-def larger(b: Bool): Circle ! String {
-    val c: Circle = (if b => Circle(1.0) else Circle(2.0))?
-    c with (radius = c.radius * 10.0)
-}
 
 def doubled(ok: Bool): Int ! Oops {
     val n: Int = parsed(21, ok)?
@@ -25,16 +18,13 @@ def first(present: Bool): Int? {
 
 def main(): Unit {
     val b = true
-    val c: Circle = (if b => Circle(3.0) else Circle(4.0))!
-    printl(c.radius)
-    val m: Circle = (match b {
-        true => { Circle(5.0) }
-        false => Circle(6.0)
+    val c: Int = (if b => found(3, true) else none())!
+    printl(c)
+    val m: [Int] = (match b {
+        true => { found([5], true) }
+        false => none()
     })!
-    printl(m.radius)
-    val many: Many<Int> = (if b => Many([1, 2]) else Many([3]))!
-    printl(many.items)
-    printl(larger(true))
+    printl(m)
     printl(doubled(true))
     printl(doubled(false))
     printl(first(true))

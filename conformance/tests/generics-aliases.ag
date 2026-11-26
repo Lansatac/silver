@@ -6,8 +6,7 @@ import generics_support.boxes
 type Box<T>(value: T)
 type Pair<A, B>(first: A, second: B)
 type Outcome<T> = Done(value: T) | Failed(reason: String)
-type Empty
-type NonEmpty<T>(items: [T]) invariant items.length() > 0 else Empty
+type NonEmpty<T>(items: [T])
 
 alias IntBox = Box<Int>
 alias Also = IntBox
@@ -62,8 +61,7 @@ def main(): Unit {
     printl(total(done))
     printl(total(Failed("no")))
 
-    printl(Ints([17, 18])!)
-    printl(Ints([]) ?? Ints([19])!)
+    printl(Ints([17, 18]))
 
     val labels = generics_support.boxes.Labels(["x", "y"])
     printl(labels)

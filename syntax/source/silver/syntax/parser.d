@@ -238,7 +238,7 @@ private final class Parser
     }
 
     /// One declaration, except that a sum comes with a declaration for each member it defines
-    /// inline, and a type with an invariant with the functions holding it.
+    /// inline.
     private Decl[] parseDeclaration()
     {
         if (!at(TokenKind.kwPrivate)) return parseDeclarationBody(false);
@@ -387,10 +387,6 @@ private final class Parser
             {
                 throw error(spanFrom(parensStart),
                     "A native type with no fields is written `native type %s`, with no `()`".format(text(nameToken)));
-            }
-            if (at(TokenKind.kwInvariant))
-            {
-                throw error(spanOf(tokens[pos]), "A native type can't have an invariant, since C can make any value of it");
             }
         }
         auto native = TypeDecl(ids.next!TypeDecl, text(nameToken), spanOf(nameToken), fields, false);
@@ -610,18 +606,6 @@ private final class Parser
         return TypeParam(ids.next!TypeParam, text(nameToken), spanOf(nameToken), bounds);
     }
 
-    /// The type parameters at token `at`, parsed again so they're nodes of their own; none if
-    /// there are none.
-    private TypeParam[] freshTypeParams(size_t at)
-    {
-        if (at == size_t.max) return null;
-        auto saved = pos;
-        pos = at;
-        auto params = parseTypeParameters();
-        pos = saved;
-        return params;
-    }
-
     /// `I & J<T>`, after an interface's name or in a conformance or bound.
     private TypeExpr[] parseInterfaces()
     {
@@ -711,55 +695,25 @@ private final class Parser
     }
 
     /// `type Name`, `type Name()`, `type Name(fields)` or `type Name = members`, and for a sum a
-    /// declaration of each member it defines inline, which from here on is a type like any other,
-    /// and for a type with an invariant, the functions holding it.
+    /// declaration of each member it defines inline, which from here on is a type like any other.
     private Decl[] parseTypeDeclaration()
     {
         auto start = here;
         pos++;
         auto nameToken = expect(TokenKind.typeName, "a type name");
-        auto typeParamsAt = size_t.max;
         TypeParam[] typeParams;
-        if (at(TokenKind.less))
-        {
-            typeParamsAt = pos;
-            typeParams = parseTypeParameters();
-        }
-        if (accept(TokenKind.assign)) return parseSum(start, nameToken, typeParams, typeParamsAt);
+        if (at(TokenKind.less)) typeParams = parseTypeParameters();
+        if (accept(TokenKind.assign)) return parseSum(start, nameToken, typeParams);
 
         Field[] fields;
         bool emptyParens;
-        auto fieldsAt = pos;
         if (at(TokenKind.leftParen)) fields = parseFields(emptyParens);
         auto product = TypeDecl(ids.next!TypeDecl, text(nameToken), spanOf(nameToken), fields, emptyParens);
         product.typeParams = typeParams;
-        if (fieldsAt == pos || !at(TokenKind.kwInvariant)) return [Decl(spanFrom(start), DeclKind(product))];
-
-        auto invariantStart = here;
-        pos++;
-        auto conditionStart = here;
-        auto condition = parseExpression();
-        auto conditionSpan = spanFrom(conditionStart);
-        if (!accept(TokenKind.kwElse)) throw missingElse(invariantStart);
-        auto errorStart = here;
-        auto errorValue = parseExpression();
-        auto errorSpan = spanFrom(errorStart);
-        auto invariantSpan = spanFrom(invariantStart);
-
-        auto f = invariantFunction(product, fieldsAt, condition, conditionSpan, freshTypeParams(typeParamsAt));
-        auto e = invariantErrorFunction(product, fieldsAt, errorValue, errorSpan, freshTypeParams(typeParamsAt));
-        product.invariantFunction = f.id;
-        product.invariantError = e.id;
-        return [Decl(spanFrom(start), DeclKind(product)), Decl(invariantSpan, DeclKind(f)), Decl(invariantSpan, DeclKind(e))];
+        return [Decl(spanFrom(start), DeclKind(product))];
     }
 
-    private ParseException missingElse(size_t invariantStart)
-    {
-        return error(spanFrom(invariantStart),
-            "An invariant needs `else` and the error a value that breaks it gives, as in `invariant low <= high else Reversed(low, high)`");
-    }
-
-    private Decl[] parseSum(size_t start, Token nameToken, TypeParam[] typeParams, size_t typeParamsAt)
+    private Decl[] parseSum(size_t start, Token nameToken, TypeParam[] typeParams)
     {
         Decl[] declarations;
         SumMember[] members;
@@ -779,39 +733,12 @@ private final class Parser
 
             auto memberStart = here;
             auto memberName = tokens[pos++];
-            auto fieldsAt = pos;
             bool emptyParens;
             auto fields = parseFields(emptyParens);
             auto inline = TypeDecl(ids.next!TypeDecl, text(memberName), spanOf(memberName), fields, emptyParens);
             inline.typeParams = mentioned(typeParams, inline.fields);
             inline.inheritsParams = inline.typeParams.length > 0;
-            Decl[] check;
-            if (at(TokenKind.kwInvariant))
-            {
-                auto invariantStart = here;
-                pos++;
-                expect(TokenKind.leftParen, "`(`");
-                auto conditionStart = here;
-                auto condition = parseExpression();
-                auto conditionSpan = spanFrom(conditionStart);
-                expect(TokenKind.rightParen, "`)`");
-                if (!accept(TokenKind.kwElse)) throw missingElse(invariantStart);
-                expect(TokenKind.leftParen, "`(`");
-                auto errorStart = here;
-                auto errorValue = parseExpression();
-                auto errorSpan = spanFrom(errorStart);
-                expect(TokenKind.rightParen, "`)`");
-                auto invariantSpan = spanFrom(invariantStart);
-
-                auto f = invariantFunction(inline, fieldsAt, condition, conditionSpan,
-                    mentioned(freshTypeParams(typeParamsAt), inline.fields));
-                auto e = invariantErrorFunction(inline, fieldsAt, errorValue, errorSpan,
-                    mentioned(freshTypeParams(typeParamsAt), inline.fields));
-                inline.invariantFunction = f.id;
-                inline.invariantError = e.id;
-                check = [Decl(invariantSpan, DeclKind(f)), Decl(invariantSpan, DeclKind(e))];
-            }
-            declarations ~= Decl(spanFrom(memberStart), DeclKind(inline)) ~ check;
+            declarations ~= Decl(spanFrom(memberStart), DeclKind(inline));
             TypeExpr[] args;
             foreach (p; inline.typeParams)
             {
@@ -861,47 +788,6 @@ private final class Parser
         }
         expect(TokenKind.rightParen, "`)` or `,`");
         return fields;
-    }
-
-    /// A parameter for each field of the list at token `at`, parsed again so it has nodes of its own.
-    private Param[] fieldParams(size_t at)
-    {
-        auto saved = pos;
-        pos = at;
-        bool emptyParens;
-        Param[] params;
-        foreach (field; parseFields(emptyParens))
-        {
-            params ~= Param(ids.next!Param, field.name, field.nameSpan, field.type);
-        }
-        pos = saved;
-        return params;
-    }
-
-    /// The function holding `type`'s invariant `condition`, whose parameters are the fields at
-    /// `fieldsAt` and whose type parameters match the type's. Its nodes are its own, so sema
-    /// checks it as any other function.
-    private FunctionDecl invariantFunction(const TypeDecl type, size_t fieldsAt, Expr condition, Span conditionSpan,
-        TypeParam[] typeParams)
-    {
-        auto bool_ = TypeExpr(ids.next!TypeExpr, conditionSpan, TypeExprKind(NamedType(["Bool"], null)));
-        auto f = FunctionDecl(ids.next!FunctionDecl, "invariant " ~ type.name, type.nameSpan, fieldParams(fieldsAt),
-            boxed(condition), bool_, FunctionKind.ordinary, null, true, typeParams);
-        f.invariantOf = type.id;
-        return f;
-    }
-
-    /// The function holding the `else` of `type`'s invariant, declared as `invariantFunction` is.
-    /// Sema infers its return type, so the one written here is a placeholder.
-    private FunctionDecl invariantErrorFunction(const TypeDecl type, size_t fieldsAt, Expr error, Span errorSpan,
-        TypeParam[] typeParams)
-    {
-        auto placeholder = TypeExpr(ids.next!TypeExpr, errorSpan, TypeExprKind(UnitType()));
-        auto f = FunctionDecl(ids.next!FunctionDecl, "invariant error " ~ type.name, type.nameSpan, fieldParams(fieldsAt),
-            boxed(error), placeholder, FunctionKind.ordinary, null, true, typeParams);
-        f.invariantOf = type.id;
-        f.invariantErrorOf = type.id;
-        return f;
     }
 
     /// A TypeDecl for each bare name in a sum. They come last, so a clash with a declaration

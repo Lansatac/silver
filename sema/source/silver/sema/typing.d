@@ -81,14 +81,6 @@ package struct Typing
     SideTable!(Id!Pattern, size_t) patternsThrough;
     SideTable!(Id!Pattern, Type) patternListSubjects;
     SideTable!(Id!Pattern, Id!TypeDecl) patternConstructors;
-    /// What the invariant of each type that has one gives when it doesn't hold, in terms of the
-    /// type's own parameters.
-    SideTable!(Id!TypeDecl, Type) invariantErrors;
-    /// The fields each invariant's condition names, which change only through `with`.
-    SideTable!(Id!TypeDecl, string[]) invariantMentions;
-    /// For a `with` that checks invariants, the place of each value it checks, as field indexes
-    /// from the whole value, longest first. The empty path is the whole value.
-    SideTable!(Id!Expr, size_t[][]) withChecks;
 }
 
 struct FieldInfo { string name; Type type; }

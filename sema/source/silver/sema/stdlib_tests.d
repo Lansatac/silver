@@ -95,7 +95,7 @@ private string[] hiddenByFacades(string fixtures, string[] modules)
                     if (i.forward && i.names.length == 0) targets ~= i.path.join(".");
                 },
                 (const FunctionDecl f) {
-                    if (!f.isPrivate && f.testName is null && !f.invariantOf.isValid && !names.canFind(f.name))
+                    if (!f.isPrivate && f.testName is null && !names.canFind(f.name))
                         names ~= f.name;
                 },
                 (_) {},

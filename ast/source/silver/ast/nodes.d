@@ -799,12 +799,6 @@ struct FunctionDecl
     string symbol;
     bool isPrivate;
     TypeParam[] typeParams;
-    /// For the function holding a type's invariant, that type; otherwise invalid. Its name can't be
-    /// written, and its parameters name the fields, which hide anything of the same name.
-    Id!TypeDecl invariantOf;
-    /// For the function holding what a type's invariant gives when it doesn't hold, that type;
-    /// otherwise invalid. `invariantOf` is set too, and its return type is inferred.
-    Id!TypeDecl invariantErrorOf;
     /// For a `test`, its name, which the function's own name can't be written as; otherwise null.
     string testName;
 }
@@ -856,11 +850,6 @@ struct TypeDecl
     /// `native type Name`, a handle to something a library owns, with no fields, constructor or
     /// patterns; or with fields, a C structure, which is otherwise an ordinary product.
     bool native;
-    /// The function holding the invariant, which syntax lowering declares beside the type with the
-    /// fields as its parameters, or an invalid ID when it has none.
-    Id!FunctionDecl invariantFunction;
-    /// The function holding the invariant's `else`, declared beside it in the same way.
-    Id!FunctionDecl invariantError;
 }
 
 /// `alias Name = Type`, a second name for a type. Sema expands it, so the backends never see one.

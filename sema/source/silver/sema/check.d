@@ -73,17 +73,6 @@ private struct Reference
     Witness[] witnesses;
 }
 
-/// A value of a type with an invariant built, or changed by a `with` the invariant checks, in a
-/// function. The type is `type`, or found in what `expr` gives.
-private struct InvariantUse
-{
-    Site site;
-    Span span;
-    Id!TypeDecl decl;
-    Id!Expr expr;
-    Type type;
-}
-
 /// What a lambda with no known return type was found to return.
 private struct InferredReturn
 {
@@ -142,9 +131,6 @@ private final class TypeChecker
     private const(Expr)[] _floatLiterals;
     /// Constants whose initializer already has an error, which evaluating would only repeat.
     private bool[Id!ConstDecl] _unevaluable;
-    /// Constructions of a type with an invariant from literals alone, which are checked once the
-    /// literals' types are final.
-    private const(Expr)[] _literalConstructions;
     /// The option or error union `!` or `?` is typing its operand toward, which a bare type
     /// parameter takes whole, though against any other expected type it takes what that holds.
     private Type _unwrapTarget;
@@ -155,8 +141,6 @@ private final class TypeChecker
     private const(Id!FunctionDecl)[][string][string] _exported;
     /// How many elements `placePath` has named, so each is a place of its own.
     private size_t _elementPlaces;
-    /// The types with an invariant whose `else` hasn't been typed yet, and whether it's being typed.
-    private bool[Id!TypeDecl] _pendingInvariants;
     /// Each function whose result type is worked out from its body that has been started on.
     private ResultState[Id!FunctionDecl] _resultStates;
     /// Those found to need their own result type while it was being worked out.
@@ -182,7 +166,6 @@ private final class TypeChecker
     private Id!Expr[Id!Expr] _testsByBranch;
     /// Every use of a generic function, for `rejectGrowingCalls`.
     private Reference[] _references;
-    private InvariantUse[] _invariantUses;
     /// For the type parameters a search makes up.
     private NodeIds _ids;
 
@@ -270,34 +253,6 @@ private final class TypeChecker
         declareConformances(programModules);
         checkTypeHooks(programModules, _typing, _resolutions, _collector);
 
-        // After every signature, since an invariant's `else` can call anything, and before any body,
-        // since a body can build the type. One that another needs first is typed from there.
-        noteInvariantMentions();
-        foreach (mod; programModules)
-        {
-            foreach (decl; mod.declarations)
-            {
-                decl.kind.match!(
-                    (const TypeDecl t) {
-                        if (t.invariantError.isValid) _pendingInvariants[t.id] = false;
-                    },
-                    (_) {},
-                );
-            }
-        }
-        foreach (mod; programModules)
-        {
-            foreach (decl; mod.declarations)
-            {
-                decl.kind.match!(
-                    (const TypeDecl t) {
-                        if (t.id in _pendingInvariants) inferInvariantError(t);
-                    },
-                    (_) {},
-                );
-            }
-        }
-
         foreach (mod; programModules)
         {
             checkOverloads(mod, mod.companionOf is null ? null : program.modules[mod.companionOf]);
@@ -306,7 +261,7 @@ private final class TypeChecker
         }
         checkNativeSymbols(programModules, program);
 
-        // After every overload is checked and invariant typed, which finding a conformance's functions
+        // After every overload is checked, which finding a conformance's functions
         // can need, and before any body. One that's needed first is found from there.
         foreach (entry; _entries) findConformance(entry);
         checkConformances();
@@ -349,14 +304,14 @@ private final class TypeChecker
 
         // Last, because an integer literal's type isn't final until everything's been checked.
         _typing.constants = evaluateConstants(programModules, _types, _typing.exprTypes, _resolutions, _unevaluable,
-            _negatedLiterals, _collector, _literalConstructions, _typing.operators);
+            _negatedLiterals, _collector);
 
         return _typing;
     }
 
     /// Reports each generic function that needs an instance of itself at ever larger type
-    /// arguments: by calling itself or through other functions, the witnesses their uses and
-    /// loops find, and the invariants of the values they build.
+    /// arguments: by calling itself or through other functions, and the witnesses their uses and
+    /// loops find.
     private void rejectGrowingCalls()
     {
         Use!(Id!FunctionDecl)[] uses;
@@ -382,17 +337,6 @@ private final class TypeChecker
             add(from, reference.func, reference.typeArgs, reference.span);
             addWitnesses(from, reference.witnesses, reference.span);
         }
-        // An invariant's functions have the type's parameters, and each value built needs them at its own.
-        foreach (use; _invariantUses)
-        {
-            if (!generic(use.site.function_)) continue;
-            auto decl = _resolutions.declarations.types[use.decl];
-            auto type = use.expr.isValid ? _typing.exprTypes.get(use.expr, _types.error) : use.type;
-            auto args = argumentsOf(type, *decl);
-            if (args is null) continue;
-            add(use.site.function_, decl.invariantFunction, args, use.span);
-            if (decl.invariantError.isValid) add(use.site.function_, decl.invariantError, args, use.span);
-        }
 
         const(TypeParam)[] paramsOf(Id!FunctionDecl f) => _resolutions.typeParamsOf(f);
         string name(Id!FunctionDecl f) => _resolutions.declarations.functions[f].name;
@@ -405,53 +349,13 @@ private final class TypeChecker
         }
     }
 
-    /// Notes that a generic function may build a value of a type with an invariant, for
-    /// `rejectGrowingCalls`.
-    private void noteInvariantUse(InvariantUse use)
-    {
-        if (!_resolutions.declarations.types[use.decl].invariantFunction.isValid || !isGenericFunction(use.site.function_)) return;
-        use.site.unsettled = null;
-        _invariantUses ~= use;
-    }
-
-    /// The type arguments of the instance of `decl` that `type` builds, for the type parameters of
-    /// its invariant's functions, or null if there's none. `type` is the instance, what a
-    /// construction gives, or a constructor's function type, so only the success side of what it
-    /// returns is the instance: a parameter can hold others. A member a sum declares inline is
-    /// built as the sum, and has the sum's parameters it mentions.
-    private const(Type)[] argumentsOf(Type type, const TypeDecl decl)
-    {
-        type = _types[type].match!((const FunctionData f) => f.ret, _ => type);
-        type = _types[type].match!((const ErrorUnionData u) => u.success, _ => type);
-        auto owner = _declarer.ownerOf(decl.id);
-        auto sought = owner !is null && decl.inheritsParams ? _types[*owner].match!((const NominalData n) => n.decl, _ => decl.id)
-            : decl.id;
-        auto found = _types[type].match!((const NominalData n) => n.decl == sought ? n.args : null, _ => null);
-        if (found is null || sought == decl.id) return found;
-        auto sumParams = _resolutions.declarations.types[sought].typeParams;
-        const(Type)[] args;
-        foreach (param; decl.typeParams)
-        {
-            auto at = sumParams.countUntil!(p => p.id == param.id);
-            if (at < 0 || at >= found.length) return null;
-            args ~= found[at];
-        }
-        return args;
-    }
-
-    /// `first<Int>`; for an invariant, `the invariant of W<Int>`; and a parameter whose type is
+    /// `first<Int>`; and a parameter whose type is
     /// an interface name is shown by what it's given, as in `primes with r a Skipped<R>`.
     private string describeInstance(Id!FunctionDecl f, const(Type)[] args)
     {
         auto func = _resolutions.declarations.functions[f];
         auto declared = func.typeParams.length;
         auto shown = args[0 .. declared].map!(a => _types.describe(a)).array;
-        if (func.invariantOf.isValid)
-        {
-            auto type = "%s%s".format(_resolutions.declarations.types[func.invariantOf].name,
-                shown.length > 0 ? "<%-(%s, %)>".format(shown) : "");
-            return func.invariantErrorOf.isValid ? "the `else` of `%s`'s invariant".format(type) : "the invariant of `%s`".format(type);
-        }
         auto text = "`%s%s`".format(func.name, shown.length > 0 ? "<%-(%s, %)>".format(shown) : "");
         string[] given;
         foreach (k, param; _resolutions.hiddenParams.get(f, null))
@@ -855,8 +759,7 @@ private final class TypeChecker
             (const FunctionData fd)=>fd.ret,
             (_)=>_types.error
             );
-        // An invariant's `else` was checked when its type was inferred.
-        if (func.body is null || func.invariantErrorOf.isValid) return;
+        if (func.body is null) return;
         checkBody(*func.body, returnType, siteOf(func.id), func.testName !is null);
     }
 
@@ -1025,100 +928,6 @@ private final class TypeChecker
     {
         return Site(_resolutions.declarations.functionModules[func], func,
             _resolutions.declarations.functions[func].testName !is null);
-    }
-
-    /// The fields each invariant's condition names: those of its function's parameters that
-    /// something resolves to, since only the condition can see them.
-    private void noteInvariantMentions()
-    {
-        bool[SymbolId] resolved;
-        foreach (symbol; _resolutions.resolutions.byValue) resolved[symbol] = true;
-        foreach (type; _resolutions.declarations.types.byValue)
-        {
-            if (!type.invariantFunction.isValid) continue;
-            auto condition = _resolutions.declarations.functions[type.invariantFunction];
-            _typing.invariantMentions[type.id] = condition.params.filter!(p => (SymbolId(p.id) in resolved) !is null)
-                .map!(p => p.name.idup).array;
-        }
-    }
-
-    /// What `type`'s invariant gives when it doesn't hold, from its `else`, and its constructor
-    /// as a function returning an error union of that.
-    private void inferInvariantError(const TypeDecl type)
-    {
-        auto func = _resolutions.declarations.functions[type.invariantError];
-        auto params = signatureOf(func.id).params;
-        _pendingInvariants[type.id] = true;
-        auto error = inferReturn(*func.body, siteOf(func.id));
-        _pendingInvariants.remove(type.id);
-        if (error == _types.never)
-        {
-            _collector.reportError(DiagnosticCode.InvalidErrorType, func.body.span,
-                "An invariant's `else` has to give the error, not stop the program");
-            error = _types.error;
-        }
-        _typing.symbolTypes[SymbolId(func.id)] = _types.function_(params, error);
-
-        // The function has type parameters of its own, in the type's order.
-        Substitution toType;
-        foreach (i, param; func.typeParams) toType[param.id] = _declarer.parameterType(type.typeParams[i]);
-        auto own = _types.substitute(error, toType);
-        _typing.invariantErrors[type.id] = own;
-        auto constructor = SymbolId(type.id);
-        _typing.symbolTypes[constructor] = _types[_typing.symbolTypes[constructor]].match!(
-            (const FunctionData f) => _types.function_(f.params, own == _types.error ? own : _types.errorUnion(f.ret, own)),
-            (_) => _typing.symbolTypes[constructor],
-        );
-    }
-
-    /// Whether what the invariant of `decl` gives is known, typing its `else` first when nothing
-    /// has yet. It isn't, and that's reported at `span`, when that `else` is what's being typed
-    /// and has got here, so it needs its own type. `site` is where `span` is.
-    private bool requireInvariant(Id!TypeDecl decl, Span span, Site site)
-    {
-        auto working = decl in _pendingInvariants;
-        if (working is null) return true;
-        if (!*working)
-        {
-            inferInvariantError(*_resolutions.declarations.types[decl]);
-            return true;
-        }
-        auto name = _resolutions.declarations.types[decl].name;
-        // The `else` got here through a function whose body it wouldn't need if its result were written.
-        if (site.function_ in _resolutions.resultFloors && _resultStates.get(site.function_, ResultState.waiting) == ResultState.working)
-        {
-            auto through = _resolutions.declarations.functions[site.function_];
-            _collector.reportError(DiagnosticCode.NotSupportedYet, span,
-                ("This needs what building %s can give, which is worked out from the `else` of `%s`'s invariant, and that "
-                    ~ "`else` leads to `%s`, whose result type is worked out from this body; write the type `%s` returns in "
-                    ~ "place of `%s`, so the `else` doesn't need its body")
-                    .format(withArticle(name), name, through.name, through.name, printTypeExpr(through.returnType)));
-            return false;
-        }
-        _collector.reportError(DiagnosticCode.NotSupportedYet, span,
-            ("What building %s can give is worked out from the `else` of its invariant, which needs this before "
-                ~ "that's known; an `else` can't lead back to its own type")
-                .format(withArticle(name)));
-        return false;
-    }
-
-    /// Whether the invariant of `type`, a declared type, names its field `field`.
-    private bool invariantMentions(Type type, string field)
-    {
-        auto decl = declOf(type);
-        if (!decl.isValid) return false;
-        auto mentioned = decl in _typing.invariantMentions;
-        return mentioned !is null && (*mentioned).canFind(field);
-    }
-
-    /// What the invariant of the declared type `type` gives when it doesn't hold, or `Type.init`
-    /// when it has none.
-    private Type invariantErrorOf(Type type)
-    {
-        auto decl = declOf(type);
-        if (!decl.isValid) return Type.init;
-        auto error = decl in _typing.invariantErrors;
-        return error is null ? Type.init : _types.substitute(*error, _declarer.substitutionOf(type));
     }
 
     /// The function type of `lambda`, checking its body. `expected` supplies what it leaves out.
@@ -1663,20 +1472,7 @@ private final class TypeChecker
     {
         return target.kind.match!(
             (const Identifier _) => checkBindingMutable(target, use),
-            (const MemberAccess access) {
-                // The outermost invariant first, so the `with` the message suggests is allowed.
-                if (!checkAssignable(*access.object, use)) return false;
-                auto object = access.object.id in _typing.exprTypes;
-                if (object !is null && invariantMentions(*object, access.member))
-                {
-                    auto name = spelledPlace(*access.object);
-                    _collector.reportError(DiagnosticCode.InvariantFieldChanged, target.span,
-                        "`%s` is in the invariant of `%s`, so it changes only through `with`, as in `%s = (%s with (%s = ...))?`"
-                            .format(access.member, _types.describe(*object), name, name, access.member));
-                    return false;
-                }
-                return true;
-            },
+            (const MemberAccess access) => checkAssignable(*access.object, use),
             (const IndexExpr index) {
                 auto arraySlice = asRange(index.index) !is null
                     && _types.isArray(_typing.exprTypes.get(index.object.id, _types.error));
@@ -1938,17 +1734,6 @@ private final class TypeChecker
         );
     }
 
-    /// A place as it's written, with an index shown as `[...]`.
-    private string spelledPlace(const Expr place)
-    {
-        return place.kind.match!(
-            (const Identifier name) => name.name,
-            (const MemberAccess access) => spelledPlace(*access.object) ~ "." ~ access.member,
-            (const IndexExpr index) => spelledPlace(*index.object) ~ "[...]",
-            _ => "...",
-        );
-    }
-
     /// Reports each of `paths` that is, or is inside or around, one before it.
     private void reportOverlaps(const(string[])[] paths, const(Span)[] spans, string message)
     {
@@ -2103,10 +1888,8 @@ private final class TypeChecker
         if (sum is null) return type;
 
         _typing.constructedMembers[expr.id] = type;
-        // A member with an invariant yields the sum or its error.
-        auto result = _types.isErrorUnion(type) ? _types.errorUnion(*sum, _types.errorOf(type)) : *sum;
-        _typing.exprTypes[expr.id] = result;
-        return result;
+        _typing.exprTypes[expr.id] = *sum;
+        return *sum;
     }
 
     /// `expected`, when there is one, is only for inferring the type arguments of a generic use.
@@ -2728,8 +2511,6 @@ private final class TypeChecker
             return _types.error;
         }
 
-        if (!symbol.match!((const Id!TypeDecl type) => requireInvariant(type, span, site), _ => true)) return _types.error;
-
         if (showsCondition(symbol))
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, span,
@@ -3016,14 +2797,6 @@ private final class TypeChecker
     /// `x!`: the value of an option or error union, which lowering makes a panic when there isn't one.
     private Type synthesizeAssert(const AssertExpr assertion, BodyContext ctx, Type expected = Type.init)
     {
-        // A construction from literals alone that `!` says can't fail is checked at compile time.
-        auto construction = assertion.operand.kind.match!(
-            (const CallExpr call) => (assertion.operand.id in _resolutions.constructions) !is null
-                && _resolutions.declarations.types[_resolutions.constructions[assertion.operand.id]].invariantFunction.isValid
-                && call.args.all!(a => isLiteral(a)),
-            _ => false,
-        );
-        if (construction) _literalConstructions ~= *assertion.operand;
         auto operandType = _declarer.requireTyped(unwrapped(*assertion.operand, ctx, expected), assertion.operand.span);
         if (operandType == _types.error) return operandType;
         if (_types.isOption(operandType)) return _types.optionInner(operandType);
@@ -3047,8 +2820,7 @@ private final class TypeChecker
     }
 
     /// The type of `expr`, toward `expected`, an option or error union that `!` or `?` will unwrap.
-    /// It only binds type arguments and picks an owned member over its sum, through branches and a
-    /// block's value; nothing is coerced to it.
+    /// It only binds type arguments, through branches and a block's value; nothing is coerced to it.
     private Type synthesizeToward(const Expr expr, Type expected, BodyContext ctx)
     {
         Type joinedOf(const(Expr)[] bodies, const(Type)[] types, Span span, string what)
@@ -3091,10 +2863,7 @@ private final class TypeChecker
         auto isMethod = expr.kind.match!((const CallExpr call) => isMethodCall(expr.id, *call.callee),
             (const SafeMemberAccess _) => true, _ => false);
         auto unwraps = expr.kind.match!((const AssertExpr _) => true, (const PropagateExpr _) => true, _ => false);
-        auto constructed = constructedDecl(expr);
-        auto owner = _declarer.ownerOf(constructed);
-        auto member = owner !is null && wantsMember(_typing.nominalTypes[constructed], *owner, expected);
-        if (isMethod || unwraps || member || genericUse(expr).found || isOverloadedUse(expr))
+        if (isMethod || unwraps || genericUse(expr).found || isOverloadedUse(expr))
         {
             auto outer = _unwrapTarget;
             _unwrapTarget = expected;
@@ -3671,15 +3440,6 @@ private final class TypeChecker
 
     private Type synthesizeCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected)
     {
-        if (auto decl = expr.id in _resolutions.constructions)
-        {
-            noteInvariantUse(InvariantUse(ctx.site, expr.span, *decl, expr.id));
-            if (!requireInvariant(*decl, expr.span, ctx.site))
-            {
-                foreach (arg; call.args) synthesize(arg, ctx);
-                return _types.error;
-            }
-        }
         Type[] typed;
         auto reported = _collector.diagnostics.length;
         if (auto locals = call.callee.id in _resolutions.localOverloads)
@@ -6090,24 +5850,6 @@ private final class TypeChecker
         return wanted(expected);
     }
 
-    /// The member a use of `g` builds on the way to its generic sum, as an error union for a member
-    /// with an invariant.
-    private Type memberBuilt(const Generic g, const Substitution bound)
-    {
-        auto member = _types.substitute(g.member, bound);
-        auto ret = _types[g.type].match!((const FunctionData f) => f.ret, _ => g.type);
-        if (!_types.isErrorUnion(ret)) return member;
-        return _types.errorUnion(member, _types.substitute(_types.errorOf(ret), bound));
-    }
-
-    /// What a use of `g`, a member its generic sum owns, builds: the sum, or for a member with an
-    /// invariant, the sum or its error.
-    private Type ownerResult(const Generic g)
-    {
-        auto ret = _types[g.type].match!((const FunctionData f) => f.ret, _ => g.type);
-        return _types.isErrorUnion(ret) ? _types.errorUnion(g.owner, _types.errorOf(ret)) : g.owner;
-    }
-
     /// `type` with `result` for its result: a function's return type, or a marker itself.
     private Type withResult(Type type, Type result)
     {
@@ -6479,7 +6221,7 @@ private final class TypeChecker
         auto args = call.args;
         auto sum = g.owner != Type.init && !buildsMember(g, expected);
         auto params = sum ? g.ownerParams : g.params;
-        auto shape = sum ? withResult(g.type, ownerResult(g)) : g.type;
+        auto shape = sum ? withResult(g.type, g.owner) : g.type;
         auto typed = new Type[args.length];
         foreach (i, type; pretyped) typed[i] = type;
         void typeTheRest()
@@ -6571,7 +6313,7 @@ private final class TypeChecker
         _typing.typeArguments[g.name] = params.map!(p => bound[p.id]).array;
         if (conformance.witnesses.length > 0) _typing.witnesses[g.name] = conformance.witnesses;
         if (g.func.isValid && !sum) noteNamed(ctx.site, g, conformance.witnesses);
-        if (sum) _typing.constructedMembers[expr.id] = memberBuilt(g, bound);
+        if (sum) _typing.constructedMembers[expr.id] = _types.substitute(g.member, bound);
         return _types.substitute(signature.ret, bound);
     }
 
@@ -6710,7 +6452,7 @@ private final class TypeChecker
         if (conformance.witnesses.length > 0) _typing.witnesses[g.name] = conformance.witnesses;
         _typing.typeArguments[g.name] = params.map!(p => bound[p.id]).array;
         if (g.func.isValid && !sum) noteNamed(site, g, conformance.witnesses);
-        if (sum) _typing.constructedMembers[expr.id] = memberBuilt(g, bound);
+        if (sum) _typing.constructedMembers[expr.id] = _types.substitute(g.member, bound);
         // Without its type arguments the value has no type, rather than one made up from `error`.
         if (params.any!(p => bound[p.id] == _types.error)) return _types.error;
         return _types.substitute(shape, bound);
@@ -7050,33 +6792,7 @@ private final class TypeChecker
         }
         reportOverlaps(paths, spans, "This overlaps an update before it, and one `with` can't change a place twice");
         _typing.updatePaths[expr.id] = indexes;
-
-        // Each value along a path whose invariant names the field updated in it is checked, once.
-        size_t[][] checks;
-        Type[] errors;
-        foreach (i, ref update; with_.updates)
-        {
-            if (indexes[i].length < update.path.length) continue;
-            auto type = objectType;
-            foreach (depth, name; update.path)
-            {
-                auto prefix = indexes[i][0 .. depth];
-                if (invariantMentions(type, name) && !checks.canFind(prefix))
-                {
-                    noteInvariantUse(InvariantUse(ctx.site, expr.span, declOf(type), Id!Expr.init, type));
-                    if (!requireInvariant(declOf(type), expr.span, ctx.site)) return _types.error;
-                    checks ~= prefix.dup;
-                    errors ~= invariantErrorOf(type);
-                }
-                type = _declarer.fieldsOf(type)[indexes[i][depth]].type;
-            }
-        }
-        if (checks.length == 0) return objectType;
-        if (errors.canFind(_types.error)) return _types.error;
-        auto reason = errors[0];
-        foreach (error; errors[1 .. $]) reason = mergedErrors(reason, error);
-        _typing.withChecks[expr.id] = checks.sort!((a, b) => a.length > b.length).release;
-        return _types.errorUnion(objectType, reason);
+        return objectType;
     }
 
     /// The type of the field `update` writes, reached from `object`, with the field index of each
@@ -7701,7 +7417,6 @@ private final class TypeChecker
             return _types.error;
         }
         if (usesUnsettled(symbol, site)) return _types.error;
-        symbol.match!((const Id!TypeDecl type) => noteInvariantUse(InvariantUse(site, name.span, type, name.id)), (_) {});
         auto generic = genericNamed(name);
         if (generic.found && !takesAnyIntrinsically(symbol)) return instantiateValue(name, generic, expected, site);
         if (generic.found) _declarer.resolveTypeArguments(generic.written);

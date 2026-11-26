@@ -54,8 +54,6 @@ def factorial(n: Int): Int ! Negative | Overflow {
 
 - A form of indexing that returns an option is `try xs[i]`.
 
-Building a value of a type with an invariant isn't covered, because it doesn't panic: it yields an error union. See [user types](../language/user-types.md#invariants).
-
 ## Alternatives considered
 
 - **A named twin for each operation**: `get(xs, i)`, `checkedAdd`, `toInt8`. Each is unsurprising alone. Together they're a second name for everything, and arithmetic needs a numeric bound or an overload per integer type.

@@ -60,7 +60,7 @@ This is what lets one function report the failures of everything it calls. It ha
 
 ### Where errors meet
 
-Where error unions with different errors come together, the result lists them all: the branches of an `if` or `match`, the `?`s and values of a lambda whose return type is inferred, [`?.`](#the-option-operators) through something that can fail, and a [`with`](user-types.md#copying-with-changes) that checks two invariants. When one error already fits the other, as a member fits its sum, the result is the one it fits, so no route to an error is listed twice:
+Where error unions with different errors come together, the result lists them all: the branches of an `if` or `match`, the `?`s and values of a lambda whose return type is inferred, and [`?.`](#the-option-operators) through something that can fail. When one error already fits the other, as a member fits its sum, the result is the one it fits, so no route to an error is listed twice:
 
 ```silver
 def count(ok: Bool): Int ! Oops => ...
@@ -310,4 +310,3 @@ Two proposals build on this: [checked operations](../proposals/checked-operation
 The implementation matches this description, except:
 
 - `Ok` and `Error` can't be passed as function values, as `Some` can't.
-- With an [invariant](user-types.md#current-implementation) on a type, which is to be removed, what's expected of `x!` or `x?` also picks a member over its sum, so `val c: Circle = Circle(1.0)!` builds the member.

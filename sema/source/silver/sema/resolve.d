@@ -1512,7 +1512,7 @@ private final class NameResolver
                         foreach (bound; typeParam.bounds) resolveTypeExpr(bound, declScope, InterfaceUse.bound);
                     }
                     // Only a module-level `def` can stand in a type parameter for an interface name.
-                    auto sugared = func.kind == FunctionKind.ordinary && func.testName is null && !func.invariantOf.isValid;
+                    auto sugared = func.kind == FunctionKind.ordinary && func.testName is null;
                     foreach (ref param; func.params)
                     {
                         _declarations.params[param.id] = &param;
@@ -1544,8 +1544,7 @@ private final class NameResolver
                     {
                         auto outer = _bodyOf;
                         _bodyOf = func.id;
-                        resolveBody(func.params, *func.body, declScope, Id!Expr.init, Id!VarDecl.init,
-                            func.invariantOf.isValid);
+                        resolveBody(func.params, *func.body, declScope);
                         _bodyOf = outer;
                     }
                 },
@@ -2370,9 +2369,8 @@ private final class NameResolver
     }
 
     /// Resolves a function or lambda body in a new scope holding its params, inside `enclosing`.
-    /// An invariant's params are the type's fields, which hide what they're named like.
     private void resolveBody(const Param[] params, const Expr body, Scope enclosing,
-        Id!Expr lambda = Id!Expr.init, Id!VarDecl selfBinding = Id!VarDecl.init, bool isInvariant = false)
+        Id!Expr lambda = Id!Expr.init, Id!VarDecl selfBinding = Id!VarDecl.init)
     {
         auto functionScope = new Scope(enclosing);
         functionScope.lambda = lambda;
@@ -2380,11 +2378,6 @@ private final class NameResolver
         foreach (param; params)
         {
             if (param.name == discardName) continue;
-            if (isInvariant)
-            {
-                functionScope.declare(param.name, SymbolId(param.id));
-                continue;
-            }
             declareLocal(param.name, param.nameSpan, SymbolId(param.id), functionScope,
                 DiagnosticCode.DuplicateParameter, "'%s' is already a parameter of this function");
         }

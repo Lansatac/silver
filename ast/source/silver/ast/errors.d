@@ -125,16 +125,12 @@ enum DiagnosticCode : string
     AmbiguousOverload = "T0034",
     /// Two functions of one name in a module that a call couldn't tell apart.
     DuplicateOverload = "T0035",
-    /// A value built from literals alone that breaks its type's invariant.
-    InvariantViolated = "T0036",
     /// `expect` outside a test.
     ExpectOutsideTest = "T0037",
     /// An error list that repeats a type or lists one that can't be an error.
     InvalidErrorType = "T0038",
     /// `Ok(x)` or `Error(e)` where nothing says which error union it is.
     UntypedErrorUnion = "T0039",
-    /// Assigning a field an invariant names, through it, or passing it as `mutable`.
-    InvariantFieldChanged = "T0040",
     /// `panics` outside a test.
     PanicsOutsideTest = "T0041",
     /// A bound where there can't be one, or an interface declared in a way the language doesn't allow.

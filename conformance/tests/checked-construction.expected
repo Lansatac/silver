@@ -1,0 +1,16 @@
+Ok(Span(1, 2))
+Error(Reversed(3, 2))
+Ok(Percent(40))
+Error(OutOfRange(101))
+fine: Span(1, 5)
+5 is above 1
+Ok(Span(-2, 5))
+Error(Reversed(4, -1))
+Percent(100)
+Ok(NonEmpty([x]))
+Error(Empty)
+Ok(Circle(2.0))
+Error(NotPositive(-1.0))
+circle 2.0
+Ok(Span(3, 4))
+Error(Reversed(4, 3))

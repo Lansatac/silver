@@ -114,7 +114,6 @@ immutable Case[] natives = [
     declaresAs("private native type Line(from: Vector2, to: Vector2)",
         "(private (native type Line (from: Vector2, to: Vector2)))"),
     rejectsDeclaration("native type Vector2<T>(x: T, y: T)"),
-    rejectsDeclaration("native type Size(width: Int32) invariant width >= 0 else Negative"),
     rejectsDeclaration(`native("FILE") type File`),
     rejectsDeclaration("native type file"),
     rejectsDeclaration("native type File = A | B"),

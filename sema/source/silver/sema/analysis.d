@@ -541,13 +541,6 @@ final class Analysis
         return _typing.updatePaths[with_];
     }
 
-    /// The places of the values a `with` checks the invariants of, longest first, the empty path being
-    /// the whole value. Empty when it checks none, and its type is the object's.
-    const(size_t[])[] withChecksOf(Id!Expr with_) const
-    {
-        return _typing.withChecks.get(with_, null);
-    }
-
     /// The node an ID was given to. Name resolution records every declaration, so an ID
     /// from this program always has one.
     const(FunctionDecl)* declarationOf(Id!FunctionDecl func) const

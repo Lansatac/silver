@@ -1,15 +1,16 @@
 // A conformance's functions are found before bodies are checked, and a function whose result is
-// worked out from its body is checked then. Its body still sees what an invariant makes a
-// construction return.
+// worked out from its body is checked then. Its body still sees what the functions it calls return.
 interface Source<R> { def src(v: Self): R }
 
 type OutOfRange(v: Int)
-type Percent(value: Int) invariant 0 <= value && value <= 100 else OutOfRange(value)
+type Percent(value: Int)
+
+def percent(value: Int): Percent ! OutOfRange => if 0 <= value && value <= 100 => Percent(value) else Error(OutOfRange(value))
 
 type Bag(n: Int)
 conform Bag: Source<[Int]>
 def src(b: Bag): Range<Int> {
-    val p = Percent(b.n)!
+    val p = percent(b.n)!
     [p.value]
 }
 

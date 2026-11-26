@@ -81,7 +81,6 @@ val none: Point? = None
 - A constant's type can be a product, a marker, a sum, a tuple or an option, when every type inside it can be a constant's too. A [native type with fields](../language/native.md) is a product here. An instance of a generic type is allowed.
 - It can't be or contain an array, a dictionary, a function, an error union, a `Ref` or a native type with no fields.
 - The initializer can also be a constructor called with constants, a tuple of them, `None` or `Some(...)`, and a field of a constant, as `origin.x`. A value is promoted into an option or a sum as anywhere. No function is called, and there's no `with`, `if` or `match`.
-- A type whose construction can fail, as one with an `invariant`, can't be constructed in a constant.
 - A constant is a value like any other: each use is that value, and it's compared and printed structurally. It still isn't a pattern.
 
 ## Details

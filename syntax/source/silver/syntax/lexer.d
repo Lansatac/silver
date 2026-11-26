@@ -42,7 +42,6 @@ enum TokenKind : ubyte
     kwIn,
     kwInterface,
     kwIntrinsic,
-    kwInvariant,
     kwMatch,
     kwModule,
     kwMutable,
@@ -153,7 +152,6 @@ TokenKind keywordKind(const(char)[] word)
     case "in": return TokenKind.kwIn;
     case "interface": return TokenKind.kwInterface;
     case "intrinsic": return TokenKind.kwIntrinsic;
-    case "invariant": return TokenKind.kwInvariant;
     case "match": return TokenKind.kwMatch;
     case "module": return TokenKind.kwModule;
     case "mutable": return TokenKind.kwMutable;

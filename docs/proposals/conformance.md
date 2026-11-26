@@ -42,7 +42,7 @@ Three rules of the current design compound:
 
 - **Conformance is a search at a place.** Whether `T` is a `Sized` has no answer until a module is named, and answering it runs the overloading rule.
 - **Overloads that differ only in their bounds make choosing a function depend on conformance.** So the choice runs inside the search that runs inside the choice, together with literals, lambdas and the expected type.
-- **Inside a generic function the choice waits for the real type.** That needs questions carried to each caller, answers that may be absent, instances that differ in their answers, and a rule that every function of the group returns the same type. Invariants and promised result types each need their own answer to where the question goes.
+- **Inside a generic function the choice waits for the real type.** That needs questions carried to each caller, answers that may be absent, instances that differ in their answers, and a rule that every function of the group returns the same type. Promised result types need their own answer to where the question goes.
 
 Each was reasonable alone. Together, most of what's hard to resolve in the checker traces back to them, and the remaining open items in the range work are all about the third.
 
@@ -327,7 +327,6 @@ total(Countdown(3))     // the default
 - Each adapter declares its own conformances, with `when`.
 - `count`, `last`, `array` and the others with a second function for an indexed or backward source become one function each that asks in its body.
 - A result type that's an interface stays as built: the result keeps its own type. The open question about functions that differ in their bounds goes.
-- Answering a question inside an invariant goes with the questions.
 - A chain built in one module and consumed in another is the same range in both, so the prelude no longer has to forward every adapter's `next` for that reason.
 
 ## Open questions

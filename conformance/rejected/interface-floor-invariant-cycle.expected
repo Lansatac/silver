@@ -1,1 +1,0 @@
-T0016: This needs what building a `Small` can give, which is worked out from the `else` of `Small`'s invariant, and that `else` leads to `pick`, whose result type is worked out from this body; write the type `pick` returns in place of `Range<Int> & Indexed<Int>`, so the `else` doesn't need its body

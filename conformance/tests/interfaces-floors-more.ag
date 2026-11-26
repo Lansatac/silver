@@ -1,22 +1,12 @@
 // More places a floor goes: the success side of an error union, a type argument of a part of
-// `A & B`, and `A & B` as a parameter's whole type. A floored function's body is checked as a
-// function's body whatever needed its result first.
+// `A & B`, and `A & B` as a parameter's whole type.
 
 import interfaces_support.floors
 
 type NotFound(code: Int)
 type TooLong
 
-type Bad(n: Int)
-// The `else` needs `pick`'s result, and `pick`'s body builds a type declared after this one.
-type Small(n: Int) invariant n < 10 else Bad(pick([n, 2])[0])
-type Even(n: Int) invariant n % 2 == 0 else Bad(n)
-
-def pick(xs: [Int]): Range<Int> & Indexed<Int> {
-    val even = Even(2)
-    if val Error(bad) = even { return [bad.n] }
-    xs
-}
+def pick(xs: [Int]): Range<Int> & Indexed<Int> => xs
 
 def find(xs: [Int]): [Int] ! NotFound => if length(xs) == 0 => Error(NotFound(404)) else xs
 
@@ -76,6 +66,4 @@ def main(): Unit {
     printl(ends(["a", "b"], Countdown(2)))
 
     printl(pick([1])[0])
-    printl(Small(3))
-    printl(Small(30))
 }

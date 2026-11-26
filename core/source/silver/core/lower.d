@@ -741,21 +741,9 @@ private final class Lowering
         // A bare `Error(e)` is its error until the error union it lands in wraps it.
         if (types.isFailure(built)) built = types.errorOf(built);
         auto value = lowerRaw(e, built);
-        if (member !is null) value = types.isErrorUnion(built) ? asSum(value, type) : inject(_analysis.memberIndexFor(type, built), value, type);
+        if (member !is null) value = inject(_analysis.memberIndexFor(type, built), value, type);
         if (auto option = _analysis.promotionOf(e.id)) value = promote(value, type, *option);
         return value;
-    }
-
-    /// `value`, a member with an invariant built as an error union, as the error union `type` of its sum.
-    private Expr asSum(Expr value, Type type)
-    {
-        auto span = value.span;
-        auto held = temp("member", value.type);
-        auto sum = types.successOf(type);
-        auto member = inject(_analysis.memberIndexFor(sum, types.successOf(value.type)), payload(use(held, span), 1), sum);
-        auto chosen = Expr(type, span, ExprKind(If(boxed(isMember(use(held, span), 1)), boxed(inject(1, member, type)),
-            boxed(inject(0, payload(use(held, span), 0), type)))));
-        return Expr(type, span, ExprKind(Block([let(held, value)], boxed(chosen))));
     }
 
     /// `e` as a value of `type`, before anything sema records on top of it is applied.
@@ -918,32 +906,11 @@ private final class Lowering
         return slot;
     }
 
-    /// A value of `type`, a tuple or a declared type that isn't a sum, built from `fields`. For a
-    /// type with an invariant, `type` is the error union its construction yields.
+    /// A value of `type`, a tuple or a declared type that isn't a sum, built from `fields`.
     private Expr construct(Type type, Expr[] fields, Span span)
     {
         if (isCellType(type)) return Expr(type, span, ExprKind(Cell(CellOp.New, fields)));
-        if (!types.isErrorUnion(type)) return Expr(type, span, ExprKind(Construct(fields)));
-        auto held = temp("built", types.successOf(type));
-        auto built = Expr(held.type, span, ExprKind(Construct(fields)));
-        return Expr(type, span, ExprKind(Block([let(held, built)],
-            boxed(checked(use(held, span), inject(1, use(held, span), type), type)))));
-    }
-
-    /// `then` if `value`, which is pure, keeps its type's invariant, and otherwise the error the
-    /// invariant gives, as `result`, an error union.
-    private Expr checked(Expr value, Expr then, Type result)
-    {
-        auto decl = _analysis.declarationOf(declOf(value.type));
-        auto span = value.span;
-        auto fields = _analysis.fieldsOf(value.type);
-        auto args = fields.length.iota.map!(i => field(value, i, fields[i].type)).array;
-        auto typeArgs = types[value.type].match!((const NominalData nominal) => nominal.args, _ => null);
-        auto holds = Expr(types.bool_, span, ExprKind(Call(slotFor(InstanceKey(decl.invariantFunction, typeArgs)), args)));
-        auto reason = _analysis.signatureOf(decl.invariantError, typeArgs).ret;
-        auto error = Expr(reason, span, ExprKind(Call(slotFor(InstanceKey(decl.invariantError, typeArgs)), args)));
-        return Expr(result, span, ExprKind(If(boxed(holds), boxed(then),
-            boxed(inject(0, promote(error, reason, types.errorOf(result)), result)))));
+        return Expr(type, span, ExprKind(Construct(fields)));
     }
 
     /// A function that calls the native `func`, for using it as a value.
@@ -982,19 +949,17 @@ private final class Lowering
         auto slot = reserveSlot();
         _constructors[decl][type] = slot;
         auto signature = functionData(type);
-        // A type with an invariant builds an error union of itself.
-        auto record = types.isErrorUnion(signature.ret) ? types.successOf(signature.ret) : signature.ret;
+        auto record = signature.ret;
         if (declOf(record) != decl)
         {
-            if (types.isErrorUnion(signature.ret)) return notLowered!size_t("a generic sum's member with an invariant as a function value");
             auto members = _analysis.membersOf(record).filter!(m => declOf(m) == decl);
             assert(!members.empty, "a constructor builds its type, or a member of its sum");
             record = members.front;
         }
         Local[] params;
         foreach (field; _analysis.fieldsOf(record)) params ~= new Local(field.name, field.type);
-        Expr body = construct(types.isErrorUnion(signature.ret) ? signature.ret : record, params.map!(p => use(p, _span)).array, _span);
-        if (signature.ret != record && !types.isErrorUnion(signature.ret)) body = inject(_analysis.memberIndexFor(signature.ret, record), body, signature.ret);
+        Expr body = construct(record, params.map!(p => use(p, _span)).array, _span);
+        if (signature.ret != record) body = inject(_analysis.memberIndexFor(signature.ret, record), body, signature.ret);
         auto name = typeName(record) ~ typeArgumentsOf(record);
         functions[slot] = Function(name, _moduleName, params, null, signature.ret, body, FunctionOrigin.derived, name);
         return slot;
@@ -1386,27 +1351,14 @@ private final class Lowering
     private Expr lowerWith(const ast.Expr e, const ast.WithExpr with_, Type type)
     {
         auto span = e.span;
-        auto checks = _analysis.withChecksOf(e.id);
-        auto object = checks.length > 0 ? types.successOf(type) : type;
-        auto result = temp("with", object, true);
+        auto result = temp("with", type, true);
         Stmt[] statements = [let(result, lowerExpr(*with_.object))];
         foreach (i, path; _analysis.updatePathsOf(e.id))
         {
             auto value = lowerExpr(with_.updates[i].value);
-            statements ~= assign(result, rebuild(use(result, span), stepsOf(object, path), value));
+            statements ~= assign(result, rebuild(use(result, span), stepsOf(type, path), value));
         }
-        if (checks.length == 0) return Expr(type, span, ExprKind(Block(statements, boxed(use(result, span)))));
-
-        // Once every update is made, each value whose invariant names a field updated in it is
-        // checked, innermost first.
-        Expr chain = inject(1, use(result, span), type);
-        foreach_reverse (prefix; checks)
-        {
-            Expr value = use(result, span);
-            foreach (step; stepsOf(object, prefix)) value = field(value, step.index, step.type);
-            chain = checked(value, chain, type);
-        }
-        return Expr(type, span, ExprKind(Block(statements, boxed(chain))));
+        return Expr(type, span, ExprKind(Block(statements, boxed(use(result, span)))));
     }
 
     /// The steps through a value of `type` that the field indexes `path` take.
@@ -1421,8 +1373,7 @@ private final class Lowering
         return steps;
     }
 
-    /// `object`, a pure expression, with the field at the end of `steps` replaced by `value`. Nothing
-    /// is checked: an assignment can't reach a field an invariant names, and `with` checks afterwards.
+    /// `object`, a pure expression, with the field at the end of `steps` replaced by `value`.
     private Expr rebuild(Expr object, const Step[] steps, Expr value)
     {
         if (steps.length == 0) return value;

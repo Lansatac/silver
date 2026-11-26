@@ -29,16 +29,6 @@ immutable Case[] typeDeclarations = [
     declaresAs("type Key(privateKey: Int)", "(type Key (privateKey: Int))"),
     declaresAs("private type Detail(value: Int)", "(private (type Detail (value: Int)))"),
     declaresAs("private type S = A(x: Int) | B", ["(private (type A (x: Int)))", "(private (type S = A | B))", "(private (type B))"]),
-    declaresAs("type Span(low: Int, high: Int) invariant low <= high else Reversed(low, high)", ["(type Span (low: Int, high: Int))", "(private (def invariant Span (low: Int, high: Int): Bool (LessEqual low high)))", "(private (def invariant error Span (low: Int, high: Int): () (call Reversed low high)))"]),
-    declaresAs("type P(v: Int)\n    invariant\n    v > 0 &&\n    v < 9\n    else\n    Bad", ["(type P (v: Int))", "(private (def invariant P (v: Int): Bool (And (Greater v 0) (Less v 9))))", "(private (def invariant error P (v: Int): () Bad))"]),
-    declaresAs("type P(v: Int) invariant ok(v) else \"bad\"\ndef f(): Int => 1", ["(type P (v: Int))", "(private (def invariant P (v: Int): Bool (call ok v)))", "(private (def invariant error P (v: Int): () \"bad\"))", "(def f (): Int 1)"]),
-    declaresAs("type S = C(r: Float) invariant (r > 0.0) else (Neg(r)) | N", ["(type C (r: Float))", "(private (def invariant C (r: Float): Bool (Greater r 0)))", "(private (def invariant error C (r: Float): () (call Neg r)))", "(type S = C | N)", "(type N)"]),
-    declaresAs("type S =\n    C(r: Float)\n    invariant (\n        r > 0.0\n    )\n    else (\n        Neg(r)\n    )\n    | N", ["(type C (r: Float))", "(private (def invariant C (r: Float): Bool (Greater r 0)))", "(private (def invariant error C (r: Float): () (call Neg r)))", "(type S = C | N)", "(type N)"]),
-    rejectsDeclaration("type S = C(r: Float) invariant r > 0.0 | N"),
-    rejectsDeclaration("type S = C(r: Float) invariant (r > 0.0) else Neg(r) | N"),
-    rejectsDeclaration("type M invariant true"),
-    rejectsDeclaration("type S = A | B invariant true"),
-    rejects("val invariant = 1"),
     declaresAs("private def f(): Int => 1", "(private (def f (): Int 1))"),
     declaresAs("private\ndef f(): Int => 1", "(private (def f (): Int 1))"),
     declaresAs("private native def f(): Int", "(private (native def f (): Int))"),
@@ -255,10 +245,4 @@ immutable Case[] errorUnions = [
     parsesAs("a = Error", "(assign a Error)"),
     parsesAs("val r = match p { Ok(x) => 1\n Error(Empty) => 2 }", "(val r (match p (Ok(x) 1) (Error(Empty) 2)))"),
     parsesAs("if val Error(e) = p => e", "(match p (Error(e) e) (_ ()))"),
-];
-
-/// An invariant without `else` gets an error saying it's missing.
-immutable Case[] invariantsWithoutElse = [
-    rejectsDeclaration("type Span(low: Int, high: Int) invariant low <= high"),
-    rejectsDeclaration("type S = C(r: Float) invariant (r > 0.0) | N"),
 ];

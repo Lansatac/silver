@@ -1,0 +1,9 @@
+module checked_construction_support.bounds
+
+private def inRange(value: Int): Bool => 0 <= value && value <= 100
+
+type OutOfRange(value: Int)
+
+type Percent(value: Int)
+
+def percent(value: Int): Percent ! OutOfRange => if inRange(value) => Percent(value) else Error(OutOfRange(value))

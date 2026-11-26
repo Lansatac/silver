@@ -247,7 +247,7 @@ Not designed yet:
 
 ### Stored structure
 
-A witness is harmless when nothing outlives the call. It matters when a value's invariants depend on one:
+A witness is harmless when nothing outlives the call. It matters when how a value is arranged depends on one:
 
 ```silver
 type Set<T: Ord>(...)

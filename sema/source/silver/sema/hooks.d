@@ -41,7 +41,7 @@ package void checkTypeHooks(Modules)(Modules modules, ref Typing typing, const r
     void check(const FunctionDecl f, string moduleName)
     {
         auto named = shapes.find!(s => s.name == f.name);
-        if (named.empty || f.invariantOf.isValid || f.testName !is null || f.kind == FunctionKind.required) return;
+        if (named.empty || f.testName !is null || f.kind == FunctionKind.required) return;
         auto shape = named.front;
         auto declared = SymbolId(f.id) in typing.symbolTypes;
         if (declared is null) return;
@@ -119,7 +119,7 @@ package void checkTypeHooks(Modules)(Modules modules, ref Typing typing, const r
     {
         auto arity = ["opNeg", "opNot"].canFind(f.name) ? 1
             : ["opAdd", "opSub", "opMul", "opDiv", "opRem", "opAnd", "opOr", "opXor", "opShl", "opShr"].canFind(f.name) ? 2 : 0;
-        if (arity == 0 || f.invariantOf.isValid || f.testName !is null || f.kind != FunctionKind.ordinary) return;
+        if (arity == 0 || f.testName !is null || f.kind != FunctionKind.ordinary) return;
         auto declared = SymbolId(f.id) in typing.symbolTypes;
         if (declared is null || types.mentionsError(*declared)) return;
         auto params = types[*declared].match!((const FunctionData data) => data.params, _ => null);
