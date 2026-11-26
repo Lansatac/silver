@@ -145,6 +145,9 @@ package struct Resolution
     SideTable!(Id!Expr, Id!VarDecl[]) localOverloads;
     /// For a nested `def` that shares its name with earlier ones in its block, those.
     SideTable!(Id!VarDecl, Id!VarDecl[]) earlierLocalOverloads;
+    /// The names and member accesses that name a module, or a package prefix like `std`, or were
+    /// reported as unknown, where a value would otherwise be expected.
+    SideTable!(Id!Expr, bool) modulePaths;
 
     /// The type parameters of `func`: those it declares, then its hidden ones.
     const(TypeParam)[] typeParamsOf(Id!FunctionDecl func) const
@@ -663,6 +666,7 @@ private final class NameResolver
     private SideTable!(Id!ConformDecl, Id!FunctionDecl) _conformances;
     private SideTable!(Id!Expr, Test) _tests;
     private SideTable!(Id!Expr, string) _hiddenModules;
+    private SideTable!(Id!Expr, bool) _modulePaths;
     private SideTable!(Id!Expr, Id!VarDecl[]) _localOverloads;
     private SideTable!(Id!VarDecl, Id!VarDecl[]) _earlierLocalOverloads;
     /// The module-level function whose body is being resolved.
@@ -729,7 +733,7 @@ private final class NameResolver
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
             _operatorLookups, _declarations, _nativeLibraries, cast(const(Scope)[string]) _moduleScopes, _hiddenParams, _sugarParams,
             _resultFloors, _lambdaFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances, _forwardImports, _listedImports, _conformances, _tests,
-            _hiddenModules, _localOverloads, _earlierLocalOverloads);
+            _hiddenModules, _localOverloads, _earlierLocalOverloads, _modulePaths);
     }
 
     /// Works out what every module forwards. A blanket forward passes on what its module forwards
@@ -2773,6 +2777,13 @@ private final class NameResolver
 
     /// Resolves an identifier or a member access chain, which may start with a module path.
     private Path resolvePath(const Expr expr, Scope scopeTable)
+    {
+        auto path = resolvePathOf(expr, scopeTable);
+        if (path.kind != Path.Kind.Value) _modulePaths[expr.id] = true;
+        return path;
+    }
+
+    private Path resolvePathOf(const Expr expr, Scope scopeTable)
     {
         return expr.kind.match!(
             (const Identifier id) {

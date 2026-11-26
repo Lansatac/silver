@@ -6697,7 +6697,7 @@ private final class TypeChecker
         if (!safe)
         {
             // A receiver that's only a shape has no fields to look for, and waits for the function as an argument does.
-            auto objectType = isShaped(*object) ? Type.init : synthesize(*object, ctx);
+            auto objectType = cantHaveFields(*object) ? Type.init : synthesize(*object, ctx);
             return callOn(expr, call, object, member, typeArgs, objectType, ctx, expected);
         }
 
@@ -6946,22 +6946,16 @@ private final class TypeChecker
         return _types.error;
     }
 
+    /// Whether the value of `expr` is only a shape that no declared type is given to, so it has no
+    /// fields to look for. A range literal is an `Interval`, which has some.
+    private bool cantHaveFields(const Expr expr)
+    {
+        return isShaped(expr) && expr.kind.match!((const RangeExpr _) => false, _ => true);
+    }
+
     private bool isModulePath(const Expr expr)
     {
-        if (auto symbol = expr.id in _resolutions.resolutions)
-        {
-            return (*symbol).match!(
-                (const Id!Module _) => true,
-                _ => false,
-            );
-        }
-        return expr.kind.match!(
-            // A package prefix like `std`, or an unknown name.
-            (const Identifier _) => true,
-            // `a.b` with no resolution is a module path only if `a` is one; otherwise it's a member of a value.
-            (const MemberAccess access) => isModulePath(*access.object),
-            _ => false,
-        );
+        return (expr.id in _resolutions.modulePaths) !is null;
     }
 
     /// Whether `symbol` is a nested `def` whose result type is being worked out from the body at
