@@ -144,7 +144,98 @@ string formatTomlError(string file, const TomlError error) nothrow
         ~ cast(string) error.code ~ ": " ~ error.message;
 }
 
+/// `root` as TOML text that `readToml` reads back to the same keys and values, after `header`, comment
+/// lines each starting with `#`. The top level's keys come first, then each array of tables, an
+/// array whose items are all tables, as `[[key]]` sections. A table elsewhere is written inline.
+string writeToml(const Table root, string header = null) nothrow
+{
+    string text = header;
+    foreach (ref e; root.entries)
+    {
+        if (!sectioned(e.value)) text ~= keyText(e.key) ~ " = " ~ valueText(e.value) ~ "\n";
+    }
+    foreach (ref e; root.entries)
+    {
+        if (!sectioned(e.value)) continue;
+        foreach (ref item; e.value.items)
+        {
+            text ~= (text.length > 0 ? "\n" : "") ~ "[[" ~ keyText(e.key) ~ "]]\n";
+            foreach (ref field; item.table.entries) text ~= keyText(field.key) ~ " = " ~ valueText(field.value) ~ "\n";
+        }
+    }
+    return text;
+}
+
+/// A string value, for building a table to write.
+Value stringValue(string text) nothrow => Value(ValueKind.string_, Span(), text);
+
+/// `text` as a TOML basic string, in quotes, with what has to be escaped escaped.
+string quotedString(string text) nothrow
+{
+    string quoted = "\"";
+    foreach (char c; text)
+    {
+        switch (c)
+        {
+            case '"': quoted ~= "\\\""; break;
+            case '\\': quoted ~= "\\\\"; break;
+            case '\n': quoted ~= "\\n"; break;
+            case '\t': quoted ~= "\\t"; break;
+            case '\r': quoted ~= "\\r"; break;
+            default:
+                if (c < 0x20 || c == 0x7F)
+                {
+                    enum digits = "0123456789ABCDEF";
+                    quoted ~= "\\u00" ~ digits[(c >> 4) & 0xF] ~ digits[c & 0xF];
+                }
+                else quoted ~= c;
+        }
+    }
+    return quoted ~ "\"";
+}
+
 private:
+
+bool sectioned(const ref Value value) nothrow
+{
+    if (value.kind != ValueKind.array || value.items.length == 0) return false;
+    foreach (ref item; value.items)
+    {
+        if (item.kind != ValueKind.table) return false;
+    }
+    return true;
+}
+
+string keyText(string key) nothrow
+{
+    bool bare = key.length > 0;
+    foreach (c; key) bare = bare && isBareKeyChar(c);
+    return bare ? key : quotedString(key);
+}
+
+string valueText(const ref Value value) nothrow
+{
+    final switch (value.kind)
+    {
+        case ValueKind.string_: return quotedString(value.text);
+        case ValueKind.integer:
+            return value.integer < 0 ? "-" ~ decimal(-cast(ulong) value.integer) : decimal(value.integer);
+        case ValueKind.boolean: return value.boolean ? "true" : "false";
+        case ValueKind.array:
+        {
+            string text = "[";
+            foreach (k, ref item; value.items) text ~= (k > 0 ? ", " : "") ~ valueText(item);
+            return text ~ "]";
+        }
+        case ValueKind.table:
+        {
+            string text = "{";
+            foreach (k, ref field; value.table.entries)
+                text ~= (k > 0 ? ", " : " ") ~ keyText(field.key) ~ " = " ~ valueText(field.value);
+            return text ~ (value.table.entries.length > 0 ? " }" : "}");
+        }
+    }
+}
 
 enum maxDepth = 100;
 
@@ -1432,4 +1523,53 @@ unittest
             }
         }
     }
+}
+
+@("what writeToml writes reads back to the same keys and values")
+unittest
+{
+    // Each table's keys and values, as text, so two tables read from different text compare.
+    string shape(const ref Value value)
+    {
+        final switch (value.kind)
+        {
+            case ValueKind.string_: return "s:" ~ value.text;
+            case ValueKind.integer: return "i:" ~ decimal(cast(ulong) value.integer);
+            case ValueKind.boolean: return value.boolean ? "true" : "false";
+            case ValueKind.array:
+            {
+                string text = "[";
+                foreach (ref item; value.items) text ~= shape(item) ~ ",";
+                return text ~ "]";
+            }
+            case ValueKind.table:
+            {
+                string text = "{";
+                foreach (ref e; value.table.entries) text ~= e.key ~ "=" ~ shape(e.value) ~ ",";
+                return text ~ "}";
+            }
+        }
+    }
+    string of(Table t)
+    {
+        auto v = Value(ValueKind.table);
+        v.table = t;
+        return shape(v);
+    }
+    foreach (text; [geometryFile, cardsFile, compilerFile, "a = {b = [1, {c = 'd'}], e.f = \"\\u00e9\"}\nz = -3\n"
+        ~ "\"odd key\" = \"q\\\"\\\\\\n\\t\\u0001\"\n[[x]]\ny = true\n[[x]]\n"])
+    {
+        auto first = read(text);
+        auto written = writeToml(first, "# header\n");
+        assert(written.length > 9 && written[0 .. 9] == "# header\n");
+        assert(of(read(written)) == of(first), written);
+    }
+    auto t = new Table(Origin.header);
+    auto entry = new Table(Origin.header);
+    entry.entries ~= Entry("name", Span(), stringValue("a.b"));
+    auto list = Value(ValueKind.array);
+    list.items ~= Value(ValueKind.table);
+    list.items[0].table = entry;
+    t.entries ~= Entry("package", Span(), list);
+    assert(writeToml(t, "# x\n") == "# x\n\n[[package]]\nname = \"a.b\"\n", writeToml(t));
 }
