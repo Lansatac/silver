@@ -12,12 +12,13 @@ import silver.codegen : copyBeside, executablePath, findingLibraries, findToolch
 import silver.core : lowerProgram, printCore = print;
 import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed, RuntimeError;
 import silver.loader : describeNativeFiles, describePackageFiles, describePackages, describeScriptHomes, describeSilver, load,
-    missingStandardLibrary, Packages, programStart, standardPrelude, undeclared;
+    missingStandardLibrary, NativeFiles, nativesOf, Packages, programStart, standardPrelude, undeclared;
 import silver.sema : analyze, Analysis, Target;
 
-/// Loads and analyzes `programFile`. Problems go to `context.collector`, which the caller
-/// must check before using `program` or the returned Analysis.
-Analysis loadAndAnalyze(string programFile, const Packages packages, SourceContext context, out Program program)
+/// Loads and analyzes `programFile`, with the files its native libraries are given in `natives`. Problems
+/// go to `context.collector`, which the caller must check before using `program` or the returned Analysis.
+Analysis loadAndAnalyze(string programFile, const Packages packages, SourceContext context, out Program program,
+    out NativeFiles natives)
 {
     try
     {
@@ -32,6 +33,11 @@ Analysis loadAndAnalyze(string programFile, const Packages packages, SourceConte
     {
         return null;
     }
+    natives = nativesOf(program, packages, context);
+    if (context.collector.hasErrors)
+    {
+        return null;
+    }
     return analyze(program, context.collector, Target.host);
 }
 
@@ -40,7 +46,8 @@ int interpret(string programFile, const Packages packages, bool emitCore = false
 {
     auto context = new SourceContext();
     Program program;
-    auto analysis = loadAndAnalyze(programFile, packages, context, program);
+    NativeFiles natives;
+    auto analysis = loadAndAnalyze(programFile, packages, context, program, natives);
     printDiagnostics(context);
     if (context.collector.hasErrors)
     {
@@ -55,7 +62,7 @@ int interpret(string programFile, const Packages packages, bool emitCore = false
             writeln(printCore(lowered));
             return 0;
         }
-        auto evaluator = new Evaluator(lowered, true, arguments, null, packages.natives.load);
+        auto evaluator = new Evaluator(lowered, true, arguments, null, natives.load);
         evaluator.run();
     }
     catch (RuntimeError e)
@@ -90,12 +97,12 @@ enum Backend
 }
 
 /// The LLVM IR for the program in `programFile`, or null after printing why there isn't any.
-/// `libraries` are what it has to be linked with.
-string compileToIr(string programFile, const Packages packages, out string[] libraries)
+/// `libraries` are what it has to be linked with, and `natives` the files given for them.
+string compileToIr(string programFile, const Packages packages, out string[] libraries, out NativeFiles natives)
 {
     auto context = new SourceContext();
     Program program;
-    auto analysis = loadAndAnalyze(programFile, packages, context, program);
+    auto analysis = loadAndAnalyze(programFile, packages, context, program, natives);
     printDiagnostics(context);
     if (context.collector.hasErrors)
     {
@@ -136,12 +143,13 @@ bool compileToExecutable(string programFile, const Packages packages, string out
     bool copyLibraries, out string[] sharedLibraries)
 {
     string[] libraries;
-    auto ir = compileToIr(programFile, packages, libraries);
+    NativeFiles natives;
+    auto ir = compileToIr(programFile, packages, libraries, natives);
     if (ir is null)
     {
         return false;
     }
-    sharedLibraries = sharedLibrariesOf(libraries, packages.natives.load);
+    sharedLibraries = sharedLibrariesOf(libraries, natives.load);
     Toolchain toolchain;
     if (auto missing = findToolchain(toolchain))
     {
@@ -157,7 +165,7 @@ bool compileToExecutable(string programFile, const Packages packages, string out
     scope (exit) remove(irPath);
 
     immutable beside = copyLibraries && sharedLibraries.length > 0;
-    auto linked = linkExecutable(toolchain, irPath, outputPath, libraries, optimization, packages.natives.link, beside);
+    auto linked = linkExecutable(toolchain, irPath, outputPath, libraries, optimization, natives.link, beside);
     if (!linked.succeeded)
     {
         stderr.writeln("Linking failed:\n", linked.output);
@@ -199,7 +207,8 @@ int build(string programFile, const Packages packages, string outputPath, bool e
     if (emitLlvm)
     {
         string[] libraries;
-        auto ir = compileToIr(programFile, packages, libraries);
+        NativeFiles natives;
+        auto ir = compileToIr(programFile, packages, libraries, natives);
         if (ir is null)
         {
             return 1;
@@ -1252,11 +1261,12 @@ int run(string[] args)
         ~ " uses what the package uses, and the package too unless it's a program; silver gives it", &scriptsInOptions,
     "program", "run, build: in place of a file, a package whose program to start from: the package's own, or the one"
         ~ " of the packages it describes that's a program; silver gives it when no file is named", &programs,
-    "native-link", "the file a compiled program is linked against for a native library, as library=file, in place of"
-        ~ " finding the library by its name; silver gives it from silver.toml", &nativeLinks,
-    "native-load", "the shared library to load for a native library, as library=file: interpreting loads it, a built"
-        ~ " program has it copied beside it, and a compiled program run from here finds it; silver gives it from"
-        ~ " silver.toml", &nativeLoads,
+    "native-link", "the file a compiled program is linked against for a native library that a package's modules name,"
+        ~ " as package:library=file, in place of finding the library by its name; silver gives it from silver.toml",
+        &nativeLinks,
+    "native-load", "the shared library to load for a native library that a package's modules name, as"
+        ~ " package:library=file: interpreting loads it, a built program has it copied beside it, and a compiled program"
+        ~ " run from here finds it; silver gives it from silver.toml", &nativeLoads,
     "from-silver", "silver gives it, so that messages say what a user of silver can do rather than naming these"
         ~ " options", &fromSilver,
     "backend|b", "run, test: how to run the program: interpreter (default), llvm, or for tests, both", &backend,

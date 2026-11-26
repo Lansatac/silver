@@ -16,7 +16,7 @@ import silver.codegen : executablePath, findingLibraries, findToolchain, generat
     sharedLibrariesOf, Toolchain;
 import silver.core : lowerTests, CoreProgram = Program;
 import silver.interpreter.evaluator : Evaluator;
-import silver.loader : companionModuleFile, companionOf, isCompanionFile, load, NativeFiles, Packages, standardPrelude,
+import silver.loader : companionModuleFile, companionOf, isCompanionFile, load, NativeFiles, nativesOf, Packages, standardPrelude,
     withStandardLibrary;
 import silver.sema : analyze, Analysis, Target;
 
@@ -104,9 +104,11 @@ FileRun runFile(string file, const Packages packages, TestBackend backend, strin
     auto context = new SourceContext;
     Program program;
     Analysis analysis;
+    NativeFiles natives;
     try
     {
         program = load(readText(file), file, packages, standardPrelude, context, companionOf(file));
+        if (!context.collector.hasErrors) natives = nativesOf(program, packages, context);
         if (!context.collector.hasErrors) analysis = analyze(program, context.collector, Target.host, true);
     }
     catch (DiagnosticException e)
@@ -139,13 +141,13 @@ FileRun runFile(string file, const Packages packages, TestBackend backend, strin
     TestResult[] compiledResults;
     if (backend != TestBackend.interpreter)
     {
-        run.problem = compiled(lowered, context.sources, file, workDirectory, optimization, packages.natives, compiledResults);
+        run.problem = compiled(lowered, context.sources, file, workDirectory, optimization, natives, compiledResults);
         if (run.problem !is null) return run;
     }
     TestResult[] interpretedResults;
     if (backend != TestBackend.llvm)
     {
-        try interpretedResults = interpreted(lowered, context.sources, packages.natives);
+        try interpretedResults = interpreted(lowered, context.sources, natives);
         catch (DiagnosticException e)
         {
             run.diagnostics ~= formatDiagnostic(e.diagnostic, context.sources);

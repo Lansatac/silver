@@ -962,15 +962,19 @@ else
     enum linkName = "libnum.so.1", loadName = "libnum.so.1";
 }
 
-/// Builds the C library `num`, with `twice`, into `directory` with clang, as `linkName` and `loadName`.
-void buildNumLibrary(string directory)
+/// Builds the C library `num` into `directory` with clang, as `linkName` and `loadName`. Its function `twice`
+/// multiplies by `factor`, so a test can tell two builds apart.
+void buildNumLibrary(string directory, int factor = 2)
 {
+    import std.conv : text;
+
     import std.file : mkdirRecurse, write;
     import std.string : strip;
 
     mkdirRecurse(directory);
     auto source = buildPath(directory, "num.c");
-    write(source, "#ifdef _WIN32\n__declspec(dllexport)\n#endif\nlong long twice(long long x) { return 2 * x; }\n");
+    write(source, "#ifdef _WIN32\n__declspec(dllexport)\n#endif\nlong long twice(long long x) { return " ~ text(factor)
+        ~ " * x; }\n");
     auto clang = std.process.environment.get("SILVER_CLANG", "clang");
     version (Windows)
     {
@@ -1037,7 +1041,7 @@ unittest
     assert(ran.status == 0 && ran.output.replace("\r\n", "\n") == "42\n", ran.output);
 
     // silverc takes the same files by hand.
-    auto byHand = runIn([built("silverc"), "--package", "app=src", "--native-load", "num=" ~ buildPath("vendor", loadName),
+    auto byHand = runIn([built("silverc"), "--package", "app=src", "--native-load", "app:num=" ~ buildPath("vendor", loadName),
         buildPath("src", "main.ag")], project);
     expectRan(byHand, "42\n");
     // Without them the library is looked for by name, as before.
@@ -1057,8 +1061,56 @@ unittest
     assert(ran.status == 1 && ran.output.startsWith("silver.toml(4,8): Error F0051: `load` for the library 'num' is "),
         ran.output);
     // Inside a project the files come from silver.toml, not the command line.
-    ran = silver(["--native-load", "num=x", "main.ag"], project);
+    ran = silver(["--native-load", "app:num=x", "main.ag"], project);
     assert(ran.status == 1 && ran.output.canFind("Error F0036: --native-load is given by hand"), ran.output);
+}
+
+@("each package's table is for its own modules: a test run over two packages gets each one's library, and a program with both is refused")
+unittest
+{
+    string package_(string name)
+    {
+        return "name = \"" ~ name ~ "\"\nsource = \"src\"\n\n[native.num." ~ host ~ "]\nlink = \"vendor/" ~ linkName
+            ~ "\"\nload = \"vendor/" ~ loadName ~ "\"\n";
+    }
+    enum num = "native library \"num\"\n\nnative def twice(x: Int64): Int64\n";
+    auto ws = makeTree("frontend-native-packages", [
+        "silver.toml": "name = \"ws\"\nsource = \"src\"\n\n[[package]]\npath = \"a\"\n\n[[package]]\npath = \"b\"\n\n"
+            ~ "[[package]]\npath = \"both\"\ntest = false\n",
+        "src/": "",
+        "a/silver.toml": package_("a"),
+        "a/src/num.ag": "module a.num\n\n" ~ num ~ "\ntest \"by two\" => expect(twice(2) == 4)\n",
+        "b/silver.toml": package_("b"),
+        "b/src/num.ag": "module b.num\n\n" ~ num ~ "\ntest \"by three\" => expect(twice(2) == 6)\n",
+        "both/silver.toml": "name = \"both\"\nuses = [\"a\", \"b\"]\n\n[[package]]\npath = \"../a\"\n\n[[package]]\n"
+            ~ "path = \"../b\"\n",
+        "both/main.ag": "module both.main\n\nimport a.num\nimport b.num\n\ndef main(): Unit {\n    printl(a.num.twice(1))\n}\n",
+    ]);
+    scope (exit) removeTree(ws);
+    buildNumLibrary(buildPath(ws, "a", "vendor"), 2);
+    buildNumLibrary(buildPath(ws, "b", "vendor"), 3);
+
+    foreach (backend; ["interpreter", "llvm", "both"])
+        expectRan(silver(["test", "-b", backend], ws), "2 passed, 0 failed\n");
+
+    // One program with both packages' modules has one file for `num`, so the two tables disagree.
+    auto both = buildPath(ws, "both");
+    auto ran = silver(["run"], both);
+    assert(ran.status == 1, ran.output);
+    // Outside the working directory, paths are shown whole.
+    auto at = (string[] path...) => buildPath(ws ~ path);
+    assert(ran.output.startsWith(at("b", "src", "num.ag") ~ "(3,1): Error L0017: The library 'num' is given two files to "
+        ~ "link against in this program: " ~ at("a", "vendor", linkName) ~ " by " ~ at("a", "silver.toml") ~ ", for 'a', "
+        ~ "where a.num names it, and " ~ at("b", "vendor", linkName) ~ " by " ~ at("b", "silver.toml") ~ ", for 'b', here. "
+        ~ "A program has one file for each library, so give it in one of the two, or the same file in both\n"), ran.output);
+    // By hand, the options that gave them are named.
+    auto a = buildPath(ws, "a", "vendor", loadName), b = buildPath(ws, "b", "vendor", loadName);
+    ran = runIn([built("silverc"), "--package", "a=" ~ buildPath(ws, "a", "src"), "--package", "b=" ~ buildPath(ws, "b", "src"),
+        "--package", "both=.", "--uses", "both=a,b", "--native-load", "a:num=" ~ a, "--native-load", "b:num=" ~ b,
+        "main.ag"], both);
+    assert(ran.status == 1 && ran.output.canFind("Error L0017: The library 'num' is given two files to load in this "
+        ~ "program: " ~ a ~ " by `--native-load a:num=" ~ a ~ "`, where a.num names it, and " ~ b ~ " by `--native-load "
+        ~ "b:num=" ~ b ~ "`, here."), ran.output);
 }
 
 @("out/ has the silver and silverc that were last built into build/, so these tests run what was built")

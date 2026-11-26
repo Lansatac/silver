@@ -65,8 +65,9 @@ enum ProjectCode : string
     AbsoluteNativePath = "F0050",
     /// A file a `[native.<library>.<platform>]` table names for this platform that isn't there.
     NoNativeFile = "F0051",
-    /// Two package files of one run that give one library and platform.
-    NativeGivenTwice = "F0052",
+    /// A `[native]` table's library that `native library` can't name or an option can't carry: empty, or
+    /// holding `=` or a NUL.
+    BadNativeLibrary = "F0052",
 }
 
 /// The platforms a `[native.<library>.<platform>]` table can be for.
@@ -183,7 +184,8 @@ struct Project
 {
     string file;
     Facts[] packages;
-    /// The `[native]` tables of the package files whose packages were reached, for every platform.
+    /// The `[native]` tables of the package files whose packages were reached, for every platform. Each is
+    /// for the modules of its own file's packages.
     NativeTable[] natives;
 }
 
@@ -513,8 +515,12 @@ string[] compilerOptions(const Project project, string delegate(string) shown, c
     foreach (ref n; project.natives)
     {
         if (n.platform != hostPlatform) continue;
-        if (n.link !is null) options ~= ["--native-link", n.library ~ "=" ~ shown(n.link)];
-        if (n.load !is null) options ~= ["--native-load", n.library ~ "=" ~ shown(n.load)];
+        foreach (ref p; project.packages)
+        {
+            if (p.directory is null || !samePath(p.file, n.file)) continue;
+            if (n.link !is null) options ~= ["--native-link", p.name ~ ":" ~ n.library ~ "=" ~ shown(n.link)];
+            if (n.load !is null) options ~= ["--native-load", p.name ~ ":" ~ n.library ~ "=" ~ shown(n.load)];
+        }
     }
     return options;
 }
@@ -920,6 +926,12 @@ struct Checker
         foreach (ref library; value.table.entries)
         {
             if (library.value.kind != ValueKind.table) return fail(ProjectCode.WrongType, library.value.span, shape);
+            if (library.key.length == 0 || library.key.canFind('=') || library.key.canFind('\0'))
+            {
+                return fail(ProjectCode.BadNativeLibrary, library.keySpan, "\"" ~ library.key ~ "\" isn't a library "
+                    ~ "this table can give files for: it's the name a module's `native library` gives, which isn't empty "
+                    ~ "and here can't hold `=` or a NUL character");
+            }
             immutable named = "native." ~ library.key;
             foreach (ref platform; library.value.table.entries)
             {
@@ -1093,18 +1105,7 @@ struct ProjectReader
         }
         if (!declare(file.name, file.directory, file.modules, file.uses, file.described.map!(d => d.name.name).array))
             return false;
-        foreach (ref n; file.natives)
-        {
-            foreach (ref other; natives)
-            {
-                if (other.library != n.library || other.platform != n.platform) continue;
-                mistake = Mistake(file.file, ProjectCode.NativeGivenTwice, n.span, "The library '" ~ n.library ~ "' on "
-                    ~ n.platform ~ " is given here and in " ~ other.file ~ ", at line " ~ decimal(other.span.line)
-                    ~ ", and both are part of this program; one silver.toml gives a library's files");
-                return false;
-            }
-            natives ~= n;
-        }
+        natives ~= file.natives;
         foreach (ref d; file.described)
         {
             if (!declare(d.name, d.directory, d.modules, d.uses, null)) return false;
@@ -1583,35 +1584,35 @@ unittest
         ~ ", which isn't a file", missing.message);
     m("[native.ray." ~ hostPlatform ~ "]\nlink = \"lib/dir\"", ProjectCode.NoNativeFile, 3, 8);
     m("[native.ray." ~ hostPlatform ~ "]\nlink = \"\"", ProjectCode.NoNativeFile, 3, 8);
+    auto equals = m("[native.\"a=b\"." ~ other ~ "]\nlink = \"x.a\"", ProjectCode.BadNativeLibrary, 2, 9);
+    assert(equals.message == "\"a=b\" isn't a library this table can give files for: it's the name a module's `native "
+        ~ "library` gives, which isn't empty and here can't hold `=` or a NUL character", equals.message);
+    m("[native.\"\"." ~ hostPlatform ~ "]\nload = \"lib/ray.dll\"", ProjectCode.BadNativeLibrary, 2, 9);
 }
 
-@("two package files of one program can't give one library and platform, and only this platform's files reach the compiler")
+@("a table is given to the compiler for each package of its own file, and only this platform's files")
 unittest
 {
-    import std.algorithm : canFind;
     import std.conv : to;
 
-    auto directory = makeTree("project-natives-twice", [
+    auto directory = makeTree("project-natives-packages", [
         "app/silver.toml": "name = \"app\"\nuses = [\"ray\"]\n[[package]]\npath = \"../ray\"\n\n[native.ray." ~ hostPlatform
             ~ "]\nload = \"r.dll\"\n",
         "app/r.dll": "",
-        "ray/silver.toml": "name = \"ray\"\n[native.ray." ~ hostPlatform ~ "]\nlink = \"r.a\"\nload = \"r.dll\"\n",
+        "ray/silver.toml": "name = \"ray\"\n[[package]]\nname = \"ray.extra\"\npath = \"extra\"\n\n[native.ray."
+            ~ hostPlatform ~ "]\nlink = \"r.a\"\nload = \"r.dll\"\n",
+        "ray/extra/": "",
         "ray/r.a": "",
         "ray/r.dll": "",
-        "solo/silver.toml": "name = \"solo\"\nuses = [\"ray\"]\n[[package]]\npath = \"../ray\"\n",
     ]);
     scope (exit) rmdirRecurse(directory);
 
-    auto twice = projectMistake(buildPath(directory, "app", "silver.toml"), ProjectCode.NativeGivenTwice);
-    assert(twice.file == buildPath(directory, "ray", "silver.toml") && twice.span.line == 2, formatMistake(twice));
-    assert(twice.message == "The library 'ray' on " ~ hostPlatform ~ " is given here and in " ~ buildPath(directory, "app",
-        "silver.toml") ~ ", at line 6, and both are part of this program; one silver.toml gives a library's files",
-        twice.message);
-
-    auto solo = project(buildPath(directory, "solo", "silver.toml"));
-    auto options = compilerOptions(solo, (string path) => path);
-    assert(options.canFind("--native-link") && options.canFind("ray=" ~ buildPath(directory, "ray", "r.a")), options.to!string);
-    assert(options.canFind("ray=" ~ buildPath(directory, "ray", "r.dll")), options.to!string);
+    // ray's file describes no modules of its own, only ray.extra's, which is the package its table is for.
+    auto options = compilerOptions(project(buildPath(directory, "app", "silver.toml")), (string path) => path);
+    auto ray = (string file) => buildPath(directory, "ray", file);
+    assert(options[$ - 6 .. $] == ["--native-load", "app:ray=" ~ buildPath(directory, "app", "r.dll"),
+        "--native-link", "ray.extra:ray=" ~ ray("r.a"), "--native-load", "ray.extra:ray=" ~ ray("r.dll")],
+        options.to!string);
 }
 
 @("two packages tested in one run that never share a program can each give the same library")
