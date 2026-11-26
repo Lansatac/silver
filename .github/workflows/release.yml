@@ -72,7 +72,7 @@ jobs:
         id: pins
         run: |
           echo "dmd=$(sed -n 's/^ARG DMD_VERSION=//p' .devcontainer/Dockerfile)" >> "$GITHUB_OUTPUT"
-          echo "redub=$(sed -n 's/^ARG REDUB_COMMIT=//p' .devcontainer/Dockerfile)" >> "$GITHUB_OUTPUT"
+          echo "redub=$(sed -n 's/^ARG REDUB_VERSION=//p' .devcontainer/Dockerfile)" >> "$GITHUB_OUTPUT"
 
       - name: Enlarge the page file
         uses: al-cheb/configure-pagefile-action@v1.5
@@ -96,8 +96,7 @@ jobs:
         if: steps.redub-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          git clone --quiet https://github.com/Lansatac/redub.git "$HOME/redub"
-          git -C "$HOME/redub" checkout --quiet ${{ steps.pins.outputs.redub }}
+          git clone --quiet --depth 1 --branch v${{ steps.pins.outputs.redub }} https://github.com/MrcSnm/redub.git "$HOME/redub"
           Push-Location "$HOME/redub"
           dub build --quiet
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

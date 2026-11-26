@@ -1,7 +1,7 @@
 # Runs the whole suite (runTests) on Linux and Windows.
 # Linux runs it in the `build` stage of the dev container's Dockerfile, which the dev container is
 # built on, so both use the same pinned dmd, clang and redub. Windows takes dmd's version and
-# redub's commit from the same Dockerfile.
+# redub's version from the same Dockerfile.
 name: test
 
 on:
@@ -71,7 +71,7 @@ jobs:
         shell: bash
         run: |
           echo "dmd=$(sed -n 's/^ARG DMD_VERSION=//p' .devcontainer/Dockerfile)" >> "$GITHUB_OUTPUT"
-          echo "redub=$(sed -n 's/^ARG REDUB_COMMIT=//p' .devcontainer/Dockerfile)" >> "$GITHUB_OUTPUT"
+          echo "redub=$(sed -n 's/^ARG REDUB_VERSION=//p' .devcontainer/Dockerfile)" >> "$GITHUB_OUTPUT"
 
       # redub runs several dmd processes at once, each taking gigabytes, and Windows refuses memory past
       # RAM plus the page file, where Linux overcommits. With the runner's own page file, dmd crashed
@@ -98,8 +98,7 @@ jobs:
       - name: Build redub
         if: steps.redub-cache.outputs.cache-hit != 'true'
         run: |
-          git clone --quiet https://github.com/Lansatac/redub.git "$HOME/redub"
-          git -C "$HOME/redub" checkout --quiet ${{ steps.pins.outputs.redub }}
+          git clone --quiet --depth 1 --branch v${{ steps.pins.outputs.redub }} https://github.com/MrcSnm/redub.git "$HOME/redub"
           Push-Location "$HOME/redub"
           dub build --quiet
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

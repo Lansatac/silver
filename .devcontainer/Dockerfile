@@ -29,13 +29,12 @@ RUN curl -fsS https://dlang.org/install.sh | bash -s install "dmd-${DMD_VERSION}
     && echo "${DMD_DIR}/linux/lib64" > /etc/ld.so.conf.d/dlang.conf && ldconfig \
     && chmod -R a+rX /opt/dlang
 
-# redub, which runTests.sh builds and tests with, from Jason's fork: upstream's `redub test` doesn't
-# generate the dub_test_root silver.testrunner needs, and its builds drop dub.selections.json's
-# entries. Pinned to a commit on the fork's test-root branch; bump it to upgrade.
-ARG REDUB_COMMIT=0962451ae2b9e93634f2a6de70fd2e87bc813b22
-RUN git clone --quiet https://github.com/Lansatac/redub.git /opt/redub \
+# redub, which runTests.sh builds and tests with. It needs 1.38.3 or later: before that `redub test`
+# didn't generate the dub_test_root silver.testrunner needs, and builds dropped dub.selections.json's
+# entries. Pinned to a release's tag; bump it to upgrade.
+ARG REDUB_VERSION=1.38.4
+RUN git clone --quiet --depth 1 --branch v${REDUB_VERSION} https://github.com/MrcSnm/redub.git /opt/redub \
     && cd /opt/redub \
-    && git checkout --quiet ${REDUB_COMMIT} \
     && dub build --quiet \
     && ln -s /opt/redub/build/redub /usr/local/bin/redub \
     && rm -rf /root/.dub \

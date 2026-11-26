@@ -4,10 +4,10 @@
 # Packages are named relative to this directory (`:sema`, not `silver:sema`): dub can resolve a
 # qualified name to another checkout of the package, such as a git worktree.
 #
-# Builds and tests with redub from Jason's fork (github.com/Lansatac/redub, branch test-root), which
-# generates the dub_test_root that silver.testrunner needs and leaves dub.selections.json's entries
-# alone: $env:SILVER_REDUB, else ~\redub\build\redub.exe, else `redub` on the PATH (which in the dev
-# container is the fork, built into its image). Without one, dub does the same work more slowly.
+# Builds and tests with redub (github.com/MrcSnm/redub), 1.38.3 or later, which generates the
+# dub_test_root that silver.testrunner needs and leaves dub.selections.json's entries alone:
+# $env:SILVER_REDUB, else ~\redub\build\redub.exe, else `redub` on the PATH (the dev container builds
+# the version its Dockerfile pins into its image). Without one, dub does the same work more slowly.
 # $env:SILVER_REDUB_PARALLEL is passed to redub as --parallel (auto, full, leaves or no): each dmd that
 # compiles against sema takes gigabytes, and several at once can need more memory than a machine has.
 $packages = ':ast', ':syntax', ':loader', ':sema', ':core', ':interpreter', ':codegen', ':testing', ':conformance', ':frontend', 'root'
