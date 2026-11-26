@@ -141,4 +141,4 @@ Looking up, adding, replacing and removing a key take time that grows with the l
 - `keys`, `values` and `iterate` give the types `Keys<K, V>`, `Values<K, V>` and `Entries<K, V>`, which a `val` infers. Writing one of those names needs `import lang.dictionary`.
 - A dictionary's fields can be read and it can be built with its constructor by a module that imports `lang.dictionary`, which nothing checks.
 - The panic for a key that isn't equal to itself is reported at the line in `lang.dictionary` that panics, not at the caller's.
-- It's slow on the interpreter, where a lookup is tens of microseconds, since it's Silver run by a tree walker. Compiled, 200,000 keys are added, read and stepped through in under a second.
+- It's slow on the interpreter, where a lookup takes about 6 microseconds and an insert about 20, since it's Silver run by a tree walker. Compiled, 200,000 keys are added, read and stepped through in under a second.
