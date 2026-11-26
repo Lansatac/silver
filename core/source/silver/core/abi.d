@@ -4,7 +4,7 @@
 /// other, only both with C.
 module silver.core.abi;
 
-import silver.core.nodes : Program;
+import silver.core.nodes : Native, Program;
 import silver.sema : Type;
 
 /// A C calling convention for x86-64.
@@ -103,6 +103,12 @@ struct CallDescription
     uint stackWords;
 }
 
+/// A call of `native`, as it's declared.
+CallDescription describeCall(const ref Program program, const ref Native native, Convention convention)
+{
+    return describeCall(program, native.params, native.result, convention);
+}
+
 /// The call of a native taking `params` and returning `result`, which are its Core types as declared.
 CallDescription describeCall(const ref Program program, const(Type)[] params, Type result, Convention convention)
 {
@@ -142,6 +148,18 @@ CallDescription describeCall(const(CType)[] params, CType result, Convention con
         call.result = Crossing(Passing.value, [Part(result, place, extensionOf(result))]);
     }
     return call;
+}
+
+/// Whether C passes the parameters and result of `a` and `b` alike, and neither or both never return.
+bool sameCSignature(const ref Program program, const ref Native a, const ref Native b)
+{
+    if (a.params.length != b.params.length) return false;
+    foreach (i, param; a.params)
+    {
+        if (cTypeOf(program, param) != cTypeOf(program, b.params[i])) return false;
+    }
+    auto never = program.types.never;
+    return cTypeOf(program, a.result) == cTypeOf(program, b.result) && (a.result == never) == (b.result == never);
 }
 
 /// The C type of `type`, which sema allows in a native's signature.

@@ -1,9 +1,14 @@
 /// The runtime's natives for `std.time`, which `lang.time` declares. The interpreter compiles this
 /// module in and calls them as compiled code does, so it uses nothing of the runtime's but
-/// `silver.runtime.registers`, and nothing here can fail.
+/// `silver.runtime.registers`.
 module silver.runtime.clock;
 
+import core.exception : OutOfMemoryError;
 import silver.runtime.registers : SavedRegisters, silver_save_registers;
+
+/// What running out of memory here does: the runtime's panic in a compiled program, which its entry
+/// sets, or the interpreter's, which reports it once the call has returned.
+__gshared void function() nothrow @nogc clockOutOfMemory;
 
 extern (C) nothrow:
 
@@ -47,5 +52,10 @@ long silver_localOffsetSeconds(long unixSeconds)
     SavedRegisters saved = void;
     silver_save_registers(&saved);
     auto seconds = clamp(unixSeconds, -62_167_219_200L, 253_402_300_799L);
-    return LocalTime().utcOffsetAt(seconds * 10_000_000L + 621_355_968_000_000_000L).total!"seconds";
+    try return LocalTime().utcOffsetAt(seconds * 10_000_000L + 621_355_968_000_000_000L).total!"seconds";
+    catch (OutOfMemoryError)
+    {
+        clockOutOfMemory();
+        return 0;
+    }
 }

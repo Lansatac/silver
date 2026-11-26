@@ -1396,46 +1396,47 @@ private final class Generator
         return name;
     }
 
-    /// A call to a C function, declared with the types the platform's convention gives its declared
-    /// parameters and result.
+    /// A call to a C function, declared with the types the platform's convention gives the native's
+    /// declared parameters and result.
     private Fragment emit(const Expr e, const ForeignCall call)
     {
-        auto symbol = _program.natives[call.native].symbol;
-        auto description = describeCall(_program, call.params, e.type, hostConvention);
+        auto native = &_program.natives[call.native];
+        auto description = describeCall(_program, *native, hostConvention);
         auto returnType = description.result.passing == Passing.nothing ? "void" : llvmResult(description.result.parts[0]);
         Fragment arguments;
         string[] params;
         string[] operands;
         foreach (i, ref arg; call.args)
         {
-            auto param = llvmParam(description.arguments[i].parts[0]);
             auto value = emitExpr(arg);
             arguments = arguments.then(value);
-            params ~= param;
-            if (isNullableHandle(call.params[i]))
+            string scalar;
+            if (isNullableHandle(native.params[i]))
             {
                 // `None` is null, whatever its pointer scalar holds.
                 auto option = operandsOf(arg, value.operands, 2);
                 auto pointer = _function.result("select i1 %s, ptr %s, ptr null".format(option[0], option[1]));
                 arguments = arguments.then(pointer);
-                operands ~= "ptr " ~ pointer.value;
-                continue;
+                scalar = pointer.value;
             }
-            operands ~= param ~ " " ~ operandOf(arg, value);
+            else scalar = operandOf(arg, value);
+            auto parts = description.arguments[i].parts;
+            foreach (part; parts)
+            {
+                assert(parts.length == 1, "a scalar crosses whole, as one part");
+                params ~= llvmParam(part);
+                operands ~= llvmParam(part) ~ " " ~ scalar;
+            }
         }
 
         // `nobuiltin`, or LLVM takes a native named like a C library function for that function, and
         // works out or rewrites calls to it with arithmetic of its own, which rounds differently.
+        auto symbol = native.symbol;
         auto declaration = "declare ccc %s @%s(%s) nobuiltin%s".format(returnType, symbol, params.join(", "),
             e.type == _program.types.never ? " noreturn" : "");
         if (symbol in runtime) return notImplemented("a native named like the runtime's own " ~ symbol, e.span);
-        if (auto existing = symbol in _foreign)
-        {
-            if (*existing != declaration)
-            {
-                return notImplemented("natives that bind `%s` with different signatures".format(symbol), e.span);
-            }
-        }
+        assert((symbol in _foreign) is null || _foreign[symbol] == declaration,
+            "lowering refuses natives that bind one symbol with signatures C passes differently");
         _foreign[symbol] = declaration;
 
         auto called = arguments.then(_function.call(returnType, "@" ~ symbol, operands, "ccc"));

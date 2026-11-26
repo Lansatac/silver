@@ -400,7 +400,7 @@ unittest
     run.output.should.equal("");
 }
 
-@("codegen reports two natives that bind one symbol with different signatures")
+@("two natives that bind one symbol with signatures C passes differently are refused before codegen")
 unittest
 {
     import std.exception : collectException;

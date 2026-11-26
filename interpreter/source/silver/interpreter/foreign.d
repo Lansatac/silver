@@ -48,6 +48,13 @@ Returned callC(const(void)* address, const ref CallDescription call, const(ulong
     frame.stack = stack.ptr;
     frame.stackWords = stack.length;
     trampoline(&frame);
+    if (nativeOutOfMemory)
+    {
+        import core.exception : onOutOfMemoryError;
+
+        nativeOutOfMemory = false;
+        onOutOfMemoryError();
+    }
     return Returned(frame.integerResults, frame.floatResults);
 }
 
@@ -206,14 +213,17 @@ const(void)* findNative(string symbol, string library, out string problem)
         problem = "`%s` is in neither Silver's runtime nor the C library".format(symbol);
         return null;
     }
-    auto handle = loaded(library);
-    if (handle is null)
+    auto handles = loaded(library);
+    if (handles.length == 0)
     {
         problem = "the library `%s` can't be loaded: interpreting needs it as the shared library %s, where the system finds shared libraries, and can't use a static one"
             .format(library, sharedLibraryFile(library));
         return null;
     }
-    if (auto address = symbolIn(handle, symbol)) return address;
+    foreach (handle; handles)
+    {
+        if (auto address = symbolIn(handle, symbol)) return address;
+    }
     problem = "`%s` isn't in %s".format(symbol, sharedLibraryFile(library));
     return null;
 }
@@ -228,9 +238,20 @@ string sharedLibraryFile(string name)
 /// The runtime's natives, which the interpreter compiles in.
 private immutable const(void)*[string] runtimeNatives;
 
+/// Whether a runtime native running on this thread ran out of memory, which `callC` reports once it
+/// returns, since nothing can be thrown through the trampoline.
+private bool nativeOutOfMemory;
+
+private void noteOutOfMemory() nothrow @nogc
+{
+    nativeOutOfMemory = true;
+}
+
 shared static this()
 {
-    import silver.runtime.clock : silver_localOffsetSeconds, silver_monotonicNanos, silver_nowNanos;
+    import silver.runtime.clock : clockOutOfMemory, silver_localOffsetSeconds, silver_monotonicNanos, silver_nowNanos;
+
+    clockOutOfMemory = &noteOutOfMemory;
 
     const(void)*[string] table;
     table["silver_nowNanos"] = &silver_nowNanos;
@@ -253,9 +274,95 @@ private const(void*)[] cLibrary()
     }
 }
 
-private void* loaded(string library)
+/// The shared library `library` names, loaded: on Linux the shared libraries its `.so` names instead
+/// when that is a linker script, as glibc's `libm.so` and `libc.so` are, which the linker follows and
+/// the loader doesn't. Empty when it can't be loaded.
+private void*[] loaded(string library)
 {
-    return loadedFile(sharedLibraryFile(library));
+    auto file = sharedLibraryFile(library);
+    if (auto handle = loadedFile(file)) return [handle];
+    version (linux)
+    {
+        void*[] handles;
+        foreach (named; sharedLibrariesOfScript(linkerScriptFor(file)))
+        {
+            if (auto handle = loadedFile(named)) handles ~= handle;
+        }
+        return handles;
+    }
+    else return null;
+}
+
+version (linux)
+{
+    /// The text of the linker script that the linker would find as `file`, or null: the first `file`
+    /// in the linker's directories that isn't an ELF file.
+    private string linkerScriptFor(string file)
+    {
+        import std.algorithm : splitter;
+        import std.file : exists, isFile, read;
+        import std.path : buildPath;
+        import std.process : environment;
+
+        string[] directories;
+        foreach (variable; ["LIBRARY_PATH", "LD_LIBRARY_PATH"])
+        {
+            foreach (directory; environment.get(variable, "").splitter(':')) if (directory.length) directories ~= directory;
+        }
+        directories ~= ["/usr/local/lib/x86_64-linux-gnu", "/usr/local/lib", "/lib/x86_64-linux-gnu",
+            "/usr/lib/x86_64-linux-gnu", "/lib64", "/usr/lib64", "/lib", "/usr/lib"];
+        foreach (directory; directories)
+        {
+            auto path = buildPath(directory, file);
+            try
+            {
+                if (!exists(path) || !isFile(path)) continue;
+                auto text = cast(string) read(path, 4096);
+                return text.length >= 4 && text[0 .. 4] == "\x7fELF" ? null : text;
+            }
+            catch (Exception) continue;
+        }
+        return null;
+    }
+
+    /// The shared libraries a linker script's `GROUP` and `INPUT` name, in order, as paths or names:
+    /// every word that names a `.so` file, those under `AS_NEEDED` included, and no static library.
+    private string[] sharedLibrariesOfScript(string script)
+    {
+        import std.algorithm : canFind, splitter;
+        import std.array : replace;
+        import std.string : indexOf;
+
+        // Comments, which may hold any words, go first.
+        string text;
+        while (script.length > 0)
+        {
+            auto start = script.indexOf("/*");
+            if (start < 0)
+            {
+                text ~= script;
+                break;
+            }
+            text ~= script[0 .. start];
+            auto end = script[start .. $].indexOf("*/");
+            script = end < 0 ? null : script[start + end + 2 .. $];
+        }
+        string[] named;
+        foreach (word; text.replace("(", " ").replace(")", " ").replace(",", " ").splitter!(c => c == ' ' || c == '\n' || c == '\t' || c == '\r'))
+        {
+            if (word.length > 0 && (word.canFind(".so.") || (word.length > 3 && word[$ - 3 .. $] == ".so"))) named ~= word;
+        }
+        return named;
+    }
+
+    @("a linker script's shared libraries are what its GROUP names, without its comments or static libraries")
+    unittest
+    {
+        auto script = "/* GNU ld script\n   Use the shared library, but some functions are only in libx.so.9 */\n"
+            ~ "OUTPUT_FORMAT(elf64-x86-64)\nGROUP ( /usr/lib/libc.so.6 /usr/lib/libc_nonshared.a  AS_NEEDED ( /lib64/ld-linux-x86-64.so.2 ) )\n";
+        assert(sharedLibrariesOfScript(script) == ["/usr/lib/libc.so.6", "/lib64/ld-linux-x86-64.so.2"]);
+        assert(sharedLibrariesOfScript(null) == []);
+    }
 }
 
 /// The shared library `file`, loaded by the system's own search, or null. A library stays loaded.

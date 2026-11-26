@@ -83,16 +83,82 @@ version (unittest)
         return cLibrariesProblem;
     }
 
+    enum cLibraryPrefix = "silver-conformance-clibraries-";
+
+    /// Where the process `pid` builds the libraries of conformance/clibraries/.
+    string cLibraryDirectory(int pid)
+    {
+        return buildPath(tempDir, cLibraryPrefix ~ pid.to!string);
+    }
+
+    /// This process's directory of built libraries, once it has one.
+    __gshared string builtLibraries;
+
+    /// Removes the library directories of processes that have ended, which on Windows couldn't remove
+    /// their own while their libraries were loaded, or that were killed.
+    void removeDeadLibraryDirectories()
+    {
+        import std.conv : ConvException;
+
+        foreach (entry; dirEntries(tempDir, cLibraryPrefix ~ "*", SpanMode.shallow))
+        {
+            int pid;
+            try pid = baseName(entry.name)[cLibraryPrefix.length .. $].to!int;
+            catch (ConvException) continue;
+            if (pid != thisProcessID && !isRunning(pid)) collectException(rmdirRecurse(entry.name));
+        }
+    }
+
+    bool isRunning(int pid)
+    {
+        version (Windows)
+        {
+            import core.sys.windows.winbase : CloseHandle, GetExitCodeProcess, OpenProcess, STILL_ACTIVE;
+            import core.sys.windows.winnt : PROCESS_QUERY_INFORMATION;
+
+            auto process = OpenProcess(PROCESS_QUERY_INFORMATION, false, pid);
+            if (process is null) return false;
+            scope (exit) CloseHandle(process);
+            uint status;
+            return GetExitCodeProcess(process, &status) && status == STILL_ACTIVE;
+        }
+        else return exists("/proc/" ~ pid.to!string);
+    }
+
+    /// Removes this process's libraries as it ends, unloading them first on Windows, where a loaded one
+    /// can't be removed.
+    shared static ~this()
+    {
+        if (builtLibraries is null) return;
+        version (Windows)
+        {
+            import core.sys.windows.winbase : FreeLibrary, GetModuleHandleW;
+            import std.utf : toUTF16z;
+
+            foreach (entry; dirEntries(builtLibraries, "*.dll", SpanMode.shallow))
+            {
+                for (auto module_ = GetModuleHandleW(entry.name.toUTF16z); module_ !is null;
+                    module_ = GetModuleHandleW(entry.name.toUTF16z))
+                {
+                    if (!FreeLibrary(module_)) break;
+                }
+            }
+        }
+        collectException(rmdirRecurse(builtLibraries));
+    }
+
     string buildCLibraries()
     {
         import std.process : execute;
 
         Toolchain toolchain;
         if (auto missing = findToolchain(toolchain)) return missing;
+        removeDeadLibraryDirectories();
         // The process's own, since a library another process has loaded can't be replaced on Windows.
-        auto directory = buildPath(tempDir, "silver-conformance-clibraries-" ~ thisProcessID.to!string);
+        auto directory = cLibraryDirectory(thisProcessID);
         if (exists(directory)) rmdirRecurse(directory);
         mkdirRecurse(directory);
+        builtLibraries = directory;
         foreach (entry; dirEntries(buildPath(conformanceDirectory, "clibraries"), "*.c", SpanMode.shallow))
         {
             auto name = baseName(entry.name).stripExtension;

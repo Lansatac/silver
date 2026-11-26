@@ -147,6 +147,25 @@ unittest
         && error.diagnostic.message.canFind("can't use a static one"), error.diagnostic.message);
 }
 
+@("two natives that bind one symbol with signatures C passes differently are refused, as when compiling")
+unittest
+{
+    import std.exception : collectException;
+    import silver.ast : DiagnosticCode, DiagnosticException;
+
+    auto error = collectException!DiagnosticException(run("native(\"llabs\") def a(x: Int64): Int64\n"
+        ~ "native(\"llabs\") def b(x: Float): Float\ndef main(): Unit {\n    printl(a(-1))\n    printl(b(1.0))\n}"));
+    assert(error !is null);
+    error.diagnostic.code.should.equal(DiagnosticCode.NotImplemented);
+    error.diagnostic.message.should.contain("`llabs`");
+
+    // Aliases of one type, and handles of two types, are passed alike.
+    run("import std.c\nnative type A\nnative type B\nnative(\"strchr\") def a(s: CString, c: CInt): A?\n"
+        ~ "native(\"strchr\") def b(s: CString, c: Int32): B?\ndef main(): Unit {\n"
+        ~ "    printl(a(toCString(\"x\"), 120) == None)\n    printl(b(toCString(\"x\"), 121) == None)\n}")
+        .should.equal("false\ntrue\n");
+}
+
 @("a native parameter narrower than C's int is refused when called, as Windows leaves its upper bits undefined")
 unittest
 {

@@ -9,6 +9,7 @@ import std.typecons : Rebindable, rebindable;
 
 import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
+import silver.core.abi : sameCSignature;
 import silver.core.nodes;
 import silver.core.slots : numberLocals;
 import silver.sema : Analysis, DerivedOrder, DerivedPart, DictionaryFunctions, FunctionUse, IndexFunctions, LoopFunctions, SafeCall, ConstChar, ConstFloat32, float32Of, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
@@ -43,6 +44,7 @@ Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis, const ast
     auto program = Program(rebindable(analysis.types), lowering.functions, entry, lowering.libraries);
     program.natives = lowering.natives;
     lowering.describeTypes(program);
+    checkNatives(program);
     numberLocals(program);
     return program;
 }
@@ -72,8 +74,27 @@ Program lowerTests(const ref ast.Program program, const Analysis analysis)
     lowered.natives = lowering.natives;
     lowered.tests = tests;
     lowering.describeTypes(lowered);
+    checkNatives(lowered);
     numberLocals(lowered);
     return lowered;
+}
+
+/// Refuses natives that bind one symbol with signatures C would pass differently, since a C function
+/// has one, on either backend.
+/// Throws: DiagnosticException (`NotImplemented`) at the later native's first use.
+private void checkNatives(const ref Program program)
+{
+    import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException;
+
+    foreach (i, ref later; program.natives)
+    {
+        foreach (ref earlier; program.natives[0 .. i])
+        {
+            if (earlier.symbol != later.symbol || sameCSignature(program, earlier, later)) continue;
+            throw new DiagnosticException(Diagnostic(DiagnosticCode.NotImplemented, later.span,
+                "Natives that bind `%s` with different signatures can't both be called".format(later.symbol)));
+        }
+    }
 }
 
 /// How deeply an instance's type arguments can nest, which only polymorphic recursion reaches.
@@ -276,9 +297,8 @@ private final class Lowering
     private InstanceKey[InstanceKey] _neededBy;
     /// Each `native library` a call has needed, in the order first needed.
     string[] libraries;
-    /// Each C function called, in the order first called, and where each is in it by library and symbol.
+    /// Each C function called, as it was declared, in the order first called.
     Native[] natives;
-    private size_t[string] _nativeIndex;
 
     /// The functions lowering makes up, by what they're for, so each is made once.
     private size_t[Type] _equalities;
@@ -934,7 +954,7 @@ private final class Lowering
         Local[] params;
         foreach (i, ref param; decl.params) params ~= new Local(paramName(param.name, i), signature.params[i]);
         auto args = params.map!(p => use(p, _span)).array;
-        auto body = Expr(signature.ret, _span, ExprKind(ForeignCall(nativeFor(func, _span), args, signature.params)));
+        auto body = Expr(signature.ret, _span, ExprKind(ForeignCall(nativeFor(func, _span), args)));
         functions[slot] = Function(decl.name, _analysis.moduleOf(func), params, null, signature.ret, body,
             FunctionOrigin.derived, decl.name);
         return slot;
@@ -2136,7 +2156,7 @@ private final class Lowering
             case ast.FunctionKind.native:
                 auto native = nativeFor(callee.decl, span);
                 return callWith(written, signature, type, span, null,
-                    (Expr[] args, Expr* _) => Expr(signature.ret, span, ExprKind(ForeignCall(native, args, signature.params))));
+                    (Expr[] args, Expr* _) => Expr(signature.ret, span, ExprKind(ForeignCall(native, args))));
             case ast.FunctionKind.intrinsic:
                 return lowerIntrinsic(e.id, callee.decl, written, signature, span);
             case ast.FunctionKind.required:
@@ -2208,7 +2228,7 @@ private final class Lowering
             case ast.FunctionKind.ordinary:
                 return Expr(signature.ret, span, ExprKind(Call(slotFor(callee), args)));
             case ast.FunctionKind.native:
-                return Expr(signature.ret, span, ExprKind(ForeignCall(nativeFor(callee.decl, span), args, signature.params)));
+                return Expr(signature.ret, span, ExprKind(ForeignCall(nativeFor(callee.decl, span), args)));
             case ast.FunctionKind.intrinsic:
                 auto intrinsic = _analysis.intrinsicOf(callee.decl);
                 if (intrinsic == Intrinsic.assert_ || intrinsic == Intrinsic.expect) return notLowered!Expr("`%s` as a conformance".format(decl.name));
@@ -2224,11 +2244,14 @@ private final class Lowering
     {
         auto symbol = _analysis.declarationOf(func).symbol;
         auto library = _analysis.libraryOf(func);
-        auto key = library ~ "\0" ~ symbol;
-        if (auto existing = key in _nativeIndex) return *existing;
+        auto signature = _analysis.signatureOf(func);
+        foreach (i, ref native; natives)
+        {
+            if (native.symbol == symbol && native.library == library && native.params == signature.params
+                && native.result == signature.ret) return i;
+        }
         if (library !is null && !libraries.canFind(library)) libraries ~= library;
-        _nativeIndex[key] = natives.length;
-        natives ~= Native(symbol, library, span);
+        natives ~= Native(symbol, library, signature.params, signature.ret, span);
         return natives.length - 1;
     }
 

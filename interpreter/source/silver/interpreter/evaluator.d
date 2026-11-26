@@ -32,8 +32,18 @@ final class Evaluator
     private string[] _arguments;
     /// What a relative path is relative to, or null for the process's working directory.
     private string _directory;
-    /// The address of each of the program's `natives`, found before anything runs.
-    private const(void)*[] _natives;
+    /// How to call each of the program's `natives`, found and described before anything runs.
+    private Callable[] _natives;
+
+    private static struct Callable
+    {
+        const(void)* address;
+        CallDescription description;
+        /// How many words its arguments' parts take.
+        size_t words;
+        /// Why calling it is refused, or null.
+        string refusal;
+    }
 
     /// With `useStdOut`, output goes straight to standard output; otherwise it's kept for `output`.
     /// `directory` stands in for the directory the program was started in, so programs in one process
@@ -113,15 +123,28 @@ final class Evaluator
     /// Throws: DiagnosticException (`MissingNativeBinding`) at the first call of one that can't be found.
     private void findNatives()
     {
-        _natives = new const(void)*[_program.natives.length];
-        foreach (i, native; _program.natives)
+        auto types = _program.types;
+        _natives = new Callable[_program.natives.length];
+        foreach (i, ref native; _program.natives)
         {
             string problem;
-            _natives[i] = findNative(native.symbol, native.library, problem);
-            if (_natives[i] is null)
+            auto callable = &_natives[i];
+            callable.address = findNative(native.symbol, native.library, problem);
+            if (callable.address is null)
             {
                 throw new DiagnosticException(Diagnostic(DiagnosticCode.MissingNativeBinding, native.span,
                     "`%s` can't be called when interpreting: %s".format(native.symbol, problem)));
+            }
+            callable.description = describeCall(_program, native, hostConvention);
+            foreach (ref argument; callable.description.arguments) callable.words += argument.parts.length;
+            foreach (param; native.params)
+            {
+                if (types.isInteger(param) && types.integerOf(param).bits < 32)
+                {
+                    callable.refusal = "`%s` can't be called when interpreting as it's declared: a parameter narrower than C's `int` is passed with its upper bits undefined on Windows, so the interpreter refuses `%s`"
+                        .format(native.symbol, types.describe(param));
+                    break;
+                }
             }
         }
     }
@@ -987,26 +1010,24 @@ final class Evaluator
     private Value evaluate(ref const Expr e, ref const ForeignCall call, Value[] frame)
     {
         auto types = _program.types;
-        foreach (param; call.params)
-        {
-            if (types.isInteger(param) && types.integerOf(param).bits < 32)
-            {
-                throw new RuntimeError(Diagnostic(DiagnosticCode.MissingNativeBinding, e.span,
-                    "`%s` can't be called when interpreting as it's declared: a parameter narrower than C's `int` is passed with its upper bits undefined on Windows, so the interpreter refuses `%s`"
-                        .format(_program.natives[call.native].symbol, types.describe(param))));
-            }
-        }
+        auto native = &_natives[call.native];
+        if (native.refusal !is null) throw new RuntimeError(Diagnostic(DiagnosticCode.MissingNativeBinding, e.span, native.refusal));
 
         Value[] values;
         auto jump = all(call.args, frame, values);
         if (jump.has!Jump) return jump;
-        auto description = describeCall(_program, call.params, e.type, hostConvention);
-        auto words = new ulong[values.length];
-        foreach (i, value; values) words[i] = bitsOf(value, description.arguments[i].parts[0].type);
+        ulong[16] few;
+        auto words = native.words <= few.length ? few[0 .. native.words] : new ulong[native.words];
+        size_t next;
+        foreach (i, value; values)
+        {
+            foreach (part; native.description.arguments[i].parts) words[next++] = bitsOf(value, part);
+        }
 
-        auto returned = callC(_natives[call.native], description, words);
-        if (description.result.passing == Passing.nothing) return Value(Unit());
-        auto part = description.result.parts[0];
+        auto returned = callC(native.address, native.description, words);
+        if (native.description.result.passing == Passing.nothing) return Value(Unit());
+        // A scalar result is one part; a structure's would be put together from each.
+        auto part = native.description.result.parts[0];
         auto bits = part.place.where == Where.floatRegister ? returned.floats[part.place.index]
             : returned.integers[part.place.index];
         final switch (part.type)
@@ -1029,12 +1050,12 @@ final class Evaluator
         }
     }
 
-    /// The bits C is passed `value` as when it's a `type`: an integer as its two's complement, which a
+    /// The bits of `value` that C is passed as `part`: an integer as its two's complement, which a
     /// `Value` already holds extended, a `float` in the low 32 bits, an option of a handle as null for
-    /// `None`.
-    private static ulong bitsOf(Value value, CType type)
+    /// `None`. A scalar is the whole of its one part.
+    private static ulong bitsOf(Value value, Part part)
     {
-        final switch (type)
+        final switch (part.type)
         {
             case CType.void_:
                 assert(0, "no parameter is void");
