@@ -5,6 +5,11 @@ intrinsic def printl<T>(value: T): Unit
 def printl(): Unit {
     printl("")
 }
+intrinsic def eprint<T>(value: T): Unit
+intrinsic def eprintl<T>(value: T): Unit
+def eprintl(): Unit {
+    eprintl("")
+}
 
 // What can go wrong reading or writing outside the program. A function returns only the members
 // it can produce, which `?` widens into this.

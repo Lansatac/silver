@@ -24,6 +24,8 @@ enum Intrinsic
 {
     print,
     printl,
+    eprint,
+    eprintl,
     readLine,
     readWhole,
     writeWhole,

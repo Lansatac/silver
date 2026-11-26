@@ -41,6 +41,7 @@ final class Evaluator
     private Program _program;
     private bool _useStdOut;
     private string _output;
+    private string _errorOutput;
     /// Whether tests are running, so `read` finds no input; and the failures of the current one.
     private bool _testing;
     private string[] _failures;
@@ -119,6 +120,12 @@ final class Evaluator
     string output() const
     {
         return _output;
+    }
+
+    /// Everything the program has written to standard error so far, when it's kept (see `writeError`).
+    string errorOutput() const
+    {
+        return _errorOutput;
     }
 
     /// Throws: RuntimeError when the program panics, ProgramFailed when `main` returns an error, and
@@ -1147,6 +1154,12 @@ final class Evaluator
             case Intrinsic.printl:
                 write(args[0].as!string, true);
                 return Value(Unit());
+            case Intrinsic.eprint:
+                writeError(args[0].as!string);
+                return Value(Unit());
+            case Intrinsic.eprintl:
+                writeError(args[0].as!string, true);
+                return Value(Unit());
             case Intrinsic.readLine:
                 return readLine();
             case Intrinsic.readWhole:
@@ -1480,6 +1493,29 @@ final class Evaluator
         replaced[cast(size_t) at] = value;
         frame[slot] = Value(ArrayValue(replaced));
         return Value(Unit());
+    }
+
+    /// What the program writes to standard error, for the intrinsics that do. A write that fails is ignored.
+    /// Kept for `errorOutput` unless output goes to standard output or tests are running, which, as a compiled
+    /// program's tests do, write it to the real standard error.
+    private void writeError(string text, bool newLine = false)
+    {
+        import std.stdio : stderr;
+
+        if (newLine) text ~= "\n";
+        if (_useStdOut || _testing)
+        {
+            try
+            {
+                stderr.write(text);
+                stderr.flush();
+            }
+            catch (Exception) {}
+        }
+        else
+        {
+            _errorOutput ~= text;
+        }
     }
 
     /// What the program prints, for the intrinsics that print.

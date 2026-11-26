@@ -94,16 +94,17 @@ A failure to write to standard error is ignored.
 
 ## Current implementation
 
-[main](#main) and [Arguments](#arguments) are built, on both backends:
+[main](#main), [Arguments](#arguments) and `eprint` and `eprintl` are built, on both backends:
 
 - `main` takes no parameters or one of type `[String]`, written directly or through an alias. Two parameters, a `mutable` one, or one of another type is `S0009`.
 - `silver` and `silverc` give the program what follows the file, options included, with the first `--` dropped by the rule above.
 - An argument that isn't UTF-8 ends the program whether `main` takes the arguments or not. On Windows the arguments are read as UTF-16, so only an unpaired surrogate does, and the message shows it as `\u{D800}`. `silverc` and a compiled program check once the program is compiled. On Windows, where such an argument can't be passed on, `silver run` checks before it calls the compiler, so there that message comes before any about the program's source.
 - A word starting `--DRT-`, which a D program's runtime would take as its own option, is the program's like any other, for `silver`, `silverc` and a compiled program.
+- `eprint` and `eprintl` are in `lang.io` beside `print` and `printl`, generic over what they write, and a failed write is ignored. A compiled program writes to C's standard error, which C leaves unbuffered, so it appears at once, without waiting for what standard output holds. Where the two go to one place, as a pipe both are redirected to, the order is therefore not defined: standard output, buffered, may come out after later standard error. When interpreted, standard output is flushed after each write, so the two come out in the order they were written.
 
 The rest of this document's additions aren't built:
 
-- There is no `exit`, `eprint`, `eprintl` or `environment`, and no `std.process`.
+- There is no `exit` or `environment`, and no `std.process`.
 - `print` panics when the write fails, and when interpreted a closed pipe ends the program with the interpreter's own error.
 
 The exit statuses, and an error from `main`, are as described.

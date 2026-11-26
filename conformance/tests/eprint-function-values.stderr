@@ -1,0 +1,17 @@
+1
+2
+3
+abc
+Some(Point(1, 2))
+None
+ababcd
+cd
+0.5
+99
+Point(3, 4)
+Printer(lines, eprintl<Point>)
+1
+eprint<Int>
+true
+eprint<String>
+eprintl<Bool>

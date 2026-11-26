@@ -1736,7 +1736,7 @@ private final class Generator
     {
         final switch (call.intrinsic)
         {
-            case Intrinsic.print, Intrinsic.printl:
+            case Intrinsic.print, Intrinsic.printl, Intrinsic.eprint, Intrinsic.eprintl:
                 return emitPrint(call);
             case Intrinsic.readLine:
                 return emitWithStatus("silver_readLine", call);
@@ -1772,7 +1772,7 @@ private final class Generator
         }
     }
 
-    /// `silver_print` or `silver_printl` of the String lowering formatted the value to.
+    /// `silver_print`, `silver_printl`, `silver_eprint` or `silver_eprintl` of the String lowering formatted the value to.
     private Fragment emitPrint(const IntrinsicCall call)
     {
         import std.conv : to;

@@ -1,5 +1,5 @@
-/// The prelude's `print` and `printl`, the `readLine` under `read`, and `lang.file`'s intrinsics.
-/// Lowering formats what `print` and `printl` are given, so they write a String.
+/// The prelude's `print`, `printl`, `eprint` and `eprintl`, the `readLine` under `read`, and `lang.file`'s
+/// intrinsics. Lowering formats what the printing ones are given, so they write a String.
 module silver.runtime.io;
 
 import core.exception : OutOfMemoryError;
@@ -15,6 +15,8 @@ extern (C) nothrow:
 
 void silver_print(const(char)* data, size_t length) { output(data[0 .. length], false); }
 void silver_printl(const(char)* data, size_t length) { output(data[0 .. length], true); }
+void silver_eprint(const(char)* data, size_t length) { errorOutput(data[0 .. length], false); }
+void silver_eprintl(const(char)* data, size_t length) { errorOutput(data[0 .. length], true); }
 
 /// A line from stdin, as `readLine` in `lang.io` takes it: 0 and the line without its `\n`
 /// or `\r\n`, 1 at the end of input, 2 for a line that isn't UTF-8 (consumed), or 3 and the OS's
@@ -180,6 +182,27 @@ private void output(const(char)[] text, bool newline)
     }
     write(text);
     if (newline) write("\n");
+}
+
+/// Writes to C's `stderr`, which C leaves unbuffered, so each write reaches the descriptor at once: it
+/// doesn't wait for stdout's buffer, and what stdout holds comes out after it. A line under `room` bytes
+/// is one write. A failure is ignored. Stdout isn't flushed first, as a panic's report does.
+private void errorOutput(const(char)[] text, bool newline)
+{
+    import core.stdc.stdio : fwrite, stderr;
+    import core.stdc.string : memcpy;
+
+    enum room = 256;
+    if (newline && text.length < room)
+    {
+        char[room] line = void;
+        memcpy(line.ptr, text.ptr, text.length);
+        line[text.length] = '\n';
+        fwrite(line.ptr, 1, text.length + 1, stderr);
+        return;
+    }
+    if (text.length > 0) fwrite(text.ptr, 1, text.length, stderr);
+    if (newline) fwrite("\n".ptr, 1, 1, stderr);
 }
 
 private void testedOutput(const(char)[] text, bool newline)

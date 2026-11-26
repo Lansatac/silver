@@ -41,6 +41,18 @@ version (unittest)
         string inputPath;
         /// The program's arguments, from `.args`, one to a line, so an empty line is an empty argument.
         string[] arguments;
+        /// The `.stderr` file, which holds what the program writes to standard error. Null when the case has
+        /// none, and then standard error is mixed into the output a case compares.
+        string standardErrorPath;
+    }
+
+    /// Why `actual` isn't what `c` expects on standard error, or null if it is or the case doesn't say.
+    string compareStandardError(Case c, string actual)
+    {
+        if (c.standardErrorPath is null) return null;
+        auto expected = readText(c.standardErrorPath).normalizeNewlines;
+        if (actual == expected) return null;
+        return "standard error differs.\n--- expected\n" ~ expected ~ "\n--- actual\n" ~ actual;
     }
 
     /// The arguments in the `.args` file at `path`: each line, without its `\n` or `\r\n`.
@@ -273,8 +285,10 @@ version (unittest)
             auto errorMessage = exists(errorPath) ? readText(errorPath).strip : null;
             auto inputPath = buildPath(casesDirectory, name ~ ".stdin");
             auto argumentsPath = buildPath(casesDirectory, name ~ ".args");
+            auto standardErrorPath = buildPath(casesDirectory, name ~ ".stderr");
             result ~= Case(name, entry.name, readText(expectedPath).normalizeNewlines, panicMessage, errorMessage,
-                exists(inputPath) ? inputPath : null, exists(argumentsPath) ? argumentsIn(argumentsPath) : null);
+                exists(inputPath) ? inputPath : null, exists(argumentsPath) ? argumentsIn(argumentsPath) : null,
+                exists(standardErrorPath) ? standardErrorPath : null);
         }
         assert(result.length > 0 || filter.length > 0, "No conformance .ag files were found in " ~ directory);
         return result.sort!((a, b) => a.name < b.name).release;
@@ -495,6 +509,8 @@ version (unittest)
     {
         int status;
         string output;
+        /// What it wrote to standard error, kept apart from `output` only when the case has a `.stderr`.
+        string errorOutput;
     }
 
     /// Compiles `c` in `workDirectory` and runs it. Returns why it couldn't, or null with `run` set.
@@ -535,7 +551,9 @@ version (unittest)
         auto runDirectory = buildPath(workDirectory, c.name ~ ".run");
         if (exists(runDirectory)) rmdirRecurse(runDirectory);
         mkdirRecurse(runDirectory);
-        auto process = pipeProcess([exePath] ~ c.arguments, Redirect.stdin | Redirect.stdout | Redirect.stderrToStdout,
+        auto separate = c.standardErrorPath !is null;
+        auto process = pipeProcess([exePath] ~ c.arguments,
+            Redirect.stdin | Redirect.stdout | (separate ? Redirect.stderr : Redirect.stderrToStdout),
             null, Config.none, runDirectory);
         if (c.inputPath !is null)
         {
@@ -543,8 +561,11 @@ version (unittest)
         }
         process.stdin.close();
         auto output = process.stdout.byChunk(4096).join;
+        // Read after standard output, so a program writing more than a pipe holds to standard error would
+        // stall; a case's standard error is a few lines.
+        auto errorOutput = separate ? process.stderr.byChunk(4096).join : null;
         auto status = wait(process.pid);
-        run = CompiledRun(status, (cast(string) output).normalizeNewlines);
+        run = CompiledRun(status, (cast(string) output).normalizeNewlines, (cast(string) errorOutput).normalizeNewlines);
         return null;
     }
 
@@ -616,7 +637,7 @@ version (unittest)
 
         // A bundle's members are loaded with the bundle's packages, not their own, and run with its
         // arguments, which are none.
-        if (c.inputPath !is null || c.arguments !is null || exists(packagesFile(c)))
+        if (c.inputPath !is null || c.arguments !is null || c.standardErrorPath !is null || exists(packagesFile(c)))
         {
             return false;
         }
@@ -728,7 +749,8 @@ version (unittest)
         {
             return "the program exited with status " ~ run.status.to!string ~ ":\n" ~ run.output;
         }
-        return compareOutput(c, run.output);
+        if (auto failure = compareOutput(c, run.output)) return failure;
+        return compareStandardError(c, run.errorOutput);
     }
 
     /// Compiles and runs the panic case `c`, and returns why it didn't panic as expected, or null.
@@ -882,7 +904,8 @@ version (unittest)
             return "the program failed at runtime: " ~ formatDiagnostic(e.diagnostic, context.sources)
                 ~ "\n--- output so far\n" ~ evaluator.output;
         }
-        return compareOutput(c, evaluator.output);
+        if (auto failure = compareOutput(c, evaluator.output)) return failure;
+        return compareStandardError(c, evaluator.errorOutput);
     }
 
     /// Why `actual` isn't `c`'s expected output, or null if it is.

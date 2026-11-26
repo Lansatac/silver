@@ -2381,7 +2381,7 @@ private final class Lowering
                 assert(0, "`derivedCompare` is expanded where it's called, and sema rejects it as a value");
             case Intrinsic.exitWithError, Intrinsic.programArguments:
                 assert(0, "only the wrapper lowering makes for `main` calls `exitWithError` and `programArguments`");
-            case Intrinsic.print, Intrinsic.printl:
+            case Intrinsic.print, Intrinsic.printl, Intrinsic.eprint, Intrinsic.eprintl:
                 return Expr(types.unit, span, ExprKind(IntrinsicCall(intrinsic, [formatted(args[0])])));
             case Intrinsic.readLine, Intrinsic.panic, Intrinsic.panics:
             case Intrinsic.readWhole, Intrinsic.writeWhole, Intrinsic.exists:

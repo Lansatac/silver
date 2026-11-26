@@ -43,7 +43,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
 | [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: ownership shared by the packages of one project isn't enforced yet, and there are no renamed imports; the build can't name another prelude |
 | [Native functions](language/native.md) | Calling C functions, native types, libraries, intrinsics | Partial: only x86-64's conventions are built |
-| [Programs](language/programs.md) | `main`, arguments, exit status, standard output and error | Partial: `main`, its arguments and the exit statuses; no `eprint`, and a failed write to standard output panics |
+| [Programs](language/programs.md) | `main`, arguments, exit status, standard output and error | Partial: `main`, its arguments, the exit statuses and `eprint`; a failed write to standard output panics |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, `panics`, the test runner | Partial: no library hooks |
 | [The `silver` tool](silver.md) | Its commands, `silver.toml`, finding a project, scripts | Partial: no remote packages; a script in no project can't say it needs a package |
 

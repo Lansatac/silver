@@ -1,0 +1,60 @@
+42 | 42
+42 | 42
+-8 | -8
+-8 | -8
+18446744073709551615 | 18446744073709551615
+18446744073709551615 | 18446744073709551615
+2.5 | 2.5
+2.5 | 2.5
+0.1 | 0.1
+0.1 | 0.1
+1e300 | 1e300
+1e300 | 1e300
+true | true
+true | true
+x | x
+x | x
+text | text
+text | text
+ | 
+ | 
+() | ()
+() | ()
+Some(1) | Some(1)
+Some(1) | Some(1)
+None | None
+None | None
+[1, 2, 3] | [1, 2, 3]
+[1, 2, 3] | [1, 2, 3]
+[] | []
+[] | []
+(1, a, false) | (1, a, false)
+(1, a, false) | (1, a, false)
+Marker | Marker
+Marker | Marker
+Point(1, 2) | Point(1, 2)
+Point(1, 2) | Point(1, 2)
+Circle(1.5) | Circle(1.5)
+Circle(1.5) | Circle(1.5)
+Empty | Empty
+Empty | Empty
+Square(3) | Square(3)
+Square(3) | Square(3)
+Box(Box([Some(Point(0, 0))])) | Box(Box([Some(Point(0, 0))]))
+Box(Box([Some(Point(0, 0))])) | Box(Box([Some(Point(0, 0))]))
+21.5C | 21.5C
+21.5C | 21.5C
+[1.0C] | [1.0C]
+[1.0C] | [1.0C]
+increment | increment
+increment | increment
+lambda | lambda
+lambda | lambda
+[a: 1, b: 2] | [a: 1, b: 2]
+[a: 1, b: 2] | [a: 1, b: 2]
+Ok(1) | Ok(1)
+Ok(1) | Ok(1)
+Error(bad) | Error(bad)
+Error(bad) | Error(bad)
+Ref(7) | Ref(7)
+Ref(7) | Ref(7)

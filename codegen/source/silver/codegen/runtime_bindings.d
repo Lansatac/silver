@@ -4,6 +4,8 @@ struct RuntimeFunction { string returnType; string[] params; string attributes; 
 static immutable RuntimeFunction[string] runtime = [
     "silver_print": RuntimeFunction("void", ["ptr", "i64"]),
     "silver_printl": RuntimeFunction("void", ["ptr", "i64"]),
+    "silver_eprint": RuntimeFunction("void", ["ptr", "i64"]),
+    "silver_eprintl": RuntimeFunction("void", ["ptr", "i64"]),
 
     "silver_format_int":  RuntimeFunction("void", ["i64", "ptr", "ptr"]),
     "silver_format_uint": RuntimeFunction("void", ["i64", "ptr", "ptr"]),

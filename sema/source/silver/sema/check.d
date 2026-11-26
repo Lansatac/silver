@@ -2584,7 +2584,7 @@ private final class TypeChecker
     {
         auto callee = calleeOf(expr.id);
         if (callee is null) callee = expr.id in _typing.methodCallees;
-        if (callee is null || !isIntrinsic(*callee, "print") && !isIntrinsic(*callee, "printl")) return type;
+        if (callee is null || !["print", "printl", "eprint", "eprintl"].any!(name => isIntrinsic(*callee, name))) return type;
         auto given = call.callee.id in _typing.typeArguments;
         if (given is null || (*given).length != 1 || !_types.isFailure((*given)[0])) return type;
         _declarer.reportUntypedErrorUnion("Error", call.args.length > 0 ? call.args[0].span : expr.span);
