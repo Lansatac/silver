@@ -297,6 +297,16 @@ unittest
     assert(frameBound(["  %.t0 = call zeroext i1 @h(i64 1)"], 0, structs) == roundUp(64 + 8 + 40, 16));
 }
 
+@("a phi takes two slots, its own and the copy made for it where each arm ends")
+unittest
+{
+    // Measured with clang -O0 on Windows and Linux: a function passing eight 64-scalar products
+    // that are each `if n > i => B(...) else B(...)` of constants has 512 phis and a frame of
+    // 8,912 bytes, 16 a phi, against a bound of 5,320.
+    auto lines = ["  %.t0 = phi i64 [ 1, %.then.0 ], [ 2, %.else.1 ]", "  %.t1 = phi i64 [ 3, %.then.0 ], [ 4, %.else.1 ]"];
+    assert(frameBound(lines, 0, null) == 64 + 2 * 16);
+}
+
 @("a function on no cycle checks the stack only where the chain of unchecked frames below it passes the threshold")
 unittest
 {
