@@ -15,7 +15,7 @@ struct Type { private uint index; }
 
 final class TypeTable
 {
-    Type error, never, unit, bool_, int_, float_, float32, string_, char_, any;
+    Type error, never, unit, bool_, int_, float_, float32, string_, char_;
     Type int8, int16, int32, uint8, uint16, uint32, uint_;
     /// The type of a bare `None`, assignable to every option. No value keeps it: each one is
     /// promoted to the option it lands in.
@@ -45,7 +45,6 @@ final class TypeTable
         float32 = registerTypeData(TypeData(Primitive(Primitive.Kind.Float32)));
         string_ = registerTypeData(TypeData(Primitive(Primitive.Kind.String)));
         char_ = registerTypeData(TypeData(Primitive(Primitive.Kind.Char)));
-        any = registerTypeData(TypeData(Primitive(Primitive.Kind.Any)));
         none = registerTypeData(TypeData(NoneType()));
         emptyArray = registerTypeData(TypeData(EmptyArrayType()));
         emptyDictionary = registerTypeData(TypeData(EmptyDictionaryType()));
@@ -560,7 +559,6 @@ struct Primitive
         Int,
         Float,
         String,
-        Any,
         Int8,
         Int16,
         Int32,

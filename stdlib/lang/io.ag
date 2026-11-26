@@ -1,7 +1,7 @@
 module lang.io
 
-intrinsic def print(value: Any): Unit
-intrinsic def printl(value: Any): Unit
+intrinsic def print<T>(value: T): Unit
+intrinsic def printl<T>(value: T): Unit
 def printl(): Unit {
     printl("")
 }

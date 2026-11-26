@@ -898,7 +898,7 @@ unittest
 @("name resolution reports a type that redeclares a built-in")
 unittest
 {
-    static foreach (name; ["Never", "Unit", "Bool", "Int", "Float", "String", "Any"])
+    static foreach (name; ["Never", "Unit", "Bool", "Int", "Float", "String"])
     {
         analyzed("type " ~ name ~ "(x: Int)" ~ emptyMain)
             .shouldReport(DiagnosticCode.DuplicateDeclaration, At(name, 1));
@@ -908,9 +908,9 @@ unittest
 @("name resolution finds every built-in type")
 unittest
 {
-    analyzed("def takes(a: Never, b: Unit, c: Bool, d: Int, e: Float, f: String, g: Any): Unit => ()" ~ emptyMain)
+    analyzed("def takes(a: Never, b: Unit, c: Bool, d: Int, e: Float, f: String): Unit => ()" ~ emptyMain)
         .shouldHaveNoDiagnostics();
-    analyzed("type All(a: Never, b: Unit, c: Bool, d: Int, e: Float, f: String, g: Any)" ~ emptyMain)
+    analyzed("type All(a: Never, b: Unit, c: Bool, d: Int, e: Float, f: String)" ~ emptyMain)
         .shouldHaveNoDiagnostics();
 }
 
@@ -1453,7 +1453,6 @@ unittest
             .shouldReport(DiagnosticCode.InvalidConstantType, At(annotation, annotation == "Marker" ? 2 : 1), file, line);
     }
 
-    check("Any", "1");
     check("Never", "1");
     check("Marker", "Marker");
     analyzed("val x: Int? = 1\ndef main(): Unit => ()")

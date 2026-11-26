@@ -25,7 +25,7 @@ private bool isFunction(const SymbolId symbol)
 
 private bool isConversion(Builtin builtin)
 {
-    static immutable Builtin[] notConversions = [Builtin.Never, Builtin.Unit, Builtin.Bool, Builtin.Char, Builtin.Any];
+    static immutable Builtin[] notConversions = [Builtin.Never, Builtin.Unit, Builtin.Bool, Builtin.Char];
     return !notConversions.canFind(builtin);
 }
 
@@ -2055,7 +2055,7 @@ private final class NameResolver
                 // An unknown type has already been reported.
                 if (symbol is null) return true;
                 return expandAlias(*symbol, _declarations.aliases, _typeResolutions).match!(
-                    (const Builtin builtin) => builtin != Builtin.Any && builtin != Builtin.Never,
+                    (const Builtin builtin) => builtin != Builtin.Never,
                     (const Id!TypeDecl _) => false,
                     (const Id!AliasDecl a) => (a in _recursiveAliases) !is null || isConstantType(_declarations.aliases[a].target),
                     (const Id!TypeParam _) => false,

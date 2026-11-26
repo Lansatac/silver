@@ -516,9 +516,9 @@ unittest
 @("this module's function of a name can call the prelude's")
 unittest
 {
-    // The prelude's `show(Any)` fits a `Point` too, as the real prelude's `printl(Any)` does.
+    // The prelude's `show<T>` fits a `Point` too, as the real prelude's `printl<T>` does.
     auto prelude = ["kit/base.ag": "module kit.base\nforward import console",
-        "console.ag": "module console\ndef show(value: Any): Unit => ()"];
+        "console.ag": "module console\ndef show<T>(value: T): Unit => ()"];
     auto a = analyzed("type Point(x: Int, y: Int)\ndef show(p: Point): Unit => show(\"({p.x}, {p.y})\")\n"
         ~ "def main(): Unit => show(Point(1, 2))", prelude, Target.host, false, "kit.base");
     a.shouldHaveNoDiagnostics();
@@ -579,6 +579,19 @@ unittest
 {
     analyzedWith(shows, "    val f = show").shouldReport(DiagnosticCode.AmbiguousOverload, At("show", 4));
     analyzedWith(shows, "    val f: (Float) -> Unit = show").shouldReport(DiagnosticCode.NoMatchingOverload, At("show", 4));
+}
+
+@("type arguments written choose an overloaded function as a value among those with that many type parameters")
+unittest
+{
+    enum both = "def put(): Unit => ()\ndef put<T>(value: T): Unit => ()\ndef pair<A, B>(a: A, b: B): Unit => ()\n"
+        ~ "def pair<T>(a: T): Unit => ()\n";
+    auto a = analyzed(both ~ "def main(): Unit {\n    val f = put<Int>\n    val g = pair<Int, String>\n    val h = pair<Int>\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldResolve(At("put", 3), At("put", 2));
+    a.shouldResolve(At("pair", 3), At("pair", 1));
+    a.shouldResolve(At("pair", 4), At("pair", 2));
+    analyzed(both ~ "def main(): Unit {\n    val f = put<Int, Int>\n}").shouldReport(DiagnosticCode.AmbiguousOverload, At("put", 3));
 }
 
 @("an overloaded function passed to an overloaded function chooses by the parameter's arity")

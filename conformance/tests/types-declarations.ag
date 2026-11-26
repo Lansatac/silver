@@ -3,7 +3,7 @@ import types_support.geometry
 
 type Marker
 type Pair(first: Int, second: String)
-type Everything(a: Unit, b: Bool, c: Int, d: Float, e: String, f: Any)
+type Everything(a: Unit, b: Bool, c: Int, d: Float, e: String)
 type Wrapper(maybe: Int?, transform: (Int) -> Int)
 type Line(start: Later, end: Later)
 type Later(x: Int)

@@ -1142,10 +1142,10 @@ final class Evaluator
         final switch (call.intrinsic)
         {
             case Intrinsic.print:
-                write(formatted(args[0], call.args[0].type));
+                write(args[0].as!string);
                 return Value(Unit());
             case Intrinsic.printl:
-                write(formatted(args[0], call.args[0].type), true);
+                write(args[0].as!string, true);
                 return Value(Unit());
             case Intrinsic.readLine:
                 return readLine();

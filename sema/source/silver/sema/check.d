@@ -420,7 +420,7 @@ private final class TypeChecker
     private bool isConstantType(Type type)
     {
         return _types[type].match!(
-            (const Primitive p) => p.kind != Primitive.Kind.Any && p.kind != Primitive.Kind.Never,
+            (const Primitive p) => p.kind != Primitive.Kind.Never,
             _ => false,
         );
     }
@@ -2007,7 +2007,7 @@ private final class TypeChecker
         {
             coerce(element, types[i], joined);
         }
-        return _declarer.arrayOf(joined, literal.elements[0].span);
+        return _declarer.arrayOf(joined);
     }
 
     /// `[k: v]` with nothing saying what it's a dictionary of: its keys are joined as an array's
@@ -2537,7 +2537,7 @@ private final class TypeChecker
                 "`%s` shows the condition it's given, so it can only be called".format(symbolName(symbol)));
             return _types.error;
         }
-        if (!takesAnyIntrinsically(symbol)) return symbolType(symbol);
+        if (!expandedWhereCalled(symbol)) return symbolType(symbol);
         _collector.reportError(DiagnosticCode.NotSupportedYet, span,
             "`%s` is built into the compiler, so it can only be called for now".format(symbolName(symbol)));
         return _types.error;
@@ -2653,16 +2653,10 @@ private final class TypeChecker
             "`panics` survives a panic so that a test can check it, so it can only be used in one");
     }
 
-    /// Whether `symbol` is an intrinsic with an `Any` parameter, which has no function type to be a
-    /// value of, or `derivedCompare`, which is worked out where it's called.
-    private bool takesAnyIntrinsically(SymbolId symbol)
+    /// Whether `symbol` is `derivedCompare`, which is worked out where it's called.
+    private bool expandedWhereCalled(SymbolId symbol)
     {
-        return symbol.match!(
-            (const Id!FunctionDecl f) => _resolutions.declarations.functions[f].kind == FunctionKind.intrinsic
-                && (isIntrinsic(f, "derivedCompare")
-                    || _types[symbolType(symbol)].match!((const FunctionData data) => data.params.canFind(_types.any), _ => false)),
-            _ => false,
-        );
+        return symbol.match!((const Id!FunctionDecl f) => isIntrinsic(f, "derivedCompare"), _ => false);
     }
 
     private string symbolName(SymbolId symbol)
@@ -2984,7 +2978,7 @@ private final class TypeChecker
     }
 
     /// `UInt8(x)`: a literal is checked against the target where it's written, and any other
-    /// number at runtime, where one that doesn't fit panics. `String(x)` takes whatever `print` does.
+    /// number at runtime, where one that doesn't fit panics. `String(x)` takes a value of any type.
     private Type synthesizeConversion(const CallExpr call, Type target, Span span, BodyContext ctx)
     {
         rejectMutableArguments(call);
@@ -3848,7 +3842,6 @@ private final class TypeChecker
     private Fit shapeFit(const Expr arg, Type param, const(TypeParam)[] params)
     {
         if (_types.mentionsError(param)) return Fit.exact;
-        if (param == _types.any) return Fit.converted;
         auto bare = _types[param].match!((const TypeParamData p) => params.canFind!(q => q.id == p.param), _ => false);
         auto members = _declarer.membersOf(param);
         bool sumHas(bool delegate(Type) test) => members.any!(m => test(m));
@@ -4407,11 +4400,20 @@ private final class TypeChecker
         if (expected == _types.error) return _types.error;
         if (expected == Type.init || !_types.isFunction(expected))
         {
-            // The current module's functions come first, as for a call.
-            if (candidates.groups[0].length == 1)
+            // The current module's functions come first, as for a call. Type arguments written
+            // leave only the functions with that many type parameters.
+            auto written = typeArgsOf(name).length;
+            foreach (group; candidates.groups)
             {
-                _typing.chosenSymbols[name.id] = SymbolId(candidates.groups[0][0]);
-                return namedValue(name, SymbolId(candidates.groups[0][0]), expected, site);
+                auto taking = written == 0 ? group.dup
+                    : group.filter!(f => _resolutions.declarations.functions[f].typeParams.length == written).array;
+                if (taking.length == 0 && written > 0) continue;
+                if (taking.length == 1)
+                {
+                    _typing.chosenSymbols[name.id] = SymbolId(taking[0]);
+                    return namedValue(name, SymbolId(taking[0]), expected, site);
+                }
+                break;
             }
             reportOverloadedValue(name);
             return _types.error;
@@ -5880,13 +5882,17 @@ private final class TypeChecker
     /// `actual`. Nothing is reported, and a parameter that's already bound is left alone.
     private void bindParams(Type declared, Type actual, const(TypeParam)[] params, ref Substitution bound)
     {
-        if (actual == _types.error || actual == _types.never || isBareLiteralType(actual) || actual == _types.any) return;
+        if (actual == _types.error || actual == _types.never || isBareLiteralType(actual)) return;
         // What `!` unwraps is an option or an error union whose error isn't known, so it's either.
         auto unwrapped = _types.isErrorUnion(actual) && _types.errorOf(actual) == _types.error;
         auto data = _types[actual];
         _types[declared].match!(
             (const TypeParamData p) {
-                if (params.canFind!(q => q.id == p.param) && p.param !in bound && !unwrapped) bound[p.param] = actual;
+                // `Error(e)` alone doesn't say what the success side is, so it can't be a type argument.
+                if (params.canFind!(q => q.id == p.param) && p.param !in bound && !unwrapped && !_types.isFailure(actual))
+                {
+                    bound[p.param] = actual;
+                }
             },
             (const OptionData o) => bindParams(o.inner, _types.isOption(actual) ? _types.optionInner(actual)
                 : unwrapped ? _types.successOf(actual) : actual, params, bound),
@@ -6370,6 +6376,7 @@ private final class TypeChecker
                 if (typed[i] == _types.none) _declarer.reportUntypedNone(args[i].span);
                 else if (typed[i] == _types.emptyArray) _declarer.reportUntypedEmptyArray(args[i].span);
                 else if (typed[i] == _types.emptyDictionary) _declarer.reportUntypedEmptyDictionary(args[i].span);
+                else if (_types.isFailure(typed[i])) _declarer.reportUntypedErrorUnion("Error", args[i].span);
                 else if (_types.mentionsError(typed[i]) || typed[i] == _types.never) continue;
                 else
                 {
@@ -7435,7 +7442,7 @@ private final class TypeChecker
         }
         if (usesUnsettled(symbol, site)) return _types.error;
         auto generic = genericNamed(name);
-        if (generic.found && !takesAnyIntrinsically(symbol)) return instantiateValue(name, generic, expected, site);
+        if (generic.found && !expandedWhereCalled(symbol)) return instantiateValue(name, generic, expected, site);
         if (generic.found) _declarer.resolveTypeArguments(generic.written);
         else rejectTypeArguments(typeArgsOf(name), spelling(name), name.span);
         return symbolValue(symbol, name.span, site);
@@ -7675,10 +7682,6 @@ private final class TypeChecker
                 _typing.promotions[expr.id] = expected;
                 return expected;
             }
-        }
-        else if (expected == _types.any)
-        {
-            type = _declarer.requireTyped(type, expr.span);
         }
         else if (type == _types.emptyArray && _types.isArray(expected)
             || type == _types.emptyDictionary && isDictionary(expected))
@@ -8282,7 +8285,6 @@ private final class TypeChecker
         {
             return _types.isOption(to) || _types.isErrorUnion(to) && _types.isOption(_types.successOf(to)) ? 1 : -1;
         }
-        if (to == _types.any) return 1;                             // print's placeholder
         if (_types.isFailure(from))
         {
             return (_types.isErrorUnion(to) || _types.isFailure(to)) && errorFits(_types.errorOf(from), _types.errorOf(to)) ? 1 : -1;

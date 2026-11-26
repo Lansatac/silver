@@ -21,7 +21,7 @@ immutable Case[] functions = [
     rejectsDeclaration("def a(x: mutable Int): Int => x"),
     declaresAs("def a(_: Int, mutable _: Int): Int => 1", "(def a (_: Int, mutable _: Int): Int 1)"),
 
-    declaresAs("native def print(value : Any) : Unit", "(native def print (value: Any): Unit)"),
+    declaresAs("native def print(value : String) : Unit", "(native def print (value: String): Unit)"),
     declaresAs("native def now() : Int", "(native def now (): Int)"),
     rejectsDeclaration("native def f() : Int => 1"), // natives have no body
     rejectsDeclaration("native val a = 1"),
@@ -86,7 +86,7 @@ immutable Case[] natives = [
     declaresAs(`private native("f") def g(): Int`, `(private (native("f") def g (): Int))`),
 
     declaresAs("intrinsic def panic(message: String): Never", "(intrinsic def panic (message: String): Never)"),
-    declaresAs("intrinsic\ndef\nlength(values: Any): Int", "(intrinsic def length (values: Any): Int)"),
+    declaresAs("intrinsic\ndef\nlength(values: String): Int", "(intrinsic def length (values: String): Int)"),
     declaresAs("private intrinsic def f(): Int", "(private (intrinsic def f (): Int))"),
     rejectsDeclaration("intrinsic def f(): Int => 1"),
     rejectsDeclaration(`intrinsic("f") def f(): Int`),

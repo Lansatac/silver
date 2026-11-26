@@ -1,38 +1,19 @@
-/// The prelude's `print` and `printl`, the `readLine` under `read`, and `lang.file`'s intrinsics. `print` and `printl` take
-/// `Any`, so there's one function per argument type, named `silver_<intrinsic>_<type>`. Values are
-/// formatted with `to!string`, as the interpreter does, so both backends print the same thing.
-/// Every integer type widens to `int` or `uint` first.
+/// The prelude's `print` and `printl`, the `readLine` under `read`, and `lang.file`'s intrinsics.
+/// Lowering formats what `print` and `printl` are given, so they write a String.
 module silver.runtime.io;
 
 import core.exception : OutOfMemoryError;
-import std.conv : to;
 import std.stdio : readln, stdout;
 
 import silver.runtime.buffer : newString;
-import silver.runtime.format : float32Text, floatText;
 import silver.runtime.registers : SavedRegisters, silver_save_registers;
 import silver.runtime.panic : outOfMemory, panic;
 import silver.runtime.testing : testing, testOutput;
 
 extern (C) nothrow:
 
-void silver_print_int(long value) { output(value.to!string, false); }
-void silver_print_uint(ulong value) { output(value.to!string, false); }
-void silver_print_float(double value) { output(floatText(value), false); }
-void silver_print_float32(float value) { output(float32Text(value), false); }
-void silver_print_bool(bool value) { output(value.to!string, false); }
-void silver_print_string(const(char)* data, size_t length) { output(data[0 .. length], false); }
-void silver_print_unit() { output("()", false); }
-void silver_print_char(uint value) { output([cast(dchar) value].to!string, false); }
-
-void silver_printl_int(long value) { output(value.to!string, true); }
-void silver_printl_uint(ulong value) { output(value.to!string, true); }
-void silver_printl_float(double value) { output(floatText(value), true); }
-void silver_printl_float32(float value) { output(float32Text(value), true); }
-void silver_printl_bool(bool value) { output(value.to!string, true); }
-void silver_printl_string(const(char)* data, size_t length) { output(data[0 .. length], true); }
-void silver_printl_unit() { output("()", true); }
-void silver_printl_char(uint value) { output([cast(dchar) value].to!string, true); }
+void silver_print(const(char)* data, size_t length) { output(data[0 .. length], false); }
+void silver_printl(const(char)* data, size_t length) { output(data[0 .. length], true); }
 
 /// A line from stdin, as `readLine` in `lang.io` takes it: 0 and the line without its `\n`
 /// or `\r\n`, 1 at the end of input, 2 for a line that isn't UTF-8 (consumed), or 3 and the OS's

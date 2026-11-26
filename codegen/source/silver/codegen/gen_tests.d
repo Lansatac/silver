@@ -177,25 +177,18 @@ unittest
     }
 }
 
-@("codegen declares each runtime function once, and suffixes an Any argument with its type")
+@("codegen declares each runtime function once, and prints the String a value is formatted to")
 unittest
 {
     import std.algorithm : count;
 
     auto ir = generateSource("def main(): Unit {\n    printl(1)\n    print(())\n    printl(2)\n}");
 
-    ir.count("declare void @silver_printl_int(i64)").should.equal(1);
-    ir.should.contain("call void @silver_printl_int(i64 1)");
-    ir.should.contain("call void @silver_printl_int(i64 2)");
-}
-
-@("codegen passes a Unit argument as no argument")
-unittest
-{
-    auto ir = generateSource("def main(): Unit {\n    printl(())\n}");
-
-    ir.should.contain("declare void @silver_printl_unit()");
-    ir.should.contain("call void @silver_printl_unit()");
+    ir.count("declare void @silver_printl(ptr, i64)").should.equal(1);
+    ir.count("declare void @silver_format_int(i64, ptr, ptr)").should.equal(1);
+    ir.count("call void @silver_printl(").should.equal(2);
+    ir.count("call void @silver_print(").should.equal(1);
+    ir.should.contain("call void @silver_format_int(i64 1,");
 }
 
 @("codegen passes a local to a native by loading it from its slot")
@@ -252,7 +245,7 @@ unittest
     ir.should.contain("fsub float");
     ir.should.contain("fptrunc double");
     ir.should.contain("fpext float");
-    ir.should.contain("@silver_printl_float32");
+    ir.should.contain("@silver_format_float32");
     ir.should.contain("float 0x3FB99999A0000000");
 
     Run run;
@@ -460,7 +453,7 @@ unittest
     ir.should.contain("store i64 2, ptr %c.addr\n");
     ir.should.contain("store i64 3, ptr %b.addr\n");
     ir.should.contain("  %c.addr = alloca i64\n  %b.addr = alloca i64\n");
-    ir.count(" = alloca ").should.equal(2);
+    ir.count(".addr = alloca ").should.equal(2);
 
     Run run;
     if (!compileAndRun(source, run)) return;

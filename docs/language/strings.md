@@ -8,7 +8,7 @@ String literals are written `"..."` on one line. The escapes are `\n`, `\r`, `\t
 
 ## Interpolation
 
-Every string interpolates. `{expr}` holds one expression, of any type `print` accepts.
+Every string interpolates. `{expr}` holds one expression, of any type.
 
 ```silver
 val message = "{count} of {total} done"
@@ -72,7 +72,7 @@ Every `String` is valid UTF-8. A literal can't be anything else, and bytes that 
 
 ## Conversions
 
-`String(x)` formats any printable value, as `print` would.
+`String(x)` formats a value of any type, as `print` would.
 
 Operations that can fail return an option under their own names, and aren't spelled as conversions: `decode(bytes)` returns `String?`, `parseInt(s)` returns `Int?`, `parseFloat(s)` returns `Float?`, `parseBool(s)` returns `Bool?` (all three in [`std.string`](../stdlib/string.md)) and `toChar(n)` returns `Char?`.
 

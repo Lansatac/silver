@@ -404,7 +404,7 @@ private final class Lowering
         if (takesArguments)
         {
             assert(main.params.length == 1, "sema gives `main` no parameter or the arguments");
-            args = [Expr(main.params[0].type, span, ExprKind(IntrinsicCall(Intrinsic.programArguments, [], [])))];
+            args = [Expr(main.params[0].type, span, ExprKind(IntrinsicCall(Intrinsic.programArguments, [])))];
         }
         auto call = Expr(main.returnType, span, ExprKind(Call(slot, args)));
         Expr body;
@@ -413,7 +413,7 @@ private final class Lowering
         {
             auto result = temp("result", main.returnType);
             auto message = formatted(payload(use(result, span), 0));
-            auto exit = Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.exitWithError, [message], [false])));
+            auto exit = Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.exitWithError, [message])));
             body = Expr(types.unit, span, ExprKind(Block([let(result, call),
                 eval(when(not(isMember(use(result, span), 1)), exit))], null)));
         }
@@ -1175,7 +1175,7 @@ private final class Lowering
             ? Expr(types.string_, span, ExprKind(Prim(PrimOp.Concat, [stringLiteral("`%s` failed: ".format(source), span),
                 formatted(payload(use(held, span), 0))])))
             : stringLiteral("`%s` was None".format(source), span);
-        auto failure = Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.panic, [message], [false])));
+        auto failure = Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.panic, [message])));
         auto choice = Expr(type, span, ExprKind(If(boxed(isMember(use(held, span), 1)),
             boxed(payload(use(held, span), 1)), boxed(failure))));
         return Expr(type, span, ExprKind(Block([let(held, operand)], boxed(choice))));
@@ -2271,7 +2271,7 @@ private final class Lowering
         parts ~= values;
         auto message = Expr(types.string_, span, ExprKind(Prim(PrimOp.Concat, parts)));
         auto failure = expect ? testFailure(message, false, span)
-            : Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.panic, [message], [false])));
+            : Expr(types.never, span, ExprKind(IntrinsicCall(Intrinsic.panic, [message])));
         return Expr(types.unit, span, ExprKind(Block(held ~ eval(when(not(test), failure)), null)));
     }
 
@@ -2349,8 +2349,8 @@ private final class Lowering
         return "%s(%s,%s)".format(span.file, location.line, location.column);
     }
 
-    /// What `intrinsic` does with `args`, which are values. One filling an `Any` that isn't a
-    /// primitive is formatted to a String first.
+    /// What `intrinsic` does with `args`, which are values. What `print` and `printl` are given is
+    /// formatted to a String first.
     private Expr intrinsicCall(Intrinsic intrinsic, Expr[] args, FunctionData signature, Span span)
     {
         final switch (intrinsic)
@@ -2378,19 +2378,14 @@ private final class Lowering
                 assert(0, "`derivedCompare` is expanded where it's called, and sema rejects it as a value");
             case Intrinsic.exitWithError, Intrinsic.programArguments:
                 assert(0, "only the wrapper lowering makes for `main` calls `exitWithError` and `programArguments`");
-            case Intrinsic.print, Intrinsic.printl, Intrinsic.readLine, Intrinsic.panic, Intrinsic.panics:
+            case Intrinsic.print, Intrinsic.printl:
+                return Expr(types.unit, span, ExprKind(IntrinsicCall(intrinsic, [formatted(args[0])])));
+            case Intrinsic.readLine, Intrinsic.panic, Intrinsic.panics:
             case Intrinsic.readWhole, Intrinsic.writeWhole, Intrinsic.exists:
             case Intrinsic.bytes, Intrinsic.uncheckedString, Intrinsic.toCString, Intrinsic.fromCString:
                 break;
         }
-        bool[] anyArgs;
-        foreach (i, ref value; args)
-        {
-            auto isAny = signature.params[i] == types.any;
-            if (isAny && !isPrimitive(value.type)) value = formatted(value);
-            anyArgs ~= isAny;
-        }
-        return Expr(signature.ret, span, ExprKind(IntrinsicCall(intrinsic, args, anyArgs)));
+        return Expr(signature.ret, span, ExprKind(IntrinsicCall(intrinsic, args)));
     }
 
     /// `update(cell, change)`. The contents are taken out of the cell while `change` runs, so
@@ -3411,7 +3406,7 @@ def f(): Int { 2 }
     result.program.functions.length.should.equal(1);
 }
 
-@("a call to an intrinsic names the operation, and marks the arguments that fill an Any")
+@("print and printl are given their value formatted to a String")
 unittest
 {
     auto result = loweredFunction(`
@@ -3422,7 +3417,7 @@ def f(x: Int8, s: String): () {
 `, "f");
     print(result.program).should.equal(
 `def f(x: Int8, s: String): Unit {
-    intrinsic printl(x)
+    intrinsic printl(Format(x))
     intrinsic print(s)
 }`);
     auto first = result.program.functions[0].body.kind.match!(
@@ -3432,7 +3427,7 @@ def f(x: Int8, s: String): () {
     first.kind.match!(
         (const IntrinsicCall call) {
             call.intrinsic.should.equal(Intrinsic.printl);
-            call.anyArgs.should.equal([true]);
+            call.args[0].type.should.equal(result.program.types.string_);
         },
         (_) { assert(0, "expected an IntrinsicCall"); },
     );

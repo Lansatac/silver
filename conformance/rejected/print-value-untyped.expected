@@ -1,0 +1,1 @@
+T0031: `print` is generic, so as a value it needs its type arguments, as in `print<Int>`, or a type to take them from

@@ -1,0 +1,40 @@
+// print and printl are functions like any other: they can be passed, stored, compared and printed.
+type Point(x: Int, y: Int)
+type Printer(name: String, write: (Point) -> Unit)
+
+def each<T>(values: [T], f: (T) -> Unit): Unit {
+    for value in values { f(value) }
+}
+
+def twice(f: (String) -> Unit, text: String): Unit {
+    f(text)
+    f(text)
+}
+
+def main(): Unit {
+    each([1, 2, 3], printl)
+    each(["a", "b", "c"], print)
+    printl()
+    each([Some(Point(1, 2)), None], printl)
+    twice(print, "ab")
+    twice(printl, "cd")
+
+    val line: (Float) -> Unit = printl
+    line(0.5)
+    val writers: [(Int) -> Unit] = [print, printl]
+    for write in writers { write(9) }
+    val printer = Printer("lines", printl)
+    printer.write(Point(3, 4))
+    printl(printer)
+
+    val f = print<Int>
+    f(1)
+    printl()
+    printl(f)
+    val g: (Int) -> Unit = print
+    printl(f == g)
+    val h: (String) -> Unit = print
+    printl(h)
+    val l: (Bool) -> Unit = printl
+    printl(l)
+}

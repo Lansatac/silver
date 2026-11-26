@@ -77,8 +77,6 @@ unittest
         .shouldReport(DiagnosticCode.UnknownType, At("Typo", 1));
     analyzed("def f(): Int ! Never => 1\ndef main(): Unit => ()")
         .shouldReport(DiagnosticCode.InvalidErrorType, At("Never", 1));
-    analyzed("def f(): Any ! Int => 1\ndef main(): Unit => ()")
-        .shouldReport(DiagnosticCode.InvalidOptionPayload, At("Int", 1));
 }
 
 @("an error union widens where each of its errors is listed, or a member of a listed sum")

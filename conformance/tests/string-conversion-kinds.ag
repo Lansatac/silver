@@ -1,0 +1,39 @@
+// String(x) gives what print shows, for every kind of value, directly and through a generic function.
+import std.ref
+
+type Marker
+type Point(x: Int, y: Int)
+type Shape = Circle(r: Float) | Square(side: Int) | Empty
+type Celsius(degrees: Float)
+
+def opString(c: Celsius): String => "{c.degrees}C"
+def increment(x: Int): Int => x + 1
+def text<T>(value: T): String => String(value)
+def failing(fails: Bool): Int ! String => if fails => Error("bad") else Ok(1)
+
+def main(): Unit {
+    val small: Int8 = -8
+    val single: Float32 = 0.1
+    val nothing: Int? = None
+    val shape: Shape = Square(3)
+    printl(String(42) ~ "|" ~ text(42))
+    printl(String(small) ~ "|" ~ text(small))
+    printl(String(2.5) ~ "|" ~ text(2.5))
+    printl(String(single) ~ "|" ~ text(single))
+    printl(String(true) ~ "|" ~ text(false))
+    printl(String('x') ~ "|" ~ text('x'))
+    printl(String("text") ~ "|" ~ text("text"))
+    printl(String(()) ~ "|" ~ text(()))
+    printl(String(Some(1)) ~ "|" ~ text(nothing))
+    printl(String([1, 2]) ~ "|" ~ text([[1], []]))
+    printl(String((1, "a")) ~ "|" ~ text((true, 'c')))
+    printl(String(Marker) ~ "|" ~ text(Marker))
+    printl(String(Point(1, 2)) ~ "|" ~ text(Point(3, 4)))
+    printl(String(Circle(1.5)) ~ "|" ~ text(shape) ~ "|" ~ text(Empty))
+    printl(String(Celsius(21.5)) ~ "|" ~ text([Celsius(1.0)]))
+    printl(String(increment) ~ "|" ~ text(increment))
+    printl(String(["a": 1]) ~ "|" ~ text(["b": 2]))
+    printl(String(failing(false)) ~ "|" ~ text(failing(true)))
+    printl(String(Ref(7)) ~ "|" ~ text(Ref("r")))
+    printl(String(printl<Int>) ~ "|" ~ text(print<String>))
+}

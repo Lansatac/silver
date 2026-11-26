@@ -1,0 +1,4 @@
+def main(): Unit {
+    val write = print
+    write(1)
+}

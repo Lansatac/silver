@@ -51,7 +51,6 @@ A function that needs an order asks for it with a bound, as in `def smaller<T: O
 A generic type is named with its arguments, as in `Box<Int>` or `Result<Int, String>`. `Box<Int>` and `Box<String>` are different types.
 
 - The number of arguments has to match. `Box` alone isn't a type, and arguments on a type that takes none are an error.
-- A type argument can be any type except `Any`.
 - A generic type may refer to itself with its own parameters, as `List<T>` does above. The rule that a value must be buildable is checked at the declaration, assuming every type parameter can be built.
 
 In a sum, a member declared inline takes the sum's parameters that it mentions, in the sum's order. In `Result<T, E>` the members are `Ok<T>` and `Error<E>`, and in `List<T>` they are `Cons<T>` and plain `Nil`. So the members of `Result<Int, String>` are `Ok<Int>` and `Error<String>`.

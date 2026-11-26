@@ -197,13 +197,11 @@ struct ForeignCall
 }
 
 /// A call to an `intrinsic def`, an operation each backend implements itself. `print` and
-/// `printl` only take a primitive: lowering formats anything else to a String first.
+/// `printl` take a String: lowering formats the value first.
 struct IntrinsicCall
 {
     Intrinsic intrinsic;
     Expr[] args;
-    /// Which of `args` fill an `Any` parameter, so the backend has to look at the argument's type.
-    bool[] anyArgs;
 }
 
 /// An operation each backend implements itself. Arithmetic is checked, panicking on overflow

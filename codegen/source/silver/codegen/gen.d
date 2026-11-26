@@ -1772,32 +1772,16 @@ private final class Generator
         }
     }
 
-    /// A call to the runtime's `silver_<name>`, with a suffix naming the type of the `Any` argument.
+    /// `silver_print` or `silver_printl` of the String lowering formatted the value to.
     private Fragment emitPrint(const IntrinsicCall call)
     {
         import std.conv : to;
 
-        auto types = _program.types;
         auto arg = call.args[0];
         auto value = emitExpr(arg);
-        if (arg.type == types.never) return value;
-        auto name = "silver_%s_%s".format(call.intrinsic.to!string, runtimeSuffix(arg.type));
-        if (types.isInteger(arg.type)) value = value.then(widened(arg.type, value.value, arg.span));
-        return value.then(callRuntime(name, value.operands)).withValue(null);
-    }
-
-    /// The suffix for an argument of `type` passed as `Any`. Every integer is `int` or `uint`.
-    private string runtimeSuffix(Type type)
-    {
-        auto types = _program.types;
-        if (types.isInteger(type)) return types.integerOf(type).signed ? "int" : "uint";
-        if (type == types.float_) return "float";
-        if (type == types.float32) return "float32";
-        if (type == types.bool_) return "bool";
-        if (type == types.unit) return "unit";
-        if (type == types.string_) return "string";
-        if (type == types.char_) return "char";
-        assert(0, "lowering only passes primitives to an intrinsic's Any");
+        if (arg.type == _program.types.never) return value;
+        auto name = "silver_" ~ call.intrinsic.to!string;
+        return value.then(callRuntime(name, operandsOf(arg, value.operands, 2))).withValue(null);
     }
 
     /// A call of the runtime's `name` with `call`'s arguments, as the `(Int32, String)` of the status it

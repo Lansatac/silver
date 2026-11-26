@@ -48,28 +48,19 @@ package final class Declarer
             (const NamedType _) => resolveNamedType(type),
             (const OptionType option) => optionOf(resolveType(*option.inner), type.span),
             (const ErrorUnionType u) => errorUnionOf(resolveType(*u.success), u.errors),
-            (const ArrayType array) => arrayOf(resolveType(*array.element), type.span),
+            (const ArrayType array) => arrayOf(resolveType(*array.element)),
             (const DictionaryType d) => dictionaryOf(resolveType(*d.key), resolveType(*d.value), type.span),
             (const FunctionType func) => _types.function_(
                 func.params.map!(p => resolveType(p)).array, resolveType(*func.returnType), func.mutableParams),
             (const UnitType _) => _types.unit,
-            (const TupleType tuple) => tupleOf(tuple.elements.map!(e => resolveType(e)).array, tuple.elements),
+            (const TupleType tuple) => tupleOf(tuple.elements.map!(e => resolveType(e)).array),
             (const JoinedType _) => floorType(type),
         );
     }
 
-    /// The tuple of `elements`, or `error` if one of them is, reported at its type expression in
-    /// `written` when it's `Any`. Nothing that synthesizes a tuple can give it an `Any`.
-    package Type tupleOf(Type[] elements, const(TypeExpr)[] written = null)
+    /// The tuple of `elements`, or `error` if one of them is.
+    package Type tupleOf(Type[] elements)
     {
-        foreach (i, element; elements)
-        {
-            if (element == _types.any && written.length > 0)
-            {
-                _collector.reportError(DiagnosticCode.InvalidTupleElement, written[i].span, "A tuple can't hold `Any`");
-                elements[i] = _types.error;
-            }
-        }
         if (elements.canFind(_types.error)) return _types.error;
         return _types.tuple(elements);
     }
@@ -79,11 +70,6 @@ package final class Declarer
     {
         if (inner == _types.error) return inner;
         if (inner == _types.none) return reportUntypedNone(span);
-        if (inner == _types.any)
-        {
-            _collector.reportError(DiagnosticCode.InvalidOptionPayload, span, "An option can't hold `Any`");
-            return _types.error;
-        }
         return _types.option(inner);
     }
 
@@ -100,7 +86,7 @@ package final class Declarer
             {
                 failed = true;
             }
-            else if (type == _types.never || type == _types.any)
+            else if (type == _types.never)
             {
                 _collector.reportError(DiagnosticCode.InvalidErrorType, w.span,
                     "`%s` can't be an error".format(_types.describe(type)));
@@ -125,11 +111,6 @@ package final class Declarer
                 failed = true;
             }
             errors ~= type;
-        }
-        if (success == _types.any)
-        {
-            _collector.reportError(DiagnosticCode.InvalidOptionPayload, written[0].span, "An error union can't hold `Any`");
-            failed = true;
         }
         return failed ? _types.error : _types.errorUnion(success, _types.errorList(errors));
     }
@@ -158,15 +139,10 @@ package final class Declarer
         return _types.nominal(decl, "Dictionary", [key, value]);
     }
 
-    /// The array of `element`, or `error` (reported at `span`) if there can't be one.
-    package Type arrayOf(Type element, Span span)
+    /// The array of `element`, or `error` if it is.
+    package Type arrayOf(Type element)
     {
         if (element == _types.error) return element;
-        if (element == _types.any)
-        {
-            _collector.reportError(DiagnosticCode.InvalidArrayElement, span, "An array can't hold `Any`");
-            return _types.error;
-        }
         return _types.array(element);
     }
 
@@ -405,12 +381,6 @@ package final class Declarer
         foreach (arg; written)
         {
             auto type = resolveType(arg);
-            if (type == _types.any)
-            {
-                _collector.reportError(DiagnosticCode.InvalidTypeArgument, arg.span,
-                    "`Any` can't be a type argument, since no value has it as its type");
-                type = _types.error;
-            }
             args ~= type;
         }
         return args;
@@ -515,7 +485,6 @@ package final class Declarer
             case Builtin.Float64: return _types.float_;
             case Builtin.String: return _types.string_;
             case Builtin.Char: return _types.char_;
-            case Builtin.Any: return _types.any;
             case Builtin.Int8: return _types.int8;
             case Builtin.Int16: return _types.int16;
             case Builtin.Int32: return _types.int32;
@@ -719,7 +688,7 @@ package final class Declarer
             auto type = member.type.id in _memberTypes ? _memberTypes[member.type.id] : resolveType(member.type);
             if (type == _types.error) continue;
             string problem;
-            if (type == _types.any || type == _types.never) problem = "A sum can't have `%s` as a member".format(_types.describe(type));
+            if (type == _types.never) problem = "A sum can't have `%s` as a member".format(_types.describe(type));
             else if (type == sum) problem = "A sum can't be a member of itself";
             else if (members.canFind(type)) problem = "`%s` is already a member of this sum".format(_types.describe(type));
             else if (_types.isParameter(type))

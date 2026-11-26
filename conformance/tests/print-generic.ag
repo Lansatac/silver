@@ -1,0 +1,65 @@
+// Every kind of value prints the same through a generic function as when printed directly.
+import std.ref
+
+type Marker
+type Point(x: Int, y: Int)
+type Shape = Circle(r: Float) | Square(side: Int) | Empty
+type Box<T>(item: T)
+type Celsius(degrees: Float)
+
+def opString(c: Celsius): String => "{c.degrees}C"
+def increment(x: Int): Int => x + 1
+
+def show<T>(value: T): Unit {
+    print(value)
+    print(" | ")
+    printl(value)
+}
+
+def both<T>(value: T): Unit {
+    show(value)
+    print(value)
+    print(" | ")
+    printl(value)
+}
+
+def failing(fails: Bool): Int ! String => if fails => Error("bad") else Ok(1)
+
+def main(): Unit {
+    val small: Int8 = -8
+    val wide: UInt = 18446744073709551615
+    val single: Float32 = 0.1
+    both(42)
+    both(small)
+    both(wide)
+    both(2.5)
+    both(single)
+    both(1e300)
+    both(true)
+    both('x')
+    both("text")
+    both("")
+    both(())
+    both(Some(1))
+    val nothing: Int? = None
+    both(nothing)
+    both([1, 2, 3])
+    val empty: [String] = []
+    both(empty)
+    both((1, "a", false))
+    both(Marker)
+    both(Point(1, 2))
+    both(Circle(1.5))
+    both(Empty)
+    val shape: Shape = Square(3)
+    both(shape)
+    both(Box(Box([Some(Point(0, 0))])))
+    both(Celsius(21.5))
+    both([Celsius(1.0)])
+    both(increment)
+    both((x: Int) => x * 2)
+    both(["a": 1, "b": 2])
+    both(failing(false))
+    both(failing(true))
+    both(Ref(7))
+}

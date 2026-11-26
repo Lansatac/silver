@@ -12,7 +12,7 @@ private Type[] builtins(TypeTable table)
 {
     with (table)
     {
-        return [error, never, unit, bool_, int_, float_, string_, any];
+        return [error, never, unit, bool_, int_, float_, string_];
     }
 }
 
@@ -63,7 +63,6 @@ unittest
     shape(table, table.int_).should.equal("Int");
     shape(table, table.float_).should.equal("Float");
     shape(table, table.string_).should.equal("String");
-    shape(table, table.any).should.equal("Any");
 }
 
 @("TypeTable never hands out the uninitialized handle")
@@ -133,10 +132,10 @@ unittest
 unittest
 {
     auto table = new TypeTable;
-    auto f = table.function_([table.float_, table.any], table.never);
+    auto f = table.function_([table.float_, table.string_], table.never);
     table[f].match!(
         (const FunctionData data) {
-            assert(data.params == [table.float_, table.any]);
+            assert(data.params == [table.float_, table.string_]);
             assert(data.ret == table.never);
         },
         (_) { assert(false, "expected a function type"); },

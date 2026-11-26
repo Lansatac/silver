@@ -84,14 +84,13 @@ unittest
         .shouldReport(DiagnosticCode.PrivateTypeExposed, At("Secret", 2));
 }
 
-@("a generic type needs all of its type arguments, a type that isn't generic takes none, and Any isn't one")
+@("a generic type needs all of its type arguments, and a type that isn't generic takes none")
 unittest
 {
     enum box = "type Box<T>(value: T)\n";
     analyzedModule(box ~ "def f(b: Box): Unit => ()").shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("Box", 2));
     analyzedModule(box ~ "def f(b: Box<Int, Int>): Unit => ()").shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("Box", 2));
     analyzedModule("def f(b: Int<Int>): Unit => ()").shouldReport(DiagnosticCode.WrongTypeArgumentCount, At("Int", 1));
-    analyzedModule(box ~ "def f(b: Box<Any>): Unit => ()").shouldReport(DiagnosticCode.InvalidTypeArgument, At("Any", 1));
     analyzedModule(box ~ "def f(a: Box<Unit>, b: Box<Never>, c: Box<Box<[Int?]>>): Unit => ()").shouldHaveNoDiagnostics();
 }
 
@@ -367,14 +366,17 @@ unittest
     analyzedGeneric("    mutable val r = [1]\n    _ = length(mutable r)").shouldReport(DiagnosticCode.NoMatchingOverload, At("length(mutable r)", 1));
 }
 
-@("an intrinsic is a value like any function, unless it takes an Any")
+@("an intrinsic is a value like any function")
 unittest
 {
     // Reached qualified, so the other overloads that `lang` forwards take no part.
     Analyzed inMain(string body) => analyzed("import lang.array\nimport lang.io\ndef main(): Unit {\n" ~ body ~ "\n}");
     inMain("    val qf: ([Int]) -> Int = lang.array.length<Int>").shouldHaveNoDiagnostics();
     inMain("    val qf: ([Bool]) -> Int = lang.array.length").shouldHaveNoDiagnostics();
-    inMain("    val qf = lang.io.print").shouldReport(DiagnosticCode.NotSupportedYet, At("lang", 3));
+    inMain("    val qf: (Int) -> Unit = lang.io.print").shouldHaveNoDiagnostics();
+    inMain("    val qf: ([Int?]) -> Unit = lang.io.printl<[Int?]>").shouldHaveNoDiagnostics();
+    inMain("    val qf = lang.io.printl<Int>").shouldHaveNoDiagnostics();
+    inMain("    val qf = lang.io.print").shouldReport(DiagnosticCode.CannotInferTypeArgument, At("lang", 3));
 }
 
 @("a constructor pattern sees an instance's fields, and coverage works on instances")

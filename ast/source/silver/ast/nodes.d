@@ -14,7 +14,7 @@ alias NodeIds = IdSource!(Module, Expr, TypeExpr, VarDecl, Param, FunctionDecl, 
 /// The types every module can name, which no declaration can take the name of.
 enum Builtin
 {
-    Never, Unit, Bool, Int, Float, Float32, Float64, String, Char, Any,
+    Never, Unit, Bool, Int, Float, Float32, Float64, String, Char,
     Int8, Int16, Int32, Int64,
     UInt, UInt8, UInt16, UInt32, UInt64,
 }

@@ -149,12 +149,14 @@ unittest
 
 // Assignability
 
-@("type checking accepts any type where Any is expected")
+@("print and printl take a value of any type")
 unittest
 {
     analyzedMain(`printl(1)
     printl("s")
-    printl(true)`).shouldHaveNoDiagnostics();
+    printl(true)
+    print([Some((1, "a"))])
+    printl((x: Int) => x + 1 == 2)`).shouldHaveNoDiagnostics();
 }
 
 @("type checking promotes T to T?, but not T? to T")
@@ -651,13 +653,6 @@ unittest
     analyzed("type Some(x: Int)\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("Some", 1));
     analyzedMain("val f = Some").shouldReport(DiagnosticCode.UnknownName, At("Some", 1));
     analyzedMain("val x = Some(1, 2)").shouldReport(DiagnosticCode.UnknownName, At("Some", 1));
-}
-
-@("type checking rejects an option of Any")
-unittest
-{
-    analyzed("def f(x: Any?): Unit => ()\ndef main(): Unit => ()")
-        .shouldReport(DiagnosticCode.InvalidOptionPayload, At("Any?", 1));
 }
 
 @("type checking needs an option on the left of ?? and a fitting value on the right")
@@ -2117,13 +2112,6 @@ unittest
     analyzedMain(`val x = [None]`).shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
 }
 
-@("an array can't hold Any")
-unittest
-{
-    analyzed("def f(x: [Any]): Unit => ()\ndef main(): Unit => ()")
-        .shouldReport(DiagnosticCode.InvalidArrayElement, At("[Any]", 1));
-}
-
 @("an array index is an Int, and a slice keeps the array's type")
 unittest
 {
@@ -2694,13 +2682,11 @@ unittest
     analyzedMain(`val b: (Int, Int?) = (1, 2)`).shouldHaveNoDiagnostics();
 }
 
-@("a tuple element with nothing to take a type from says to annotate, and Any isn't one")
+@("a tuple element with nothing to take a type from says to annotate")
 unittest
 {
     analyzedMain(`val t = (1, None)`).shouldReport(DiagnosticCode.UntypedNone, At("None", 1));
     analyzedMain(`val t = ([], 1)`).shouldReport(DiagnosticCode.UntypedEmptyArray, At("[]", 1));
-    analyzed(`def f(t: (Any, Int)): Unit => ()
-def main(): Unit => ()`).shouldReport(DiagnosticCode.InvalidTupleElement, At("Any", 1));
 }
 
 @("tuples compare elementwise when every element can")
@@ -2930,7 +2916,7 @@ unittest
     }
     analyzed("native def f(): Unit\nnative def g(): Never\ndef main(): Unit { }").shouldHaveNoDiagnostics();
 
-    foreach (type; ["String", "Any", "Int?", "[Int]", "(Int, Bool)", "Point", "(Int) -> Int", "()", "Unit", "Never"])
+    foreach (type; ["String", "Int?", "[Int]", "(Int, Bool)", "Point", "(Int) -> Int", "()", "Unit", "Never"])
     {
         analyzed(point ~ "native def f(x: " ~ type ~ "): Int\ndef main(): Unit { }")
             .shouldReport(DiagnosticCode.InvalidNativeType, At(type, type == "Point" ? 2 : 1));
@@ -3012,15 +2998,15 @@ def main(): Unit {
 @("an intrinsic is declared only in lang, and only for one the compiler implements")
 unittest
 {
-    analyzed("import kit.extra\ndef main(): Unit { }", ["kit/extra.ag": "module kit.extra\nintrinsic def printl(value: Any): Unit"])
+    analyzed("import kit.extra\ndef main(): Unit { }", ["kit/extra.ag": "module kit.extra\nintrinsic def printl<T>(value: T): Unit"])
         .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("printl", 1, "kit.extra"));
     analyzed("import language\ndef main(): Unit { }", ["language.ag": "module language\nintrinsic alias CLong"])
         .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("CLong", 1, "language"));
-    analyzed("intrinsic def print(value: Any): Unit\ndef main(): Unit { }")
+    analyzed("intrinsic def print<T>(value: T): Unit\ndef main(): Unit { }")
         .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("print", 1));
     analyzed("intrinsic alias CLong\ndef main(): Unit { }")
         .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("CLong", 1));
-    analyzed("import stdx\ndef main(): Unit { }", ["stdx.ag": "module stdx\nintrinsic def printl(value: Any): Unit"])
+    analyzed("import stdx\ndef main(): Unit { }", ["stdx.ag": "module stdx\nintrinsic def printl<T>(value: T): Unit"])
         .shouldReport(DiagnosticCode.IntrinsicOutsideLang, At("printl", 1, "stdx"));
 
     inLang("intrinsic def sqrt(x: Float): Float").should.equal([DiagnosticCode.UnknownIntrinsic]);
@@ -3282,7 +3268,6 @@ unittest
 @("sum members have to make sense")
 unittest
 {
-    analyzed("type A = :Int | :Any\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("Any", 1));
     analyzed("type A = :Int | :Never\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("Never", 1));
     analyzed("type A = :A | :Int\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("A", 2));
     analyzed("type A = :Int | :Int64\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidSumMember, At("Int64", 1));
@@ -3379,7 +3364,6 @@ unittest
     analyzed("alias Int = Float\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("Int", 1));
     analyzed("alias None = Int\ndef main(): Unit => ()").shouldReport(DiagnosticCode.DuplicateDeclaration, At("None", 1));
     analyzed("alias A = Missing\ndef main(): Unit => ()").shouldReport(DiagnosticCode.UnknownType, At("Missing", 1));
-    analyzed("alias A = [Any]\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidArrayElement, At("[Any]", 1));
     analyzed("private type P\nalias A = [P]\ndef main(): Unit => ()").shouldReport(DiagnosticCode.PrivateTypeExposed, At("P", 2));
     analyzed("private alias A = Int\ndef f(a: A): Int => 1\ndef main(): Unit => ()").shouldReport(DiagnosticCode.PrivateTypeExposed, At("A", 2));
     analyzed("alias A = (Int, Int)\nval a: A = 1\ndef main(): Unit => ()").shouldReport(DiagnosticCode.InvalidConstantType, At("A", 2));

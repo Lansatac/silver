@@ -94,13 +94,10 @@ enum DiagnosticCode : string
     ConstantEvaluationFailed = "T0010",
     UntypedNone = "T0011",
     InvalidPropagation = "T0012",
-    InvalidOptionPayload = "T0013",
-    InvalidArrayElement = "T0014",
     UntypedEmptyArray = "T0015",
     /// Syntax with a decided future that sema can't give a meaning to yet.
     NotSupportedYet = "T0016",
     UnusedValue = "T0017",
-    InvalidTupleElement = "T0018",
     PatternMismatch = "T0019",
     MutabilityMismatch = "T0020",
     /// Two `mutable` arguments of one call, or two updates of one `with`, that reach the same place.
@@ -115,7 +112,6 @@ enum DiagnosticCode : string
     InvalidNativeType = "T0028",
     /// Type arguments that don't fit what they're given to: too many or too few, or any at all.
     WrongTypeArgumentCount = "T0029",
-    InvalidTypeArgument = "T0030",
     CannotInferTypeArgument = "T0031",
     /// Something generic code can't do with a value whose type mentions a type parameter.
     OpaqueTypeParameter = "T0032",

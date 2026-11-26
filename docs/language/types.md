@@ -159,7 +159,7 @@ Jack < Ace        // true
 
 ## Printing
 
-`print` and `printl` (which adds a newline) accept any printable value, and `String(x)` and string holes format it in the same way.
+`print` and `printl` (which adds a newline) take a value of any type, as `print<T>(value: T)`, and `String(x)` and string holes format it in the same way. Every type prints, so generic code prints a value of a type parameter with no bound, and `print` and `printl` are function values like any other generic function: `each(names, printl)`.
 
 | Value | Printed form |
 | --- | --- |
@@ -192,4 +192,3 @@ A function value prints as the function it comes from, without anything it captu
 - `compare` on an integer is written once for each integer type, since a bound can't ask for an integer yet, so an error about a call of it lists them all.
 - `derivedCompare` can only be called. It isn't a function value, so `val f = derivedCompare` is an error.
 - `Ord`, `Ordering` and its members, `compare` and `derivedCompare` are declared in `lang.ord`, which `lang` forwards, and the compiler finds them there by name.
-- `Any` is a placeholder type visible in prelude signatures such as `print(value: Any)`, standing in for a design based on generics. It can't be an element of an array, tuple or option, a field, or a member of a sum.

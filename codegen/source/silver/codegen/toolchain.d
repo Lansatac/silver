@@ -305,23 +305,29 @@ unittest
     auto exePath = executablePath(buildPath(directory, "main"));
     write(irPath, `
         @.str = private unnamed_addr constant [2 x i8] c"hi"
-        declare void @silver_printl_int(i64)
-        declare void @silver_printl_float(double)
-        declare void @silver_printl_bool(i1 zeroext)
-        declare void @silver_print_string(ptr, i64)
-        declare void @silver_printl_unit()
+        declare void @silver_printl(ptr, i64)
+        declare void @silver_print(ptr, i64)
+        declare void @silver_format_int(i64, ptr, ptr)
+        declare void @silver_format_float(double, ptr, ptr)
         declare ptr @silver_alloc(i64)
 
         define void @silver_main() {
         entry:
+          %data = alloca ptr
+          %length = alloca i64
           %p = call ptr @silver_alloc(i64 8)
           store i64 42, ptr %p
           %n = load i64, ptr %p
-          call void @silver_printl_int(i64 %n)
-          call void @silver_printl_float(double 2.5)
-          call void @silver_printl_bool(i1 zeroext false)
-          call void @silver_print_string(ptr @.str, i64 2)
-          call void @silver_printl_unit()
+          call void @silver_format_int(i64 %n, ptr %data, ptr %length)
+          %d1 = load ptr, ptr %data
+          %l1 = load i64, ptr %length
+          call void @silver_printl(ptr %d1, i64 %l1)
+          call void @silver_format_float(double 2.5, ptr %data, ptr %length)
+          %d2 = load ptr, ptr %data
+          %l2 = load i64, ptr %length
+          call void @silver_printl(ptr %d2, i64 %l2)
+          call void @silver_print(ptr @.str, i64 2)
+          call void @silver_printl(ptr @.str, i64 0)
           ret void
         }
 
@@ -340,7 +346,7 @@ unittest
         auto run = execute([exePath]);
         assert(run.status == 0, run.output);
         // The runtime writes the platform's newline.
-        assert(run.output.replace("\r\n", "\n") == "42\n2.5\nfalse\nhi()\n", run.output);
+        assert(run.output.replace("\r\n", "\n") == "42\n2.5\nhi\n", run.output);
     }
 }
 
