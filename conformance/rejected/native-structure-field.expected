@@ -1,0 +1,1 @@
+T0028: `String` can't be a field of a native type; a C structure holds integers, `Float`, `Float32`, `Bool`, native types and options of native types with no fields

@@ -1,0 +1,8 @@
+// Only a pointer can be null, so an option of a structure can't cross.
+native type Vector2(x: Float32, y: Float32)
+
+native def f(v: Vector2?): Unit
+
+def main(): Unit {
+    printl(1)
+}

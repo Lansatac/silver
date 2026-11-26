@@ -416,6 +416,29 @@ unittest
         ~ "def main(): Unit {\n    val x = a(1)\n    val y = b(2)\n}").should.contain("declare ccc i64 @llabs(i64)");
 }
 
+@("codegen declares a native taking and returning structures with the types clang gives the same C signature")
+unittest
+{
+    auto source = "native type Vector2(x: Float32, y: Float32)\nnative type Five(a: Int32, b: Int32, c: Int32, d: Int32, e: Int32)\n"
+        ~ "native type Triple(a: Float32, b: Float32, c: Float32)\n"
+        ~ "native def add(a: Vector2, b: Vector2): Vector2\nnative def reverse(f: Five): Five\nnative def rotate(t: Triple): Triple\n"
+        ~ "def main(): Unit {\n    printl(add(Vector2(1.0, 2.0), Vector2(3.0, 4.0)))\n"
+        ~ "    printl(reverse(Five(1, 2, 3, 4, 5)))\n    printl(rotate(Triple(1.0, 2.0, 3.0)))\n}";
+    auto ir = generateSource(source);
+    version (Windows)
+    {
+        ir.should.contain("declare ccc i64 @add(i64, i64)");
+        ir.should.contain("declare ccc void @reverse(ptr sret([20 x i8]) align 4, ptr)");
+        ir.should.contain("declare ccc void @rotate(ptr sret([12 x i8]) align 4, ptr)");
+    }
+    else
+    {
+        ir.should.contain("declare ccc <2 x float> @add(<2 x float>, <2 x float>)");
+        ir.should.contain("declare ccc void @reverse(ptr sret([20 x i8]) align 4, ptr byval([20 x i8]) align 8)");
+        ir.should.contain("declare ccc { <2 x float>, float } @rotate(<2 x float>, float)");
+    }
+}
+
 version (linux)
 {
     @("codegen links the native library a program's natives come from")

@@ -1,0 +1,1 @@
+T0027: No value of `Loop` can ever be built, because its field `next: Loop` can't be; a native type holds a structure by value, so it can't contain itself

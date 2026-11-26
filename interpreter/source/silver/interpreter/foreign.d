@@ -16,14 +16,20 @@ struct Returned
 
 /// Calls the C function at `address` as `call` describes, with `words` holding the bits of each part
 /// of each argument in order, a narrow integer already extended as the part says and a `float` in the
-/// low 32 bits.
-Returned callC(const(void)* address, const ref CallDescription call, const(ulong)[] words)
+/// low 32 bits. A result that comes back through a hidden pointer is written to `hidden`.
+Returned callC(const(void)* address, const ref CallDescription call, const(ulong)[] words, void* hidden = null)
 {
     assert(call.convention == hostConvention, "the trampoline follows only the convention it runs under");
     CallFrame frame;
     frame.function_ = address;
     ulong[16] few;
     auto stack = call.stackWords <= few.length ? few[0 .. call.stackWords] : new ulong[call.stackWords];
+    if (call.result.passing == Passing.hidden)
+    {
+        auto place = call.result.parts[0].place;
+        assert(hidden !is null && place.where == Where.integerRegister, "a hidden result pointer is in an integer register");
+        frame.integers[place.index] = cast(ulong) hidden;
+    }
     size_t next;
     foreach (ref argument; call.arguments)
     {
@@ -418,17 +424,23 @@ unittest
 {
     import core.stdc.math : pow, sqrtf;
 
-    auto call = describeCall([CType.double_, CType.double_], CType.double_, hostConvention);
+    CType[] scalars(const CKind[] kinds...)
+    {
+        CType[] types;
+        foreach (kind; kinds) types ~= scalar(kind);
+        return types;
+    }
+
+    auto call = describeCall(scalars(CKind.double_, CKind.double_), scalar(CKind.double_), hostConvention);
     auto returned = callC(&pow, call, [bitsOf(2.0), bitsOf(10.0)]);
     assert(*cast(double*) &returned.floats[0] == 1024);
 
-    call = describeCall([CType.float_], CType.float_, hostConvention);
+    call = describeCall(scalars(CKind.float_), scalar(CKind.float_), hostConvention);
     returned = callC(&sqrtf, call, [bitsOf(2.0f)]);
     assert(*cast(float*) &returned.floats[0] == sqrtf(2.0f));
 
-    call = describeCall([CType.int64, CType.double_, CType.int32, CType.float_, CType.int64, CType.double_, CType.int64,
-        CType.float_, CType.int64, CType.double_, CType.int64, CType.int64, CType.int64, CType.double_, CType.double_,
-        CType.double_, CType.double_, CType.double_, CType.float_, CType.int8], CType.double_, hostConvention);
+    with (CKind) call = describeCall(scalars(int64, double_, int32, float_, int64, double_, int64, float_, int64, double_,
+        int64, int64, int64, double_, double_, double_, double_, double_, float_, int8), scalar(double_), hostConvention);
     assert(call.stackWords > 0);
     ulong[] words = [1, bitsOf(2.0), cast(uint) -3, bitsOf(4.0f), 5, bitsOf(6.0), 7, bitsOf(8.0f), 9, bitsOf(10.0), 11,
         12, 13, bitsOf(14.0), bitsOf(15.0), bitsOf(16.0), bitsOf(17.0), bitsOf(18.0), bitsOf(19.0f), cast(ulong) -20L];

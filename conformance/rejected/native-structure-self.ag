@@ -1,0 +1,6 @@
+// A structure inside a structure is held by value, so one can't contain itself.
+native type Loop(value: Int32, next: Loop)
+
+def main(): Unit {
+    printl(1)
+}

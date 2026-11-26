@@ -1,0 +1,52 @@
+// The functions of conformance/clibraries/silverstructs.c, which the harness builds as a shared library.
+module native_structures_support.silverstructs
+
+native library "silverstructs"
+
+native type Spot
+
+native type Color(r: UInt8, g: UInt8, b: UInt8, a: UInt8)
+native type Vector2(x: Float32, y: Float32)
+native type Rectangle(x: Float32, y: Float32, width: Float32, height: Float32)
+native type Five(a: Int32, b: Int32, c: Int32, d: Int32, e: Int32)
+native type Mixed(count: Int32, scale: Float32)
+native type DoubleLong(value: Float, count: Int64)
+native type Triple(a: Float32, b: Float32, c: Float32)
+native type Bytes3(a: UInt8, b: UInt8, c: UInt8)
+native type Line(from: Vector2, to: Vector2)
+native type Held(spot: Spot, maybe: Spot?)
+native type Flags(on: Bool, off: Bool, count: Int32)
+native type IntLong(small: Int32, large: Int64)
+native type FloatDouble(single: Float32, wide: Float)
+native type Six(a: Int8, b: Int16, c: Int8)
+native type Single(value: Float32)
+
+native def packColor(c: Color): UInt32
+native def brighter(c: Color, by: Int32): Color
+native def addVectors(a: Vector2, b: Vector2): Vector2
+native def cross(a: Vector2, b: Vector2): Float32
+native def grow(r: Rectangle, by: Float32): Rectangle
+native def weighRectangle(r: Rectangle): Float32
+native def nextMixed(m: Mixed): Mixed
+native def nextDoubleLong(d: DoubleLong): DoubleLong
+native def rotate(t: Triple): Triple
+native def rotateBytes(t: Bytes3): Bytes3
+native def reverseLine(l: Line): Line
+native def lineWeight(l: Line): Float32
+native def flipFlags(f: Flags): Flags
+native def weighFlags(f: Flags): Int32
+native def nextIntLong(v: IntLong): IntLong
+native def nextFloatDouble(v: FloatDouble): FloatDouble
+native def nextSix(v: Six): Six
+native def halveSingle(v: Single): Single
+native def fiveFrom(start: Int32): Five
+native def weighFive(f: Five): Int64
+native def reverseFive(f: Five): Five
+native def hold(offset: Int64, second: Bool): Held
+native def heldDistance(h: Held): Int64
+native def weighRectangles(a: Rectangle, b: Rectangle, c: Rectangle, d: Rectangle, e: Rectangle): Float32
+native def weighFives(a: Five, b: Five, c: Five, d: Five, e: Five, f: Five, g: Five, h: Five, i: Five, j: Five, k: Five): Int64
+native def weighHelds(a: Held, b: Held, c: Held, d: Held): Int64
+native def weighMixedCall(a: Int64, b: Vector2, c: Float, d: Color, e: Five, f: Float32, g: DoubleLong, h: Int32,
+    i: Float, j: Float, k: Float, m: Rectangle, n: Rectangle, o: Float32): Float
+native def combine(f: Five, a: Int32, v: Vector2, d: Float, e: Int64, c: Color): Five

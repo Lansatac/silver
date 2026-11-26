@@ -620,6 +620,7 @@ private final class Lowering
                     }
                     auto fields = fieldTypes(type);
                     program.recordFields[type] = fields;
+                    if (isStructureType(type)) program.nativeStructures[type] = true;
                     foreach (field; fields) visitType(field);
                 },
                 (const silver.sema.OptionData option) => visitType(option.inner),
@@ -719,6 +720,12 @@ private final class Lowering
             foreach (local; func.params ~ func.captures) visitType(local.type);
             visitType(func.returnType);
             visitExpr(func.body);
+        }
+        // Describing a native's call needs the layout of each structure it's declared with.
+        foreach (ref native; program.natives)
+        {
+            foreach (param; native.params) visitType(param);
+            visitType(native.result);
         }
     }
 
@@ -2868,11 +2875,26 @@ private final class Lowering
         );
     }
 
-    /// Whether `type` is a native type, a pointer that a library owns.
+    /// Whether `type` is a native type with no fields, a pointer that a library owns.
     private bool isNativeType(Type type)
     {
         return types[type].match!(
-            (const NominalData nominal) => _analysis.declarationOf(nominal.decl).native,
+            (const NominalData nominal) {
+                auto declared = _analysis.declarationOf(nominal.decl);
+                return declared.native && declared.fields.length == 0;
+            },
+            _ => false,
+        );
+    }
+
+    /// Whether `type` is a native type with fields, a C structure.
+    private bool isStructureType(Type type)
+    {
+        return types[type].match!(
+            (const NominalData nominal) {
+                auto declared = _analysis.declarationOf(nominal.decl);
+                return declared.native && declared.fields.length > 0;
+            },
             _ => false,
         );
     }

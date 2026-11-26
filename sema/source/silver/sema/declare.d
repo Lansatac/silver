@@ -455,16 +455,26 @@ package final class Declarer
         return _resolutions.declarations.types[decl].intrinsic;
     }
 
-    /// Whether `decl` is a `native type`.
-    package bool isNative(Id!TypeDecl decl)
+    /// Whether `decl` is a `native type` with no fields, a handle.
+    package bool isHandle(Id!TypeDecl decl)
     {
-        return _resolutions.declarations.types[decl].native;
+        auto declared = _resolutions.declarations.types[decl];
+        return declared.native && declared.fields.length == 0;
     }
 
-    /// Whether `type` is a native type.
-    package bool isNativeType(Type type)
+    /// Whether `type` is a native type with no fields, a handle.
+    package bool isHandleType(Type type)
     {
-        return _types[type].match!((const NominalData nominal) => isNative(nominal.decl), _ => false);
+        return _types[type].match!((const NominalData nominal) => isHandle(nominal.decl), _ => false);
+    }
+
+    /// Whether `type` is a native type with fields, a C structure.
+    package bool isStructureType(Type type)
+    {
+        return _types[type].match!((const NominalData nominal) {
+            auto declared = _resolutions.declarations.types[nominal.decl];
+            return declared.native && declared.fields.length > 0;
+        }, _ => false);
     }
 
     package Type aliasType(Id!AliasDecl id)
@@ -536,10 +546,32 @@ package final class Declarer
         if (type == _types.error || _types.isInteger(type) || type == _types.float_ || type == _types.float32
         || type == _types.bool_) return;
         if (isReturn && (type == _types.unit || type == _types.never)) return;
-        if (isNativeType(type) || (_types.isOption(type) && isNativeType(_types.optionInner(type)))) return;
+        if (isHandleType(type) || isStructureType(type) || (_types.isOption(type) && isHandleType(_types.optionInner(type)))) return;
+        if (_types.isOption(type) && isStructureType(_types.optionInner(type)))
+        {
+            _collector.reportError(DiagnosticCode.InvalidNativeType, span,
+                "`%s` can't cross into C: a structure is passed by value, and only a pointer can be null"
+                    .format(_types.describe(type)));
+            return;
+        }
         _collector.reportError(DiagnosticCode.InvalidNativeType, span,
             "`%s` can't cross into C; a native function takes integers, `Float`, `Float32`, `Bool`, native types and options of native types%s"
                 .format(_types.describe(type), isReturn ? ", and can also return `Unit` or `Never`" : ""));
+    }
+
+    /// Reports a field of a C structure whose type has no C equivalent. One that holds the structure
+    /// itself, even through another, is reported as a type that can't be built (`checkInhabited`).
+    private void requireStructureField(const Field field, Type type)
+    {
+        if (type == _types.error || _types.isInteger(type) || type == _types.float_ || type == _types.float32
+            || type == _types.bool_ || isHandleType(type) || isStructureType(type)
+            || (_types.isOption(type) && isHandleType(_types.optionInner(type))))
+        {
+            return;
+        }
+        _collector.reportError(DiagnosticCode.InvalidNativeType, field.type.span,
+            "`%s` can't be a field of a native type; a C structure holds integers, `Float`, `Float32`, `Bool`, native types and options of native types with no fields"
+                .format(_types.describe(type)));
     }
 
     package void declareSum(const TypeDecl decl)
@@ -649,7 +681,7 @@ package final class Declarer
     package void declareConstructor(const TypeDecl decl)
     {
         if (decl.members.length > 0) return declareSum(decl);
-        if (decl.native)
+        if (decl.native && decl.fields.length == 0)
         {
             _typing.fields[decl.id] = null;
             // Using the name as a value is reported where it's used.
@@ -658,6 +690,10 @@ package final class Declarer
         }
 
         auto fields = decl.fields.map!(f => FieldInfo(f.name, resolveType(f.type))).array;
+        if (decl.native)
+        {
+            foreach (i, field; decl.fields) requireStructureField(field, fields[i].type);
+        }
         _typing.fields[decl.id] = fields;
 
         auto declared = _typing.nominalTypes[decl.id];
@@ -760,8 +796,11 @@ package final class Declarer
                 auto field = _typing.fields[decl.id].find!(f => canBuild(f.type, decl).length == 0).front;
                 reason = "its field `%s: %s` can't be".format(field.name, _types.describe(field.type));
             }
-            _collector.reportError(DiagnosticCode.UninhabitedType, decl.nameSpan,
-                "No value of `%s` can ever be built, because %s; an option or array field would end the recursion"
+            // A native type's fields are held by value in C, so nothing would end the recursion.
+            _collector.reportError(DiagnosticCode.UninhabitedType, decl.nameSpan, decl.native
+                ? "No value of `%s` can ever be built, because %s; a native type holds a structure by value, so it can't contain itself"
+                    .format(decl.name, reason)
+                : "No value of `%s` can ever be built, because %s; an option or array field would end the recursion"
                     .format(decl.name, reason));
         }
     }

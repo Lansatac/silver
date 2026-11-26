@@ -2670,7 +2670,7 @@ private final class TypeChecker
                 "A sum type has no value of its own; build one of its members");
             return _types.error;
         }
-        if (symbol.match!((const Id!TypeDecl type) => _declarer.isNative(type), _ => false))
+        if (symbol.match!((const Id!TypeDecl type) => _declarer.isHandle(type), _ => false))
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, span,
                 "`%s` is a native type, which has no constructor; its values only come from native functions"
@@ -2733,7 +2733,7 @@ private final class TypeChecker
         if (subject == _types.error) return type;
 
         auto declared = _types[subject].match!(
-            (const NominalData nominal) => !_declarer.isIntrinsic(nominal.decl) && !_declarer.isNative(nominal.decl), _ => false);
+            (const NominalData nominal) => !_declarer.isIntrinsic(nominal.decl) && !_declarer.isHandle(nominal.decl), _ => false);
         if (!declared)
         {
             _collector.reportError(DiagnosticCode.InvalidOperand, expr.span,
@@ -8010,7 +8010,7 @@ private final class TypeChecker
                 .format(printTypeExpr(constructor.type), printTypeExpr(constructor.type)));
         }
 
-        if (_declarer.isNative(decl))
+        if (_declarer.isHandle(decl))
         {
             checkArgumentsAsUnknown();
             return reportPattern(pattern.span, "A native type isn't taken apart by a pattern; bind a value of it with `name: %s`"
