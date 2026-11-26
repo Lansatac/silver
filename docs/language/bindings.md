@@ -74,7 +74,7 @@ Type `[Card]` has no member named `handSize`
 
 ## Open questions
 
-- Constants of richer types, which depends on compile-time evaluation.
+- Constants of richer types. A product, marker, sum member, tuple or option built from constructors and constants needs no function called, and is what [shared fields](../proposals/shared-fields.md#constants-of-constructed-types) rest on. Anything more depends on compile-time evaluation.
 
 ## Current implementation
 

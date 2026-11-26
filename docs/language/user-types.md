@@ -161,6 +161,7 @@ val r = if val Circle(radius) = shape => radius else 0.0
 ## Open questions
 
 - Guards on match arms
+- Fields that every member of a sum provides, which makes a sum of markers an enum whose members carry data: [the shared fields proposal](../proposals/shared-fields.md)
 - Named constants as patterns, as in `match p { origin => ... }`, and whether one compares with `==`, since it's a whole value rather than a structure
 - Named patterns, alongside named arguments
 - A one-member sum over an existing type, such as `type Id = :Int`, is a nominal wrapper with implicit injection. It may be rejected if it proves a footgun.
