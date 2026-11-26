@@ -588,3 +588,17 @@ unittest
     assert(unwritable("a\\b") !is null && unwritable("a:b") !is null && unwritable("a\nb") !is null);
     assert(unwritable("x/.GIT/config") !is null && unwritable("../a") !is null);
 }
+
+@("a path Windows can't write as it is is refused everywhere, so the files are the same on every platform")
+unittest
+{
+    // Windows refuses these characters in a name, and a device name with any extension.
+    foreach (c; ["*", "?", "<", ">", "\"", "|"]) assert(unwritable("a" ~ c ~ "b.ag") !is null, c);
+    foreach (device; ["CON", "con.ag", "nul", "aux.txt", "prn", "com1.ag", "LPT1", "d/nul.ag"])
+        assert(unwritable(device) !is null, device);
+    // Windows drops a trailing dot or space, so "a." would be written as "a".
+    foreach (trailing; ["a.", "a ", "d./b.ag", "d /b.ag"]) assert(unwritable(trailing) !is null, trailing);
+    // A name that isn't UTF-8 can't be written on Windows, which names files in UTF-16.
+    assert(unwritable("a\xFF.ag") !is null);
+    assert(unwritable("console.ag") is null && unwritable("a.b/c.ag") is null && unwritable(".hidden") is null);
+}
