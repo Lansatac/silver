@@ -351,3 +351,18 @@ def main(): Unit {
     printl(v)
 }`).shouldHaveNoDiagnostics();
 }
+
+@("type checking a generic sum with a named member whose type argument lists the sum ends")
+unittest
+{
+    // The member is recorded as one of the sum's direct members, and substituting it at an instance
+    // rebuilds its list, which asks the instance's direct members again.
+    analyzed(`type Bad(n: Int)
+type Other
+type Holder<T>(v: T)
+type Box<E> = :Bad | :Holder<Int ! Box<E> | Other>
+def main(): Unit {
+    val b: Box<Int> = Bad(1)
+    printl(b)
+}`).shouldHaveNoDiagnostics();
+}
