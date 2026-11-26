@@ -283,6 +283,60 @@ def main(): Unit {
     assert(timer.peek.total!"seconds" < 20, format("took %s", timer.peek));
 }
 
+@("the steps a literal takes count through a generic call, so wrapping an argument doesn't change the function chosen")
+unittest
+{
+    auto a = analyzedUntyped(`    val bare = wide(1)
+    val wrapped = wide(id(1))
+    val twice = wide(id(id(1)))
+    val array = wide(id([1]))
+    val pair = wide(two(1, 2))`, `def wide(x: Int): Int => 0
+def wide(x: UInt8): String => ""
+def wide(x: [Int]): Int => 0
+def wide(x: [UInt8]): String => ""
+`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("bare", 1), "Int");
+    a.shouldDeclareType(At("wrapped", 1), "Int");
+    a.shouldDeclareType(At("twice", 1), "Int");
+    a.shouldDeclareType(At("array", 1), "Int");
+    a.shouldDeclareType(At("pair", 1), "Int");
+}
+
+@("checking stays linear in how deep blocks nest in an arm that is tried against the other arm's type")
+unittest
+{
+    enum depth = 19;
+    string value = "None";
+    foreach (i; 0 .. depth) value = format("{ val q%s = if c => small else %s\n None }", i, value);
+    auto timer = StopWatch(AutoStart.yes);
+    auto a = analyzed(format(`def main(): Unit {
+    val c = true
+    val small: UInt8 = 3
+    val r = if c => small else %s
+}`, value));
+    a.shouldHaveNoDiagnostics();
+    // Twice the work at each level, as a failed try and then typing it again is, takes minutes at this depth.
+    assert(timer.peek.total!"seconds" < 5, format("took %s", timer.peek));
+}
+
+@("checking stays linear in how deep blocks nest in an argument that is tried against several functions")
+unittest
+{
+    enum depth = 11;
+    string value = "[1]";
+    foreach (i; 0 .. depth) value = format("{ val q%s = ov(%s)\n [1] }", i, value);
+    auto timer = StopWatch(AutoStart.yes);
+    auto a = analyzed(format(`def ov(xs: [Int]): String => "ints"
+def ov(s: String): String => "string"
+def main(): Unit {
+    val r = ov(%s)
+}`, value));
+    a.shouldHaveNoDiagnostics();
+    // A trial for each function and then the check, at each level, takes minutes at this depth.
+    assert(timer.peek.total!"seconds" < 5, format("took %s", timer.peek));
+}
+
 private void shouldEqual(size_t actual, size_t expected, string file = __FILE__, size_t line = __LINE__)
 {
     import core.exception : AssertError;
