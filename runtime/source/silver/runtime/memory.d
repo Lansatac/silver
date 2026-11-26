@@ -12,7 +12,8 @@
 module silver.runtime.memory;
 
 import core.exception : OutOfMemoryError;
-import core.internal.gc.impl.conservative.gc : ConservativeGC, Gcx;
+import core.gc.config : config;
+import core.internal.gc.impl.conservative.gc : ConservativeGC, Gcx, numCollections;
 import core.internal.gc.proxy : gc_getProxy, gc_init_nothrow;
 static import core.memory;
 import core.stdc.string : memset;
@@ -25,8 +26,8 @@ alias BlkInfo = core.memory.GC.BlkInfo;
 // This calls druntime's internals, and leaves out the lock because of how they behave in this version,
 // so a new one needs the argument in "One thread, no collector lock" in `notes/runtime.md` checked again.
 static assert(__VERSION__ == 2113, "druntime changed: re-read ConservativeGC.qalloc, mallocNoSync, "
-    ~ "addrOfNoSync and Gcx.fullcollect against collectable and blockOf, and the argument in "
-    ~ "notes/runtime.md, before raising this");
+    ~ "addrOfNoSync and Gcx.fullcollect against collectable and blockOf, Gcx.updateCollectThresholds "
+    ~ "against pace, and the argument in notes/runtime.md, before raising this");
 
 /// druntime's collector itself, which its entry points call with the lock held.
 private __gshared Gcx* heap;
@@ -45,6 +46,27 @@ void takeHeap() nothrow
     heap = collector.gcx;
 }
 
+/// The collection `pace` last saw the end of.
+private __gshared size_t pacedAfter;
+
+/// Sets when the next collection happens, after one has. druntime paces small blocks (up to half a page)
+/// and large ones apart: it collects once the pages in use for either reach `heapSizeFactor` times what
+/// that kind had in use after the last collection. A program whose live data is mostly in large blocks
+/// while it makes small short-lived ones (an array of a file's lines, then a few small arrays for each
+/// line) then collects every time the small pages fill again, however little that is, and each
+/// collection marks all the large data: quadratic in the data. So each kind may also grow by half of
+/// what both have in use, `heapSizeFactor - 1` times over, which keeps the work of collecting in
+/// proportion to what's allocated and the heap within about `heapSizeFactor` times its live data.
+private void pace() nothrow @nogc
+{
+    pacedAfter = numCollections;
+    immutable growth = (heap.usedSmallPages + heap.usedLargePages) * (config.heapSizeFactor - 1) / 2;
+    immutable small = heap.usedSmallPages + growth;
+    immutable large = heap.usedLargePages + growth;
+    if (heap.smallCollectThreshold < small) heap.smallCollectThreshold = small;
+    if (heap.largeCollectThreshold < large) heap.largeCollectThreshold = large;
+}
+
 /// Memory the collector owns, at least `size` bytes, after making the caller's registers visible
 /// to it. Every allocation the runtime asks for by name comes through here; a function that
 /// allocates through D's library instead (`to!string`, `~`, `readln`) saves them itself.
@@ -59,6 +81,7 @@ BlkInfo collectable(size_t size, uint attributes) nothrow
         BlkInfo block;
         block.base = heap.alloc(size, block.size, attributes, null);
         allocating = false;
+        if (numCollections != pacedAfter) pace();
         if (block.base is null) outOfMemory();
         // As `GC.qalloc` does: what the caller won't write mustn't look like pointers to the scan.
         if (!(attributes & BlkAttr.NO_SCAN)) memset(block.base + size, 0, block.size - size);
