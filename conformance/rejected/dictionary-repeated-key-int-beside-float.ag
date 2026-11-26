@@ -1,0 +1,5 @@
+// An Int literal beside a Float literal is one key when the keys are Floats.
+def main(): Unit {
+    val d: [Float: String] = [1: "a", 1.0: "b"]
+    printl(d)
+}

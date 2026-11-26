@@ -2297,6 +2297,7 @@ private final class TypeChecker
         {
             if (!isConstantKey(key)) continue;
             auto value = keyValue(key, false);
+            if (value is null) continue;
             if (value in seen)
             {
                 _collector.reportError(DiagnosticCode.RepeatedKey, key.span,
@@ -2322,10 +2323,12 @@ private final class TypeChecker
             (const FloatLiteral f)
             {
                 auto single = float32Of(f);
+                if (isInfinity(f.value) || type == _types.float32 && isInfinity(single)) return null;
                 return negated ? number(-f.value, -single) : number(f.value, single);
             },
             (const IntLiteral i)
             {
+                if (i.tooLarge) return null;
                 if (_types.isInteger(type) || type == Type.init)
                     return negated && i.value != 0 ? "-" ~ i.value.to!string : i.value.to!string;
                 return negated ? number(-cast(double) i.value, -cast(float) i.value)
@@ -2334,9 +2337,14 @@ private final class TypeChecker
             (const UnaryExpr unary)
             {
                 if (unary.op == UnaryOp.Minus) return keyValue(*unary.operand, !negated);
-                return format("(%s %s)", unary.op, keyValue(*unary.operand, false));
+                auto operand = keyValue(*unary.operand, false);
+                return operand is null ? null : format("(%s %s)", unary.op, operand);
             },
-            (const TupleLiteral tuple) => format("(tuple%-(%s,%))", tuple.elements.map!(e => keyValue(e, false))),
+            (const TupleLiteral tuple)
+            {
+                auto parts = tuple.elements.map!(e => keyValue(e, false)).array;
+                return parts.any!(p => p is null) ? null : format("(tuple%-(%s,%))", parts);
+            },
             (_) => printExpr(key),
         );
     }

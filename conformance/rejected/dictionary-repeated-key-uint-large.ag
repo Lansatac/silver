@@ -1,0 +1,5 @@
+// A UInt beyond Int's range is one key however it's written.
+def main(): Unit {
+    val d: [UInt: String] = [18446744073709551615: "a", 0xFFFFFFFFFFFFFFFF: "b"]
+    printl(d)
+}
