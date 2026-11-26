@@ -1,0 +1,75 @@
+// Two functions of one name may differ only in which parameters are mutable: the call says which it means.
+
+type Gen(state: UInt64)
+
+def step(g: Gen): Gen => Gen(g.state * 5 + 1)
+
+// A range of the states up to 200, by the pure form.
+def next(g: Gen): (UInt64, Gen)? {
+    if g.state > 200 => None else Some((g.state, step(g)))
+}
+
+// The same type steps in place by the other.
+def next(mutable g: Gen): UInt64 {
+    val old = g.state
+    g = step(g)
+    old
+}
+
+interface Source {
+    def next(mutable s: Self): UInt64
+}
+conform Gen: Source
+conform Gen: Range<UInt64>
+
+def draw<S: Source>(mutable s: S): UInt64 => next(mutable s) + next(mutable s)
+
+def total<R: Range<UInt64>>(range: R): UInt64 {
+    mutable val sum = UInt64(0)
+    for x in range { sum += x }
+    sum
+}
+
+def first<T>(f: (T) -> (UInt64, T)?, start: T): UInt64 {
+    val (a, _) = f(start) ?? (UInt64(0), start)
+    a
+}
+
+def apply(f: (mutable Gen) -> UInt64, mutable g: Gen): UInt64 => f(mutable g)
+
+def main(): Unit {
+    mutable val g = Gen(1)
+    printl(next(g))
+    printl(g.next())
+    printl(next(mutable g))
+    printl(g.state)
+    printl(next(mutable g))
+    printl(g.state)
+
+    for x in Gen(1) { printl("for {x}") }
+    printl(total(Gen(1)))
+
+    val pure: (Gen) -> (UInt64, Gen)? = next
+    val inPlace: (mutable Gen) -> UInt64 = next
+    printl(pure(Gen(2)))
+    mutable val h = Gen(2)
+    printl(inPlace(mutable h))
+    printl(h.state)
+    printl(apply(next, mutable h))
+    printl(h.state)
+    printl(first(next, Gen(3)))
+
+    mutable val s = Gen(4)
+    printl(draw(mutable s))
+    printl(s.state)
+
+    def show(a: Gen): String => "pure {a.state}"
+    def show(mutable a: Gen): String {
+        a = step(a)
+        "in place {a.state}"
+    }
+    mutable val c = Gen(1)
+    printl(show(c))
+    printl(show(mutable c))
+    printl(c.state)
+}

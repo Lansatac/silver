@@ -33,12 +33,65 @@ unittest
         .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
 }
 
-@("mutable alone doesn't make an overload")
+@("functions that differ only in which parameters are mutable are overloads")
 unittest
 {
-    auto a = analyzed("def f(x: Int): Unit => ()\ndef f(mutable x: Int): Unit => ()\ndef main(): Unit => ()");
+    enum decls = "type G(n: Int)\ndef advance(g: G): Int => 1\ndef advance(mutable g: G): String => \"\"";
+    analyzed(decls ~ "\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
+    auto a = analyzedWith(decls, "mutable val g = G(1)\nval a = advance(g)\nval b = advance(mutable g)\nval c = g.advance()");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("advance(g)", "Int");
+    a.shouldHaveType("advance(mutable g)", "String");
+    a.shouldHaveType("g.advance()", "Int");
+    analyzedWith(decls, "val p: (G) -> Int = advance\nval q: (mutable G) -> String = advance").shouldHaveNoDiagnostics();
+}
+
+@("a call without mutable doesn't reach the only mutable function")
+unittest
+{
+    enum decls = "type G(n: Int)\ndef advance(mutable g: G): Int => 1";
+    auto a = analyzedWith(decls, "mutable val g = G(1)\nval a = advance(g)");
+    a.shouldReport(DiagnosticCode.MutabilityMismatch, At("g", 3));
+    assert(a.collector.diagnostics[0].message.canFind("`mutable`"));
+    analyzedWith(decls, "mutable val g = G(1)\nval a = g.advance()").shouldReport(DiagnosticCode.MutabilityMismatch, At("g", 3));
+}
+
+@("a candidate that fits but for mutable says so in the listing")
+unittest
+{
+    auto a = analyzedWith("def f(x: Int, y: Int): Unit => ()\ndef f(mutable x: Int, y: String): Unit => ()",
+        "mutable val v = 1\nf(v, true)");
+    a.shouldReport(DiagnosticCode.NoMatchingOverload, At("f", 3));
+    assert(a.collector.diagnostics[0].message.canFind("argument 1 has to be passed as `mutable`"));
+}
+
+@("two functions with the same mutable parameters are still duplicates")
+unittest
+{
+    auto a = analyzed("def f(mutable x: Int): Unit => ()\ndef f(mutable y: Int): Unit => ()\ndef main(): Unit => ()");
     a.shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
-    assert(a.collector.diagnostics[0].message.canFind("`mutable` alone"));
+    assert(!a.collector.diagnostics[0].message.canFind("`mutable` alone"));
+}
+
+@("nested defs that differ only in mutable are overloads")
+unittest
+{
+    analyzedWith("", "def f(x: Int): Int => 1\ndef f(mutable x: Int): String => \"\"\nmutable val v = 1\nval a = f(v)\nval b = f(mutable v)")
+        .shouldHaveNoDiagnostics();
+    analyzedWith("", "def f(mutable x: Int): Int => 1\ndef f(mutable y: Int): Int => 2")
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+}
+
+@("a forwarded and a listed function that differ only in mutable don't clash")
+unittest
+{
+    auto files = [
+        "a.ag": "module a\ndef same(x: Int): Int => 1",
+        "b.ag": "module b\ndef same(mutable y: Int): Int => 2",
+        "two.ag": "module two\nforward import a : same\nforward import b : same",
+        "own.ag": "module own\nforward import a : same\ndef same(mutable z: Int): Int => 3",
+    ];
+    analyzed("import two\nimport own\ndef main(): Unit => ()", files).shouldHaveNoDiagnostics();
 }
 
 @("generic overloads are the same when only their type parameters' names differ")
@@ -564,7 +617,6 @@ unittest
 unittest
 {
     analyzedWith("", "    def f(x: Int): Int => x\n    def f(y: Int): String => \"a\"").shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
-    analyzedWith("", "    def f(x: Int): Int => x\n    def f(mutable y: Int): Int => y").shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
     analyzedWith("", "    val f = 1\n    def f(y: Int): Int => y").shouldReport(DiagnosticCode.DuplicateDeclaration, At("f", 2));
 }
 

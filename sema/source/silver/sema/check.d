@@ -1362,11 +1362,10 @@ private final class TypeChecker
             auto theirType = _typing.symbolTypes.get(SymbolId(other), _types.error);
             if (theirType == _types.error) continue;
             auto theirs = signatureOf(theirType);
-            if (mine.params != theirs.params) continue;
+            if (mine.params != theirs.params || mine.mutables != theirs.mutables) continue;
             _collector.reportError(DiagnosticCode.DuplicateOverload, binding.nameSpan,
-                "`%s` already takes `%s`; overloads need different parameter types%s".format(binding.name,
-                    localLabel(other)[binding.name.length .. $],
-                    mine.mutables == theirs.mutables ? "" : ", and `mutable` alone doesn't make one"));
+                "`%s` already takes `%s`; overloads need different parameter types".format(binding.name,
+                    localLabel(other)[binding.name.length .. $]));
             return;
         }
     }
@@ -4703,9 +4702,7 @@ private final class TypeChecker
         }
         else if (sameParameters(earlier, later.id))
         {
-            auto a = signatureOf(earlier), b = signatureOf(later.id);
             problem = "`%s` already takes `" ~ overloadLabel(earlier)[first.name.length .. $] ~ "`; overloads need different parameter types"
-                ~ (a.mutables == b.mutables ? "" : ", and `mutable` alone doesn't make one")
                 ~ (_resolutions.boundFunctions.get(earlier, null).length + _resolutions.boundFunctions.get(later.id, null).length == 0
                     ? "" : ", whatever their bounds");
         }
@@ -4715,7 +4712,7 @@ private final class TypeChecker
     }
 
     /// Whether `a` and `b` take the same parameter types, apart from what they name their type
-    /// parameters and which parameters are `mutable`.
+    /// parameters; one `mutable` where the other isn't makes them different.
     private bool sameParameters(Id!FunctionDecl a, Id!FunctionDecl b)
     {
         Id!TypeParam[Id!TypeParam] renamed;
@@ -4727,7 +4724,7 @@ private final class TypeChecker
     {
         auto aParams = signatureOf(a).params;
         auto bParams = signatureOf(b).params;
-        if (aParams.length != bParams.length) return false;
+        if (aParams.length != bParams.length || signatureOf(a).mutables != signatureOf(b).mutables) return false;
         auto aTypeParams = _resolutions.typeParamsOf(a);
         auto bTypeParams = _resolutions.typeParamsOf(b);
         return aParams.length.iota.all!(i => sameUpToRenaming(aParams[i], bParams[i], aTypeParams, bTypeParams, renamed));

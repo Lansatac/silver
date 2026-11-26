@@ -460,5 +460,4 @@ A function that's useful to call by name keeps a plain name, even where syntax u
 - Two native functions of one name in a module have to bind different C symbols, and two intrinsics can't share a name.
 - A `mutable` first parameter is rejected for a method call. A later `mutable` argument is fine.
 - `tail` isn't available.
-- `mutable` alone doesn't make an overload yet: two functions that differ only in it are `T0035`.
 - Type functions aren't built. A function for a type only in its result takes a parameter of the marker type `Of<T>` from `std.of`, as [Interfaces](interfaces.md#current-implementation) describes, and `Point.describe()` is still a method call with `Point`'s constructor as its receiver.
