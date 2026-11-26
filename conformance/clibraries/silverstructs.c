@@ -23,6 +23,10 @@ typedef struct { uint8_t a, b, c; } Bytes3;
 typedef struct { Vector2 from, to; } Line;
 typedef struct { void *spot; void *maybe; } Held;
 typedef struct { bool on; bool off; int32_t count; } Flags;
+typedef struct { int32_t small; int64_t large; } IntLong;
+typedef struct { float single; double wide; } FloatDouble;
+typedef struct { int8_t a; int16_t b; int8_t c; } Six;
+typedef struct { float value; } Single;
 
 static char block[64];
 
@@ -49,6 +53,13 @@ EXPORT Flags flipFlags(Flags f)
     return flipped;
 }
 EXPORT int32_t weighFlags(Flags f) { return f.on + f.off * 2 + f.count * 4; }
+
+// Shapes whose pieces clang types by the field at their start: { i32, i64 }, { float, double }, i48, float. Changed
+// in place, since a compound literal with padding has clang call memset, which isn't linked.
+EXPORT IntLong nextIntLong(IntLong v) { v.small += 1; v.large *= 2; return v; }
+EXPORT FloatDouble nextFloatDouble(FloatDouble v) { v.single += 1; v.wide *= 2; return v; }
+EXPORT Six nextSix(Six v) { v.a += 1; v.b *= 2; v.c -= 1; return v; }
+EXPORT Single halveSingle(Single v) { v.value /= 2; return v; }
 
 // Over 16 bytes: in memory both ways.
 EXPORT Five fiveFrom(int32_t start) { return (Five){start, start + 1, start + 2, start + 3, start + 4}; }

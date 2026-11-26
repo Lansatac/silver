@@ -18,6 +18,10 @@ def main(): Unit {
     printl(flipFlags(Flags(true, false, 41)))
     printl(weighFlags(Flags(true, false, 41)))
     printl(weighFlags(Flags(false, true, -1)))
+    printl(nextIntLong(IntLong(-7, 4611686018427387903)))
+    printl(nextFloatDouble(FloatDouble(1.5, 0.25)))
+    printl(nextSix(Six(-128, 300, 0)))
+    printl(halveSingle(Single(3.0)))
 
     printl(fiveFrom(10))
     printl(weighFive(Five(1, 2, 3, 4, 5)))

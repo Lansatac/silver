@@ -652,8 +652,10 @@ unittest
 {
     with (CKind)
     {
+        assert(describeCall([structureOf(float_)], scalar(void_), Convention.win64).arguments[0].parts
+            == [piece(integer, integerRegister(0), 0, 4)]);
         auto call = describeCall([color, vector2, intAndFloat, structureOf(bool_, bool_), rectangle, threeBytes,
-            threeFloats, fiveInts, doubleAndLong, line, handles], scalar(void_), Convention.win64);
+            threeFloats, fiveInts, doubleAndLong, line, handles, structureOf(int8, int16, int8)], scalar(void_), Convention.win64);
         assert(call.arguments[0] == Crossing(Passing.value, [piece(integer, integerRegister(0), 0, 4)], color));
         assert(call.arguments[1].parts == [piece(integer, integerRegister(1), 0, 8)]);
         assert(call.arguments[2].parts == [piece(integer, integerRegister(2), 0, 8)]);
@@ -663,7 +665,7 @@ unittest
             assert(argument.passing == Passing.copy);
             assert(argument.parts == [piece(pointer, stackWord(cast(uint) i), 0, 8)]);
         }
-        assert(call.stackWords == 7);
+        assert(call.stackWords == 8);
     }
 }
 
@@ -711,6 +713,8 @@ unittest
         assert(partsFor(structureOf(int32, int64)) == [piece(integer, integerRegister(0), 0, 4), piece(integer, integerRegister(1), 8, 8)]);
         assert(partsFor(structureOf(pointer, int32)) == [piece(pointer, integerRegister(0), 0, 8), piece(integer, integerRegister(1), 8, 4)]);
         assert(partsFor(structureOf(float_, double_)) == [piece(float_, floatRegister(0), 0, 4), piece(double_, floatRegister(1), 8, 8)]);
+        assert(partsFor(structureOf(int8, int16, int8)) == [piece(integer, integerRegister(0), 0, 6)]);
+        assert(partsFor(structureOf(float_)) == [piece(float_, floatRegister(0), 0, 4)]);
 
         auto call = describeCall([fiveInts], scalar(void_), Convention.systemV);
         assert(call.arguments[0] == Crossing(Passing.stack, [piece(integer, stackWord(0), 0, 8), piece(integer, stackWord(1), 8, 8),
