@@ -90,8 +90,8 @@ package struct Resolution
     /// For a call `x.f(...)` on a value, the functions a plain `f` finds at module level. The type
     /// checker decides whether one is used, since a field of `x` comes first.
     SideTable!(Id!Expr, Candidates) methodLookups;
-    /// Names that could be more than one function, by the name's expression. The type checker
-    /// chooses, so these have no entry in `resolutions`.
+    /// Names that could be more than one function, module-level or nested, by the name's
+    /// expression. The type checker chooses, so these have no entry in `resolutions`.
     SideTable!(Id!Expr, Candidates) overloads;
     /// For each `for`, each `x[i]` and each arithmetic operator, by name, the functions that calls
     /// of `length`, `opIndex`, `opIndexAssign`, `next` and `opAdd` and the like there would choose
@@ -139,10 +139,6 @@ package struct Resolution
     /// For `x.f` where `x` is a local named like an imported module that has an `f`, that module,
     /// by the member access. A local hides a module, so this is only for saying so when `x.f` fails.
     SideTable!(Id!Expr, string) hiddenModules;
-    /// Names that could be more than one nested `def` of a block, by the name's expression: those
-    /// declared before the use, in order. The type checker chooses, so these have no entry in
-    /// `resolutions`, and module-level functions of the name take no part.
-    SideTable!(Id!Expr, Id!VarDecl[]) localOverloads;
     /// For a nested `def` that shares its name with earlier ones in its block, those.
     SideTable!(Id!VarDecl, Id!VarDecl[]) earlierLocalOverloads;
     /// The names and member accesses that name a module, or a package prefix like `std`, or were
@@ -343,7 +339,24 @@ package TypeSymbol expandAlias(TypeSymbol symbol, const SideTable!(Id!AliasDecl,
     return symbol;
 }
 
-/// The functions a name could be. `groups[0]` is the current module's, which may be empty, and
+/// A function an overloaded name could call: one of a module's, or a nested `def` of a block.
+package struct Candidate
+{
+    private SumType!(Id!FunctionDecl, Id!VarDecl) _which;
+
+    this(Id!FunctionDecl func) { _which = func; }
+    this(Id!VarDecl local) { _which = local; }
+
+    /// The module-level function, or none for a nested `def`.
+    Id!FunctionDecl func() const => _which.match!((Id!FunctionDecl f) => f, (Id!VarDecl _) => Id!FunctionDecl.init);
+    /// The nested `def`, or none for a module-level function.
+    Id!VarDecl local() const => _which.match!((Id!FunctionDecl _) => Id!VarDecl.init, (Id!VarDecl l) => l);
+    bool isValid() const => func.isValid || local.isValid;
+    SymbolId symbol() const => _which.match!((Id!FunctionDecl f) => SymbolId(f), (Id!VarDecl l) => SymbolId(l));
+}
+
+/// The functions a name could be, in groups, nearest first. Nested `def`s of the block the name
+/// is in are the nearest; otherwise `groups[0]` is the current module's, which may be empty, and
 /// each later group is one imported module's.
 package struct Candidates
 {
@@ -356,6 +369,9 @@ package struct Candidates
     /// The module whose scope found them, for a plain name, whose imports' levels hide farther
     /// functions the same way.
     string scopeModule;
+    /// The block's nested `def`s of the name, declared before the use. They hide the module's
+    /// functions, so a name that finds them has no `groups`.
+    Id!VarDecl[] nested;
 
     /// How many different functions there are, since imports can lead to the same ones.
     size_t count() const
@@ -365,7 +381,14 @@ package struct Candidates
         {
             if (!seen.canFind(f)) seen ~= f;
         }
-        return seen.length;
+        return nested.length + seen.length;
+    }
+
+    /// Every candidate, a group at a time, nearest first.
+    Candidate[][] all() const
+    {
+        auto byGroup = groups.map!(g => g.map!(f => Candidate(f)).array).array;
+        return nested.length == 0 ? byGroup : [nested.map!(l => Candidate(l)).array] ~ byGroup;
     }
 }
 
@@ -667,7 +690,6 @@ private final class NameResolver
     private SideTable!(Id!Expr, Test) _tests;
     private SideTable!(Id!Expr, string) _hiddenModules;
     private SideTable!(Id!Expr, bool) _modulePaths;
-    private SideTable!(Id!Expr, Id!VarDecl[]) _localOverloads;
     private SideTable!(Id!VarDecl, Id!VarDecl[]) _earlierLocalOverloads;
     /// The module-level function whose body is being resolved.
     private Id!FunctionDecl _bodyOf;
@@ -733,7 +755,7 @@ private final class NameResolver
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
             _operatorLookups, _declarations, _nativeLibraries, cast(const(Scope)[string]) _moduleScopes, _hiddenParams, _sugarParams,
             _resultFloors, _lambdaFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances, _forwardImports, _listedImports, _conformances, _tests,
-            _hiddenModules, _localOverloads, _earlierLocalOverloads, _modulePaths);
+            _hiddenModules, _earlierLocalOverloads, _modulePaths);
     }
 
     /// Works out what every module forwards. A blanket forward passes on what its module forwards
@@ -2820,7 +2842,9 @@ private final class NameResolver
             if (nested.length > 1)
             {
                 foreach (sibling; nested) recordCapture(SymbolId(sibling), name, expr.span, scopeTable);
-                _localOverloads[expr.id] = nested;
+                Candidates candidates;
+                candidates.nested = nested;
+                _overloads[expr.id] = candidates;
                 return Path(Path.Kind.Value);
             }
             recordCapture(*local, name, expr.span, scopeTable);

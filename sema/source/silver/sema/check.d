@@ -499,6 +499,8 @@ private final class TypeChecker
     /// and without those a nearer function of the same parameters hides.
     private const(Candidates) distinct(const Candidates candidates)
     {
+        // Nested defs hide every other function, and no bound supplies one.
+        if (candidates.nested.length > 0) return candidates;
         auto unhidden = unshadowed(candidates);
         if (_repeatedBounds.length == 0 || !unhidden.groups.joiner.any!(f => (f in _repeatedBounds) !is null)) return unhidden;
         Candidates kept;
@@ -1361,18 +1363,13 @@ private final class TypeChecker
     {
         auto earlier = binding.id in _resolutions.earlierLocalOverloads;
         if (earlier is null) return;
-        auto myType = _typing.symbolTypes.get(SymbolId(binding.id), _types.error);
-        if (myType == _types.error) return;
-        auto mine = signatureOf(myType);
+        bool typed(Id!VarDecl local) => _typing.symbolTypes.get(SymbolId(local), _types.error) != _types.error;
+        if (!typed(binding.id)) return;
         foreach (other; *earlier)
         {
-            auto theirType = _typing.symbolTypes.get(SymbolId(other), _types.error);
-            if (theirType == _types.error) continue;
-            auto theirs = signatureOf(theirType);
-            if (mine.params != theirs.params || mine.mutables != theirs.mutables) continue;
+            if (!typed(other) || !sameParameters(Candidate(other), Candidate(binding.id))) continue;
             _collector.reportError(DiagnosticCode.DuplicateOverload, binding.nameSpan,
-                "`%s` already takes `%s`; overloads need different parameter types".format(binding.name,
-                    localLabel(other)[binding.name.length .. $]));
+                sameParametersProblem(Candidate(other), binding.name).format(binding.name));
             return;
         }
     }
@@ -3476,21 +3473,6 @@ private final class TypeChecker
     {
         Type[] typed;
         auto reported = _collector.diagnostics.length;
-        if (auto locals = call.callee.id in _resolutions.localOverloads)
-        {
-            typed = new Type[call.args.length];
-            auto chosen = chooseLocal(*call.callee, spelling(*call.callee), *locals, call, typed, ctx);
-            if (!chosen.isValid)
-            {
-                _typing.exprTypes[call.callee.id] = _types.error;
-                typeUnchosen(call, typed, ctx);
-                return _types.error;
-            }
-            _typing.chosenSymbols[call.callee.id] = SymbolId(chosen);
-            auto calleeType = namedValue(*call.callee, SymbolId(chosen), Type.init, ctx.site);
-            _typing.exprTypes[call.callee.id] = calleeType;
-            return applyCallee(calleeType, call, expr.span, ctx, typed);
-        }
         if (auto candidates = call.callee.id in _resolutions.overloads)
         {
             typed = new Type[call.args.length];
@@ -3502,8 +3484,15 @@ private final class TypeChecker
                 typeUnchosen(call, typed, ctx);
                 return _types.error;
             }
-            _typing.chosenSymbols[call.callee.id] = SymbolId(chosen);
-            _typing.chosenCallees[expr.id] = chosen;
+            _typing.chosenSymbols[call.callee.id] = chosen.symbol;
+            // A nested def is a local, called as any function value is.
+            if (chosen.local.isValid)
+            {
+                auto calleeType = namedValue(*call.callee, chosen.symbol, Type.init, ctx.site);
+                _typing.exprTypes[call.callee.id] = calleeType;
+                return applyCallee(calleeType, call, expr.span, ctx, typed);
+            }
+            _typing.chosenCallees[expr.id] = chosen.func;
         }
         auto candidates = call.callee.id in _resolutions.overloads;
         scope (exit) if (candidates !is null) noteOtherCounts(reported, call, distinct(*candidates));
@@ -3525,8 +3514,8 @@ private final class TypeChecker
     /// Whether `expr` names an overloaded function or calls one, which are chosen as they're checked.
     private bool isOverloadedUse(const Expr expr)
     {
-        if (expr.id in _resolutions.overloads || expr.id in _resolutions.localOverloads) return true;
-        return expr.kind.match!((const CallExpr call) => call.callee.id in _resolutions.overloads || call.callee.id in _resolutions.localOverloads,
+        if (expr.id in _resolutions.overloads) return true;
+        return expr.kind.match!((const CallExpr call) => (call.callee.id in _resolutions.overloads) !is null,
             _ => false);
     }
 
@@ -3564,7 +3553,7 @@ private final class TypeChecker
     /// One candidate of an overloaded call, tried against its arguments.
     private struct Trial
     {
-        Id!FunctionDecl func;
+        Candidate candidate;
         Fit[] fits;
         /// How each argument's integer literals read, by `literalReading`.
         int[] readings;
@@ -3579,23 +3568,23 @@ private final class TypeChecker
     /// Chooses which of `candidates` a call of `name` invokes, reporting it when none or several
     /// do. Each argument with a type of its own is synthesized first, once, and its type is left
     /// in `typed`; the rest only have to have the right shape, and are checked once one is chosen.
-    private Id!FunctionDecl chooseFunction(const Expr name, string spelled, const(TypeExpr)[] written,
+    private Candidate chooseFunction(const Expr name, string spelled, const(TypeExpr)[] written,
         const Candidates candidates, const CallExpr call, Type[] typed, bool hasReceiver, BodyContext ctx,
         Type expected = Type.init)
     {
         auto args = call.args;
         Trial[][] groups;
-        foreach (group; candidates.groups)
+        foreach (group; candidates.all)
         {
-            groups ~= group.map!(f => arityTrial(f, args.length, written.length)).array;
+            groups ~= group.map!(c => arityTrial(c, args.length, written.length)).array;
         }
         auto plausible = groups.joiner.filter!(t => t.fitsAll).array;
         // One candidate is called as a lone function is, so its arguments can adapt to it.
-        if (plausible.length == 1) return plausible[0].func;
+        if (plausible.length == 1) return plausible[0].candidate;
         if (plausible.length == 0)
         {
             reportNoOverload(name.span, spelled, groups);
-            return Id!FunctionDecl.init;
+            return Candidate.init;
         }
 
         foreach (i, arg; args)
@@ -3625,13 +3614,13 @@ private final class TypeChecker
         // An argument whose type is already an error fits anything, so it would only add to it.
         auto reportable = !typed.any!(t => t != Type.init && _types.mentionsError(t));
 
-        // The module's own come first, unless an imported one takes the arguments in fewer steps
-        // than each of them.
+        // The nearest group, the block's nested defs or else the module's own functions, comes
+        // first, unless an imported one takes the arguments in fewer steps than each of them.
         auto nearer = imported.any!(t => own.all!(u => fitsNearer(t, u)));
         if (own.length > 0 && !nearer) return bestTrial(own, name.span, spelled, reportable);
         if (imported.length > 0) return bestTrial(imported, name.span, spelled, reportable);
         if (reportable) reportNoOverload(name.span, spelled, groups);
-        return Id!FunctionDecl.init;
+        return Candidate.init;
     }
 
     /// The trials of the imported groups that fit, each function once, ranked together whichever
@@ -3641,7 +3630,7 @@ private final class TypeChecker
         const(Trial)[] merged;
         foreach (trial; groups.joiner)
         {
-            if (trial.fitsAll && !merged.canFind!(t => t.func == trial.func)) merged ~= trial;
+            if (trial.fitsAll && !merged.canFind!(t => t.candidate == trial.candidate)) merged ~= trial;
         }
         return merged;
     }
@@ -3656,17 +3645,17 @@ private final class TypeChecker
 
     private bool fitsExactly(const Trial trial)
     {
-        return trial.fits.all!(f => f == Fit.exact) && !isGenericFunction(trial.func);
+        return trial.fits.all!(f => f == Fit.exact) && !isGenericFunction(trial.candidate);
     }
 
-    /// `f` as a candidate for a call with `count` arguments and `written` type arguments, failed
+    /// `c` as a candidate for a call with `count` arguments and `written` type arguments, failed
     /// already if those can't fit it.
-    private Trial arityTrial(Id!FunctionDecl f, size_t count, size_t written)
+    private Trial arityTrial(Candidate c, size_t count, size_t written)
     {
-        auto trial = Trial(f);
-        auto params = signatureOf(f).params.length;
+        auto trial = Trial(c);
+        auto params = signatureOf(c).params.length;
         // Only the type parameters a function declares can be written.
-        auto typeParams = _resolutions.declarations.functions[f].typeParams.length;
+        auto typeParams = c.func.isValid ? _resolutions.declarations.functions[c.func].typeParams.length : 0;
         if (params != count)
         {
             trial.problem = "takes %s argument%s".format(params, params == 1 ? "" : "s");
@@ -3686,22 +3675,25 @@ private final class TypeChecker
     private void fitTrial(ref Trial trial, const CallExpr call, const(Type)[] typed, const(Type)[] written, bool hasReceiver,
         BodyContext ctx, Type expected)
     {
-        auto params = _resolutions.typeParamsOf(trial.func);
-        auto signature = signatureOf(trial.func);
+        auto params = typeParamsOf(trial.candidate);
+        auto signature = signatureOf(trial.candidate);
+        auto func = trial.candidate.func;
         Binding bindAgainst(Type against)
         {
             Binding binding;
             foreach (i, type; written) binding.bound[params[i].id] = type;
             binding.typed = typed.dup;
+            // A nested def isn't generic, so there's nothing to bind.
+            if (!func.isValid) return binding;
             // A trial records nothing, so it doesn't work out a result from the body. A result written
             // as an interface name then says nothing the expected type could bind, whether or not
             // it's been worked out elsewhere, so the choice doesn't depend on the order of checking.
-            if ((trial.func in _resolutions.resultFloors) !is null) against = Type.init;
+            if ((func in _resolutions.resultFloors) !is null) against = Type.init;
             _trials++;
             scope (exit) _trials--;
-            bindCall(binding, signature, signatureOf(trial.func).ret, params, trial.func, call, against, ctx, true);
+            bindCall(binding, signature, signature.ret, params, func, call, against, ctx, true);
             // Bounds don't rule a function out, but one that holds binds what its interface says.
-            conformanceOf(trial.func, binding.bound, ctx.site);
+            conformanceOf(func, binding.bound, ctx.site);
             return binding;
         }
 
@@ -3935,16 +3927,8 @@ private final class TypeChecker
         {
             if (bare) return Fit.none;
             return inOption((Type t) => _types[t].match!(
-                (const FunctionData f) => candidates.groups.joiner.any!(c => signatureOf(c).params.length == f.params.length)
+                (const FunctionData f) => candidates.all.joiner.any!(c => signatureOf(c).params.length == f.params.length)
                     ? Fit.exact : Fit.none,
-                _ => Fit.none,
-            ));
-        }
-        if (auto locals = arg.id in _resolutions.localOverloads)
-        {
-            if (bare) return Fit.none;
-            return inOption((Type t) => _types[t].match!(
-                (const FunctionData f) => (*locals).any!(c => lambdaOf(c).params.length == f.params.length) ? Fit.exact : Fit.none,
                 _ => Fit.none,
             ));
         }
@@ -4104,27 +4088,34 @@ private final class TypeChecker
     }
 
     /// The one of `trials` that beats each of the others, reporting it when there isn't one.
-    private Id!FunctionDecl bestTrial(const(Trial)[] trials, Span span, string spelled, bool reportable)
+    private Candidate bestTrial(const(Trial)[] trials, Span span, string spelled, bool reportable)
     {
-        auto winners = trials.filter!(t => trials.all!(u => u.func == t.func || beats(t, u))).array;
-        if (winners.length == 1) return winners[0].func;
-        if (!reportable) return Id!FunctionDecl.init;
+        auto winners = trials.filter!(t => trials.all!(u => u.candidate == t.candidate || beats(t, u))).array;
+        if (winners.length == 1) return winners[0].candidate;
+        if (!reportable) return Candidate.init;
         auto unbeaten = trials.filter!(t => !trials.any!(u => beats(u, t))).array;
-        auto tied = unbeaten.map!(t => "`" ~ overloadLabel(t.func) ~ "`").array;
+        // Two nested defs that take the same parameters have been reported as duplicates already.
+        if (unbeaten.length == 2 && unbeaten.all!(t => t.candidate.local.isValid)
+            && sameParameters(unbeaten[0].candidate, unbeaten[1].candidate))
+        {
+            return unbeaten[0].candidate;
+        }
+        auto tied = unbeaten.map!(t => "`" ~ overloadLabel(t.candidate) ~ "`").array;
         // Functions of different modules tie where a blanket forward brings them together.
-        auto homes = unbeaten.map!(t => _resolutions.declarations.functionModules.get(t.func, null).idup).array.sort.uniq.array;
-        if (homes.length > 1 && !homes.canFind(null) && !unbeaten.any!(t => (t.func in _resolutions.requirements) !is null))
+        auto homes = unbeaten.map!(t => _resolutions.declarations.functionModules.get(t.candidate.func, null).idup).array.sort.uniq.array;
+        if (homes.length > 1 && !homes.canFind(null) && !unbeaten.any!(t => (t.candidate.func in _resolutions.requirements) !is null))
         {
             _collector.reportError(DiagnosticCode.AmbiguousName, span,
                 ("This call fits a `%s` of more than one module (%-(%s, %)) equally well: %s; import the one you mean "
                     ~ "and qualify it, as in `%s.%s(...)`").format(spelled, homes,
-                    unbeaten.map!(t => "`" ~ overloadLabel(t.func, true) ~ "`").join(" and "), homes[0], _resolutions.declarations.functions[unbeaten[0].func].name));
-            return Id!FunctionDecl.init;
+                    unbeaten.map!(t => "`" ~ overloadLabel(t.candidate, true) ~ "`").join(" and "), homes[0],
+                    _resolutions.declarations.functions[unbeaten[0].candidate.func].name));
+            return Candidate.init;
         }
         _collector.reportError(DiagnosticCode.AmbiguousOverload, span,
             "This call fits more than one `%s` equally well: %s; convert an argument, or annotate it, to choose one"
                 .format(spelled, tied.join(" and ")));
-        return Id!FunctionDecl.init;
+        return Candidate.init;
     }
 
     /// Whether `a` fits a call better than `b`: at least as well for every argument and better for
@@ -4134,11 +4125,11 @@ private final class TypeChecker
     {
         if (fitsBetter(a, b)) return true;
         if (a.fits != b.fits) return false;
-        auto aGeneric = isGenericFunction(a.func), bGeneric = isGenericFunction(b.func);
+        auto aGeneric = isGenericFunction(a.candidate), bGeneric = isGenericFunction(b.candidate);
         if (aGeneric != bGeneric) return bGeneric;
         if (aGeneric)
         {
-            auto aTakes = accepts(a.func, b.func), bTakes = accepts(b.func, a.func);
+            auto aTakes = accepts(a.candidate.func, b.candidate.func), bTakes = accepts(b.candidate.func, a.candidate.func);
             if (aTakes != bTakes) return bTakes;
         }
         return readsEarlier(a, b);
@@ -4160,8 +4151,8 @@ private final class TypeChecker
     /// parameter that is only a type parameter takes anything, so it's never the nearer one.
     private bool fitsNearer(const Trial a, const Trial b)
     {
-        auto params = signatureOf(a.func).params;
-        auto typeParams = _resolutions.typeParamsOf(a.func);
+        auto params = signatureOf(a.candidate).params;
+        auto typeParams = typeParamsOf(a.candidate);
         bool better, worse;
         foreach (i; 0 .. a.fits.length)
         {
@@ -4174,16 +4165,27 @@ private final class TypeChecker
 
     /// Whether `a` is the more specific of two functions that fit alike: it isn't generic and `b`
     /// is, or `b` takes everything it takes and more.
-    private bool moreSpecific(Id!FunctionDecl a, Id!FunctionDecl b)
+    private bool moreSpecific(Candidate a, Candidate b)
     {
         auto aGeneric = isGenericFunction(a), bGeneric = isGenericFunction(b);
         if (aGeneric != bGeneric) return bGeneric;
-        return aGeneric && accepts(b, a) && !accepts(a, b);
+        return aGeneric && accepts(b.func, a.func) && !accepts(a.func, b.func);
     }
 
     private bool isGenericFunction(Id!FunctionDecl f)
     {
         return _resolutions.typeParamsOf(f).length > 0;
+    }
+
+    private bool isGenericFunction(Candidate c)
+    {
+        return typeParamsOf(c).length > 0;
+    }
+
+    /// The type parameters of `c`, of which a nested def has none.
+    private const(TypeParam)[] typeParamsOf(Candidate c)
+    {
+        return c.func.isValid ? _resolutions.typeParamsOf(c.func) : null;
     }
 
     /// Whether the generic `wider` takes every list of arguments that `narrower` does: its type
@@ -4211,6 +4213,18 @@ private final class TypeChecker
     private FunctionData signatureOf(Id!FunctionDecl f)
     {
         return signatureOf(_typing.symbolTypes[SymbolId(f)]);
+    }
+
+    /// What `c` takes. A nested def's parameters are read from what's written, since a call can
+    /// come before its body has been checked, and so its result is left out.
+    private FunctionData signatureOf(Candidate c)
+    {
+        if (c.func.isValid) return signatureOf(c.func);
+        auto params = lambdaOf(c.local).params;
+        auto mutables = params.map!(p => p.mutable).array;
+        // Stored empty when none is, as in a function type.
+        return FunctionData(params.map!(p => quietlyResolved(p.type)).array.idup, Type.init,
+            mutables.canFind(true) ? mutables.idup : null);
     }
 
     private FunctionData signatureOf(Type functionType)
@@ -4277,6 +4291,11 @@ private final class TypeChecker
         return owner ~ decl.name ~ typeParams ~ "(" ~ params ~ ")";
     }
 
+    private string overloadLabel(Candidate c, bool qualified = false)
+    {
+        return c.func.isValid ? overloadLabel(c.func, qualified) : localLabel(c.local);
+    }
+
     /// A call with one candidate that takes its number of arguments is checked against that one
     /// alone, so when that one is imported, the first error about the call itself, since there
     /// were `reported`, says which others there are.
@@ -4307,7 +4326,7 @@ private final class TypeChecker
         string[] lines;
         foreach (g, group; groups)
         {
-            foreach (trial; group) lines ~= "%s %s".format(overloadLabel(trial.func, g > 0), trial.problem);
+            foreach (trial; group) lines ~= "%s %s".format(overloadLabel(trial.candidate, g > 0), trial.problem);
         }
         _collector.reportError(DiagnosticCode.NoMatchingOverload, span,
             "No `%s` takes these arguments:\n    %-(%s\n    %)".format(spelled, lines));
@@ -4337,188 +4356,58 @@ private final class TypeChecker
         return "%s(%s)".format(decl.name, params);
     }
 
-    /// One nested `def` of an overloaded name, tried against a call's arguments.
-    private struct LocalTrial
-    {
-        Id!VarDecl local;
-        Fit[] fits;
-        int[] readings;
-        /// Why it doesn't fit, or null when it does.
-        string problem;
-
-        bool fitsAll() const => problem is null;
-    }
-
-    /// Chooses which of the nested `def`s `locals` a call of `name` invokes, reporting it when none
-    /// or several do. They're ranked as module-level functions are, but none is generic, so the
-    /// expected type and the bounds take no part. Arguments are typed as `chooseFunction` types them.
-    private Id!VarDecl chooseLocal(const Expr name, string spelled, const(Id!VarDecl)[] locals, const CallExpr call,
-        Type[] typed, BodyContext ctx)
-    {
-        auto args = call.args;
-        LocalTrial[] trials;
-        foreach (local; locals)
-        {
-            auto trial = LocalTrial(local);
-            auto params = lambdaOf(local).params.length;
-            if (params != args.length) trial.problem = "takes %s argument%s".format(params, params == 1 ? "" : "s");
-            trials ~= trial;
-        }
-        auto plausible = trials.filter!(t => t.fitsAll).array;
-        // One candidate is called as a lone function is, so its arguments can adapt to it.
-        if (plausible.length == 1) return plausible[0].local;
-        void reportNone()
-        {
-            _collector.reportError(DiagnosticCode.NoMatchingOverload, name.span,
-                "No `%s` takes these arguments:\n    %-(%s\n    %)".format(spelled,
-                    trials.map!(t => "%s %s".format(localLabel(t.local), t.problem))));
-        }
-        if (plausible.length == 0)
-        {
-            reportNone();
-            return Id!VarDecl.init;
-        }
-        foreach (i, arg; args)
-        {
-            if (typed[i] == Type.init && (call.isMutable(i) || !isShaped(arg))) typed[i] = synthesize(arg, ctx);
-        }
-        foreach (ref trial; trials)
-        {
-            if (!trial.fitsAll) continue;
-            auto lambda = lambdaOf(trial.local);
-            trial.fits = new Fit[args.length];
-            trial.readings = new int[args.length];
-            foreach (i, arg; args)
-            {
-                auto param = quietlyResolved(lambda.params[i].type);
-                auto describedArg = "argument %s".format(i + 1);
-                if (call.isMutable(i) != lambda.params[i].mutable)
-                {
-                    trial.problem = call.isMutable(i)
-                        ? "%s is passed as `mutable`, and its parameter isn't".format(describedArg)
-                        : "%s has to be passed as `mutable`".format(describedArg);
-                    break;
-                }
-                auto byShape = typed[i] == Type.init || isIntLiteral(arg);
-                auto fit = byShape ? shapeFit(arg, param, null) : typedFit(typed[i], param, null, call.isMutable(i));
-                if (fit == Fit.none)
-                {
-                    auto type = typed[i] == Type.init ? literalType(arg) : typed[i];
-                    trial.problem = type == Type.init
-                        ? "%s can't be `%s`".format(describedArg, _types.describe(param))
-                        : "%s is `%s`, not `%s`".format(describedArg, _types.describe(type), _types.describe(param));
-                    break;
-                }
-                trial.fits[i] = fit;
-                if (byShape) trial.readings[i] = literalReading(arg, param);
-            }
-        }
-        auto fitting = trials.filter!(t => t.fitsAll).array;
-        // An argument whose type is already an error fits anything, so it would only add to it.
-        auto reportable = !typed.any!(t => t != Type.init && _types.mentionsError(t));
-        auto winners = fitting.filter!(t => fitting.all!(u => u.local == t.local || fitsBetterLocal(t, u))).array;
-        if (winners.length == 1) return winners[0].local;
-        if (!reportable) return Id!VarDecl.init;
-        if (fitting.length == 0)
-        {
-            reportNone();
-            return Id!VarDecl.init;
-        }
-        auto unbeaten = fitting.filter!(t => !fitting.any!(u => fitsBetterLocal(u, t))).array;
-        // Two that take the same parameters have been reported as duplicates already.
-        auto typesOf = (const LocalTrial t) => lambdaOf(t.local).params.map!(p => quietlyResolved(p.type)).array;
-        if (unbeaten.length == 2 && typesOf(unbeaten[0]) == typesOf(unbeaten[1])) return unbeaten[0].local;
-        _collector.reportError(DiagnosticCode.AmbiguousOverload, name.span,
-            "This call fits more than one `%s` equally well: %s; convert an argument, or annotate it, to choose one"
-                .format(spelled, unbeaten.map!(t => "`" ~ localLabel(t.local) ~ "`").join(" and ")));
-        return Id!VarDecl.init;
-    }
-
-    /// Whether `a` fits at least as well as `b` for every argument and better for one, or fits
-    /// them alike and reads its integer literals earlier.
-    private static bool fitsBetterLocal(const LocalTrial a, const LocalTrial b)
-    {
-        bool better, worse, earlier, later;
-        foreach (i; 0 .. a.fits.length)
-        {
-            if (a.fits[i] > b.fits[i]) better = true;
-            if (a.fits[i] < b.fits[i]) worse = true;
-            if (a.readings[i] < b.readings[i]) earlier = true;
-            if (a.readings[i] > b.readings[i]) later = true;
-        }
-        return better ? !worse : !worse && earlier && !later;
-    }
-
-    /// An overloaded nested `def` used as a value, chosen by the function type it's expected to be.
-    private Type overloadedLocalValue(const Expr name, const(Id!VarDecl)[] locals, Type expected, Site site)
-    {
-        auto spelled = spelling(name);
-        if (expected == _types.error) return _types.error;
-        if (expected == Type.init || !_types.isFunction(expected))
-        {
-            reportOverloadedValue(name);
-            return _types.error;
-        }
-        auto fits = locals.filter!(l => (SymbolId(l) in _typing.symbolTypes) !is null && _typing.symbolTypes[SymbolId(l)] == expected).array;
-        if (fits.length != 1)
-        {
-            _collector.reportError(fits.length == 0 ? DiagnosticCode.NoMatchingOverload : DiagnosticCode.AmbiguousOverload,
-                name.span, "%s `%s` is a `%s`; there are %s".format(fits.length == 0 ? "No" : "More than one", spelled,
-                    _types.describe(expected), locals.map!(l => "`" ~ localLabel(l) ~ "`").join(", ")));
-            return _types.error;
-        }
-        _typing.chosenSymbols[name.id] = SymbolId(fits[0]);
-        return namedValue(name, SymbolId(fits[0]), expected, site);
-    }
-
     /// An overloaded function used as a value, chosen by the function type it's expected to be.
     private Type overloadedValue(const Expr name, const Candidates candidates, Type expected, Site site)
     {
         auto spelled = spelling(name);
+        auto groups = candidates.all;
         if (expected == _types.error) return _types.error;
         if (expected == Type.init || !_types.isFunction(expected))
         {
-            // The current module's functions come first, as for a call.
-            if (candidates.groups[0].length == 1)
+            // The nearest group comes first, as for a call.
+            if (groups[0].length == 1)
             {
-                _typing.chosenSymbols[name.id] = SymbolId(candidates.groups[0][0]);
-                return namedValue(name, SymbolId(candidates.groups[0][0]), expected, site);
+                _typing.chosenSymbols[name.id] = groups[0][0].symbol;
+                return namedValue(name, groups[0][0].symbol, expected, site);
             }
             reportOverloadedValue(name);
             return _types.error;
         }
 
-        const(Id!FunctionDecl)[][] matching;
-        foreach (group; candidates.groups)
+        Candidate[][] matching;
+        foreach (group; groups)
         {
-            matching ~= group.filter!(f => valueFits(f, typeArgsOf(name), expected, site)).array;
+            matching ~= group.filter!(c => valueFits(c, typeArgsOf(name), expected, site)).array;
         }
-        const(Id!FunctionDecl)[] fits = matching[0];
+        Candidate[] fits = matching[0];
         if (fits.length == 0)
         {
-            foreach (f; matching[1 .. $].joiner) if (!fits.canFind(f)) fits ~= f;
+            foreach (c; matching[1 .. $].joiner) if (!fits.canFind(c)) fits ~= c;
         }
         if (fits.length > 1)
         {
-            auto best = fits.filter!(f => fits.all!(g => g == f || moreSpecific(f, g))).array;
+            auto best = fits.filter!(c => fits.all!(d => d == c || moreSpecific(c, d))).array;
             if (best.length == 1) fits = best;
         }
         if (fits.length != 1)
         {
-            auto across = acrossModules(candidates.groups.joiner);
-            auto all = candidates.groups.joiner.map!(f => "`" ~ overloadLabel(f, across) ~ "`").array;
+            auto across = acrossModules(groups.joiner.map!(c => c.func));
+            auto all = groups.joiner.map!(c => "`" ~ overloadLabel(c, across) ~ "`").array;
             _collector.reportError(fits.length == 0 ? DiagnosticCode.NoMatchingOverload : DiagnosticCode.AmbiguousOverload,
                 name.span, "%s `%s` is a `%s`; there are %s".format(fits.length == 0 ? "No" : "More than one", spelled,
                     _types.describe(expected), all.join(", ")));
             return _types.error;
         }
-        _typing.chosenSymbols[name.id] = SymbolId(fits[0]);
-        return namedValue(name, SymbolId(fits[0]), expected, site);
+        _typing.chosenSymbols[name.id] = fits[0].symbol;
+        return namedValue(name, fits[0].symbol, expected, site);
     }
 
-    /// Whether the function `f`, given the type arguments `written`, can be a value of `expected`.
-    private bool valueFits(Id!FunctionDecl f, const(TypeExpr)[] written, Type expected, Site site)
+    /// Whether `c`, given the type arguments `written`, can be a value of `expected`.
+    private bool valueFits(Candidate c, const(TypeExpr)[] written, Type expected, Site site)
     {
+        // A nested def isn't generic, and its type is known once its body has been checked.
+        if (c.local.isValid) return written.length == 0 && _typing.symbolTypes.get(c.symbol, Type.init) == expected;
+        auto f = c.func;
         auto params = _resolutions.typeParamsOf(f);
         settleResult(f, false);
         auto type = _typing.symbolTypes[SymbolId(f)];
@@ -4536,22 +4425,16 @@ private final class TypeChecker
     private void reportOverloadedValue(const Expr name)
     {
         auto spelled = spelling(name);
-        if (auto locals = name.id in _resolutions.localOverloads)
-        {
-            auto known = (*locals).filter!(l => SymbolId(l) in _typing.symbolTypes);
-            _collector.reportError(DiagnosticCode.AmbiguousOverload, name.span,
-                "`%s` is overloaded, so as a value it needs a function type to choose by%s".format(spelled, known.empty
-                    ? "" : ", as in `val f: %s = %s`".format(_types.describe(_typing.symbolTypes[SymbolId(known.front)]), spelled)));
-            return;
-        }
-        // One whose result is being worked out has no type to show yet.
-        auto known = (name.id in _resolutions.overloads).groups.joiner.filter!((f) {
-            settleResult(f, false);
-            return _resultStates.get(f, ResultState.settled) == ResultState.settled;
+        // One whose result is being worked out, or a nested def whose body hasn't been checked, has
+        // no type to show yet.
+        auto known = (name.id in _resolutions.overloads).all.joiner.filter!((c) {
+            if (c.local.isValid) return (c.symbol in _typing.symbolTypes) !is null;
+            settleResult(c.func, false);
+            return _resultStates.get(c.func, ResultState.settled) == ResultState.settled;
         });
         _collector.reportError(DiagnosticCode.AmbiguousOverload, name.span,
             "`%s` is overloaded, so as a value it needs a function type to choose by%s".format(spelled, known.empty
-                ? "" : ", as in `val f: %s = %s`".format(_types.describe(_typing.symbolTypes[SymbolId(known.front)]), spelled)));
+                ? "" : ", as in `val f: %s = %s`".format(_types.describe(_typing.symbolTypes[known.front.symbol]), spelled)));
     }
 
     /// Reports two functions of one name in `mod` that take the same parameters, and two tests of one
@@ -4773,7 +4656,7 @@ private final class TypeChecker
         }
         else if (sameParameters(earlier, later.id))
         {
-            problem = "`%s` already takes `" ~ overloadLabel(earlier)[first.name.length .. $] ~ "`; overloads need different parameter types"
+            problem = sameParametersProblem(Candidate(earlier), first.name)
                 ~ (_resolutions.boundFunctions.get(earlier, null).length + _resolutions.boundFunctions.get(later.id, null).length == 0
                     ? "" : ", whatever their bounds");
         }
@@ -4782,22 +4665,34 @@ private final class TypeChecker
         return true;
     }
 
+    /// What's wrong with an overload of `name` that takes the same parameters as `earlier`, with
+    /// a `%s` for the name.
+    private string sameParametersProblem(Candidate earlier, string name)
+    {
+        return "`%s` already takes `" ~ overloadLabel(earlier)[name.length .. $] ~ "`; overloads need different parameter types";
+    }
+
     /// Whether `a` and `b` take the same parameter types, apart from what they name their type
     /// parameters; one `mutable` where the other isn't makes them different.
     private bool sameParameters(Id!FunctionDecl a, Id!FunctionDecl b)
+    {
+        return sameParameters(Candidate(a), Candidate(b));
+    }
+
+    private bool sameParameters(Candidate a, Candidate b)
     {
         Id!TypeParam[Id!TypeParam] renamed;
         return sameParameters(a, b, renamed);
     }
 
     /// Leaves in `renamed` which of `b`'s type parameters each of `a`'s is.
-    private bool sameParameters(Id!FunctionDecl a, Id!FunctionDecl b, ref Id!TypeParam[Id!TypeParam] renamed)
+    private bool sameParameters(Candidate a, Candidate b, ref Id!TypeParam[Id!TypeParam] renamed)
     {
         auto aParams = signatureOf(a).params;
         auto bParams = signatureOf(b).params;
         if (aParams.length != bParams.length || signatureOf(a).mutables != signatureOf(b).mutables) return false;
-        auto aTypeParams = _resolutions.typeParamsOf(a);
-        auto bTypeParams = _resolutions.typeParamsOf(b);
+        auto aTypeParams = typeParamsOf(a);
+        auto bTypeParams = typeParamsOf(b);
         return aParams.length.iota.all!(i => sameUpToRenaming(aParams[i], bParams[i], aTypeParams, bTypeParams, renamed));
     }
 
@@ -5597,7 +5492,7 @@ private final class TypeChecker
 
         Attempt attempt(Id!FunctionDecl f, size_t group)
         {
-            auto tried = Attempt(Trial(f));
+            auto tried = Attempt(Trial(Candidate(f)));
             tried.group = group;
             auto signature = signatureOf(f);
             auto params = _resolutions.typeParamsOf(f);
@@ -5653,10 +5548,10 @@ private final class TypeChecker
         Conformance finish(Attempt best, ref Substitution into)
         {
             Conformance finished;
-            auto label = overloadLabel(best.trial.func, _resolutions.declarations.functionModules[best.trial.func] != site.module_);
-            settleResult(best.trial.func);
-            auto signature = signatureOf(best.trial.func);
-            auto params = _resolutions.typeParamsOf(best.trial.func);
+            auto label = overloadLabel(best.trial.candidate.func, _resolutions.declarations.functionModules[best.trial.candidate.func] != site.module_);
+            settleResult(best.trial.candidate.func);
+            auto signature = signatureOf(best.trial.candidate.func);
+            auto params = _resolutions.typeParamsOf(best.trial.candidate.func);
             auto missing = params.filter!(p => p.id !in best.binding);
             if (!missing.empty)
             {
@@ -5694,7 +5589,7 @@ private final class TypeChecker
                 finished.failure = "`%s` returns `%s`, where `%s` is needed".format(label, _types.describe(ret), _types.describe(expected));
                 return finished;
             }
-            finished.witnesses = [Witness(best.trial.func, params.map!(p => best.binding[p.id]).array, best.witnesses)];
+            finished.witnesses = [Witness(best.trial.candidate.func, params.map!(p => best.binding[p.id]).array, best.witnesses)];
             return finished;
         }
 
@@ -5704,7 +5599,7 @@ private final class TypeChecker
         {
             foreach (each; groups[1 .. $].map!(g => fitting(g)).joiner)
             {
-                if (!pool.canFind!(t => t.trial.func == each.trial.func)) pool ~= each;
+                if (!pool.canFind!(t => t.trial.candidate.func == each.trial.candidate.func)) pool ~= each;
             }
         }
         if (pool.length == 0)
@@ -5712,7 +5607,7 @@ private final class TypeChecker
             string[] lines;
             foreach (g, group; groups)
             {
-                foreach (tried; group) lines ~= "\n    %s %s".format(overloadLabel(tried.trial.func, g > 0), tried.trial.problem);
+                foreach (tried; group) lines ~= "\n    %s %s".format(overloadLabel(tried.trial.candidate.func, g > 0), tried.trial.problem);
             }
             result.failure = "no `%s` in scope takes %s%s%s".format(name, arguments(), lines.join, importHint(name, wanted, known, candidates, site.module_));
             return result;
@@ -5723,10 +5618,10 @@ private final class TypeChecker
             result.pending = true;
             return result;
         }
-        auto winners = pool.filter!(t => pool.all!(u => u.trial.func == t.trial.func || beats(t.trial, u.trial))).array;
+        auto winners = pool.filter!(t => pool.all!(u => u.trial.candidate.func == t.trial.candidate.func || beats(t.trial, u.trial))).array;
         if (winners.length != 1)
         {
-            auto unbeaten = pool.filter!(t => !pool.any!(u => beats(u.trial, t.trial))).map!(t => t.trial.func).array;
+            auto unbeaten = pool.filter!(t => !pool.any!(u => beats(u.trial, t.trial))).map!(t => t.trial.candidate.func).array;
             auto across = acrossModules(unbeaten);
             auto tied = unbeaten.map!(f => "`" ~ overloadLabel(f, across) ~ "`").array;
             result.failure = "more than one `%s` takes %s equally well: %-(%s and %)".format(name, arguments(), tied)
@@ -6076,7 +5971,7 @@ private final class TypeChecker
     /// or `[:]`, and as with `None`, a generic name with no type arguments that isn't called, like `Nil`.
     private bool isUntyped(const Expr expr)
     {
-        if (expr.id in _resolutions.overloads || expr.id in _resolutions.localOverloads) return true;
+        if (expr.id in _resolutions.overloads) return true;
         auto genericName = expr.kind.match!(
             (const Identifier id) => id.typeArgs.length == 0,
             (const MemberAccess access) => access.typeArgs.length == 0,
@@ -6461,7 +6356,7 @@ private final class TypeChecker
                     (const ArrayLiteral _) { _declarer.reportUntypedEmptyArray(arg.span); },
                     (const MapLiteral _) { _declarer.reportUntypedEmptyDictionary(arg.span); },
                     (_) {
-                        if (arg.id in _resolutions.overloads || arg.id in _resolutions.localOverloads) reportOverloadedValue(arg);
+                        if (arg.id in _resolutions.overloads) reportOverloadedValue(arg);
                         else reportUninferredValue(arg, genericNamed(arg), true);
                     },
                 );
@@ -6773,7 +6668,7 @@ private final class TypeChecker
         }
         else if (receiver != _types.error)
         {
-            function_ = chooseFunction(*call.callee, member, typeArgs, lookup, *rewritten, typed, true, ctx, expected);
+            function_ = chooseFunction(*call.callee, member, typeArgs, lookup, *rewritten, typed, true, ctx, expected).func;
         }
         if (!function_.isValid)
         {
@@ -7159,14 +7054,14 @@ private final class TypeChecker
             Trial[] all;
             foreach (f; group)
             {
-                auto trial = arityTrial(f, args.length, 0);
+                auto trial = arityTrial(Candidate(f), args.length, 0);
                 if (trial.fitsAll) fitTrial(trial, call, typed, null, false, ctx, Type.init);
                 all ~= trial;
                 if (trial.fitsAll) fits ~= trial;
             }
             trials ~= fits;
             tried ~= all;
-            fitting.groups ~= fits.map!(t => t.func).array;
+            fitting.groups ~= fits.map!(t => t.candidate.func).array;
         }
         fitting.sources = lookup.sources.dup;
         auto reportable = !typed.any!(t => t != Type.init && _types.mentionsError(t));
@@ -7179,7 +7074,7 @@ private final class TypeChecker
         }
 
         auto named = Expr(Id!Expr.init, span, ExprKind(Identifier(name)));
-        auto function_ = chooseFunction(named, name, null, fitting, call, typed, false, ctx);
+        auto function_ = chooseFunction(named, name, null, fitting, call, typed, false, ctx).func;
         if (!function_.isValid)
         {
             typeTheRest();
@@ -7490,7 +7385,6 @@ private final class TypeChecker
     private Type synthesizeIdentifier(const Expr expr, Type expected, Site site)
     {
         if (auto candidates = expr.id in _resolutions.overloads) return overloadedValue(expr, distinct(*candidates), expected, site);
-        if (auto locals = expr.id in _resolutions.localOverloads) return overloadedLocalValue(expr, *locals, expected, site);
         if (auto symbol = expr.id in _resolutions.resolutions) return namedValue(expr, *symbol, expected, site);
         // Name resolution couldn't find it and has already reported that.
         return _types.error;
