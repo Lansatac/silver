@@ -11,19 +11,6 @@ class RuntimeError : DiagnosticException
     }
 }
 
-/// A runtime error that knows its code but not yet its span; the evaluator adds the
-/// span of the node being evaluated when it turns this into a RuntimeError.
-class CodedException : Exception
-{
-    DiagnosticCode code;
-
-    this(DiagnosticCode code, string message, string file = __FILE__, size_t line = __LINE__)
-    {
-        super(message, file, line);
-        this.code = code;
-    }
-}
-
 /// `main` returned an error, which `message` is, formatted. The program ends with it reported.
 class ProgramFailed : Exception
 {

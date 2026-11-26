@@ -3,8 +3,6 @@
 module silver.interpreter.stack;
 
 import core.thread : Thread;
-import silver.ast : DiagnosticCode;
-import silver.interpreter.errors : CodedException;
 
 private enum stackSize = 512 * 1024 * 1024;
 /// Room for the interpreter's work between two checks, and for unwinding after one fails.
@@ -25,13 +23,13 @@ void runOnLargeStack(void delegate() program)
     thread.join();
 }
 
-/// Panics if the stack is nearly used up. Anything that recurses with the depth of a Silver
-/// value or call has to come through here.
-void checkStack()
+/// Whether the stack is nearly used up, which is a panic with `stackOverflow`. Anything that
+/// recurses with the depth of a Silver value or call has to check this.
+bool stackNearlyFull()
 {
     ubyte marker;
-    if (cast(size_t) &marker < stackLimit)
-    {
-        throw new CodedException(DiagnosticCode.StackOverflow, "Stack overflow");
-    }
+    return cast(size_t) &marker < stackLimit;
 }
+
+/// What the panic says when the stack is nearly used up.
+enum stackOverflow = "Stack overflow";

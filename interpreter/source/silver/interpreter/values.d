@@ -33,18 +33,20 @@ struct Value
     }
 
     private Kind _kind;
+    /// A record's tag, a closure's function, or a jump's label, beside the kind rather than in the
+    /// union, so that a Value is 24 bytes rather than 32: every one the evaluator gives back is copied.
+    private uint _small;
     private union
     {
         bool _boolean;
         long _integer;
         double _floating;
         string _text;
-        ArrayValue _array;
-        Record _record;
-        Closure _closure;
+        /// An array's elements, a record's fields or a closure's captures.
+        Value[] _values;
         CellValue _cell;
-        Handle _handle;
-        Jump _jump;
+        void* _address;
+        Jump.Kind _jumpKind;
     }
 
     this(Unit _)
@@ -78,19 +80,21 @@ struct Value
     this(ArrayValue value)
     {
         _kind = Kind.array;
-        _array = value;
+        _values = value.elements;
     }
 
     this(Record value)
     {
         _kind = Kind.record;
-        _record = value;
+        _small = small(value.tag);
+        _values = value.fields;
     }
 
     this(Closure value)
     {
         _kind = Kind.closure;
-        _closure = value;
+        _small = small(value.target);
+        _values = value.captures;
     }
 
     this(CellValue value)
@@ -102,13 +106,14 @@ struct Value
     this(Handle value)
     {
         _kind = Kind.handle;
-        _handle = value;
+        _address = value.address;
     }
 
     this(Jump value)
     {
         _kind = Kind.jump;
-        _jump = value;
+        _small = small(value.label);
+        _jumpKind = value.kind;
     }
 
     /// Whether it holds a `T`.
@@ -126,13 +131,19 @@ struct Value
         else static if (is(T == long)) return _integer;
         else static if (is(T == double)) return _floating;
         else static if (is(T == string)) return _text;
-        else static if (is(T == ArrayValue)) return _array;
-        else static if (is(T == Record)) return _record;
-        else static if (is(T == Closure)) return _closure;
+        else static if (is(T == ArrayValue)) return ArrayValue(_values);
+        else static if (is(T == Record)) return Record(_small, _values);
+        else static if (is(T == Closure)) return Closure(_small, _values);
         else static if (is(T == CellValue)) return _cell;
-        else static if (is(T == Handle)) return _handle;
-        else static if (is(T == Jump)) return _jump;
+        else static if (is(T == Handle)) return Handle(_address);
+        else static if (is(T == Jump)) return Jump(_jumpKind, _small);
         else static assert(0, T.stringof ~ " is no layout of a Value");
+    }
+
+    private static uint small(size_t n)
+    {
+        assert(n <= uint.max, "a tag, function index or label fits 32 bits");
+        return cast(uint) n;
     }
 
     private template kindOf(T)
@@ -219,6 +230,7 @@ struct Jump
 @("a Value holds each layout, including ones made of Values")
 unittest
 {
+    static assert(Value.sizeof == 24);
     auto point = Value(Record(0, [Value(1L), Value(2L)]));
     auto numbers = Value(ArrayValue([Value(3L), point]));
     assert(numbers.as!ArrayValue.elements[1].as!Record.fields[1].as!long == 2);

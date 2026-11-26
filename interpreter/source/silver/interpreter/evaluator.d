@@ -3,21 +3,37 @@ module silver.interpreter.evaluator;
 import core.exception : OutOfMemoryError;
 import std.conv : to;
 import std.format : format;
-import std.meta : AliasSeq;
-import std.sumtype : match;
+import std.meta : AliasSeq, staticIndexOf;
 import std.traits : isSigned;
 
 import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException, Span;
 import silver.sema;
 import silver.core;
 import silver.interpreter.errors;
-import silver.interpreter.stack : checkStack, runOnLargeStack;
+import silver.interpreter.frames : FrameStack;
+import silver.interpreter.stack : runOnLargeStack, stackNearlyFull, stackOverflow;
 import silver.interpreter.foreign : addressText, callC, findNative, fromCString, toCString;
 import silver.interpreter.values;
 import silver.runtime.files : pathExists, readWhole, writeWhole;
 import silver.runtime.floattext : float32Text, floatText;
 
 private alias IntegerTypes = AliasSeq!(byte, short, int, long, ubyte, ushort, uint, ulong);
+
+/// Which of `Sum`'s kinds `T` is, as its `typeIndex` gives it.
+private enum tagOf(Sum, T) = staticIndexOf!(T, Sum.Types);
+
+/// The `T` that `kind`, a Core `SumType`, holds, which its `typeIndex` has already said. The
+/// evaluator switches on the index and reads the member straight from the storage: `match` is three
+/// calls a node that dmd doesn't inline, which was most of what a loop step cost.
+private ref const(T) member(T, Sum)(ref const Sum kind) @trusted
+{
+    enum index = tagOf!(Sum, T);
+    static assert(index >= 0, T.stringof ~ " isn't one of " ~ Sum.stringof ~ "'s kinds");
+    // The storage is a union with a field for each kind, in order.
+    static assert(is(typeof(kind.tupleof[0].tupleof[index]) == const T));
+    assert(kind.typeIndex == index);
+    return kind.tupleof[0].tupleof[index];
+}
 
 /// Runs a Core program by walking its tree.
 final class Evaluator
@@ -36,6 +52,17 @@ final class Evaluator
     private Callable[] _natives;
     /// The shared library to load for a `native library` name, where one is given.
     private const(string[string]) _libraryFiles;
+    /// Every running call's locals.
+    private FrameStack _frames;
+    private Type _int;
+    /// Each integer type and `Char`, with how a Value holds it, so that asking needs no call.
+    private IntegerLayout[9] _integerLayouts;
+
+    private static struct IntegerLayout
+    {
+        Type type;
+        IntegerInfo info;
+    }
 
     private static struct Callable
     {
@@ -64,6 +91,28 @@ final class Evaluator
         _arguments = arguments;
         _directory = directory;
         _libraryFiles = libraryFiles;
+        auto types = program.types;
+        _int = types.int_;
+        foreach (i, type; [types.int8, types.int16, types.int32, types.int_, types.uint8, types.uint16, types.uint32,
+            types.uint_, types.char_])
+        {
+            _integerLayouts[i] = IntegerLayout(type, types.integerOf(type));
+        }
+    }
+
+    /// Whether `type` is an integer type or `Char`, and so held as an integer of `info`'s width and
+    /// signedness.
+    private bool integerLayout(Type type, out IntegerInfo info) const
+    {
+        foreach (ref layout; _integerLayouts)
+        {
+            if (same(layout.type, type))
+            {
+                info = layout.info;
+                return true;
+            }
+        }
+        return false;
     }
 
     /// Everything the program has printed so far.
@@ -99,13 +148,12 @@ final class Evaluator
         _output = null;
         _failures = null;
         TestRun run;
+        auto mark = _frames.mark;
+        // A test that ends early leaves the frames of the calls it was in.
+        scope (exit) _frames.release(mark);
         try
         {
             invoke(test.function_, [], null);
-        }
-        catch (CodedException error)
-        {
-            run.panic = new Diagnostic(error.code, _program.functions[test.function_].body.span, error.msg);
         }
         catch (RuntimeError error)
         {
@@ -176,10 +224,6 @@ final class Evaluator
         {
             invoke(_program.entryPoint, [], null);
         }
-        catch (CodedException error)
-        {
-            throw new RuntimeError(Diagnostic(error.code, _program.functions[_program.entryPoint].body.span, error.msg));
-        }
         catch (OutOfMemoryError)
         {
             throw new RuntimeError(Diagnostic(DiagnosticCode.OutOfMemory, _program.functions[_program.entryPoint].body.span, "Out of memory"));
@@ -190,23 +234,26 @@ final class Evaluator
     private Value invoke(size_t target, Value[] args, Value[] captures)
     {
         auto func = &_program.functions[target];
+        auto mark = _frames.mark;
         auto frame = newFrame(*func);
         frame[0 .. args.length] = args[];
-        return enter(*func, frame, captures);
+        auto result = enter(*func, frame, captures);
+        _frames.release(mark);
+        return result;
     }
 
-    /// A call's locals, each at its `Local.slot`, and after them the value a `Return` leaves with.
-    private static Value[] newFrame(ref const Function func)
+    /// A call's locals, each at its `Local.slot`, and after them the value a `Return` leaves with,
+    /// taken from `_frames`, which the caller gives back when the call ends.
+    private Value[] newFrame(ref const Function func)
     {
-        return new Value[func.localCount + 1];
+        return _frames.take(func.localCount + 1);
     }
 
     /// Runs `func` in `frame`, which already holds its arguments.
     private Value enter(ref const Function func, Value[] frame, Value[] captures)
     {
         // At the function being entered, as compiled code checks on entry.
-        try checkStack();
-        catch (CodedException error) throw new RuntimeError(Diagnostic(error.code, func.body.span, error.msg));
+        if (stackNearlyFull()) throw new RuntimeError(Diagnostic(DiagnosticCode.StackOverflow, func.body.span, stackOverflow));
         foreach (i, capture; func.captures) frame[capture.slot] = captures[i];
         auto result = evaluate(func.body, frame);
         return result.has!Jump ? frame[$ - 1] : result;
@@ -215,49 +262,59 @@ final class Evaluator
     /// The value of `e`, or the `Jump` that leaves it, which whatever evaluated `e` gives in turn
     /// until the loop or call it's for takes it.
     /// Throws: RuntimeError, located at the innermost node being evaluated, when a primitive fails.
+    ///
+    /// The handlers it calls are `pragma(inline, false)`: inlined here, each kept stack slots of its
+    /// own, which made this function's frame 2.4 KB, paid at every level of nesting and recursion.
     private Value evaluate(ref const Expr e, Value[] frame)
     {
-        try
+        alias K = ExprKind;
+        switch (e.kind.typeIndex)
         {
-            return e.kind.match!(
-                (ref const UnitLit _) => Value(Unit()),
-                (ref const BoolLit literal) => Value(literal.value),
-                (ref const IntLit literal) => Value(cast(long) literal.value),
-                (ref const FloatLit literal) => Value(literal.value),
-                (ref const StringLit literal) => Value(literal.value),
-                (ref const LocalRef use) => frame[use.local.slot],
-                (ref const Block block) => evaluate(block, frame),
-                (ref const Call call) => callWith(call.target, null, call.args, frame),
-                (ref const CallClosure call) => evaluate(call, frame),
-                (ref const MakeClosure closure) => evaluate(closure, frame),
-                (ref const ForeignCall call) => evaluate(e, call, frame),
-                (ref const IntrinsicCall call) => evaluate(e, call, frame),
-                (ref const Prim prim) => evaluate(prim, frame),
-                (ref const Convert convert) => evaluate(e, convert, frame),
-                (ref const If if_) => evaluate(if_, frame),
-                (ref const Loop loop) => evaluate(loop, frame),
-                (ref const Break jump) => Value(Jump(Jump.Kind.break_, jump.label)),
-                (ref const Continue jump) => Value(Jump(Jump.Kind.continue_, jump.label)),
-                (ref const Return return_) => evaluate(return_, frame),
-                (ref const Construct construct) => evaluate(construct, frame),
-                (ref const Field field) => evaluate(field, frame),
-                (ref const Update update) => evaluate(update, frame),
-                (ref const Inject inject) => evaluate(inject, frame),
-                (ref const IsMember test) => evaluate(test, frame),
-                (ref const Payload payload) => evaluate(payload, frame),
-                (ref const ArrayLit literal) => evaluate(e, literal, frame),
-                (ref const Index index) => evaluate(index, frame),
-                (ref const Slice slice) => evaluate(slice, frame),
-                (ref const Length length) => evaluate(length, frame),
-                (ref const Cell cell) => evaluate(cell, frame),
-                (ref const Capture capture) => evaluate(capture, frame),
-                (ref const TestFailure failure) => evaluate(failure, frame),
-            );
+            case tagOf!(K, LocalRef): return frame[e.kind.member!LocalRef.local.slot];
+            case tagOf!(K, IntLit): return Value(cast(long) e.kind.member!IntLit.value);
+            case tagOf!(K, UnitLit): return Value(Unit());
+            case tagOf!(K, BoolLit): return Value(e.kind.member!BoolLit.value);
+            case tagOf!(K, FloatLit): return Value(e.kind.member!FloatLit.value);
+            case tagOf!(K, StringLit): return Value(e.kind.member!StringLit.value);
+            case tagOf!(K, Block): return evaluate(e.kind.member!Block, frame);
+            case tagOf!(K, Call):
+                auto call = &e.kind.member!Call();
+                return callWith(call.target, null, call.args, frame);
+            case tagOf!(K, CallClosure): return evaluate(e.kind.member!CallClosure, frame);
+            case tagOf!(K, MakeClosure): return evaluate(e.kind.member!MakeClosure, frame);
+            case tagOf!(K, If): return evaluate(e.kind.member!If, frame);
+            case tagOf!(K, Loop): return evaluate(e.kind.member!Loop, frame);
+            case tagOf!(K, Break): return Value(Jump(Jump.Kind.break_, e.kind.member!Break.label));
+            case tagOf!(K, Continue): return Value(Jump(Jump.Kind.continue_, e.kind.member!Continue.label));
+            case tagOf!(K, Return): return evaluate(e.kind.member!Return, frame);
+            case tagOf!(K, Construct): return evaluate(e.kind.member!Construct, frame);
+            case tagOf!(K, Field): return evaluate(e.kind.member!Field, frame);
+            case tagOf!(K, Update): return evaluate(e.kind.member!Update, frame);
+            case tagOf!(K, Inject): return evaluate(e.kind.member!Inject, frame);
+            case tagOf!(K, IsMember): return evaluate(e.kind.member!IsMember, frame);
+            case tagOf!(K, Payload): return evaluate(e.kind.member!Payload, frame);
+            case tagOf!(K, ArrayLit): return evaluate(e, e.kind.member!ArrayLit, frame);
+            case tagOf!(K, Length): return evaluate(e.kind.member!Length, frame);
+            case tagOf!(K, Capture): return evaluate(e.kind.member!Capture, frame);
+            case tagOf!(K, TestFailure): return evaluate(e.kind.member!TestFailure, frame);
+            case tagOf!(K, Prim): return evaluate(e, e.kind.member!Prim, frame);
+            case tagOf!(K, Convert): return evaluate(e, e.kind.member!Convert, frame);
+            case tagOf!(K, Index): return evaluate(e, e.kind.member!Index, frame);
+            case tagOf!(K, Slice): return evaluate(e, e.kind.member!Slice, frame);
+            case tagOf!(K, Cell): return evaluate(e, e.kind.member!Cell, frame);
+            case tagOf!(K, ForeignCall): return evaluate(e, e.kind.member!ForeignCall, frame);
+            case tagOf!(K, IntrinsicCall): return evaluate(e, e.kind.member!IntrinsicCall, frame);
+            default: assert(0, "an Expr is one of these");
         }
-        catch (CodedException error)
-        {
-            throw new RuntimeError(Diagnostic(error.code, e.span, error.msg));
-        }
+    }
+
+    /// The panic `code` with `message`, located at `at`, the node that failed. Each node that can
+    /// fail itself throws one, rather than a `try` around every node adding the place, which cost
+    /// about a sixth of a loop step.
+    pragma(inline, false)
+    private static RuntimeError panicAt(Span at, DiagnosticCode code, string message)
+    {
+        return new RuntimeError(Diagnostic(code, at, message));
     }
 
     /// Each of `exprs`, in order, as `values`. Gives the `Jump` one of them left with, which ends
@@ -280,6 +337,7 @@ final class Evaluator
         return Value(Unit());
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const TestFailure failure, Value[] frame)
     {
         auto message = evaluate(*failure.message, frame);
@@ -287,6 +345,7 @@ final class Evaluator
         return fail(message.as!string, failure.ends);
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const Return return_, Value[] frame)
     {
         auto value = evaluate(*return_.value, frame);
@@ -295,6 +354,7 @@ final class Evaluator
         return Value(Jump(Jump.Kind.return_));
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const MakeClosure closure, Value[] frame)
     {
         Value[] captures;
@@ -304,6 +364,7 @@ final class Evaluator
     }
 
     /// The callee is evaluated before the arguments.
+    pragma(inline, false)
     private Value evaluate(ref const CallClosure call, Value[] frame)
     {
         auto callee = evaluate(*call.callee, frame);
@@ -319,6 +380,7 @@ final class Evaluator
     {
         auto func = &_program.functions[target];
         auto params = func.params;
+        auto mark = _frames.mark;
         auto callee = newFrame(*func);
         auto anyMutable = false;
         foreach (i, ref arg; args)
@@ -329,31 +391,39 @@ final class Evaluator
                 continue;
             }
             auto value = evaluate(arg, frame);
-            if (value.has!Jump) return value;
+            if (value.has!Jump)
+            {
+                _frames.release(mark);
+                return value;
+            }
             callee[params[i].slot] = value;
         }
-        if (!anyMutable) return enter(*func, callee, captures);
-
-        foreach (i, ref arg; args)
+        if (anyMutable)
         {
-            if (params[i].mutable) callee[params[i].slot] = frame[mutableLocal(arg).slot];
+            foreach (i, ref arg; args)
+            {
+                if (params[i].mutable) callee[params[i].slot] = frame[mutableLocal(arg).slot];
+            }
         }
         auto result = enter(*func, callee, captures);
-        foreach (i, ref arg; args)
+        if (anyMutable)
         {
-            if (params[i].mutable) frame[mutableLocal(arg).slot] = callee[params[i].slot];
+            foreach (i, ref arg; args)
+            {
+                if (params[i].mutable) frame[mutableLocal(arg).slot] = callee[params[i].slot];
+            }
         }
+        _frames.release(mark);
         return result;
     }
 
+    /// Lowering passes a mutable param a `LocalRef`.
     private static const(Local) mutableLocal(ref const Expr arg)
     {
-        return arg.kind.match!(
-            (ref const LocalRef use) => use.local,
-            (ref const _) => assert(0, "lowering passes a local to a mutable param"),
-        );
+        return arg.kind.member!LocalRef.local;
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const If if_, Value[] frame)
     {
         auto condition = evaluate(*if_.condition, frame);
@@ -361,6 +431,7 @@ final class Evaluator
         return evaluate(condition.as!bool ? *if_.trueBody : *if_.falseBody, frame);
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const Loop loop, Value[] frame)
     {
         while (true)
@@ -373,6 +444,7 @@ final class Evaluator
         }
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const Construct construct, Value[] frame)
     {
         Value[] fields;
@@ -381,6 +453,7 @@ final class Evaluator
         return Value(Record(0, fields));
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const Field field, Value[] frame)
     {
         auto object = evaluate(*field.object, frame);
@@ -388,6 +461,7 @@ final class Evaluator
         return object.as!Record.fields[field.index];
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const Update update, Value[] frame)
     {
         auto object = evaluate(*update.object, frame);
@@ -400,6 +474,7 @@ final class Evaluator
         return Value(Record(record.tag, fields));
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const Inject inject, Value[] frame)
     {
         if (inject.payload is null) return Value(Record(inject.member, null));
@@ -408,6 +483,7 @@ final class Evaluator
         return Value(Record(inject.member, [payload]));
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const IsMember test, Value[] frame)
     {
         auto subject = evaluate(*test.subject, frame);
@@ -415,6 +491,7 @@ final class Evaluator
         return Value(subject.as!Record.tag == test.member);
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const Payload payload, Value[] frame)
     {
         auto subject = evaluate(*payload.subject, frame);
@@ -422,6 +499,7 @@ final class Evaluator
         return subject.as!Record.fields[0];
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const Capture capture, Value[] frame)
     {
         auto closure = evaluate(*capture.closure, frame);
@@ -429,13 +507,15 @@ final class Evaluator
         return closure.as!Closure.captures[capture.index];
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const Expr e, ref const Convert convert, Value[] frame)
     {
         auto value = evaluate(*convert.value, frame);
         if (value.has!Jump) return value;
-        return this.convert(value, convert.value.type, e.type);
+        return this.convert(value, convert.value.type, e.type, e.span);
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const Expr e, ref const ArrayLit literal, Value[] frame)
     {
         Value[] elements;
@@ -444,6 +524,7 @@ final class Evaluator
         return arrayOf(elements, e.type);
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const Length length, Value[] frame)
     {
         auto array = evaluate(*length.array, frame);
@@ -458,7 +539,8 @@ final class Evaluator
         return cast(ulong) index.as!long;
     }
 
-    private Value evaluate(ref const Index index, Value[] frame)
+    pragma(inline, false)
+    private Value evaluate(ref const Expr e, ref const Index index, Value[] frame)
     {
         auto array = evaluate(*index.array, frame);
         if (array.has!Jump) return array;
@@ -468,11 +550,11 @@ final class Evaluator
         if (array.has!string)
         {
             auto bytes = array.as!string;
-            if (at >= bytes.length) throw new CodedException(DiagnosticCode.IndexOutOfRange, "Index is out of range");
+            if (at >= bytes.length) throw panicAt(e.span, DiagnosticCode.IndexOutOfRange, "Index is out of range");
             return Value(long(cast(ubyte) bytes[cast(size_t) at]));
         }
         auto elements = array.as!ArrayValue.elements;
-        if (at >= elements.length) throw new CodedException(DiagnosticCode.IndexOutOfRange, "Index is out of range");
+        if (at >= elements.length) throw panicAt(e.span, DiagnosticCode.IndexOutOfRange, "Index is out of range");
         return elements[cast(size_t) at];
     }
 
@@ -494,7 +576,8 @@ final class Evaluator
         return array.has!string ? array.as!string : null;
     }
 
-    private Value evaluate(ref const Slice slice, Value[] frame)
+    pragma(inline, false)
+    private Value evaluate(ref const Expr e, ref const Slice slice, Value[] frame)
     {
         auto array = evaluate(*slice.array, frame);
         if (array.has!Jump) return array;
@@ -507,13 +590,14 @@ final class Evaluator
         auto length = array.has!string ? array.as!string.length : array.as!ArrayValue.elements.length;
         if (start > end || end > length)
         {
-            throw new CodedException(DiagnosticCode.IndexOutOfRange, "Slice is out of range");
+            throw panicAt(e.span, DiagnosticCode.IndexOutOfRange, "Slice is out of range");
         }
         if (array.has!string) return Value(array.as!string[cast(size_t) start .. cast(size_t) end]);
         return Value(ArrayValue(array.as!ArrayValue.elements[cast(size_t) start .. cast(size_t) end]));
     }
 
-    private Value evaluate(ref const Cell cell, Value[] frame)
+    pragma(inline, false)
+    private Value evaluate(ref const Expr e, ref const Cell cell, Value[] frame)
     {
         auto first = evaluate(cell.args[0], frame);
         if (first.has!Jump) return first;
@@ -531,7 +615,7 @@ final class Evaluator
             target.full = true;
             return Value(Unit());
         }
-        if (!target.full) throw new CodedException(DiagnosticCode.RefInUpdate, "Ref is being updated");
+        if (!target.full) throw panicAt(e.span, DiagnosticCode.RefInUpdate, "Ref is being updated");
         final switch (cell.op)
         {
             case CellOp.Get:
@@ -551,14 +635,10 @@ final class Evaluator
 
     /// A Prim's operands share one type, except a shift's amount, so the first one's type says
     /// how to read them all.
-    private Value evaluate(ref const Prim prim, Value[] frame)
+    pragma(inline, false)
+    private Value evaluate(ref const Expr e, ref const Prim prim, Value[] frame)
     {
-        if (prim.op == PrimOp.Concat)
-        {
-            Value[] parts;
-            auto jump = all(prim.args, frame, parts);
-            return jump.has!Jump ? jump : concat(parts);
-        }
+        if (prim.op == PrimOp.Concat) return concat(prim, frame);
         auto lhs = evaluate(prim.args[0], frame);
         if (lhs.has!Jump) return lhs;
         Value rhs;
@@ -567,6 +647,39 @@ final class Evaluator
             rhs = evaluate(prim.args[1], frame);
             if (rhs.has!Jump) return rhs;
         }
+        // Most arithmetic is on `Int`, and asking the table about a type costs a lookup.
+        if (onNumbers[prim.op] && same(prim.args[0].type, _int)) return integerPrim!long(prim.op, lhs, rhs, e.span);
+        return apply(e, prim, lhs, rhs);
+    }
+
+    /// Whether `op` is arithmetic or a comparison, which `integerPrim` computes for an integer.
+    private static immutable bool[PrimOp.max + 1] onNumbers = () {
+        bool[PrimOp.max + 1] table = true;
+        foreach (op; [PrimOp.Not, PrimOp.Concat, PrimOp.Append, PrimOp.Format, PrimOp.Hash, PrimOp.CountOnes])
+        {
+            table[op] = false;
+        }
+        return table;
+    }();
+
+    /// Whether `a` and `b` are one type. dmd compares a struct with `==` by calling `memcmp`.
+    private static bool same(Type a, Type b)
+    {
+        return a.tupleof == b.tupleof;
+    }
+
+    pragma(inline, false)
+    private Value concat(ref const Prim prim, Value[] frame)
+    {
+        Value[] parts;
+        auto jump = all(prim.args, frame, parts);
+        return jump.has!Jump ? jump : concat(parts);
+    }
+
+    /// `prim` of `lhs` and, if it has a second operand, `rhs`.
+    pragma(inline, false)
+    private Value apply(ref const Expr e, ref const Prim prim, Value lhs, Value rhs)
+    {
         switch (prim.op)
         {
             case PrimOp.Append:
@@ -587,18 +700,16 @@ final class Evaluator
 
         auto types = _program.types;
         auto operandType = prim.args[0].type;
-        // Most arithmetic is on `Int`, and asking the table about a type costs a lookup.
-        if (operandType == types.int_) return integerPrim!long(prim.op, lhs, rhs);
         if (operandType == types.char_) return compare(prim.op, lhs.as!long, rhs.as!long);
-        if (types.isInteger(operandType))
+        IntegerInfo info;
+        if (integerLayout(operandType, info))
         {
-            auto info = types.integerOf(operandType);
             switch (info.bits)
             {
-                case 8: return info.signed ? integerPrim!byte(prim.op, lhs, rhs) : integerPrim!ubyte(prim.op, lhs, rhs);
-                case 16: return info.signed ? integerPrim!short(prim.op, lhs, rhs) : integerPrim!ushort(prim.op, lhs, rhs);
-                case 32: return info.signed ? integerPrim!int(prim.op, lhs, rhs) : integerPrim!uint(prim.op, lhs, rhs);
-                case 64: return info.signed ? integerPrim!long(prim.op, lhs, rhs) : integerPrim!ulong(prim.op, lhs, rhs);
+                case 8: return info.signed ? integerPrim!byte(prim.op, lhs, rhs, e.span) : integerPrim!ubyte(prim.op, lhs, rhs, e.span);
+                case 16: return info.signed ? integerPrim!short(prim.op, lhs, rhs, e.span) : integerPrim!ushort(prim.op, lhs, rhs, e.span);
+                case 32: return info.signed ? integerPrim!int(prim.op, lhs, rhs, e.span) : integerPrim!uint(prim.op, lhs, rhs, e.span);
+                case 64: return info.signed ? integerPrim!long(prim.op, lhs, rhs, e.span) : integerPrim!ulong(prim.op, lhs, rhs, e.span);
                 default: assert(0, "an integer type with no D type of its width");
             }
         }
@@ -729,7 +840,7 @@ final class Evaluator
     /// `T` is the D type of the operands' width and signedness. A `Value` holds every integer as
     /// a `long`, so each is cast to `T`, computed there, and cast back, which sign- or
     /// zero-extends it as the type requires.
-    private static Value integerPrim(T)(PrimOp op, Value first, Value second)
+    private static Value integerPrim(T)(PrimOp op, Value first, Value second, Span at)
     {
         static Value integer(T value)
         {
@@ -737,12 +848,38 @@ final class Evaluator
         }
 
         auto lhs = cast(T) first.as!long;
+        // Read only by an operator with a second operand. One switch for every operator, as each
+        // case is a jump the processor has to guess.
+        T rhs() => cast(T) second.as!long;
         switch (op)
         {
+            case PrimOp.Add: return integer(checked!"+"(lhs, rhs, at));
+            case PrimOp.Subtract: return integer(checked!"-"(lhs, rhs, at));
+            case PrimOp.Multiply: return integer(checked!"*"(lhs, rhs, at));
+            case PrimOp.Equal: return Value(lhs == rhs);
+            case PrimOp.NotEqual: return Value(lhs != rhs);
+            case PrimOp.Less: return Value(lhs < rhs);
+            case PrimOp.LessEqual: return Value(lhs <= rhs);
+            case PrimOp.Greater: return Value(lhs > rhs);
+            case PrimOp.GreaterEqual: return Value(lhs >= rhs);
+            case PrimOp.WrappingAdd: return integer(cast(T)(lhs + rhs));
+            case PrimOp.WrappingSubtract: return integer(cast(T)(lhs - rhs));
+            case PrimOp.WrappingMultiply: return integer(cast(T)(lhs * rhs));
+            case PrimOp.Divide, PrimOp.Modulo:
+                auto divisor = rhs;
+                if (divisor == 0) throw panicAt(at, DiagnosticCode.DivisionByZero, "Division by zero");
+                static if (isSigned!T)
+                {
+                    if (lhs == T.min && divisor == -1) throw overflow(at);
+                }
+                return integer(cast(T)(op == PrimOp.Divide ? lhs / divisor : lhs % divisor));
+            case PrimOp.BitAnd: return integer(cast(T)(lhs & rhs));
+            case PrimOp.BitOr: return integer(cast(T)(lhs | rhs));
+            case PrimOp.BitXor: return integer(cast(T)(lhs ^ rhs));
             case PrimOp.Negate:
                 static if (isSigned!T)
                 {
-                    if (lhs == T.min) throw overflow();
+                    if (lhs == T.min) throw overflow(at);
                     return integer(cast(T) -lhs);
                 }
                 else assert(0, "sema only negates signed integers");
@@ -754,34 +891,12 @@ final class Evaluator
                 auto amount = cast(ulong) second.as!long;
                 if (amount >= T.sizeof * 8)
                 {
-                    throw new CodedException(DiagnosticCode.InvalidShift, "Shift amount is out of range");
+                    throw panicAt(at, DiagnosticCode.InvalidShift, "Shift amount is out of range");
                 }
                 auto count = cast(int) amount;
                 return integer(cast(T)(op == PrimOp.ShiftLeft ? lhs << count : lhs >> count));
             default:
-                break;
-        }
-
-        auto rhs = cast(T) second.as!long;
-        switch (op)
-        {
-            case PrimOp.Add: return integer(checked!"+"(lhs, rhs));
-            case PrimOp.Subtract: return integer(checked!"-"(lhs, rhs));
-            case PrimOp.Multiply: return integer(checked!"*"(lhs, rhs));
-            case PrimOp.WrappingAdd: return integer(cast(T)(lhs + rhs));
-            case PrimOp.WrappingSubtract: return integer(cast(T)(lhs - rhs));
-            case PrimOp.WrappingMultiply: return integer(cast(T)(lhs * rhs));
-            case PrimOp.Divide, PrimOp.Modulo:
-                if (rhs == 0) throw new CodedException(DiagnosticCode.DivisionByZero, "Division by zero");
-                static if (isSigned!T)
-                {
-                    if (lhs == T.min && rhs == -1) throw overflow();
-                }
-                return integer(cast(T)(op == PrimOp.Divide ? lhs / rhs : lhs % rhs));
-            case PrimOp.BitAnd: return integer(cast(T)(lhs & rhs));
-            case PrimOp.BitOr: return integer(cast(T)(lhs | rhs));
-            case PrimOp.BitXor: return integer(cast(T)(lhs ^ rhs));
-            default: return compare(op, lhs, rhs);
+                assert(0, "sema checked the operator against the operands' type");
         }
     }
 
@@ -799,13 +914,13 @@ final class Evaluator
         }
     }
 
-    private static T checked(string op, T)(T lhs, T rhs)
+    private static T checked(string op, T)(T lhs, T rhs, Span at)
     {
         static if (T.sizeof < 4)
         {
             // These fit an int, whatever the operator.
             int wide = mixin("int(lhs) " ~ op ~ " int(rhs)");
-            if (wide < T.min || wide > T.max) throw overflow();
+            if (wide < T.min || wide > T.max) throw overflow(at);
             return cast(T) wide;
         }
         else
@@ -825,63 +940,68 @@ final class Evaluator
                 else static if (op == "-") T result = subu(lhs, rhs, overflowed);
                 else T result = mulu(lhs, rhs, overflowed);
             }
-            if (overflowed) throw overflow();
+            if (overflowed) throw overflow(at);
             return result;
         }
     }
 
-    private static CodedException overflow()
+    pragma(inline, false)
+    private static RuntimeError overflow(Span at)
     {
-        return new CodedException(DiagnosticCode.IntegerOverflow, "Integer overflow");
+        return panicAt(at, DiagnosticCode.IntegerOverflow, "Integer overflow");
     }
 
     /// `value`, of the number type `from`, as `to`. A Float is truncated toward zero first, and
     /// a value that doesn't fit `to`, NaN among them, panics.
-    private Value convert(Value value, Type from, Type to)
+    private Value convert(Value value, Type from, Type to, Span at)
     {
-        auto types = _program.types;
-        if (to == types.float32)
+        // Every number that isn't an integer is a float.
+        IntegerInfo source;
+        auto fromFloat = !integerLayout(from, source);
+        if (same(to, _program.types.float32))
         {
-            if (types.isFloat(from)) return Value(cast(double) cast(float) value.as!double);
+            if (fromFloat) return Value(cast(double) cast(float) value.as!double);
             auto bits = value.as!long;
-            return Value(cast(double) (types.integerOf(from).signed ? cast(float) bits : cast(float) cast(ulong) bits));
+            return Value(cast(double) (source.signed ? cast(float) bits : cast(float) cast(ulong) bits));
         }
-        if (to == types.float_)
+        if (same(to, _program.types.float_))
         {
-            if (types.isFloat(from)) return value;
+            if (fromFloat) return value;
             auto bits = value.as!long;
-            return Value(types.integerOf(from).signed ? cast(double) bits : cast(double) cast(ulong) bits);
+            return Value(source.signed ? cast(double) bits : cast(double) cast(ulong) bits);
         }
 
-        auto target = types.integerOf(to);
+        IntegerInfo target;
+        auto toInteger = integerLayout(to, target);
+        assert(toInteger, "sema only converts numbers");
         foreach (T; IntegerTypes)
         {
             if (target.bits != T.sizeof * 8 || target.signed != isSigned!T) continue;
-            if (types.isFloat(from))
+            if (fromFloat)
             {
                 auto number = value.as!double;
-                if (!floatFits!T(number)) throw conversionFailure!T();
+                if (!floatFits!T(number)) throw conversionFailure!T(at);
                 return Value(cast(long) cast(T) number);
             }
-            auto source = types.integerOf(from);
             auto bits = value.as!long;
             if (source.signed)
             {
-                if (!integerFits!T(bits)) throw conversionFailure!T();
+                if (!integerFits!T(bits)) throw conversionFailure!T(at);
             }
             else
             {
-                if (!integerFits!T(cast(ulong) bits)) throw conversionFailure!T();
+                if (!integerFits!T(cast(ulong) bits)) throw conversionFailure!T(at);
             }
             return Value(cast(long) cast(T) bits);
         }
         assert(0, "sema only converts numbers");
     }
 
-    private static CodedException conversionFailure(T)()
+    pragma(inline, false)
+    private static RuntimeError conversionFailure(T)(Span at)
     {
         auto name = "%sInt%s".format(isSigned!T ? "" : "U", T.sizeof * 8);
-        return new CodedException(DiagnosticCode.InvalidConversion, "Value is out of range for " ~ name);
+        return panicAt(at, DiagnosticCode.InvalidConversion, "Value is out of range for " ~ name);
     }
 
     /// Whether `value`, truncated toward zero, is a `T`. False for NaN.
@@ -975,6 +1095,7 @@ final class Evaluator
         return Value(Record(0, [Value(long(status)), Value(cast(string) text)]));
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const Expr e, ref const IntrinsicCall call, Value[] frame)
     {
         Value[] args;
@@ -1000,7 +1121,7 @@ final class Evaluator
             case Intrinsic.exists:
                 return Value(pathExists(located(args[0].as!string)));
             case Intrinsic.panic:
-                throw new CodedException(DiagnosticCode.ExplicitPanic, args[0].as!string);
+                throw panicAt(e.span, DiagnosticCode.ExplicitPanic, args[0].as!string);
             case Intrinsic.exitWithError:
                 throw new ProgramFailed(args[0].as!string);
             case Intrinsic.programArguments:
@@ -1021,8 +1142,14 @@ final class Evaluator
                 assert(0, "lowering expands `derivedCompare` into calls of `compare`");
             case Intrinsic.panics:
                 auto work = args[0].as!Closure;
+                auto mark = _frames.mark;
                 try invoke(work.target, [], work.captures);
-                catch (RuntimeError error) return Value(Record(1, [Value(error.diagnostic.message)]));
+                catch (RuntimeError error)
+                {
+                    // The panic left the calls it ended without giving back their frames.
+                    _frames.release(mark);
+                    return Value(Record(1, [Value(error.diagnostic.message)]));
+                }
                 return Value(Record(0, null));
         }
     }
@@ -1030,6 +1157,7 @@ final class Evaluator
     /// A call to a C function, through the platform's convention as `describeCall` describes it. A
     /// structure is put into C's layout in a buffer, which its parts are taken from or whose address is
     /// passed, and one that comes back is read out of one.
+    pragma(inline, false)
     private Value evaluate(ref const Expr e, ref const ForeignCall call, Value[] frame)
     {
         auto native = &_natives[call.native];
@@ -1246,6 +1374,7 @@ final class Evaluator
         return _program.functions[value.as!Closure.target].printedName;
     }
 
+    pragma(inline, false)
     private Value evaluate(ref const Block block, Value[] frame)
     {
         foreach (ref statement; block.statements)
@@ -1260,15 +1389,23 @@ final class Evaluator
     /// Unit, or the `Jump` that leaves the statement.
     private Value execute(ref const Stmt s, Value[] frame)
     {
-        return s.kind.match!(
-            (ref const Let let) => store(let.local, let.value, frame),
-            (ref const Assign assign) => store(assign.local, assign.value, frame),
-            (ref const AssignElement assign) => execute(s, assign, frame),
-            (ref const Eval eval) {
-                auto value = evaluate(eval.expr, frame);
+        alias K = StmtKind;
+        switch (s.kind.typeIndex)
+        {
+            case tagOf!(K, Let):
+                auto let = &s.kind.member!Let();
+                return store(let.local, let.value, frame);
+            case tagOf!(K, Assign):
+                auto assign = &s.kind.member!Assign();
+                return store(assign.local, assign.value, frame);
+            case tagOf!(K, AssignElement):
+                return execute(s, s.kind.member!AssignElement, frame);
+            case tagOf!(K, Eval):
+                auto value = evaluate(s.kind.member!Eval.expr, frame);
                 return value.has!Jump ? value : Value(Unit());
-            },
-        );
+            default:
+                assert(0, "a Stmt is one of these");
+        }
     }
 
     private Value store(const Local local, ref const Expr value, Value[] frame)
@@ -1279,6 +1416,7 @@ final class Evaluator
         return Value(Unit());
     }
 
+    pragma(inline, false)
     private Value execute(ref const Stmt s, ref const AssignElement assign, Value[] frame)
     {
         auto place = evaluate(assign.index, frame);
