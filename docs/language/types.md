@@ -246,10 +246,8 @@ A function value prints as the function it comes from, without anything it captu
 
 ## Current implementation
 
-- [A type of its own](#a-type-of-its-own) is built in part, by separate lists of forms:
-  - A generic call always counts as having a type of its own, so nothing expected reaches into one that's an argument of another generic call or of an overloaded function: `id(id(1))` where a `UInt8` is expected, `Wrap(Box([]))`, `id(none())` and `ov(id(1))` are errors, while each works one level up, as `val v: UInt8 = id(1)` does.
-  - As an argument of a generic function, an array, tuple, dictionary or `Some` of literals, an `if`, a block and arithmetic are typed alone first, so `same([1, 2], t)` with `t: [UInt8]` is an error where `same(1, small)` works.
-  - A bare `Error(e)` binds a type parameter to a type that only it has, so `same(Error("x"), t)` with `t: Int ! String` is an error, and `id(Error("x"))` compiled is `I0002`.
+- Arithmetic made only of literals counts as having [a type of its own](#a-type-of-its-own), an `Int`, as [Numbers](numbers.md#current-implementation) describes, so `id(1 + 2)` is an `Int` wherever it goes.
+- A lambda that writes every parameter's type but not its result has no type of its own when its body has none, so `val f: (Int) -> UInt8 = id((x: Int) => 1)` works as it does without the `id`.
 - A tuple is ordered up to eight elements. `lang` writes the conformance once for each length, since no one declaration covers them all.
 - `compare` on an integer is written once for each integer type, since a bound can't ask for an integer yet, so an error about a call of it lists them all.
 - `derivedCompare` can only be called. It isn't a function value, so `val f = derivedCompare` is an error.

@@ -28,7 +28,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Types](language/types.md) | Built-in types, promotion, equality, ordering, printing | Mostly implemented |
 | [Numbers](language/numbers.md) | Numeric types, literals, operators, overflow, conversions | Implemented |
 | [Bindings](language/bindings.md) | `val`, `mutable val`, discards, shadowing, constants | Implemented |
-| [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading, operator functions | Partial: no tail calls; an argument with [no type of its own](language/types.md#a-type-of-its-own) is handled by separate lists in overload choice and method calls |
+| [Functions](language/functions.md) | Declarations, lambdas, mutable parameters, method-call syntax, overloading, operator functions | Partial: no tail calls |
 | [Control flow](language/control-flow.md) | Blocks, `if`, `while`, `for`, jumps, panics | Implemented |
 | [Options](language/options.md) | `T?`, `Some`, `None` and their operators | Implemented |
 | [Errors](language/errors.md) | `T ! E`, `fail`, `?` and `!` on errors, what panics, `main` | Implemented |
@@ -38,7 +38,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Strings](language/strings.md) | Text, interpolation, characters, validity, input | Partial: no raw or multi-line strings |
 | [Tuples](language/tuples.md) | Tuple values and destructuring | Implemented |
 | [User types](language/user-types.md) | Markers, products, sums, aliases, `with`, `match` | Implemented |
-| [Generics](language/generics.md) | Type parameters on functions and types, inference | Partial: an expected type doesn't reach into a nested generic call |
+| [Generics](language/generics.md) | Type parameters on functions and types, inference | Implemented |
 | [Interfaces](language/interfaces.md) | Interfaces, declared conformance, bounds, `if type`, interface names as parameter and result types | Partial: every module sees every conformance; no interface types as values |
 | [Shared references](language/refs.md) | `Ref<T>`, the one value that's shared when copied | Implemented |
 | [Modules](language/modules.md) | Files, imports, forwarding, visibility, packages | Partial: ownership shared by the packages of one project isn't enforced yet, and there are no renamed imports; the build can't name another prelude |

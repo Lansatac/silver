@@ -171,6 +171,8 @@ private final class TypeChecker
     /// The expressions typed with nothing expected whose typing stands, by `typedAlone`, with the
     /// type each was given, and what that typing wrote, for a check against a type to take back.
     private SideTable!(Id!Expr, Type) _standing;
+    /// The type each lambda parameter had the last time its lambda was typed.
+    private Type[Id!Param] _lambdaParams;
     private Change[][Id!Expr] _standingChanges;
     /// What looking a goal on types with no type parameters up found, by the goal.
     private Conformance[Looked] _lookups;
@@ -1107,6 +1109,13 @@ private final class TypeChecker
                     : "Nothing here says what type `%s` is; write `%s: Type`".format(param.name, param.name));
             }
             _typing.symbolTypes[SymbolId(param.id)] = type;
+            // What the body's expressions are with nothing expected can depend on a parameter's
+            // type, so what was found under another type for it is found again.
+            if (auto last = param.id in _lambdaParams)
+            {
+                if (*last != type) _alone = _alone.init;
+            }
+            _lambdaParams[param.id] = type;
             params ~= type;
             mutables ~= param.mutable;
         }
@@ -2394,8 +2403,8 @@ private final class TypeChecker
     {
         auto open = range.start is null || range.end is null;
         // Two literals have no type of their own, so they take the interval type an `opIndex` asks for.
-        auto shaped = !open && !hasOwnType(*index.index);
-        auto interval = shaped ? Type.init
+        auto taken = !open && !hasOwnType(*index.index);
+        auto interval = taken ? Type.init
             : open ? openSliceInterval(expr, index, range, objectType, ctx)
             : synthesize(*index.index, ctx);
         if (interval == _types.error || interval == _types.never) return _types.error;
@@ -2406,8 +2415,8 @@ private final class TypeChecker
         if (slice.failed) return _types.error;
         if (!slice.found)
         {
-            if (shaped) checkArgument(*index.index, _types.error, ctx);
-            auto passed = shaped ? intervalOf(_types.int_, expr.span) : interval;
+            if (taken) checkArgument(*index.index, _types.error, ctx);
+            auto passed = taken ? intervalOf(_types.int_, expr.span) : interval;
             _collector.reportError(DiagnosticCode.InvalidOperand, expr.span,
                 "`%s` can't be sliced: `x[a..b]` is `opIndex(x, a..b)`, and no `opIndex` here takes `%s` and `%s`"
                     .format(_types.describe(objectType), _types.describe(objectType), _types.describe(passed)));
@@ -6329,8 +6338,8 @@ private final class TypeChecker
     /// Binds `params`, the type parameters of a call of a function with `signature` and `result`,
     /// from `call`'s arguments, in inference's order: those with a type of their own, left to
     /// right; then the bounds of `func`, when it's valid, whose type is known; then the expected
-    /// type; then integer literals and lambdas, as each can be typed, and a lambda that can't be
-    /// yet may be once a later one binds what it needs.
+    /// type; then those with none, left to right, and one that can't be typed yet is tried again
+    /// once a later one binds what it needs.
     ///
     /// An argument is checked against its parameter when that's known at its turn, and otherwise
     /// typed with nothing expected. In a trial, which an attempt around this takes back, a lambda's
@@ -6358,9 +6367,11 @@ private final class TypeChecker
             b.fits[i] = wrong ? Fit.none : Fit.promoted(_cost);
             b.checked[i] = true;
         }
-        // A float literal, or a literal made of them, that hasn't had its turn. Integer literals,
-        // and what's made of them, wait for it.
-        bool floatPending() => args.length.iota.any!(j => (isFloatLiteral(args[j]) || isFloatOnly(args[j]))
+        // A float literal that hasn't had its turn, which integer literals and what's made of them
+        // wait for. With `beside`, also what's made only of float literals, which an integer
+        // literal by itself waits for too.
+        bool floatPending(bool beside = false) => args.length.iota.any!(j => (isFloatLiteral(args[j])
+                || beside && isFloatOnly(args[j]))
             && b.typed[j] == Type.init && !b.checked[j] && !known(j));
         bool open() => params.any!(p => p.id !in b.bound);
         void solveBounds()
@@ -6460,7 +6471,7 @@ private final class TypeChecker
                     progress = true;
                 }
                 // An integer literal beside a float literal waits, so that `pair(1, 1.5)` is a `Float` pair.
-                else if ((isIntLiteral(arg) || waitsForFloat(arg)) && floatPending())
+                else if (isIntLiteral(arg) && floatPending(true) || waitsForFloat(arg) && floatPending())
                 {
                     continue;
                 }
@@ -8546,8 +8557,8 @@ private final class TypeChecker
         return !isIntLiteral(arg) && onlyLiterals(arg) && anyLiteral(arg, e => isIntLiteral(e));
     }
 
-    /// One made only of literals with a float literal and no integer literal in it, which is what
-    /// integer literals wait for as they do for a float literal: `pick(11, [2.5])` is a `[Float]`.
+    /// One made only of literals with a float literal and no integer literal in it, which an
+    /// integer literal waits for as it does for a float literal: `pick(11, [2.5])` is a `[Float]`.
     private bool isFloatOnly(const Expr arg)
     {
         return onlyLiterals(arg) && anyLiteral(arg, e => isFloatLiteral(e)) && !anyLiteral(arg, e => isIntLiteral(e));

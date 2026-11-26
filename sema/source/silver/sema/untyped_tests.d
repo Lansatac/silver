@@ -81,6 +81,19 @@ unittest
     val first = same(Some(1), n)`).shouldReport(DiagnosticCode.TypeMismatch, At("Some(1)", 1));
 }
 
+@("arguments with no type of their own take their turns left to right, a literal as its default type")
+unittest
+{
+    auto a = analyzedUntyped(`    val after = same(Some(2), 1)
+    val wrapped = two(opt(1, None), 2)`);
+    a.shouldHaveNoDiagnostics();
+    a.shouldDeclareType(At("after", 1), "Int?");
+    a.shouldDeclareType(At("wrapped", 1), "[Int?]");
+    // The literal comes first and is an `Int`, which an option isn't.
+    analyzedUntyped("    val before = same(1, Some(2))").shouldReport(DiagnosticCode.TypeMismatch, At("Some(2)", 1));
+    analyzedUntyped("    val before = two(2, opt(1, None))").shouldReport(DiagnosticCode.TypeMismatch, At("opt(1, None)", 1));
+}
+
 @("an argument that can't be typed at its turn is tried again after the ones that follow it")
 unittest
 {
@@ -177,6 +190,7 @@ def ob(b: Box<Int>): Int => 3
 def k(x: Int?): Int => 4
 def ap(f: (Int) -> Int, x: Int): Int => f(x)
 def from(r: Interval<Int>): String => "a function"
+def bytes(xs: [UInt8]): Int => 5
 `;
     auto a = analyzedUntyped(`    val c = true
     val r1 = ["a": 77].m8()
@@ -184,8 +198,12 @@ def from(r: Interval<Int>): String => "a function"
     val r3 = Box([]).ob()
     val r4 = none().k()
     val r5 = dbl.ap(4)
-    val r6 = id(1).u()`, methods);
+    val r6 = id(1).u()
+    val r7 = [56, 57].bytes()`, methods);
     a.shouldHaveNoDiagnostics();
+    // What the receiver was by itself, an `[Int]` with no field `bytes`, is taken back.
+    a.shouldHaveType("56", "UInt8");
+    a.shouldHaveType("[56, 57]", "[UInt8]");
     a.shouldHaveType("55", "UInt8");
     a.shouldHaveType("id(1)", "UInt8");
 
