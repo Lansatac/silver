@@ -1,0 +1,13 @@
+// Written type arguments choose among printl's overloads wherever it's a value, an argument
+// to a generic function included, as they do for `val f = printl<Int>`.
+def show<T>(x: T): Unit => printl(x)
+def twice<T>(f: (T) -> Unit): (T) -> Unit => (x: T) => {
+    f(x)
+    f(x)
+}
+
+def main(): Unit {
+    show(printl<Int>)
+    printl(printl<Int>)
+    twice(printl<String>)("a")
+}
