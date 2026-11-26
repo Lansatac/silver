@@ -1,8 +1,9 @@
 module silver.codegen.gen;
 
-import std.algorithm : all, any, canFind, count, filter, fold, map;
+import std.algorithm : all, any, canFind, count, filter, fold, map, max;
 import std.array : array, join;
 import std.format : format;
+import std.range : iota;
 import std.sumtype : match;
 
 import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException, SourceMap, Span;
@@ -153,6 +154,12 @@ private struct Slots
         _slots ~= Slot(pointer, type, end);
         pointers[local] = pointer;
         allocas ~= "  %s = alloca %s".format(pointer, type);
+    }
+
+    /// The type of each stack slot.
+    auto types() const
+    {
+        return _slots.map!(slot => slot.type);
     }
 
     /// `pointer`, which already points at a slot of `local`'s type, as where it lives.
@@ -437,9 +444,11 @@ private final class Generator
     private bool[Type] _scalarsPending;
     /// The functions on a cycle of calls (`recursiveFunctions`), and their LLVM names.
     private bool[size_t] _recursive;
-    /// The functions a call can reach through a function value: see `escapedFunctions`.
-    private bool[size_t] _escaped;
     private bool[string] _recursiveNames;
+    /// The functions that check the stack on entry: see `checkedFunctions`.
+    private bool[size_t] _checked;
+    /// The fields of each struct type, by its name.
+    private const(string)[][string] _structFields;
 
     this(const ref Program program, const SourceMap sources)
     {
@@ -451,11 +460,12 @@ private final class Generator
     {
         string[] functions;
         _recursive = recursiveFunctions();
-        _escaped = escapedFunctions();
         foreach (index; _recursive.byKey) _recursiveNames[mangled(index)] = true;
+        auto plans = _program.functions.map!(func => planSlots(func)).array;
+        _checked = checkedFunctions(plans);
         foreach (i, ref func; _program.functions)
         {
-            functions ~= emitFunction(i, func);
+            functions ~= emitFunction(i, func, plans[i]);
         }
         auto entry = emitEntry();
         // After the functions and the entry, so every runtime call and string literal has been seen.
@@ -541,14 +551,12 @@ private final class Generator
         return text;
     }
 
-    private string emitFunction(size_t index, const Function func)
+    private string emitFunction(size_t index, const Function func, Slots slots)
     {
         auto span = func.body.span;
         auto returnType = llvmType(func.returnType, span);
-        _function = new FunctionState(planSlots(func), scalarsOf(func.returnType, span));
-        // Only recursion can overflow the stack, and every cycle of calls passes through a
-        // function on a cycle of direct calls or one reached through a function value.
-        auto stackCheck = index in _recursive || index in _escaped ? emitStackCheck(span) : Fragment.init;
+        _function = new FunctionState(slots, scalarsOf(func.returnType, span));
+        auto stackCheck = index in _checked ? emitStackCheck(span) : Fragment.init;
 
         string[] params;
         Fragment receive;
@@ -627,6 +635,7 @@ private final class Generator
         if (auto known = cast(immutable(string)[]) scalars in _structs) return *known;
         auto name = "%%T.%s".format(_structs.length);
         _structs[scalars.idup] = name;
+        _structFields[name] = scalars.map!(s => stored(s)).array;
         _structDefinitions ~= "%s = type { %-(%s, %) }".format(name, scalars.map!(s => stored(s)));
         return name;
     }
@@ -2607,29 +2616,103 @@ private final class Generator
         );
     }
 
-    /// The functions a call through a function value can reach that call something in turn, so
-    /// that a cycle of calls the call graph can't see passes through one of them. Reached that way
-    /// are every target of a closure, and what compares and hashes closures' captures, which the
-    /// runtime calls through a closure's descriptor and which recur as deep as closures capture
-    /// closures. One that calls nothing, as `x => x * 2` doesn't, is on no cycle.
-    private bool[size_t] escapedFunctions()
+    /// The most a chain of calls that don't check the stack may take, by `frameOf`'s estimate: the
+    /// runtime's 1 MB margin below the last check covers it, with room left for natives and the
+    /// runtime's own frames.
+    private enum uncheckedChain = 256 * 1024;
+
+    /// The functions that check the stack on entry. Only recursion can overflow it, and every cycle
+    /// of calls passes through a function on a cycle of direct calls (`_recursive`) or one that a
+    /// function value reaches and that calls something in turn. Reached that way are every target
+    /// of a closure, and what compares and hashes closures' captures, which the runtime calls
+    /// through a closure's descriptor and which recur as deep as closures capture closures; one
+    /// that calls nothing, as `x => x * 2` doesn't, is on no cycle. Since the check is made once a
+    /// function's frame exists, the margin must also cover every frame below it down to the next
+    /// check, so a function that isn't on a cycle checks too when the longest chain of unchecked
+    /// frames starting at it would pass `uncheckedChain`.
+    private bool[size_t] checkedFunctions(const Slots[] plans)
     {
-        bool[size_t] escaped;
-        auto calls = new bool[](_program.functions.length);
+        auto count = _program.functions.length;
+        auto callees = new size_t[][](count);
+        auto opaque = new bool[](count);
+        bool[size_t] reached;
         foreach (i, ref func; _program.functions)
         {
             bool[size_t] targets;
-            bool opaque;
-            collectCalls(func.body, targets, escaped, opaque);
-            calls[i] = opaque || targets.length > 0;
-            if (func.captureEquality != noFunction) escaped[func.captureEquality] = true;
-            if (func.captureHash != noFunction) escaped[func.captureHash] = true;
+            collectCalls(func.body, targets, reached, opaque[i]);
+            callees[i] = targets.keys;
+            if (func.captureEquality != noFunction) reached[func.captureEquality] = true;
+            if (func.captureHash != noFunction) reached[func.captureHash] = true;
         }
-        foreach (i; escaped.keys)
+
+        auto checked = _recursive.dup;
+        foreach (i; reached.byKey)
         {
-            if (!calls[i]) escaped.remove(i);
+            if (opaque[i] || callees[i].length > 0) checked[i] = true;
         }
-        return escaped;
+
+        auto frames = iota(count).map!(i => frameOf(_program.functions[i], plans[i])).array;
+        // A call the call graph can't see lands in a function a function value reaches, which
+        // checks if it calls anything and so takes its own frame at most. Natives and the runtime
+        // are left to what the margin has beyond `uncheckedChain`.
+        size_t opaqueFrame = 0;
+        foreach (i; reached.byKey) opaqueFrame = max(opaqueFrame, frames[i]);
+
+        // Below each function that doesn't check: its frame and the longest chain under it. Those
+        // functions are on no cycle, so this ends.
+        auto chains = new size_t[](count);
+        auto known = new bool[](count);
+        size_t below(size_t callee)
+        {
+            if (callee in checked) return frames[callee];
+            if (known[callee]) return chains[callee];
+            size_t deepest = opaque[callee] ? opaqueFrame : 0;
+            foreach (next; callees[callee]) deepest = max(deepest, below(next));
+            known[callee] = true;
+            chains[callee] = frames[callee] + deepest;
+            if (chains[callee] <= uncheckedChain) return chains[callee];
+            checked[callee] = true;
+            return frames[callee];
+        }
+
+        foreach (i; 0 .. count) below(i);
+        return checked;
+    }
+
+    /// An estimate of the stack `func` takes at `-O0`, where every slot has its own memory: its
+    /// slots, its result's, and a little for the return address, saved registers and spills.
+    /// Optimized, slots mostly become registers, and inlining merges frames rather than adding them.
+    private size_t frameOf(const Function func, const ref Slots slots)
+    {
+        size_t bytes = 128;
+        foreach (type; slots.types) bytes += bytesOf(type);
+        auto returnType = llvmType(func.returnType, func.body.span);
+        if (isStruct(returnType)) bytes += bytesOf(returnType);
+        return bytes;
+    }
+
+    /// The size of a slot of the LLVM type `type`, a scalar or a struct of them, as LLVM lays it out.
+    private size_t bytesOf(string type)
+    {
+        if (auto fields = type in _structFields)
+        {
+            size_t at = 0, alignment = 1;
+            foreach (field; *fields)
+            {
+                auto size = bytesOf(field);
+                at = (at + size - 1) / size * size;
+                at += size;
+                alignment = max(alignment, size);
+            }
+            return (at + alignment - 1) / alignment * alignment;
+        }
+        switch (type)
+        {
+            case "i1", "i8": return 1;
+            case "i16": return 2;
+            case "i32", "float": return 4;
+            default: return 8;
+        }
     }
 
     /// The functions on a cycle of calls, function values included (Tarjan's algorithm). LLVM can

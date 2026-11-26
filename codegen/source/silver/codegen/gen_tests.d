@@ -8,8 +8,10 @@ import core.exception : AssertError;
 import std.algorithm : any, canFind, count, endsWith, filter, findSplitBefore, map, splitter, startsWith;
 import std.array : array, join;
 import std.file : mkdirRecurse, rmdirRecurse, tempDir, write;
+import std.format : format;
 import std.path : buildPath;
 import std.process : escapeShellCommand, escapeShellFileName, execute, executeShell;
+import std.range : iota;
 import std.stdio : writeln;
 import std.string : indexOf, replace;
 import std.uuid : randomUUID;
@@ -734,6 +736,66 @@ unittest
     auto lambdas = ir.splitter("\ndefine private i64 @\"main.lambda.").array[1 .. $].map!(f => f.findSplitBefore("\n}")[0]).array;
     lambdas.length.should.equal(2);
     lambdas.map!(f => f.canFind("@silver_stack_limit")).array.should.equal([false, true]);
+}
+
+/// A chain of `count` functions on no cycle, `link1` to the last, each with a slot that `make`
+/// fills in only when `n` is negative: `c` makes a `C` of 4 KB, and `b` a `B` of 512 bytes.
+string uncheckedChain(size_t count, string make)
+{
+    auto source = "type A(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int)\n"
+        ~ "type B(a: A, b: A, c: A, d: A, e: A, f: A, g: A, h: A)\n"
+        ~ "type C(a: B, b: B, c: B, d: B, e: B, f: B, g: B, h: B)\n"
+        ~ "def a(n: Int): A => A(n, n, n, n, n, n, n, n)\n"
+        ~ "def b(n: Int): B => B(a(n), a(n), a(n), a(n), a(n), a(n), a(n), a(n))\n"
+        ~ "def c(n: Int): C => C(b(n), b(n), b(n), b(n), b(n), b(n), b(n), b(n))\n";
+    foreach (i; 1 .. count + 1)
+    {
+        source ~= "def link%s(n: Int): Int { if n < 0 { val big = %s(n); return big.%s }; %s }\n"
+            .format(i, make, make == "c" ? "h.h.a" : "h.a", i == count ? "n" : "link%s(n)".format(i + 1));
+    }
+    return source;
+}
+
+@("a function on no cycle checks the stack when the unchecked frames below it would pass 256 KB")
+unittest
+{
+    // 70 links with a 4 KB slot each: only the one where the chain passes 256 KB checks.
+    auto ir = generateSource(uncheckedChain(70, "c") ~ "def main(): Unit {\n    printl(link1(1))\n}");
+    bool checks(size_t i) => functionLines(ir, "define internal i64 @\"main.link%s\"".format(i))
+        .any!(text => text.canFind("@silver_stack_limit"));
+    // About 60 links of 4 KB from the bottom.
+    auto checked = iota(1, 71).filter!(i => checks(i)).array;
+    checked.length.should.equal(1);
+    checked[0].should.be.between(5, 15);
+}
+
+/// Runs a recursion that calls a chain of 2400 unchecked links of 512 bytes, 1.2 MB, every 64
+/// levels; its own slot of 4 KB makes it deep enough in a few thousand. It overflows inside the
+/// chain at a place the interpreter, which checks on every call, needn't agree with, so this isn't
+/// a conformance case.
+void checkUncheckedChainPanics(Optimization optimization, string file = __FILE__, size_t line = __LINE__)
+{
+    auto source = uncheckedChain(2400, "b")
+        ~ "def down(n: Int): Int {\n    if n < 0 {\n        val big = c(n)\n        return big.h.h.a\n    }\n"
+        ~ "    val here = if n % 64 == 0 => link1(n) else 0\n    here + down(n + 1)\n}\n"
+        ~ "def main(): Unit {\n    printl(\"before\")\n    printl(down(0))\n}";
+    Run run;
+    if (!compileAndRun(source, run, optimization, null, file, line)) return;
+    run.status.should.equal(101);
+    run.output.startsWith("before\npanic: ").should.equal(true);
+    run.output.should.contain("Stack overflow");
+}
+
+@("a recursion calling a chain of unchecked frames bigger than the margin overflows as a panic")
+unittest
+{
+    checkUncheckedChainPanics(Optimization.none);
+}
+
+@("a recursion calling a chain of unchecked frames bigger than the margin overflows as a panic when optimized")
+unittest
+{
+    checkUncheckedChainPanics(Optimization.full);
 }
 
 @("the pointers kept alive where a loop is left go to one asm for up to six")
