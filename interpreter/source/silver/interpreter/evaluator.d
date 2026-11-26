@@ -16,6 +16,7 @@ import silver.interpreter.foreign : addressText, callC, findNative, fromCString,
 import silver.interpreter.values;
 import silver.runtime.environment : environmentValue;
 import silver.runtime.files : pathExists, readWhole, writeWhole;
+import silver.runtime.outputerror : systemError;
 import silver.runtime.floattext : float32Text, floatText;
 
 private alias IntegerTypes = AliasSeq!(byte, short, int, long, ubyte, ushort, uint, ulong);
@@ -1546,8 +1547,8 @@ final class Evaluator
                 stdout.write(text);
                 stdout.flush();
             }
-            catch (ErrnoException e) throw OutputFailed.of(e.errno);
-            catch (StdioException e) throw OutputFailed.of(e.errno);
+            catch (ErrnoException e) throw OutputFailed.of(e.errno, systemError);
+            catch (StdioException e) throw OutputFailed.of(e.errno, systemError);
         }
         else
         {

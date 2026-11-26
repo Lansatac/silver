@@ -45,17 +45,13 @@ class OutputFailed : Exception
         this.closedPipe = closedPipe;
     }
 
-    /// The failure `error`, a C `errno`, was.
-    static OutputFailed of(int error)
+    /// The failure `error`, a C `errno`, was, with `system` the Windows error read beside it (`systemError`).
+    static OutputFailed of(int error, uint system)
     {
-        import core.stdc.errno : EINVAL, EPIPE;
-        import core.stdc.string : strerror;
-        import std.string : fromStringz;
+        import silver.runtime.outputerror : describeOutputError;
 
-        // The C library reports a write to a closed pipe on Windows as EPIPE or EINVAL.
-        version (Windows) bool closed = error == EPIPE || error == EINVAL;
-        else bool closed = error == EPIPE;
-        return new OutputFailed(closed, "couldn't write output: " ~ strerror(error).fromStringz.idup);
+        auto failure = describeOutputError(error, system);
+        return new OutputFailed(failure.closedPipe, "couldn't write output: " ~ failure.message.idup);
     }
 }
 

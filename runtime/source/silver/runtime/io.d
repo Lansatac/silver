@@ -8,6 +8,7 @@ import std.stdio : readln;
 
 import silver.runtime.buffer : newString;
 import silver.runtime.registers : SavedRegisters, silver_save_registers;
+import silver.runtime.outputerror : describeOutputError, systemError;
 import silver.runtime.panic : outOfMemory, panic;
 import silver.runtime.testing : testing, testOutput;
 
@@ -160,8 +161,8 @@ private string withoutEnding(string text)
 /// Writes to C's `stdout`, the stream a native's `puts` writes to, so the two come out in the order they were
 /// made, and C's library decides the buffering, as it did through `std.stdio`: in blocks to a file or a pipe, by
 /// line to a terminal on glibc, and not at all to a character device on Windows (a console or `NUL`), where a
-/// line under `room` bytes is one write. Flushed by `flushOutput` where the program ends, which ends it if it fails, and before a panic or an error from `main` is
-/// reported. Unlocked except where that costs a write: no other thread writes to stdout (`notes/runtime.md`).
+/// line under `room` bytes is one write. Flushed by `flushOutput` where the program ends, which ends it if it
+/// fails, and before a panic or an error from `main` is reported. Unlocked except where that costs a write: no other thread writes to stdout (`notes/runtime.md`).
 private void output(const(char)[] text, bool newline)
 {
     import core.stdc.string : memcpy;
@@ -222,7 +223,7 @@ private void write(const(char)[] text)
     import core.stdc.stdio : stdout;
 
     if (text.length == 0 || writeOut(text.ptr, text.length, stdout) == text.length) return;
-    endAfterFailedWrite(errno);
+    endAfterFailedWrite(errno, systemError);
 }
 
 /// Flushes C's `stdout`, as the program ends, and ends it as a failed write does if that fails: what
@@ -232,24 +233,21 @@ void flushOutput() nothrow @nogc
     import core.stdc.errno : errno;
     import core.stdc.stdio : fflush, stdout;
 
-    if (fflush(stdout) != 0) endAfterFailedWrite(errno);
+    if (fflush(stdout) != 0) endAfterFailedWrite(errno, systemError);
 }
 
 /// A failed write to standard output ends the program: a closed pipe with status 1 and no message, since
 /// the reader has what it asked for, anything else with the system's message and status 1. The runtime
-/// ignores SIGPIPE so that the write fails with EPIPE rather than the system killing the process. On Windows
-/// the C library reports a write to a closed pipe as EPIPE (ERROR_BROKEN_PIPE) or EINVAL (ERROR_NO_DATA).
-private noreturn endAfterFailedWrite(int error) nothrow @nogc
+/// ignores SIGPIPE so that the write fails with EPIPE rather than the system killing the process.
+/// `outputerror.d` says what counts as closed.
+private noreturn endAfterFailedWrite(int error, uint system) nothrow @nogc
 {
-    import core.stdc.errno : EINVAL, EPIPE;
     import core.stdc.stdio : fprintf, stderr;
     import core.stdc.stdlib : exit;
-    import core.stdc.string : strerror;
 
-    version (Windows) bool closed = error == EPIPE || error == EINVAL;
-    else bool closed = error == EPIPE;
-    if (!closed) fprintf(stderr, "error: couldn't write output: %s
-", strerror(error));
+    auto failure = describeOutputError(error, system);
+    if (!failure.closedPipe)
+        fprintf(stderr, "error: couldn't write output: %.*s\n", cast(int) failure.message.length, failure.message.ptr);
     exit(1);
 }
 
