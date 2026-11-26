@@ -131,9 +131,6 @@ private final class TypeChecker
     private const(Expr)[] _floatLiterals;
     /// Constants whose initializer already has an error, which evaluating would only repeat.
     private bool[Id!ConstDecl] _unevaluable;
-    /// The option or error union `!` or `?` is typing its operand toward, which a bare type
-    /// parameter takes whole, though against any other expected type it takes what that holds.
-    private Type _unwrapTarget;
     /// The functions bounds supply that an earlier bound of the same function supplies already,
     /// by the earlier one.
     private Id!FunctionDecl[Id!FunctionDecl] _repeatedBounds;
@@ -2903,12 +2900,7 @@ private final class TypeChecker
             (const SafeMemberAccess _) => true, _ => false);
         auto unwraps = expr.kind.match!((const AssertExpr _) => true, (const PropagateExpr _) => true, _ => false);
         if (isMethod || unwraps || genericUse(expr).found || isOverloadedUse(expr))
-        {
-            auto outer = _unwrapTarget;
-            _unwrapTarget = expected;
-            scope (exit) _unwrapTarget = outer;
             return synthesizeExact(expr, ctx, expected);
-        }
         return synthesize(expr, ctx);
     }
 
@@ -5929,15 +5921,16 @@ private final class TypeChecker
         if (rest.length > 0) bindParams(open[0], _types.errorList(rest), params, bound);
     }
 
-    /// Binds from where a use's result is expected to land: inside an option the result isn't, and
-    /// at the member of a sum that the result names.
+    /// Binds from where a use's result is expected to land: a result that is only a type parameter
+    /// takes it whole, any other result binds inside an option or error union it can't be itself,
+    /// and at the member of a sum that the result names.
     private void bindExpected(Type result, Type expected, const(TypeParam)[] params, ref Substitution bound)
     {
         if (expected == Type.init || expected == _types.error) return;
         // What `!` unwraps, when the result isn't something it can unwrap.
         auto unwrapped = _types.isErrorUnion(expected) && _types.errorOf(expected) == _types.error;
         if (unwrapped && !_types.isOption(result) && !_types.isErrorUnion(result)) return;
-        auto bare = _types.isParameter(result) && expected == _unwrapTarget;
+        auto bare = _types.isParameter(result);
         if (!bare && _types.isOption(expected) && !_types.isOption(result)) expected = _types.optionInner(expected);
         if (!bare && _types.isErrorUnion(expected) && !_types.isErrorUnion(result)) expected = _types.successOf(expected);
         if (_types.isErrorUnion(result) && !_types.isErrorUnion(expected)) result = _types.successOf(result);

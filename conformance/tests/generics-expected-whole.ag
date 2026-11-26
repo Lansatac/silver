@@ -1,0 +1,43 @@
+// A result that is only a type parameter takes the expected type whole; any other result is matched
+// inside the option or error union it can't be itself.
+type Box<T>(items: [T])
+
+def id<T>(x: T): T => x
+def wrap<T>(x: T): Box<T> => Box([x])
+
+def describe<T>(x: T): T {
+    printl("saw {x}")
+    x
+}
+
+def firstOr(o: Int?): Int? {
+    val v: Int = id(o)?
+    Some(v + 1)
+}
+
+def nothing(): Int? {
+    val v: Int = id(None)?
+    Some(v)
+}
+
+def main(): Unit {
+    val n = 5
+    val a: Int? = describe(5)
+    val b: Int? = describe(n)
+    val c: Int ! String = describe(6)
+    val d: Int ! String = describe(n)
+    printl("{a} {b} {c} {d}")
+
+    val v: Int? = id(None)
+    val w: (Int?)? = id(None)
+    val l: [Int]? = id([])
+    printl("{v} {if w == None => "outer" else "inner"} {l}")
+
+    val boxed: Box<Int>? = wrap(1)
+    val held: Box<UInt8> ! String = wrap(2)
+    printl("{boxed} {held}")
+
+    printl(firstOr(Some(1)))
+    printl(firstOr(None))
+    printl(nothing())
+}

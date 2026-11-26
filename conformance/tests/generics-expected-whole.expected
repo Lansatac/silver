@@ -1,0 +1,10 @@
+saw Some(5)
+saw 5
+saw Ok(6)
+saw 5
+Some(5) Some(5) Ok(6) Ok(5)
+None outer Some([])
+Some(Box([1])) Ok(Box([2]))
+Some(2)
+None
+None
