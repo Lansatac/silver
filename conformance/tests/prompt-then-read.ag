@@ -1,0 +1,15 @@
+// A prompt without a line ending comes out before what the program prints after reading.
+def main(): Unit {
+    print("Name: ")
+    match read() {
+        Ok(Some(name)) => printl("Hello, {name}")
+        Ok(None) => printl("nothing")
+        Error(_) => printl("failed")
+    }
+    print("Again: ")
+    match read() {
+        Ok(Some(name)) => printl("Hello, {name}")
+        Ok(None) => printl("nothing")
+        Error(_) => printl("failed")
+    }
+}

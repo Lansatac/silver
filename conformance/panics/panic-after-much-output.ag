@@ -1,0 +1,10 @@
+// More than a buffer's worth of output, then part of a line, all before the panic's message.
+def main(): Unit {
+    mutable val i = 0
+    while i < 600 {
+        printl("line {i}")
+        i = i + 1
+    }
+    print("partial")
+    panic("stopped")
+}

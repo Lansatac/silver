@@ -1,0 +1,12 @@
+// More than a buffer's worth of output, then part of a line, all before the error's message.
+type Stopped(at: Int)
+
+def main(): Unit ! Stopped {
+    mutable val i = 0
+    while i < 600 {
+        printl("line {i}")
+        i = i + 1
+    }
+    print("partial")
+    fail Stopped(i)
+}
