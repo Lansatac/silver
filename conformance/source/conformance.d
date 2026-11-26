@@ -900,6 +900,14 @@ version (unittest)
         return "output differs.\n--- expected\n" ~ expected ~ "\n--- actual\n" ~ actual;
     }
 
+    /// The standard library's tests aren't cases, so a case filter leaves them out, and says so.
+    bool standardLibrarySkipped()
+    {
+        if (caseFilter.length == 0) return false;
+        writeln("    note: SILVER_CONFORMANCE_CASES is set. The standard library's tests were skipped.");
+        return true;
+    }
+
     /// Every compiled case runs optimized as well, against the same expected output, which adds
     /// about half as long again. `SILVER_CONFORMANCE_UNOPTIMIZED` leaves those runs out.
     bool optimizedSkipped()
@@ -999,7 +1007,7 @@ version (unittest)
         // `stdlib/` holds the companion tests, which ship with it; `conformance/stdlib/` holds suites that
         // test it from outside, as `json_suite.ag` does.
         // A case filter is for the cases above, so it leaves these out.
-        if (caseFilter.length > 0) return null;
+        if (standardLibrarySkipped) return null;
         auto files = testFiles(standardLibraryPath()) ~ testFiles(buildPath(conformanceDirectory, "stdlib"));
         auto packages = Packages(withStandardLibrary([]));
         auto runs = files.map!(file => runFile(file, packages, backend, workDirectory, optimization)).array;
@@ -1011,7 +1019,7 @@ version (unittest)
     {
         Build build;
         if (!findBuild("standard library's compiled tests", optimization, build)) return;
-        if (caseFilter.length > 0) return;
+        if (standardLibrarySkipped) return;
         auto workDirectory = workDirectoryFor("stdlib", optimization);
         auto problems = runStandardLibrary(TestBackend.both, workDirectory, optimization);
         finish(problems is null ? null : described("standard library tests", optimization)
