@@ -798,6 +798,25 @@ unittest
     checkUncheckedChainPanics(Optimization.full);
 }
 
+@("a function's results from calls that no local holds count toward the unchecked frames below a check")
+unittest
+{
+    // Each link calls `c` eight times and keeps one field of each 4 KB result. No local holds a
+    // result, so the link has no slot for one, but clang -O0 gives every call's result its own
+    // memory and spills its scalars: each link's frame is 32,880 bytes on Windows (136 by the
+    // estimate), and 40 of them are 1.3 MB of unchecked frames under the 1 MB margin.
+    auto source = uncheckedChain(0, "c");
+    foreach (i; 1 .. 41)
+    {
+        source ~= "def link%s(n: Int): Int {\n    if n < 0 { return %-(%s + %) }\n    %s\n}\n".format(
+            i, "abcdefgh".map!(field => "c(n).h.h.%s".format(field)), i == 40 ? "n" : "link%s(n)".format(i + 1));
+    }
+    auto ir = generateSource(source ~ "def main(): Unit {\n    printl(link1(1))\n}");
+    bool checks(size_t i) => functionLines(ir, "define internal i64 @\"main.link%s\"".format(i))
+        .any!(text => text.canFind("@silver_stack_limit"));
+    iota(1, 41).any!(i => checks(i)).should.equal(true);
+}
+
 @("the pointers kept alive where a loop is left go to one asm for up to six")
 unittest
 {
