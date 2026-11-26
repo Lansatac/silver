@@ -12,6 +12,7 @@ silver test sema           run the tests in a file or a directory
 silver run                 run the program of the project here
 silver build               compile it
 silver test                run the tests of the project here
+silver update              fetch remote packages again and rewrite silver.lock
 ```
 
 - The first word is a command only when it's one of `silver`'s. Anything else is a file, so a file named `build` is run as `silver ./build`.
@@ -62,7 +63,7 @@ Every package a file tells `silver` about, other than its own, is an entry under
 
 - **Described here**, with a `name` and a `path`, and optionally `source` and `uses`. Its directory has no `silver.toml`: the package exists because this file says so. Its `path` is a directory under the file's.
 - **With a file of its own**, with a `path` alone. Its name, `source`, `uses` and the packages it lists are read from the `silver.toml` in that directory, so nothing about it is repeated. It can be anywhere, inside the file's directory or elsewhere.
-- **Remote**, with a `name` and a `version`, or a `git` repository with a `branch` or a `rev`.
+- **Remote**, with a `name` and where it comes from: a `git` repository, with a `tag`, `branch` or `rev`, or a `version` from the registry. [Remote packages](#remote-packages) describes them.
 
 ```toml
 [[package]]                   # described here
@@ -74,8 +75,9 @@ uses = ["geometry"]
 path = "../geometry"
 
 [[package]]                   # remote
-name = "json"
-version = "1.2"
+name = "cards"
+git = "https://github.com/someone/cards"
+tag = "v0.3.0"
 ```
 
 Any entry can say `test = true` or `test = false`, which decides whether `silver test` from this file tests it. An entry under the file's directory is tested unless it says `test = false`. One outside it is tested only when it says `test = true`, as a remote one will be. Where `test` gives what the entry's place gives anyway, it changes nothing.
@@ -181,6 +183,64 @@ A folder under the root with a `silver.toml` of its own that the root doesn't li
 - A file belongs to the package whose directory of modules it's under.
 - A file with a `module` line has to be named by its package's name followed by its path there.
 
+## Remote packages
+
+A remote package is one `silver` fetches. Its entry gives the package's `name`, and where the package comes from: a git repository, or the registry. Once fetched, it's a package with a `silver.toml` of its own, as one listed by its `path` is. Its file says what it uses and lists, and the project it belongs to is its own.
+
+- `name` has to be given, and has to be the name the package's own file gives it. Its modules are named after it, so it's also the name the program imports. A remote entry has no `source` or `uses`, since the package's own file gives those.
+- A remote package is tested only when its entry says `test = true`, as one outside the file's directory is.
+- Every package of one name in a program is the same package, from one source at one commit. Two entries that give a name and reach different files are an error naming both, even when one is reached only through another package. A program can't hold two versions of a package.
+- Fetching runs nothing from the package. `silver` reads what it fetches and never runs it.
+
+### From git
+
+```toml
+[[package]]
+name = "cardgames.cards"
+git = "https://github.com/someone/cardgames"
+path = "cards"
+tag = "v0.3.0"
+```
+
+- `git` is the repository: an `https://` or `ssh://` URL, git's `user@host:path` form, or a directory on this machine. Nothing else is accepted.
+- At most one of `tag`, `branch` and `rev` says what to take. A `rev` is a commit's full hash. With none, the repository's default branch.
+- `path` is the package's directory inside the repository, and with none it's the repository's root. It's found as a `path` alone is: the directory has a `silver.toml` that names the package, or the nearest `silver.toml` above it in the repository describes a package there.
+- `silver` uses `git` on the PATH to fetch, and needs it only when something isn't fetched yet. A repository that needs a login is fetched with whatever git uses for that.
+- A remote package's own `path` entries have to stay inside its repository. Its own remote entries are followed in turn. Its own `silver.lock`, if it has one, is ignored.
+
+### silver.lock
+
+When `silver run`, `build` or `test` reaches a remote package, it records the commit taken in `silver.lock` beside the `silver.toml` it started from, along with a hash of the repository's files at that commit. After that, every run takes the same commit and checks the hash, so a moved tag or a changed repository can't change a build silently. A program's `silver.lock` belongs in version control with its `silver.toml`.
+
+```toml
+# silver.lock: written by silver
+[[package]]
+name = "cardgames.cards"
+git = "https://github.com/someone/cardgames"
+path = "cards"
+tag = "v0.3.0"
+commit = "4f1c2a9e0b7d3c58e6a1f92d4b0c7e3a5d8f1b26"
+hash = "sha256-..."
+```
+
+- A remote package that isn't in the lock is fetched and added, and the run goes on. One already there is never moved by a run, even when its branch has moved on.
+- An entry that no longer matches what's locked, because its `git`, `path`, `tag`, `branch` or `rev` changed, is fetched again; the rest stay as they are. A package no longer reached is dropped from the lock.
+- `silver update` fetches every remote package again, taking a branch's or tag's current commit, and rewrites the lock. `silver update cardgames.cards` fetches just that one.
+- `--locked` fails rather than change `silver.lock`, for CI. `--offline` never fetches: anything that isn't fetched yet is an error.
+- The hash is of the files as git stores them, with no line endings converted, not of how they were fetched. So the same commit gives the same hash on every platform and wherever it comes from. A repository holding a symbolic link is refused.
+
+Fetched packages are kept, read-only, in one cache that every project shares: `$XDG_CACHE_HOME/silver`, or `~/.cache/silver`, on Linux, and `%LOCALAPPDATA%\silver` on Windows. `SILVER_CACHE` names another. Anything in it can be fetched again, so it can be deleted.
+
+### From the registry
+
+The registry isn't built yet. What's decided:
+
+- A package in the registry has a name of the form `@scope/name`. A scope belongs to an account, signed in with GitHub at first, and the account owns every name under it. The registry name is separate from the package's `name`: the entry gives both, and the program imports the `name`.
+- `version = "1.2"` asks for at least 1.2.0 and below 2.0.0. Where several packages ask for one package, the version taken is the lowest that satisfies all of them: the highest of their minimums. So a newer release never changes a build until something asks for it. Requests for different major versions are an error, since a program holds one version of each package.
+- A package in the registry can't use a package from git or by a path outside itself, so everything it uses is in the registry too.
+- What's published stays published. A broken version can be yanked, which keeps a new lock from choosing it while builds that already locked it keep working.
+- The registry holds only what's needed to find a version and check it. The code stays where its author keeps it, such as on GitHub, and is checked against the hash the registry recorded.
+
 ## Scripts
 
 A file with no `module` line is a script: a whole program in one file, which nothing can import.
@@ -210,8 +270,12 @@ And a program can keep scripts under it that never import it, as a test harness 
 
 ## Open questions
 
-- Remote packages: how a `version` is found, in a registry, how a `git` source is fetched, and a lock file. The shape of the entry is fixed, so that adding them is only new keys.
-- A remote package's tests: opted in with `test = true`, as one outside the directory is, once remote packages exist. Where its sources are kept, and whether its tests are compiled against what the lock file chose, is part of that.
+- Importing a remote package under a name of its own choosing, so that two packages that give the same name can be in one program. A package's modules are named after it, so this needs the compiler to take a package's modules under another name. It would be a new key on the entry.
+- Overriding a remote package, as the root project's `path` for a fork being worked on, in place of what the packages that use it ask for. Until then, two entries for one name that disagree are an error.
+- One `silver.lock` for a project and the projects it lists by `path`. Today the lock is the one beside the `silver.toml` a run starts from, so a listed project run from its own directory locks on its own.
+- Git submodules in a remote package's repository, which aren't fetched.
+- The registry: the key that gives an entry's registry name, how `silver publish` adds a version, several registries, and a mirror that keeps a package's code when its repository is gone.
+- Whether `std` is versioned apart from the compiler.
 - A script that needs a package and sits in no project, or in a project but under none of its packages. A header in the script could say so.
 - What an executable built from a described package is called when its name isn't wanted, as `silverc` for `silver.compiler`. The default name is the last segment of the package's name, which is usually also its directory, so where executables have no extension `silver build compiler` can't write its default output and asks for `-o`, even when that command is the one a message just suggested.
 - Whether a package may have more than one module that declares `main`.
@@ -284,7 +348,7 @@ Where the design leaves it open, `silver` takes the narrower reading:
 
 Not built:
 
-- Remote packages: `version` and `git` are refused.
+- Remote packages: `version`, `git`, `tag`, `branch` and `rev` are refused (`F0038`), and there's no `silver.lock`, cache or `silver update`.
 - A script in no project, or under none of a project's packages, can't say it needs a package.
 - A package can't be used only by tests, and the build can't name another prelude.
 - A program is compiled whole, in one call of `silverc`, rather than a package at a time.
