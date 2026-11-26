@@ -311,12 +311,25 @@ string operatorFunction(BinaryOp op)
         case BinaryOp.Multiply: return "opMul";
         case BinaryOp.Divide: return "opDiv";
         case BinaryOp.Modulo: return "opRem";
+        case BinaryOp.BitAnd: return "opAnd";
+        case BinaryOp.BitOr: return "opOr";
+        case BinaryOp.BitXor: return "opXor";
+        case BinaryOp.ShiftLeft: return "opShl";
+        case BinaryOp.ShiftRight: return "opShr";
         default: return null;
     }
 }
 
 /// ditto
-string operatorFunction(UnaryOp op) => op == UnaryOp.Minus ? "opNeg" : null;
+string operatorFunction(UnaryOp op)
+{
+    switch (op)
+    {
+        case UnaryOp.Minus: return "opNeg";
+        case UnaryOp.BitNot: return "opNot";
+        default: return null;
+    }
+}
 
 struct UnaryExpr
 {

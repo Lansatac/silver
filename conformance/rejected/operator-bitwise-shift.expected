@@ -1,0 +1,2 @@
+T0033: No `opShl` takes these arguments:
+    opShl(Flags, Flags) argument 2 is `Int`, not `Flags`

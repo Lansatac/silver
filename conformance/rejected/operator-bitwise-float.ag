@@ -1,0 +1,7 @@
+// A Float is a built-in number, so `&` on it keeps its own error whatever operator functions are in scope.
+type Flags(bits: UInt32)
+def opAnd(a: Flags, b: Flags): Flags => Flags(a.bits & b.bits)
+
+def main(): Unit {
+    printl(1.5 & 2.5)
+}

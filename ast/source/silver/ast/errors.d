@@ -169,7 +169,7 @@ enum DiagnosticCode : string
     InvalidTypeFunction = "T0054",
     /// A dictionary literal with the same constant written as two of its keys.
     RepeatedKey = "T0055",
-    /// An arithmetic operator function whose parameters are all built-in numbers, which the
+    /// An arithmetic or bitwise operator function whose parameters are all built-in numbers, which the
     /// operator does itself.
     InvalidOperatorFunction = "T0056",
     /// Two natives that bind one C symbol with signatures C passes differently.

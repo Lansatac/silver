@@ -117,7 +117,8 @@ package void checkTypeHooks(Modules)(Modules modules, ref Typing typing, const r
     // its operator, which is built in for them.
     void checkArithmetic(const FunctionDecl f)
     {
-        auto arity = f.name == "opNeg" ? 1 : ["opAdd", "opSub", "opMul", "opDiv", "opRem"].canFind(f.name) ? 2 : 0;
+        auto arity = ["opNeg", "opNot"].canFind(f.name) ? 1
+            : ["opAdd", "opSub", "opMul", "opDiv", "opRem", "opAnd", "opOr", "opXor", "opShl", "opShr"].canFind(f.name) ? 2 : 0;
         if (arity == 0 || f.invariantOf.isValid || f.testName !is null || f.kind != FunctionKind.ordinary) return;
         auto declared = SymbolId(f.id) in typing.symbolTypes;
         if (declared is null || types.mentionsError(*declared)) return;

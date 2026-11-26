@@ -3265,15 +3265,16 @@ private final class TypeChecker
 
     private Type synthesizeUnary(Id!Expr id, const UnaryExpr unary, Span span, BodyContext ctx)
     {
-        if (unary.op == UnaryOp.Minus && isFittedByShape(*unary.operand))
+        auto function_ = operatorFunction(unary.op);
+        if (function_ !is null && isFittedByShape(*unary.operand))
         {
-            return synthesizeOperator(id, "opNeg", "`-a`", [*unary.operand], [Type.init], span, ctx);
+            return synthesizeOperator(id, function_, "`%sa`".format(cast(string) unary.op), [*unary.operand], [Type.init], span, ctx);
         }
         auto operandType = synthesize(*unary.operand, ctx);
         final switch (unary.op)
         {
             case UnaryOp.Minus:
-                if (callsOperator(operandType)) return synthesizeOperator(id, "opNeg", "`-a`", [*unary.operand], [operandType], span, ctx);
+                if (callsOperator(operandType)) return synthesizeOperator(id, function_, "`-a`", [*unary.operand], [operandType], span, ctx);
                 auto isLiteral = (*unary.operand).kind.match!((const IntLiteral _) => true, _ => false);
                 if (isLiteral)
                 {
@@ -3297,6 +3298,7 @@ private final class TypeChecker
                 return operandType;
             case UnaryOp.BitNot:
                 if (operandType == _types.error) return _types.error;
+                if (callsOperator(operandType)) return synthesizeOperator(id, function_, "`~a`", [*unary.operand], [operandType], span, ctx);
                 if (!_types.isInteger(operandType))
                 {
                     _collector.reportError(DiagnosticCode.InvalidOperand, unary.operand.span,

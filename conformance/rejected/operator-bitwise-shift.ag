@@ -1,0 +1,9 @@
+// A shift's amount keeps its own type, so an `opShl` that takes flags isn't called for a shift by an Int.
+type Flags(bits: UInt32)
+def opShl(a: Flags, b: Flags): Flags => Flags(a.bits << b.bits)
+
+def main(): Unit {
+    val f = Flags(1)
+    val n = 2
+    printl((f << n).bits)
+}

@@ -1,0 +1,8 @@
+// A bitwise operator on operands that no operator function takes names the operator, the function it means and the operands.
+type Flags(bits: UInt32)
+def opOr(a: Flags, b: Flags): Flags => Flags(a.bits | b.bits)
+
+def main(): Unit {
+    val f = Flags(1)
+    printl((f & f).bits)
+}

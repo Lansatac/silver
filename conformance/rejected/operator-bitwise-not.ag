@@ -1,0 +1,7 @@
+// Prefix `~` on a type with no `opNot` is reported as a call of it, not as a number's operator.
+type Flags(bits: UInt32)
+
+def main(): Unit {
+    val f = Flags(1)
+    printl((~f).bits)
+}

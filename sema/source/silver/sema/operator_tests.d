@@ -322,3 +322,56 @@ unittest
         .shouldReport(DiagnosticCode.NonConstantInitializer, At("\"a\" + \"b\"", 1));
     analyzed("val c: Int = 1 + 2 * 3\ndef main(): Unit => print(c)").shouldHaveNoDiagnostics();
 }
+
+@("bitwise operators and shifts on anything but two integers call opAnd, opOr, opXor, opShl, opShr or opNot, typed by what the function returns")
+unittest
+{
+    enum flags = "type F(bits: UInt32)
+def opAnd(a: F, b: F): F => a
+def opOr(a: F, b: F): F => a
+def opXor(a: F, b: F): F => a
+def opNot(a: F): F => a
+def opShl(a: F, n: Int): F => a
+def opShl(a: F, n: UInt8): Bool => true
+def opShr(a: F, n: Int): F => a
+";
+    auto a = analyzed(flags ~ "def main(): Unit {
+    val f = F(1)
+    val both = f & f
+    val inverted = ~f
+    val shifted = f << 2
+    val narrow: UInt8 = 1
+    val other = f << narrow
+    val mixed = ~f | f ^ f >> 1
+    mutable val g = f
+    g |= f
+    g &= ~f
+    g <<= 1
+    g >>= 1
+    g ^= f
+}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldTypeEveryExpression();
+    a.shouldDeclareType(At("both", 1), "F");
+    a.shouldDeclareType(At("inverted", 1), "F");
+    a.shouldDeclareType(At("shifted", 1), "F");
+    a.shouldDeclareType(At("other", 1), "Bool");
+    a.shouldDeclareType(At("mixed", 1), "F");
+
+    analyzed("def main(): Unit {\n    val x = ~5\n    val y = 6 & 3 | 1 ^ 2 << 1 >> 1\n}").shouldHaveNoDiagnostics();
+}
+
+@("a bitwise operator with no function that takes its operands, or on a Float, is an error, and a function that takes only integers is too")
+unittest
+{
+    enum flags = "type F(bits: UInt32)\ndef opOr(a: F, b: F): F => a\n";
+    analyzed(flags ~ "def main(): Unit => print(F(1) & F(2))").shouldReport(DiagnosticCode.InvalidOperand, At("F(1)", 1));
+    analyzed(flags ~ "def main(): Unit => print(~F(1))").shouldReport(DiagnosticCode.InvalidOperand, At("F(1)", 1));
+    analyzed(flags ~ "def main(): Unit => print(F(1) << 2)").shouldReport(DiagnosticCode.InvalidOperand, At("F(1)", 1));
+    analyzed(flags ~ "def main(): Unit => print(F(1) | 2)").shouldReport(DiagnosticCode.NoMatchingOverload, At("F(1) | 2", 1));
+    analyzed(flags ~ "def main(): Unit => print(1.5 & 2.5)").shouldReport(DiagnosticCode.InvalidOperand, At("1.5", 1));
+    analyzed("def opShl(a: Int, n: UInt8): Int => a\ndef main(): Unit {}").shouldReport(DiagnosticCode.InvalidOperatorFunction, At("opShl", 1));
+    analyzed("def opNot(a: UInt8): UInt8 => a\ndef main(): Unit {}").shouldReport(DiagnosticCode.InvalidOperatorFunction, At("opNot", 1));
+    analyzed("def opAnd<T>(a: T, b: T): T => a\ndef opNot(a: String, b: String): Int => 1\ndef main(): Unit => print(~1)")
+        .shouldHaveNoDiagnostics();
+}

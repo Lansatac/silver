@@ -46,7 +46,7 @@ package struct Typing
     /// For `<`, `<=`, `>` or `>=` on anything but two numbers, Strings or Chars, `lang`'s
     /// function it calls, by the comparison.
     SideTable!(Id!Expr, FunctionUse) comparisons;
-    /// For `+`, `-`, `*`, `/`, `%` and prefix `-` on anything but two numbers, the operator
+    /// For `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `<<`, `>>` and prefix `-` and `~` on anything but two numbers, the operator
     /// function it calls, by the operation.
     SideTable!(Id!Expr, FunctionUse) operators;
     /// For each call of `derivedCompare`, how it orders its type, by the call.

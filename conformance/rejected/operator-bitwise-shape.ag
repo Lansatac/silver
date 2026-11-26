@@ -1,0 +1,8 @@
+// An `opNot` of two parameters is an ordinary function, not called for prefix `~`.
+type Flags(bits: UInt32)
+def opNot(a: Flags, b: Flags): Flags => Flags(~a.bits)
+
+def main(): Unit {
+    val f = Flags(1)
+    printl((~f).bits)
+}

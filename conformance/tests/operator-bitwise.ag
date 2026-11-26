@@ -1,0 +1,103 @@
+// `&`, `|`, `^`, `<<`, `>>` and prefix `~` on anything but two integers call `opAnd`, `opOr`, `opXor`,
+// `opShl`, `opShr` and `opNot`, chosen as any call of that name with those operands would be.
+type Flags(bits: UInt32)
+
+def opOr(a: Flags, b: Flags): Flags => Flags(a.bits | b.bits)
+def opAnd(a: Flags, b: Flags): Flags => Flags(a.bits & b.bits)
+def opXor(a: Flags, b: Flags): Flags => Flags(a.bits ^ b.bits)
+def opNot(a: Flags): Flags => Flags(~a.bits)
+// A shift amount keeps its own type: an Int here, a UInt8 and a type of its own below.
+def opShl(a: Flags, n: Int): Flags => Flags(a.bits << n)
+def opShr(a: Flags, n: Int): Flags => Flags(a.bits >> n)
+def opShl(a: Flags, n: UInt8): Flags => Flags((a.bits << n) << 1)
+
+type Count(n: Int)
+def opShl(a: Flags, c: Count): Flags => Flags(a.bits << c.n)
+// A built-in integer on the left is still a call, since the other operand isn't an integer.
+def opShl(n: Int, c: Count): Count => Count(n << c.n)
+// Operands aren't swapped, so a built-in integer on either side is a function of its own.
+def opOr(a: Flags, b: UInt32): Flags => Flags(a.bits | b)
+def opAnd(b: UInt32, a: Flags): Flags => Flags(b & a.bits)
+
+// Each operand is evaluated once, left then right.
+type Tick(n: Int)
+def opXor(a: Tick, b: Tick): Tick {
+    printl("xor {a.n} {b.n}")
+    Tick(a.n ^ b.n)
+}
+def opNot(a: Tick): Tick {
+    printl("not {a.n}")
+    Tick(~a.n)
+}
+def make(n: Int): Tick {
+    printl("make {n}")
+    Tick(n)
+}
+
+// A generic operator function is an ordinary generic function, never chosen for two integers.
+type Pair<T>(first: T, second: T)
+def opAnd<T>(a: Pair<T>, b: Pair<T>): Pair<T> => Pair(a.first, b.second)
+
+type Holder(f: Flags, list: [Flags])
+
+def main(): Unit {
+    val resizable = Flags(1)
+    val vsync = Flags(2)
+    val fullscreen = Flags(4)
+
+    val window = resizable | vsync
+    printl(window.bits)
+    printl(window & vsync == vsync)
+    printl((window & fullscreen).bits)
+    printl((window ^ vsync).bits)
+    printl((~resizable).bits)
+    printl((~resizable & window).bits)
+    // Usual precedence: & binds tighter than ^, which binds tighter than |.
+    printl((resizable | vsync & fullscreen ^ vsync).bits)
+    printl((vsync << 2).bits)
+    printl((fullscreen >> 1).bits)
+    val amount: UInt8 = 1
+    printl((vsync << amount).bits)
+    printl((vsync << Count(3)).bits)
+    printl((3 << Count(2)).n)
+    // A literal beside a user type takes the parameter's type.
+    printl((resizable | 8).bits)
+    printl((6 & vsync).bits)
+    printl((resizable | vsync) << 1 >> 1 == window)
+
+    mutable val f = resizable
+    f |= vsync
+    printl(f.bits)
+    f &= ~resizable
+    printl(f.bits)
+    f ^= fullscreen
+    printl(f.bits)
+    f <<= 1
+    printl(f.bits)
+    f >>= 2
+    printl(f.bits)
+    f <<= Count(2)
+    printl(f.bits)
+    f |= 1
+    printl(f.bits)
+
+    mutable val h = Holder(resizable, [vsync, fullscreen])
+    h.f |= vsync
+    h.list[0] |= resizable
+    h.list[1] <<= 1
+    printl(h.f.bits)
+    printl(h.list[0].bits)
+    printl(h.list[1].bits)
+
+    printl((make(6) ^ make(3)).n)
+    printl((~make(5)).n)
+    printl((Pair(1, 2) & Pair(3, 4)).second)
+    // Built-in integers keep working whatever is in scope.
+    printl(6 & 3)
+    printl(6 | 3)
+    printl(6 ^ 3)
+    printl(~6)
+    printl(1 << 4)
+    printl(256 >> 4)
+    printl("a" ~ "b")
+}

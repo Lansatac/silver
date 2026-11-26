@@ -1,0 +1,1 @@
+T0005: `~a` calls `opNot`, and no `opNot` here takes `Flags`

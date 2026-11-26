@@ -1,0 +1,1 @@
+T0005: `a & b` calls `opAnd`, and no `opAnd` here takes `Flags` and `Flags`

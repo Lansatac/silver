@@ -278,6 +278,9 @@ Syntax that isn't a call means a call to a function whose name starts with `op`.
 | `x[a..b] = v` | `x = opIndexAssign(x, a..b, v)` |
 | `a + b`, `a - b`, `a * b`, `a / b`, `a % b` | `opAdd(a, b)`, `opSub(a, b)`, `opMul(a, b)`, `opDiv(a, b)`, `opRem(a, b)`, unless both are built-in numbers |
 | `-a` | `opNeg(a)`, unless `a` is a built-in number |
+| `a & b`, `a \| b`, `a ^ b` | `opAnd(a, b)`, `opOr(a, b)`, `opXor(a, b)`, unless both are built-in integers |
+| `a << n`, `a >> n` | `opShl(a, n)`, `opShr(a, n)`, unless both are built-in integers |
+| `~a` | `opNot(a)`, unless `a` is a built-in integer |
 | `a == b`, `a != b` | `opEquals(a, b)` |
 | `a < b`, `<=`, `>`, `>=` | `compare(a, b)`, through the type's conformance to [`Ord`](types.md#ordering) |
 | printing, `String(x)`, a string hole | `opString(x)` |
@@ -341,11 +344,39 @@ ps[0] += p                                   // ps[0] is read once, and written 
 - `+` doesn't join strings or arrays, which `~` does. When no `opAdd` takes a String or an array, the error says so.
 - An operator function is an ordinary function. It can be called by name, as `a.opAdd(b)`, be private, and be used as a value.
 
+### Bitwise operators and shifts
+
+`& | ^ << >>` and prefix `~` work the same way, for a type that is a set of flags or a bit pattern.
+
+```silver
+type Flags(bits: UInt32)
+
+def opOr(a: Flags, b: Flags): Flags => Flags(a.bits | b.bits)
+def opAnd(a: Flags, b: Flags): Flags => Flags(a.bits & b.bits)
+def opNot(a: Flags): Flags => Flags(~a.bits)
+def opShl(a: Flags, n: Int): Flags => Flags(a.bits << n)
+
+val resizable = Flags(1)
+val vsync = Flags(2)
+val window = resizable | vsync      // opOr
+window & vsync == vsync             // opAnd, then ==: & binds tighter than ==
+~vsync                              // opNot
+vsync << 2                          // opShl(vsync, 2): the literal takes the parameter's type, an Int here
+mutable val f = resizable
+f |= vsync                          // f = opOr(f, vsync)
+f <<= 1                             // f = opShl(f, 1)
+```
+
+- Everything under [Arithmetic](#arithmetic) holds: two built-in integers are built in, so a function that takes only integers is an error where it's declared, any other operands call the function chosen where the operator is written, operands are never swapped, and `a op= b` is `a = a op b`. There's no function for a compound assignment, and a `~=` is still concatenation.
+- A shift amount has its own type, as it does for built-in integers, so `opShl` and `opShr` can take any type for it: `opShl(a: Flags, n: Int)`, `opShl(a: Flags, n: UInt8)` and `opShl(a: Flags, c: Count)` are overloads of one name, chosen by the amount, and nothing requires `a` and `n` to be alike.
+- The other operands of `& | ^` aren't required to be alike either: `opOr(a: Flags, b: UInt32)` is its own function, and `a | b` on a `Flags` and a `UInt32` is an error without it.
+- Prefix `~` is bitwise not and binary `~` is concatenation, so only the prefix form is `opNot`. `&&`, `||` and `!` aren't operator functions. A `Float` is a built-in number, so `&` on one keeps its own error whatever functions are in scope.
+
 ### How syntax finds its function
 
 Syntax finds its function in one of three ways, by what the syntax is for:
 
-- **Indexing and arithmetic are calls.** `x[i]`, `x[i] = v`, slices, and `+ - * / %` and prefix `-` on anything but two built-in numbers mean the calls in the table, chosen where they're written as any call is, just as `x.f()` means `f(x)`. So indexing a type needs its `opIndex` in scope, as calling `x.length()` needs `length`, and a module can write one for a type it didn't declare. No [conformance](interfaces.md#conformance) is involved.
+- **Indexing and arithmetic are calls.** `x[i]`, `x[i] = v`, slices, and `+ - * / %`, prefix `-`, and the [bitwise operators](#bitwise-operators-and-shifts) on anything but two built-in numbers mean the calls in the table, chosen where they're written as any call is, just as `x.f()` means `f(x)`. So indexing a type needs its `opIndex` in scope, as calling `x.length()` needs `length`, and a module can write one for a type it didn't declare. No [conformance](interfaces.md#conformance) is involved.
 - **Looping and ordering go through a conformance.** `for` steps with the `next` of the type's conformance to [`Range`](control-flow.md#for), and `<` compares with the `compare` of its conformance to [`Ord`](types.md#ordering). A conformance is one answer for the whole program, so a loop or a comparison means the same wherever it's written, in a generic function too, where a bound asks for it.
 - **Equality, hashing and printing belong to the type.** Every type has an `opEquals`, an `opHash` and an `opString` already, so generic code needs no bound to use them, and only the type's own module can write one to replace it.
 
