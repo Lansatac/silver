@@ -304,3 +304,16 @@ unittest
     analyzedErrors("", types ~ "def a(): H2 ! Missing => Ok(Missing(\"k\"))\ndef b(): H2 ! Missing => Error(Missing(\"k\"))\n"
         ~ "def c(): H2 ! Missing => 1\n").shouldHaveNoDiagnostics();
 }
+
+@("type checking a generic sum with an error list member that lists the sum itself ends")
+unittest
+{
+    // Normalizing the member's list at an instance asks the instance's members, which substitutes
+    // the member's list again.
+    analyzed(`type Bad(n: Int)
+type Box<E> = :Bad | :(Int ! Box<E> | Bad)
+def main(): Unit {
+    val b: Box<Int> = Bad(1)
+    printl(b)
+}`).shouldHaveNoDiagnostics();
+}
