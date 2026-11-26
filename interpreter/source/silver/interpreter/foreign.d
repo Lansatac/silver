@@ -335,6 +335,14 @@ unittest
     assert(problem.canFind(sharedLibraryFile("silver_no_such_library")) && problem.canFind("can't use a static one"), problem);
 }
 
+version (linux)
+@("a library whose .so is a linker script, as glibc's libm.so is, is found when interpreting as the linker finds it")
+unittest
+{
+    string problem;
+    assert(findNative("cbrt", "m", problem) !is null, problem);
+}
+
 version (unittest)
 {
     private ulong bitsOf(double value) => *cast(ulong*) &value;
