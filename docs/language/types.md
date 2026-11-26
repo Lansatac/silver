@@ -56,9 +56,63 @@ This one relation is what checking, [inference](generics.md#inference) and [over
 
 A value whose type could reach the expected type by two different routes doesn't fit, and is an error. The one case is a value that's one of an error union's errors and could also become its success, as an `Oops` against `H2 ! Oops` with `type H2 = :Oops | :Int`; it's written `Ok(...)` or `Error(...)` (see [Errors](errors.md#values)).
 
-Containers do not promote their contents once they are values. A *literal* checks each element against the expected element type, so `val xs: [Int?] = [1, None]` works, but a value of type `[Int]` is not a `[Int?]`. An empty `[]` and `None` have no type of their own that a binding can take, so they need an expected type.
+Containers do not promote their contents once they are values. A *literal* checks each element against the expected element type, so `val xs: [Int?] = [1, None]` works, but a value of type `[Int]` is not a `[Int?]`. An empty `[]` and `None` have [no type of their own](#a-type-of-its-own) that a binding can take, so they need an expected type.
 
 A conversion is implicit only if it works for every value, keeps the value's meaning, and can't fail at runtime. Anything else is written out, as in `UInt8(x)`. There are no user-defined implicit conversions.
+
+## A type of its own
+
+Most expressions have a type of their own: `n + 1`, `"a"`, `point.x` and `Point(1, 2)` are what they are wherever they're written. Some have none, and take their type from where they go:
+
+- `None`, `[]`, `[:]`, a bare `Error(e)`, a marker that a generic sum owns, a lambda without its parameter types, and the name of a generic or overloaded function.
+- A number literal, which takes the type expected of it, and is an `Int` or a `Float` only when nothing is expected.
+- Parentheses, a block, an `if` or `match`, an array, dictionary or tuple literal and arithmetic, when the part that decides their type has none of its own. `[1, 2]` has none, and `[1, n]` with `n: UInt8` is a `[UInt8]`, since `n` decides it. A tuple has none when any of its parts has none. An arm that can't finish, because it ends in `return`, `break`, `continue` or `tail`, has no value to count, and a block's earlier statements don't count.
+- A call of a generic function or constructor, `Some(...)` and `Ok(...)` among them, when a type parameter in its result is reached by no argument that has a type of its own. That can be read off the signature:
+
+  ```silver
+  def id<T>(x: T): T
+  def opt<T>(x: T, y: T?): T?
+  def none<T>(): T?
+  val n = 2
+
+  id(n)           // an Int: n reaches T
+  id(None)        // none of its own: only None reaches T
+  none()          // none of its own: nothing reaches T
+  opt(n, None)    // an Int?: n reaches T, and the None is checked against it
+  opt(1, None)    // none of its own: only the literals reach T
+  Box([])         // none of its own
+  ```
+
+An expression is one or the other whatever surrounds it, and one with a type of its own is typed once, by itself. So a call of an overloaded function is chosen by its own arguments, never by the call it's an argument of.
+
+An expression with no type of its own is never given one first and fitted afterwards. The type its place expects is passed into it, and its parts are checked against that type's parts. A generic call takes what the expected type says of the type parameters its arguments left open, and its arguments are then checked against their parameters, so the expected type reaches as far in as it's needed:
+
+```silver
+val v: UInt8 = id(id(1))                               // each id is an id<UInt8>, and the 1 a UInt8
+val t: Table<String, Int> = Table(Branch(0, []), 0)    // the [] is a [Node<String, Int>]
+val r: Int ! String = id(Error("x"))
+```
+
+That makes wrapping harmless: where `val v: X = e` works, so does `val v: X = id(e)`, and so do `(e)` and `{ e }`.
+
+A result that is only a type parameter takes the expected type whole, so in `val v: Int? = id(None)` the `T` is `Int?`. A literal is therefore promoted on its way in, while a value with a type of its own decides `T` first and is promoted on its way out:
+
+```silver
+def describe<T>(x: T): T {
+    printl("saw {x}")
+    x
+}
+
+val n = 5
+val a: Int? = describe(5)    // saw Some(5)
+val b: Int? = describe(n)    // saw 5
+```
+
+Where the result's own shape can't be the option or error union that's expected, the layer is the promotion's: against `Box<Int>?`, a result of `Box<T>` gives `T = Int`.
+
+With nothing expected, a number literal is its default type, literals that have to share a type [take one together](numbers.md#literals), and an expression made of such parts is what they make it: `id(1)` is an `Int` and `[1, 2.5]` a `[Float]`. Anything else is an error that asks for the type to be written, as `val x = None` and `val b = Box([])` are.
+
+How such an expression takes its turn among a generic function's arguments is under [Inference](generics.md#inference), how it's compared with each of several functions under [Overloading](functions.md#overloading), and what it does before a `.` under [Method-call syntax](functions.md#method-call-syntax).
 
 ## Equality and ordering
 
@@ -188,6 +242,11 @@ A function value prints as the function it comes from, without anything it captu
 
 ## Current implementation
 
+- [A type of its own](#a-type-of-its-own) is built in part, by separate lists of forms:
+  - A generic call always counts as having a type of its own, so nothing expected reaches into one that's an argument of another generic call or of an overloaded function: `id(id(1))` where a `UInt8` is expected, `Wrap(Box([]))`, `id(none())` and `ov(id(1))` are errors, while each works one level up, as `val v: UInt8 = id(1)` does.
+  - As an argument of a generic function, an array, tuple, dictionary or `Some` of literals, an `if`, a block and arithmetic are typed alone first, so `same([1, 2], t)` with `t: [UInt8]` is an error where `same(1, small)` works.
+  - A bare `Error(e)` binds a type parameter to a type that only it has, so `same(Error("x"), t)` with `t: Int ! String` is an error, and `id(Error("x"))` compiled is `I0002`.
+  - A result that is only a type parameter takes an expected option's or error union's value type, not the whole of it, so `val v: Int? = id(None)` is an error and `describe(5)` above prints `saw 5`.
 - A tuple is ordered up to eight elements. `lang` writes the conformance once for each length, since no one declaration covers them all.
 - `compare` on an integer is written once for each integer type, since a bound can't ask for an integer yet, so an error about a call of it lists them all.
 - `derivedCompare` can only be called. It isn't a function value, so `val f = derivedCompare` is an error.

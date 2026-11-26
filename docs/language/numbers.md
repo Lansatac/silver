@@ -29,7 +29,7 @@ val big: Float32 = 1e40  // error: doesn't fit
 
 A float literal is rounded once, from its text, to the nearest value of its type, and one that rounds to infinity is a compile error, for a `Float` as for a `Float32`: `1e400` is an error wherever it's a `Float`, and `1e40` is one where a `Float32` is expected. A literal too small for its type rounds to zero. Only a literal is checked: a conversion or arithmetic that leaves the range is infinity, so `Float32(1e40)` and `1e300 * 1e300` are `inf`.
 
-An integer literal takes the type expected of it, or the type of the number beside it, and is checked at compile time to fit. With neither, it is an `Int`. An arm of an `if` or `match` that's a literal takes the type of the other arms in the same way, so with `small: UInt8`, `if c => 1 else small` is a `UInt8`. A sign is an operator applied to a literal, but a negated literal still adapts, so `-128` is a valid `Int8`.
+An integer literal takes the type expected of it, or the type of the number beside it, and is checked at compile time to fit. With neither, it is an `Int`. A literal has [no type of its own](types.md#a-type-of-its-own), so wherever several values have to share a type, the ones that have a type decide it and the literals take it: with `small: UInt8`, `if c => 1 else small` is a `UInt8` and `[1, small]` a `[UInt8]`. A sign is an operator applied to a literal, but a negated literal still adapts, so `-128` is a valid `Int8`.
 
 ```silver
 val byte: UInt8 = 255
@@ -51,12 +51,39 @@ k(1)                      // k(Float), as k(1.0) is
 
 def g(x: Int8): String    def g(x: Int16): String
 g(1)                      // error: two integer types, and neither is the default
-
-type N = :Float32 | :Float
-val s: N = 1              // a Float, as 1.0 is
 ```
 
-Overload choice [counts steps](functions.md#overloading) first, so how a literal is read is the last tie-break, deciding only between functions that fit a call equally well otherwise: with `m(x: Int8?)` and `m(x: Float)`, `m(1)` calls `m(Float)`, a step fewer than the option. A type fits a literal by its type, not its value: `h(300)` calls `h(Int8)` and is then an error, since `300` doesn't fit in an `Int8`.
+Overload choice [counts steps](functions.md#overloading) first, so how a literal is read is the last tie-break, deciding only between functions that fit a call equally well otherwise: with `m(x: Int8?)` and `m(x: Float)`, `m(1)` calls `m(Float)`, a step fewer than the option, and `m(Int8(1))` says the other.
+
+A type fits a literal by its value, since a literal is checked to fit wherever it goes: `300` isn't an `Int8`, so a function that takes one isn't a candidate for it.
+
+```silver
+h(300)                    // h(Float): 300 doesn't fit in an Int8
+g(300)                    // g(Int16)
+
+def u(x: UInt8): String   def u(x: Float): String
+u(200)                    // u(UInt8)
+u(-1)                     // u(Float)
+```
+
+Only a literal and a negated literal are read by their value. Arithmetic on literals fits by its type, as below, so `u(200 + 100)` calls `u(UInt8)` and overflows when it runs.
+
+A sum takes a literal as one of its number members, the one that overloaded functions taking each would be chosen by:
+
+```silver
+type S = :Int8 | :Int
+val s: S = 1              // the Int, as w(1) calls w(Int) of w(Int8) and w(Int)
+
+type N = :Float32 | :Float
+val t: N = 1              // a Float, as 1.0 is
+
+type M = :Int8 | :Float
+val a: M = 1              // the Int8
+val b: M = 300            // the Float
+
+type P = :Int8 | :Int16
+val p: P = 1              // error: two integer members, and neither is the default
+```
 
 An integer literal too large for every integer type is the float literal of its value where only a float fits it, so `val x: Float = 99999999999999999999` is `1e20`. Where an integer type fits, it's an integer, and too large.
 
@@ -79,15 +106,27 @@ val half: Float = 1 / 2       // 0.5: both literals are Floats
 - Each literal is checked at compile time to fit, and the arithmetic then behaves as it does anywhere: `val y: UInt8 = 200 + 100` panics with `Integer overflow` when it runs. In a [constant](bindings.md#top-level-constants), which is evaluated at compile time, it's a compile error.
 - With nothing expected and no number beside it, arithmetic on integer literals is an `Int`.
 
-A literal argument doesn't fix the type parameter of a generic function by itself, whether it's an integer or a float literal. The other arguments or the type expected of the call do, and only when nothing else does, the literal takes its default type:
+Literals that have to share one type, with nothing that has a type to decide it and nothing expected, take it together: a `Float` if any of them is a float literal, and an `Int` otherwise. That's so wherever values share a type: an array's elements, a dictionary's values, the arms of an `if` or `match`, the two sides of `??`, and the arguments that reach one type parameter of a generic function.
 
 ```silver
 def id<T>(x: T): T => x
 def pair<T>(a: T, b: T): T => b
 
+val xs = [1, 2.5]                // a [Float]
+val y = if c => 1 else 2.5       // a Float
+val zs = [[1], [2.5]]            // a [[Float]]
+val g = pair(1, 1.5)             // a Float
+val p = (1, 2.5)                 // an (Int, Float): a tuple's parts don't share a type
+
+val n = 3
+val bad = [n, 2.5]               // error: n is an Int, and decides
+```
+
+A literal argument doesn't fix the type parameter of a generic function by itself. The arguments that have a type or the type expected of the call do, and only when nothing else does, the literals take their type as above:
+
+```silver
 val d: Float32 = id(1.5)         // a Float32
 val e = id(1.5)                  // a Float
-val g = pair(1, 1.5)             // a Float
 val h = pair(Float32(1.0), 2.5)  // a Float32: the other argument fixes it
 ```
 
@@ -183,5 +222,6 @@ Apart from the infinities and NaN, the text is a Float literal in Silver and a n
 - A `Float32` is a 32-bit `float` in compiled code. The interpreter holds it as the `double` it widens to, rounded to a `float` after every operation, so both compute in single precision.
 - Adaptation doesn't go through arithmetic yet. Only a literal by itself adapts, also in parentheses or negated, so `val x: UInt8 = 1 + 2` and `1 + 2 + small` are errors while `small + 1 + 2` works; `UInt8(1 + 2)` is the way to write it.
 - A literal arm of an `if` or `match` doesn't take the type of the other arms yet, so `if c => 1 else small` is an error unless a `UInt8` is expected of it.
-- Open, for a decision: a sum with `Int` and another integer member, as `type S = :Int8 | :Int`, takes an integer literal as neither, so `val s: S = 1` is an error, and with `m(x: S)` beside `m(x: Float)`, `m(1)` chooses `m(S)` (an integer is read first) and then fails. Whether such a sum should take it as its `Int`, as overloads `f(Int8)` and `f(Int)` already choose `f(Int)`, isn't decided.
-- Open, for a decision: whether a literal's value counts toward fitting. Today only its type does, so with `u(x: UInt8)` and `u(x: Float)`, `u(-1)` chooses `u(UInt8)` and fails because a `UInt8` can't be negative, and with `h(x: Int8)` and `h(x: Float)`, `h(300)` chooses `h(Int8)` and fails its range check, where reading the value would choose the `Float`.
+- A literal fits a type by the type alone, not its value, in overload choice and in a sum: with `u(x: UInt8)` and `u(x: Float)`, `u(-1)` and `u(300)` choose `u(UInt8)` and are then errors, and `h(300)` with `h(x: Int8)` and `h(x: Int16)` is ambiguous.
+- A sum takes an integer literal as its one integer member, or with none as its `Float` member, then its `Float32`. With more than one integer member it's an error even when `Int` is among them, so `val s: S = 1` with `type S = :Int8 | :Int` is.
+- Literals take a type together only as arguments reaching one type parameter of a generic function. `[1, 2.5]`, `if c => 1 else 2.5`, `["a": 1, "b": 2.5]`, `[[1], [2.5]]`, `same([1], [2.5])` and `Some(1) ?? 2.5` are errors that say the types differ.

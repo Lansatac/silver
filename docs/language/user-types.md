@@ -102,7 +102,7 @@ Common types: a member and its sum join to the sum. Otherwise a sum is never inv
 
 ### Promotion into a sum
 
-Promotion into a sum takes a member to the sum, and then on through any option or error-union layers around it, as other promotions do. Under an error union that lists the member as an error, it isn't promoted, and has to be written as `Ok(...)` or `Error(...)` (see [Errors](errors.md#values)). An integer literal adapts to the sum's one integer member, or with none to its `Float` member, then its `Float32` one, as it's [an integer first](numbers.md#literals). A `1` against `Int8 | String` adapts to `Int8`, against `Int8 | Float` to `Int8`, and against `Float32 | Float` to `Float`. Against `Int8 | Int` it's an error, and against `Int? | String` it's also an error that says to write `Some(1)`.
+Promotion into a sum takes a member to the sum, and then on through any option or error-union layers around it, as other promotions do. Under an error union that lists the member as an error, it isn't promoted, and has to be written as `Ok(...)` or `Error(...)` (see [Errors](errors.md#values)). A number literal adapts to one of the sum's number members, the one that overloaded functions taking each would be chosen by, as it's [an integer first](numbers.md#literals) and fits by its value. A `1` against `Int8 | String` adapts to `Int8`, against `Int8 | Float` to `Int8`, against `Int8 | Int` to `Int`, and against `Float32 | Float` to `Float`; a `300` against `Int8 | Float` is the `Float`. Against `Int8 | Int16` it's an error, since neither is the default, and against `Int? | String` it's also an error that says to write `Some(1)`, since only a member is promoted into its sum.
 
 ### Using sum values
 
@@ -169,4 +169,4 @@ val r = if val Circle(radius) = shape => radius else 0.0
 
 ## Current implementation
 
-The implementation matches this description.
+The implementation matches this description, except for a number literal going into a sum, which has its own rule: see [Numbers](numbers.md#current-implementation).
