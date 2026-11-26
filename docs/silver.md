@@ -241,6 +241,39 @@ The registry isn't built yet. What's decided:
 - What's published stays published. A broken version can be yanked, which keeps a new lock from choosing it while builds that already locked it keep working.
 - The registry holds only what's needed to find a version and check it. The code stays where its author keeps it, such as on GitHub, and is checked against the hash the registry recorded.
 
+## Native libraries
+
+A module's [`native library`](language/native.md#libraries) gives a library's name. A `silver.toml` can say which files that name means on each platform, so a library kept with the project is found without setting anything in the environment.
+
+```toml
+# raylib/silver.toml
+name = "raylib"
+
+[native.raylib.windows]
+link = "vendor/windows/lib/libraylibdll.a"
+load = "vendor/windows/lib/raylib.dll"
+
+[native.raylib.linux]
+link = "vendor/linux/lib/libraylib.so.620"
+load = "vendor/linux/lib/libraylib.so.620"
+```
+
+```silver
+// raylib/package.ag
+module raylib
+native library "raylib"
+```
+
+- `[native.<library>.<platform>]` is for the library that `native library "<library>"` names, in the modules of the packages this file describes. The platforms are `windows` and `linux`.
+- `link` is the file `silver build` links the program against, whatever it's called: an import library or a static one on Windows, a shared or static one on Linux.
+- `load` is the shared library itself. `silver run` loads it when interpreting, and `silver build` copies it beside the executable it writes, under the file's own name, so the built program finds it wherever the two are moved together. Running or testing a compiled program from `silver` finds it too.
+- A path is relative to the `silver.toml` it's written in. An absolute path is refused, since it would only be right on one machine.
+- Either key can be left out, and so can a platform. What isn't given is found as it is without the table: by the library's name, on the linker's and the system's search paths.
+- A file named for the platform `silver` runs on that isn't there is an error at its line in `silver.toml`, before anything runs.
+- Two `silver.toml` files in one program that give the same library and platform are an error naming both.
+
+On Linux a program asks for a shared library by the name recorded inside it, which for `libraylib.so` is `libraylib.so.620`. So `load` names the file of that name, not a link to it, and the copy beside the executable is then the one the program asks for.
+
 ## Scripts
 
 A file with no `module` line is a script: a whole program in one file, which nothing can import.
@@ -276,6 +309,11 @@ And a program can keep scripts under it that never import it, as a test harness 
 - Git submodules in a remote package's repository, which aren't fetched.
 - The registry: the key that gives an entry's registry name, how `silver publish` adds a version, several registries, and a mirror that keeps a package's code when its repository is gone.
 - Whether `std` is versioned apart from the compiler.
+- Native libraries, beyond a file kept with the project:
+  - A library installed on the machine somewhere the search paths don't reach, whose path differs from one machine to the next. That wants a setting outside the committed file, and until then the environment's search paths serve.
+  - The program's project overriding what a package it uses gives for a library.
+  - Whether a remote package may bring a library file at all, since loading one runs code that nobody read.
+  - A library whose recorded name on Linux differs from its file's name.
 - A script that needs a package and sits in no project, or in a project but under none of its packages. A header in the script could say so.
 - What an executable built from a described package is called when its name isn't wanted, as `silverc` for `silver.compiler`. The default name is the last segment of the package's name, which is usually also its directory, so where executables have no extension `silver build compiler` can't write its default output and asks for `-o`, even when that command is the one a message just suggested.
 - Whether a package may have more than one module that declares `main`.
@@ -312,6 +350,14 @@ What `silverc` is given:
 - For `test` over a directory, what [What `silver test` tests](#what-silver-test-tests) leaves out under it, as `--skip`: each directory with a `silver.toml` that isn't tested, the outermost only, and each described package whose entry says `test = false`. Each other place tested that walking the directory doesn't reach, as `--also`: a package outside opted in, or a package the file lists by its directory inside a project it doesn't otherwise name. The run is one call of `silverc`, so one report and one JSON document. A package tested is read and followed, with its dependencies, whether or not anything uses it, so a listed package nothing uses is given to `silverc` when it's tested. `--scripts-in` is given for every place tested.
 - An entry of the starting file that says a package isn't tested, by `test = false` or by being outside and not opted in, leaves out that package's directory even when a wider place tested holds it, such as a package outside that's opted in, or a package listed with a file of its own that describes it: the more specific entry wins. A `--skip` that is, or holds, a path given to be tested is refused by `silverc`, as the two disagree.
 - A project left out isn't mentioned in the report. With `--show-command`, one more line on stderr after the command line names the directories that a `silver.toml` names and the run leaves out, and why.
+
+Native libraries:
+
+- A `[native.<library>.<platform>]` table is read with the rest of its file and checked before anything runs. A platform other than `windows` and `linux`, or a key other than `link` and `load`, is `F0016`, and a value that isn't a string, or a `native`, library or platform that isn't a table, `F0017`. An absolute path is `F0050` (one starting with `/` or `\`, or a drive letter, on either platform). A file named for the platform `silver` runs on that isn't there, or isn't a file, is `F0051`; the other platform's files aren't looked at, so a project can keep only the files of the platforms it's built on. A library that's empty, or holds `=` or a NUL, can't be passed on and is `F0052`.
+- `silverc` is given the files for the platform it runs on, for each package of the table's file that has modules, as `--native-link <package>:<library>=<file>` and `--native-load <package>:<library>=<file>`, and takes the same options by hand. Given by hand inside a project, either is `F0036`. A package that isn't declared, a file given twice for one package and library, or one that isn't there, is refused before anything is loaded.
+- `silverc` chooses each program's files by the package of each module whose `native library` names the library. So a `silver test` run over packages that never share a program gives each program its own package's files, and a module of a package with no table finds its library by name, as without one. When the modules of one program name a library that two packages give different files, it's `L0017`, at the second module's `native library` in name order, which names the files and where each was given: the `silver.toml` and the package from `silver`, the option when `silverc` is run by hand.
+- Interpreting, the `load` file is loaded from where it is, on Windows with the libraries it needs looked for beside it first. `silver build` links against the `link` file by its path; on Linux it's given as `-L<directory> -l:<file>`, so a shared library with no soname is recorded by its file's name rather than the path it was linked from. It then copies the `load` file beside the executable, skipping a copy that's already the same, and on Linux gives the executable `$ORIGIN` as its run path, only when it copied one. Only the libraries the program is linked with are copied.
+- A compiled program run from `silverc` (`run -b llvm`, and `test` on the compiled backend or both) finds its `load` files through its environment: their directories go first in `PATH` on Windows and in `LD_LIBRARY_PATH` on Linux, for that program alone.
 
 Commands with no file, and `run` or `build` with a directory:
 

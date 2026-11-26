@@ -37,6 +37,8 @@ enum DiagnosticCode : string
     SeveralPrograms = "L0015",
     /// A package asked for its program that has more than one module declaring `main`.
     SeveralMains = "L0016",
+    /// One `native library` name given different files by the packages of two modules of one program.
+    NativeFilesDisagree = "L0017",
 
     DuplicateDeclaration = "S0001",
     UnknownName = "S0002",

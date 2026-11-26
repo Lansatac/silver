@@ -31,6 +31,140 @@ struct Packages
     bool fromPackageFiles;
     /// Whether `silver` is the one driving, so no message names an option to give.
     bool bySilver;
+    /// The files `--native-link` and `--native-load` give for a `native library` name in a package's
+    /// modules, by package. A name given none is found by the linker's and the system's search paths.
+    NativeFiles[string] natives;
+    /// The package file each package was described in, from `--package-file`, for messages.
+    string[string] packageFiles;
+}
+
+/// The files given for native libraries, by the name `native library` gives: `link`, what a compiled
+/// program is linked against, and `load`, the shared library itself.
+struct NativeFiles
+{
+    string[string] link;
+    string[string] load;
+}
+
+/// Reads `--native-link package:library=file` and `--native-load package:library=file` into `packages`:
+/// the file for `native library "library"` in the modules of `package`, which has to be declared. Returns
+/// what's wrong with one, or null: how it's written, a library given twice for a package, or a file that
+/// isn't there.
+string describeNativeFiles(const string[] links, const string[] loads, ref Packages packages)
+{
+    import std.file : isFile;
+    import std.string : indexOf;
+
+    foreach (i, list; [links, loads])
+    {
+        immutable option = i == 0 ? "--native-link" : "--native-load";
+        foreach (given; list)
+        {
+            auto at = given.indexOf('=');
+            auto colon = at < 0 ? -1 : given[0 .. at].indexOf(':');
+            if (colon <= 0 || colon == at - 1 || at == given.length - 1)
+                return format("%s takes a package, a library as `native library` names it in that package's modules, "
+                    ~ "and a file, as `%s app:raylib=lib/%s`, not `%s`", option, option,
+                    i == 0 ? "raylib.lib" : "raylib.dll", given);
+            immutable package_ = given[0 .. colon];
+            immutable library = given[colon + 1 .. at];
+            immutable file = given[at + 1 .. $];
+            if (!packages.declared.canFind!(p => p.name == package_))
+                return undeclared(option, package_);
+            auto natives = &packages.natives.require(package_, NativeFiles.init);
+            auto files = i == 0 ? &natives.link : &natives.load;
+            if (library in *files)
+                return format("%s gives the library '%s' of '%s' twice, as %s and as %s", option, library, package_,
+                    (*files)[library], file);
+            bool present;
+            try present = exists(file) && isFile(file);
+            catch (Exception) present = false;
+            if (!present)
+                return format("%s gives the library '%s' of '%s' the file %s, which isn't there", option, library,
+                    package_, file);
+            (*files)[library] = file;
+        }
+    }
+    return null;
+}
+
+@("--native-link and --native-load give a library's files for a declared package, once each, and the files have to be there")
+unittest
+{
+    import std.algorithm : canFind;
+    import std.file : remove, tempDir, write;
+
+    auto file = buildPath(tempDir, "silver-loader-native-files.dll");
+    write(file, "");
+    scope (exit) remove(file);
+    Packages packages;
+    assert(describePackages(["a=a", "b=b"], null, null, null, packages) is null);
+    assert(describeNativeFiles(["a:ray=" ~ file], ["a:ray=" ~ file, "b:ray=" ~ file, "a:x:y=" ~ file], packages) is null);
+    assert(packages.natives["a"].link == ["ray": file] && packages.natives["a"].load == ["ray": file, "x:y": file]);
+    assert(packages.natives["b"].load == ["ray": file]);
+
+    foreach (wrong; ["ray=" ~ file, "a:ray", ":ray=" ~ file, "a:=" ~ file, "a:ray="])
+        assert(describeNativeFiles([wrong], null, packages).canFind("--native-link takes a package"), wrong);
+    assert(describeNativeFiles(null, ["c:ray=" ~ file], packages).canFind("'c', which no --package"));
+    assert(describeNativeFiles(null, ["a:ray=" ~ file], packages).canFind("gives the library 'ray' of 'a' twice"));
+    assert(describeNativeFiles([buildPath("b:ray=" ~ tempDir, "silver-no-such-file.a")], null, packages)
+        .canFind("which isn't there"));
+    assert(describeNativeFiles(["b:z=" ~ tempDir], null, packages).canFind("which isn't there"));
+}
+
+/// The files of `packages.natives` that `program` uses, by library: for each `native library` name, the
+/// file the package of a module that names it gives. Two packages whose modules name one library and
+/// give it different files are reported to `context`, at the second module's `native library`, and the
+/// first one's file is kept.
+NativeFiles nativesOf(const ref Program program, const Packages packages, SourceContext context)
+{
+    import std.path : filenameCmp;
+
+    NativeFiles result;
+    if (packages.natives.length == 0) return result;
+    struct Given
+    {
+        string file;
+        string package_;
+        string module_;
+    }
+    Given[string][2] seen;
+    string by(size_t kind, string package_, string library, string file)
+    {
+        if (auto described = package_ in packages.packageFiles) return format("%s, for '%s'", *described, package_);
+        return format("`%s %s:%s=%s`", kind == 0 ? "--native-link" : "--native-load", package_, library, file);
+    }
+    foreach (name; program.modules.keys.sort)
+    {
+        auto m = program.modules[name];
+        if (m.library is null) continue;
+        auto package_ = name in program.packageOf;
+        if (package_ is null) continue;
+        auto files = *package_ in packages.natives;
+        if (files is null) continue;
+        immutable library = m.library.name;
+        foreach (kind; 0 .. 2)
+        {
+            auto file = library in (kind == 0 ? files.link : files.load);
+            if (file is null) continue;
+            if (auto earlier = library in seen[kind])
+            {
+                if (filenameCmp(buildNormalizedPath(absolutePath(earlier.file)), buildNormalizedPath(absolutePath(*file)))
+                    == 0)
+                    continue;
+                context.collector.reportError(DiagnosticCode.NativeFilesDisagree, m.library.span, format("The library "
+                    ~ "'%s' is given two files to %s in this program: %s by %s, where %s names it, and %s by %s, here. A "
+                    ~ "program has one file for each library, so give it in one of the two, or the same file in both",
+                    library, kind == 0 ? "link against" : "load", earlier.file, by(kind, earlier.package_, library,
+                    earlier.file), earlier.module_, *file, by(kind, *package_, library, *file)));
+                continue;
+            }
+            seen[kind][library] = Given(*file, *package_, name);
+            if (kind == 0) result.link[library] = *file;
+            else result.load[library] = *file;
+        }
+    }
+    return result;
 }
 
 /// A directory whose files with no `module` line use what the package `package_` uses.
@@ -1047,6 +1181,7 @@ string describePackageFiles(const string[] files, ref Packages packages)
         if (!packages.declared.canFind!(p => p.name == name))
             return undeclared("--package-file", name);
         fileOf[name] = option[at + 1 .. $];
+        packages.packageFiles[name] = option[at + 1 .. $];
     }
     string[string] describerOf;
     foreach (ref p; packages.declared)

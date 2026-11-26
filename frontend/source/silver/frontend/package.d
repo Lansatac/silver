@@ -115,7 +115,7 @@ unittest
 /// options. A copy of `optionsWithValues` in source/silver/driver.d, which this package can't import;
 /// a test reads that one to check the two agree.
 immutable compilerOptionsWithValues = ["--package", "--uses", "--project", "--package-file", "--scripts-in", "--program",
-    "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip", "--also"];
+    "--native-link", "--native-load", "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip", "--also"];
 
 /// `silver`'s own option, which prints the compiler's command line before running it.
 enum showCommand = "--show-command";
@@ -130,6 +130,9 @@ immutable packageOptions = ["--package", "--uses", "--project"];
 /// The compiler's options that say what `test` runs, which inside a project the project's `silver.toml`
 /// and the path given say.
 immutable testedOptions = ["--also", "--skip"];
+
+/// The compiler's options that give a native library's files, which inside a project its `silver.toml` gives.
+immutable nativeOptions = ["--native-link", "--native-load"];
 
 /// A command line after its command, taken apart at the file.
 struct Arguments
@@ -488,7 +491,9 @@ Plan plan(string compiler, Request request, string workingDirectory)
             if (auto given = handGiven(arguments.options))
             {
                 result.mistake = formatMistake(Mistake(null, ProjectCode.PackageOptionGiven, Span(), given ~ " is "
-                    ~ "given by hand, and inside a project " ~ (testedOptions.canFind(given) ? "what's tested is decided by "
+                    ~ "given by hand, and inside a project " ~ (nativeOptions.canFind(given) ? "a native library's files "
+                    ~ "are given in a package file, as [native.<library>.<platform>] with `link` and `load`"
+                    : testedOptions.canFind(given) ? "what's tested is decided by "
                     ~ "its package file, " ~ shown(result.projectFile) ~ ", and the path given: the `test` field of a "
                     ~ "`[[package]]` entry says whether a wider run tests that package, and naming a directory tests it"
                     : "packages are described in its package file, " ~ shown(result.projectFile) ~ ": what a package "
@@ -586,7 +591,7 @@ string handGiven(const string[] options)
 
     for (size_t i = 0; i < options.length; i++)
     {
-        foreach (name; packageOptions ~ testedOptions)
+        foreach (name; packageOptions ~ testedOptions ~ nativeOptions)
         {
             if (options[i] == name || options[i].startsWith(name ~ "=")) return name;
         }

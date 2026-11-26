@@ -224,7 +224,7 @@ unittest
 {
     auto broken = buildPath(fixtures, "broken");
     immutable message = "Error F0016: `version` isn't a field of a package file. A package file has `name`, `source`, "
-        ~ "`uses` and `[[package]]`\n";
+        ~ "`uses`, `[[package]]` and `[native.<library>.<platform>]`\n";
     expectRan(silver(["main.ag"], broken), "silver.toml(2,1): " ~ message, 1);
     expectRan(silver(["build", "broken/main.ag"], fixtures), buildPath("broken", "silver.toml") ~ "(2,1): " ~ message, 1);
     auto p = plan("silverc", request(["test", "main.ag"]), broken);
@@ -947,6 +947,170 @@ unittest
     git(["tag", "-a", "v1.2.3", "-m", "v"]);
     stamped(stamper, stamp, directory);
     assert(readText(stamp) == "1.2.3", readText(stamp));
+}
+
+version (Windows)
+{
+    enum host = "windows", other = "linux";
+    /// What the test library's files are called: a MinGW-style import library, and the DLL it names.
+    enum linkName = "libnum.dll.a", loadName = "num.dll";
+}
+else
+{
+    enum host = "linux", other = "windows";
+    /// The shared library under its soname, which is both what's linked and what's loaded.
+    enum linkName = "libnum.so.1", loadName = "libnum.so.1";
+}
+
+/// Builds the C library `num` into `directory` with clang, as `linkName` and `loadName`. Its function `twice`
+/// multiplies by `factor`, so a test can tell two builds apart.
+void buildNumLibrary(string directory, int factor = 2)
+{
+    import std.conv : text;
+
+    import std.file : mkdirRecurse, write;
+    import std.string : strip;
+
+    mkdirRecurse(directory);
+    auto source = buildPath(directory, "num.c");
+    write(source, "#ifdef _WIN32\n__declspec(dllexport)\n#endif\nlong long twice(long long x) { return " ~ text(factor)
+        ~ " * x; }\n");
+    auto clang = std.process.environment.get("SILVER_CLANG", "clang");
+    version (Windows)
+    {
+        // Linked as the conformance harness links its libraries: with no C runtime, by lld-link beside clang.
+        auto lld = std.process.environment.get("SILVER_LLD",
+            std.process.execute([clang, "-print-prog-name=lld-link"]).output.strip);
+        auto obj = buildPath(directory, "num.obj");
+        auto compiled = std.process.execute([clang, "-c", "-ffreestanding", "-o", obj, source]);
+        assert(compiled.status == 0, compiled.output);
+        auto linked = std.process.execute([lld, "/nologo", "/dll", "/noentry", "/nodefaultlib", "/out:"
+            ~ buildPath(directory, loadName), "/implib:" ~ buildPath(directory, linkName), obj]);
+        assert(linked.status == 0, linked.output);
+    }
+    else
+    {
+        auto built = std.process.execute([clang, "-shared", "-fPIC", "-ffreestanding", "-Wl,-soname," ~ loadName, "-o",
+            buildPath(directory, loadName), source]);
+        assert(built.status == 0, built.output);
+    }
+}
+
+/// An environment with nothing that finds a library: none at all, but on Windows the system's directory.
+string[string] cleanEnvironment()
+{
+    version (Windows) return ["SystemRoot": std.process.environment.get("SystemRoot", `C:\Windows`)];
+    else return null;
+}
+
+@("silver.toml's [native] table gives a library kept with the project: run on both backends, tested, and built with a copy beside the program")
+unittest
+{
+    import std.file : copy, mkdirRecurse, PreserveAttributes, readText;
+
+    auto project = makeTree("frontend-native", [
+        "silver.toml": "name = \"app\"\nsource = \"src\"\n\n[native.num." ~ host ~ "]\nlink = \"vendor/" ~ linkName
+            ~ "\"\nload = \"vendor/" ~ loadName ~ "\"\n\n[native.num." ~ other ~ "]\nlink = \"vendor/" ~ other
+            ~ "/not-here\"\n",
+        "src/num.ag": "module app.num\n\nnative library \"num\"\n\nnative def twice(x: Int64): Int64\n",
+        "src/main.ag": "module app.main\n\nimport app.num\n\ndef main(): Unit {\n    printl(twice(21))\n}\n\n"
+            ~ "test \"twice\" => expect(twice(2) == 4)\n",
+        "out/": "",
+        "elsewhere/": "",
+    ]);
+    scope (exit) removeTree(project);
+    buildNumLibrary(buildPath(project, "vendor"));
+
+    expectRan(silver(["run"], project), "42\n");
+    expectRan(silver(["run", "-b", "llvm"], project), "42\n");
+    expectRan(silver(["test", "-b", "both"], project), "1 passed, 0 failed\n");
+    expectRan(silver(["test", "-b", "llvm"], project), "1 passed, 0 failed\n");
+
+    // Built, the program has its library beside it, and runs from anywhere with nothing in the environment.
+    auto output = buildPath(project, "out", "app" ~ exe);
+    expectRan(silver(["build", "-o", output], project), "");
+    assert(exists(buildPath(project, "out", loadName)));
+    auto ran = std.process.execute([output], cleanEnvironment, std.process.Config.newEnv, size_t.max,
+        buildPath(project, "elsewhere"));
+    assert(ran.status == 0 && ran.output.replace("\r\n", "\n") == "42\n", ran.output);
+    // The two moved together still work.
+    auto moved = buildPath(project, "elsewhere", "app" ~ exe);
+    copy(output, moved, PreserveAttributes.yes);
+    copy(buildPath(project, "out", loadName), buildPath(project, "elsewhere", loadName), PreserveAttributes.yes);
+    ran = std.process.execute([moved], cleanEnvironment, std.process.Config.newEnv, size_t.max, tempDir);
+    assert(ran.status == 0 && ran.output.replace("\r\n", "\n") == "42\n", ran.output);
+
+    // silverc takes the same files by hand.
+    auto byHand = runIn([built("silverc"), "--package", "app=src", "--native-load", "app:num=" ~ buildPath("vendor", loadName),
+        buildPath("src", "main.ag")], project);
+    expectRan(byHand, "42\n");
+    // Without them the library is looked for by name, as before.
+    auto unfound = runIn([built("silverc"), "--package", "app=src", buildPath("src", "main.ag")], project);
+    assert(unfound.status == 1 && unfound.output.canFind("R0002"), unfound.output);
+}
+
+@("a mistake in a [native] table stops the run, at its line in silver.toml")
+unittest
+{
+    auto project = makeTree("frontend-native-mistake", [
+        "silver.toml": "name = \"app\"\n\n[native.num." ~ host ~ "]\nload = \"vendor/gone.so\"\n",
+        "main.ag": "def main(): Unit {}\n",
+    ]);
+    scope (exit) removeTree(project);
+    auto ran = silver(["main.ag"], project);
+    assert(ran.status == 1 && ran.output.startsWith("silver.toml(4,8): Error F0051: `load` for the library 'num' is "),
+        ran.output);
+    // Inside a project the files come from silver.toml, not the command line.
+    ran = silver(["--native-load", "app:num=x", "main.ag"], project);
+    assert(ran.status == 1 && ran.output.canFind("Error F0036: --native-load is given by hand"), ran.output);
+}
+
+@("each package's table is for its own modules: a test run over two packages gets each one's library, and a program with both is refused")
+unittest
+{
+    string package_(string name)
+    {
+        return "name = \"" ~ name ~ "\"\nsource = \"src\"\n\n[native.num." ~ host ~ "]\nlink = \"vendor/" ~ linkName
+            ~ "\"\nload = \"vendor/" ~ loadName ~ "\"\n";
+    }
+    enum num = "native library \"num\"\n\nnative def twice(x: Int64): Int64\n";
+    auto ws = makeTree("frontend-native-packages", [
+        "silver.toml": "name = \"ws\"\nsource = \"src\"\n\n[[package]]\npath = \"a\"\n\n[[package]]\npath = \"b\"\n\n"
+            ~ "[[package]]\npath = \"both\"\ntest = false\n",
+        "src/": "",
+        "a/silver.toml": package_("a"),
+        "a/src/num.ag": "module a.num\n\n" ~ num ~ "\ntest \"by two\" => expect(twice(2) == 4)\n",
+        "b/silver.toml": package_("b"),
+        "b/src/num.ag": "module b.num\n\n" ~ num ~ "\ntest \"by three\" => expect(twice(2) == 6)\n",
+        "both/silver.toml": "name = \"both\"\nuses = [\"a\", \"b\"]\n\n[[package]]\npath = \"../a\"\n\n[[package]]\n"
+            ~ "path = \"../b\"\n",
+        "both/main.ag": "module both.main\n\nimport a.num\nimport b.num\n\ndef main(): Unit {\n    printl(a.num.twice(1))\n}\n",
+    ]);
+    scope (exit) removeTree(ws);
+    buildNumLibrary(buildPath(ws, "a", "vendor"), 2);
+    buildNumLibrary(buildPath(ws, "b", "vendor"), 3);
+
+    foreach (backend; ["interpreter", "llvm", "both"])
+        expectRan(silver(["test", "-b", backend], ws), "2 passed, 0 failed\n");
+
+    // One program with both packages' modules has one file for `num`, so the two tables disagree.
+    auto both = buildPath(ws, "both");
+    auto ran = silver(["run"], both);
+    assert(ran.status == 1, ran.output);
+    // Outside the working directory, paths are shown whole.
+    auto at = (string[] path...) => buildPath(ws ~ path);
+    assert(ran.output.startsWith(at("b", "src", "num.ag") ~ "(3,1): Error L0017: The library 'num' is given two files to "
+        ~ "link against in this program: " ~ at("a", "vendor", linkName) ~ " by " ~ at("a", "silver.toml") ~ ", for 'a', "
+        ~ "where a.num names it, and " ~ at("b", "vendor", linkName) ~ " by " ~ at("b", "silver.toml") ~ ", for 'b', here. "
+        ~ "A program has one file for each library, so give it in one of the two, or the same file in both\n"), ran.output);
+    // By hand, the options that gave them are named.
+    auto a = buildPath(ws, "a", "vendor", loadName), b = buildPath(ws, "b", "vendor", loadName);
+    ran = runIn([built("silverc"), "--package", "a=" ~ buildPath(ws, "a", "src"), "--package", "b=" ~ buildPath(ws, "b", "src"),
+        "--package", "both=.", "--uses", "both=a,b", "--native-load", "a:num=" ~ a, "--native-load", "b:num=" ~ b,
+        "main.ag"], both);
+    assert(ran.status == 1 && ran.output.canFind("Error L0017: The library 'num' is given two files to load in this "
+        ~ "program: " ~ a ~ " by `--native-load a:num=" ~ a ~ "`, where a.num names it, and " ~ b ~ " by `--native-load "
+        ~ "b:num=" ~ b ~ "`, here."), ran.output);
 }
 
 @("out/ has the silver and silverc that were last built into build/, so these tests run what was built")

@@ -7,16 +7,18 @@ import std.path;
 import std.range;
 
 import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, SourceContext;
-import silver.codegen : executablePath, findToolchain, generate, linkExecutable, Optimization, optimizeIr, Toolchain;
+import silver.codegen : copyBeside, executablePath, findingLibraries, findToolchain, generate, linkExecutable, Optimization,
+    optimizeIr, sharedLibrariesOf, Toolchain;
 import silver.core : lowerProgram, printCore = print;
 import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramFailed, RuntimeError;
-import silver.loader : describePackageFiles, describePackages, describeScriptHomes, describeSilver, load, missingStandardLibrary, Packages,
-    programStart, standardPrelude, undeclared;
+import silver.loader : describeNativeFiles, describePackageFiles, describePackages, describeScriptHomes, describeSilver, load,
+    missingStandardLibrary, NativeFiles, nativesOf, Packages, programStart, standardPrelude, undeclared;
 import silver.sema : analyze, Analysis, Target;
 
-/// Loads and analyzes `programFile`. Problems go to `context.collector`, which the caller
-/// must check before using `program` or the returned Analysis.
-Analysis loadAndAnalyze(string programFile, const Packages packages, SourceContext context, out Program program)
+/// Loads and analyzes `programFile`, with the files its native libraries are given in `natives`. Problems
+/// go to `context.collector`, which the caller must check before using `program` or the returned Analysis.
+Analysis loadAndAnalyze(string programFile, const Packages packages, SourceContext context, out Program program,
+    out NativeFiles natives)
 {
     try
     {
@@ -31,6 +33,11 @@ Analysis loadAndAnalyze(string programFile, const Packages packages, SourceConte
     {
         return null;
     }
+    natives = nativesOf(program, packages, context);
+    if (context.collector.hasErrors)
+    {
+        return null;
+    }
     return analyze(program, context.collector, Target.host);
 }
 
@@ -39,7 +46,8 @@ int interpret(string programFile, const Packages packages, bool emitCore = false
 {
     auto context = new SourceContext();
     Program program;
-    auto analysis = loadAndAnalyze(programFile, packages, context, program);
+    NativeFiles natives;
+    auto analysis = loadAndAnalyze(programFile, packages, context, program, natives);
     printDiagnostics(context);
     if (context.collector.hasErrors)
     {
@@ -54,7 +62,7 @@ int interpret(string programFile, const Packages packages, bool emitCore = false
             writeln(printCore(lowered));
             return 0;
         }
-        auto evaluator = new Evaluator(lowered, true, arguments);
+        auto evaluator = new Evaluator(lowered, true, arguments, null, natives.load);
         evaluator.run();
     }
     catch (RuntimeError e)
@@ -89,12 +97,12 @@ enum Backend
 }
 
 /// The LLVM IR for the program in `programFile`, or null after printing why there isn't any.
-/// `libraries` are what it has to be linked with.
-string compileToIr(string programFile, const Packages packages, out string[] libraries)
+/// `libraries` are what it has to be linked with, and `natives` the files given for them.
+string compileToIr(string programFile, const Packages packages, out string[] libraries, out NativeFiles natives)
 {
     auto context = new SourceContext();
     Program program;
-    auto analysis = loadAndAnalyze(programFile, packages, context, program);
+    auto analysis = loadAndAnalyze(programFile, packages, context, program, natives);
     printDiagnostics(context);
     if (context.collector.hasErrors)
     {
@@ -128,15 +136,20 @@ bool writeFile(string path, string content)
     }
 }
 
-/// Compiles the program in `programFile` to the executable `outputPath`. False after printing why it failed.
-bool compileToExecutable(string programFile, const Packages packages, string outputPath, Optimization optimization)
+/// Compiles the program in `programFile` to the executable `outputPath`, with the shared libraries that
+/// `packages` gives for the libraries it's linked with in `sharedLibraries`. With `copyLibraries`, those
+/// are copied beside it, where it finds them. False after printing why it failed.
+bool compileToExecutable(string programFile, const Packages packages, string outputPath, Optimization optimization,
+    bool copyLibraries, out string[] sharedLibraries)
 {
     string[] libraries;
-    auto ir = compileToIr(programFile, packages, libraries);
+    NativeFiles natives;
+    auto ir = compileToIr(programFile, packages, libraries, natives);
     if (ir is null)
     {
         return false;
     }
+    sharedLibraries = sharedLibrariesOf(libraries, natives.load);
     Toolchain toolchain;
     if (auto missing = findToolchain(toolchain))
     {
@@ -151,11 +164,20 @@ bool compileToExecutable(string programFile, const Packages packages, string out
     }
     scope (exit) remove(irPath);
 
-    auto linked = linkExecutable(toolchain, irPath, outputPath, libraries, optimization);
+    immutable beside = copyLibraries && sharedLibraries.length > 0;
+    auto linked = linkExecutable(toolchain, irPath, outputPath, libraries, optimization, natives.link, beside);
     if (!linked.succeeded)
     {
         stderr.writeln("Linking failed:\n", linked.output);
         return false;
+    }
+    if (beside)
+    {
+        if (auto failed = copyBeside(sharedLibraries, outputPath))
+        {
+            stderr.writeln(failed);
+            return false;
+        }
     }
     return true;
 }
@@ -185,7 +207,8 @@ int build(string programFile, const Packages packages, string outputPath, bool e
     if (emitLlvm)
     {
         string[] libraries;
-        auto ir = compileToIr(programFile, packages, libraries);
+        NativeFiles natives;
+        auto ir = compileToIr(programFile, packages, libraries, natives);
         if (ir is null)
         {
             return 1;
@@ -215,8 +238,9 @@ int build(string programFile, const Packages packages, string outputPath, bool e
         }
         return 0;
     }
-    return compileToExecutable(programFile, packages,
-        outputPath.empty ? executablePath(name) : outputPath, optimization) ? 0 : 1;
+    string[] sharedLibraries;
+    return compileToExecutable(programFile, packages, outputPath.empty ? executablePath(name) : outputPath, optimization,
+        true, sharedLibraries) ? 0 : 1;
 }
 
 /// Compiles the program in `programFile` to a temporary executable and runs it with `arguments`,
@@ -227,7 +251,8 @@ int compileAndRun(string programFile, const Packages packages, Optimization opti
     import std.process : ProcessException, spawnProcess, wait;
 
     auto exePath = executablePath(temporaryPath(programFile, ""));
-    if (!compileToExecutable(programFile, packages, exePath, optimization))
+    string[] sharedLibraries;
+    if (!compileToExecutable(programFile, packages, exePath, optimization, false, sharedLibraries))
     {
         return 1;
     }
@@ -238,7 +263,7 @@ int compileAndRun(string programFile, const Packages packages, Optimization opti
         stderr.writeln("error: ", mistake);
         return 1;
     }
-    try return wait(spawnProcess([exePath] ~ arguments));
+    try return wait(spawnProcess([exePath] ~ arguments, findingLibraries(sharedLibraries)));
     catch (ProcessException e)
     {
         // As when the arguments are longer than the system takes.
@@ -407,7 +432,7 @@ unittest
 /// (`compilerOptionsWithValues` in frontend/source/silver/frontend/package.d), and a test there reads
 /// this one to check the two agree.
 immutable optionsWithValues = ["--package", "--uses", "--project", "--package-file", "--scripts-in", "--program",
-    "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip", "--also"];
+    "--native-link", "--native-load", "--backend", "-b", "--output", "-o", "--filter", "--format", "--skip", "--also"];
 
 /// Takes the program's words off `args` and returns them. The file is the first word that isn't an
 /// option or an option's value, and options stop there: what follows is the program's, except a first
@@ -1185,6 +1210,8 @@ int run(string[] args)
     string[] projectOptions;
     string[] packageFileOptions;
     string[] scriptsInOptions;
+    string[] nativeLinks;
+    string[] nativeLoads;
     string[] skipped;
     string[] also;
     string[] programs;
@@ -1234,6 +1261,12 @@ int run(string[] args)
         ~ " uses what the package uses, and the package too unless it's a program; silver gives it", &scriptsInOptions,
     "program", "run, build: in place of a file, a package whose program to start from: the package's own, or the one"
         ~ " of the packages it describes that's a program; silver gives it when no file is named", &programs,
+    "native-link", "the file a compiled program is linked against for a native library that a package's modules name,"
+        ~ " as package:library=file, in place of finding the library by its name; silver gives it from silver.toml",
+        &nativeLinks,
+    "native-load", "the shared library to load for a native library that a package's modules name, as"
+        ~ " package:library=file: interpreting loads it, a built program has it copied beside it, and a compiled program"
+        ~ " run from here finds it; silver gives it from silver.toml", &nativeLoads,
     "from-silver", "silver gives it, so that messages say what a user of silver can do rather than naming these"
         ~ " options", &fromSilver,
     "backend|b", "run, test: how to run the program: interpreter (default), llvm, or for tests, both", &backend,
@@ -1285,6 +1318,7 @@ int run(string[] args)
     if (mistake is null && fromSilver) describeSilver(packages);
     if (mistake is null) mistake = describePackageFiles(packageFileOptions, packages);
     if (mistake is null) mistake = describeScriptHomes(scriptsInOptions, null, packages);
+    if (mistake is null) mistake = describeNativeFiles(nativeLinks, nativeLoads, packages);
     if (mistake is null && program !is null && !packages.declared.canFind!(p => p.name == program))
         mistake = undeclared("--program", program);
     if (mistake !is null)

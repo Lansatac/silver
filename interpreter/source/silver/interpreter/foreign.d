@@ -202,10 +202,10 @@ else
     }
 }
 
-/// The address of the C function `symbol`: in the shared library `library` names, or without one,
-/// in the runtime's natives and then the C library. Null, with `problem` saying why, when it can't
-/// be found.
-const(void)* findNative(string symbol, string library, out string problem)
+/// The address of the C function `symbol`: in the shared library `library` names, which is the file
+/// `file` when that isn't null, or without a library, in the runtime's natives and then the C library.
+/// Null, with `problem` saying why, when it can't be found.
+const(void)* findNative(string symbol, string library, out string problem, string file = null)
 {
     import std.format : format;
 
@@ -219,19 +219,39 @@ const(void)* findNative(string symbol, string library, out string problem)
         problem = "`%s` is in neither Silver's runtime nor the C library".format(symbol);
         return null;
     }
-    auto handles = loaded(library);
+    auto handles = file is null ? loaded(library) : loadedPath(file);
     if (handles.length == 0)
     {
-        problem = "the library `%s` can't be loaded: interpreting needs it as the shared library %s, where the system finds shared libraries, and can't use a static one"
-            .format(library, sharedLibraryFile(library));
+        problem = file is null
+            ? "the library `%s` can't be loaded: interpreting needs it as the shared library %s, where the system finds shared libraries, and can't use a static one"
+                .format(library, sharedLibraryFile(library))
+            : "the library `%s` can't be loaded from %s, the file given to load for it".format(library, file);
         return null;
     }
     foreach (handle; handles)
     {
         if (auto address = symbolIn(handle, symbol)) return address;
     }
-    problem = "`%s` isn't in %s".format(symbol, sharedLibraryFile(library));
+    problem = "`%s` isn't in %s".format(symbol, file is null ? sharedLibraryFile(library) : file);
     return null;
+}
+
+/// The shared library at `file`, loaded, with the libraries it needs found beside it first on Windows,
+/// as they would be beside a program. Empty when it can't be loaded.
+private void*[] loadedPath(string file)
+{
+    import std.path : absolutePath;
+
+    auto path = absolutePath(file);
+    version (Windows)
+    {
+        import core.sys.windows.winbase : LoadLibraryExW, LOAD_WITH_ALTERED_SEARCH_PATH;
+        import std.utf : toUTF16z;
+
+        auto handle = LoadLibraryExW(path.toUTF16z, null, LOAD_WITH_ALTERED_SEARCH_PATH);
+    }
+    else auto handle = loadedFile(path);
+    return handle is null ? null : [handle];
 }
 
 /// The file a shared library `name` is in, as the system's loader looks for it.
@@ -461,6 +481,9 @@ unittest
     assert(problem == "`silver_no_such_function` is in neither Silver's runtime nor the C library", problem);
     assert(findNative("f", "silver_no_such_library", problem) is null);
     assert(problem.canFind(sharedLibraryFile("silver_no_such_library")) && problem.canFind("can't use a static one"), problem);
+    assert(findNative("f", "silver_no_such_library", problem, "nowhere/x.dll") is null);
+    assert(problem == "the library `silver_no_such_library` can't be loaded from nowhere/x.dll, the file given to load for it",
+        problem);
 }
 
 version (linux)
