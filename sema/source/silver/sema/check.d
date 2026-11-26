@@ -197,7 +197,20 @@ private final class TypeChecker
             {
                 decl.kind.match!(
                     (const TypeDecl t) {
-                        if (t.members.length > 0) _declarer.declareDirectMembers(t);
+                        if (t.members.length > 0) _declarer.declareDirectMembers(t, false);
+                    },
+                    (_) {},
+                );
+            }
+        }
+
+        foreach (mod; programModules)
+        {
+            foreach (decl; mod.declarations)
+            {
+                decl.kind.match!(
+                    (const TypeDecl t) {
+                        if (t.members.length > 0) _declarer.declareDirectMembers(t, true);
                     },
                     (_) {},
                 );

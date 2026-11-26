@@ -33,6 +33,7 @@ package final class Declarer
     /// What the members of sums written as a type name resolved to, so that `declareSum` doesn't
     /// resolve them, or report them, a second time.
     private Type[typeof(TypeExpr.id)] _memberTypes;
+    private Type[][Id!TypeDecl] _directMembers;
     /// The sum that declared each member it owns, which is what its constructor produces.
     package Type[Id!TypeDecl] _owners;
 
@@ -590,18 +591,43 @@ package final class Declarer
     }
 
     /// Resolves the members of the sum `decl` that are written as a type name, and records them
-    /// with the type table, ahead of every type that may be an error list.
-    package void declareDirectMembers(const TypeDecl decl)
+    /// with the type table. Those that can't build an error list go first, for every sum, so that
+    /// the ones that can (`afterLists`: an alias, a type argument with a list in it) find the
+    /// members of every sum when they build one.
+    package void declareDirectMembers(const TypeDecl decl, bool afterLists)
     {
-        Type[] direct;
+        auto direct = _directMembers.get(decl.id, null);
         foreach (member; decl.members)
         {
             if (!member.type.kind.match!((const NamedType _) => true, _ => false)) continue;
+            if (mayBuildList(member.type) != afterLists) continue;
             auto type = resolveType(member.type);
             _memberTypes[member.type.id] = type;
             if (type != _types.error) direct ~= type;
         }
+        _directMembers[decl.id] = direct;
         _types.declareDirectMembers(decl.id, decl.typeParams.map!(p => p.id).array, direct);
+    }
+
+    /// Whether resolving `type` can build an error list: it has one written in it, or names an alias,
+    /// which may.
+    private bool mayBuildList(const TypeExpr type)
+    {
+        return type.kind.match!(
+            (const NamedType named) {
+                auto symbol = type.id in _resolutions.typeResolutions;
+                if (symbol !is null && (*symbol).match!((const Id!AliasDecl _) => true, _ => false)) return true;
+                return named.args.any!(a => mayBuildList(a));
+            },
+            (const OptionType option) => mayBuildList(*option.inner),
+            (const ArrayType array) => mayBuildList(*array.element),
+            (const DictionaryType dictionary) => mayBuildList(*dictionary.key) || mayBuildList(*dictionary.value),
+            (const FunctionType func) => func.params.any!(p => mayBuildList(p)) || mayBuildList(*func.returnType),
+            (const UnitType _) => false,
+            (const TupleType tuple) => tuple.elements.any!(e => mayBuildList(e)),
+            (const ErrorUnionType _) => true,
+            (const JoinedType _) => true,
+        );
     }
 
     package void declareSum(const TypeDecl decl)
