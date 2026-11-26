@@ -346,14 +346,21 @@ private final class FunctionState
     }
 
     /// Memory for the C structure `type`, aligned to at least 8 so each 8-byte piece can be loaded
-    /// and stored as the convention's types. It starts zeroed, as the interpreter's buffer does, so
-    /// the padding C may read is the same on both backends.
+    /// and stored as the convention's types. An image C reads from the caller is zeroed with
+    /// `zeroCImage` each time it is filled.
     string newCImage(const CType type)
     {
         auto name = "%%.c%s".format(cImages.length);
         cImages ~= "  %s = alloca [%s x i8], align %s".format(name, type.size, type.alignment > 8 ? type.alignment : 8);
-        cImages ~= "  store [%s x i8] zeroinitializer, ptr %s, align 1".format(type.size, name);
         return name;
+    }
+
+    /// Zeroes `image` before a structure is packed into it, as the interpreter's fresh buffer is, so
+    /// the padding C reads is zero on every call, though C may have changed the copy it was given
+    /// the time before.
+    Fragment zeroCImage(string image, const CType type)
+    {
+        return Fragment.instruction("store [%s x i8] zeroinitializer, ptr %s, align 1".format(type.size, image));
     }
 
     Fragment load(string type, string pointer)
@@ -1454,6 +1461,7 @@ private final class Generator
 
             auto image = _function.newCImage(crossing.type);
             auto given = operandsOf(arg, value.operands, scalarsOf(native.params[i], e.span).length);
+            code = code.then(_function.zeroCImage(image, crossing.type));
             code = code.then(packStructure(native.params[i], crossing.type, given, image, 0, e.span));
             final switch (crossing.passing)
             {

@@ -27,6 +27,7 @@ typedef struct { int32_t small; int64_t large; } IntLong;
 typedef struct { float single; double wide; } FloatDouble;
 typedef struct { int8_t a; int16_t b; int8_t c; } Six;
 typedef struct { float value; } Single;
+typedef struct { int8_t a; int64_t b; int8_t c; int64_t d; } Wide;
 
 static char block[64];
 
@@ -70,6 +71,9 @@ EXPORT uint64_t sixBytesThenScribble(Six s)
     return seen;
 }
 EXPORT Single halveSingle(Single v) { v.value /= 2; return v; }
+// The raw bytes of a structure, padding included: Flags crosses in a register, Wide in memory.
+EXPORT uint64_t flagsBytes(Flags f) { return *(volatile uint64_t *)&f; }
+EXPORT uint64_t wideBytes(Wide w) { volatile uint64_t *words = (volatile uint64_t *)&w; return words[0] ^ words[2]; }
 
 // Over 16 bytes: in memory both ways.
 EXPORT Five fiveFrom(int32_t start) { return (Five){start, start + 1, start + 2, start + 3, start + 4}; }

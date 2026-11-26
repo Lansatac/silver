@@ -1,15 +1,15 @@
-// A native structure's padding is zero when C reads it: llabs takes the 8 bytes of Flags as the
-// integer it is passed as, so garbage in the three padding bytes would change the result.
-native type Flags(on: Bool, count: Int32)
+// A native structure's padding is zero when C reads its raw bytes, in a register and in memory, though the
+// stack the call's frame reuses held other bytes.
+import native_structures_support.silverstructs
 
-native def llabs(flags: Flags): Int64
-
-// Leaves 0xFFFFFFFF-filled stack below the caller for the next call's frame to reuse.
 def dirty(depth: Int): Int => if depth == 0 { 0 } else { -1 + dirty(depth - 1) }
 
-def probe(count: Int32): Int64 => llabs(Flags(true, count))
+def probe(count: Int32): Unit {
+    printl(flagsBytes(Flags(true, false, count)))
+    printl(wideBytes(Wide(1, 5, 2, 6)))
+}
 
 def main(): Unit {
     printl(dirty(200))
-    printl(probe(7))
+    probe(7)
 }

@@ -20,6 +20,7 @@ native type IntLong(small: Int32, large: Int64)
 native type FloatDouble(single: Float32, wide: Float)
 native type Six(a: Int8, b: Int16, c: Int8)
 native type Single(value: Float32)
+native type Wide(a: Int8, b: Int64, c: Int8, d: Int64)
 
 native def packColor(c: Color): UInt32
 native def brighter(c: Color, by: Int32): Color
@@ -39,6 +40,8 @@ native def nextIntLong(v: IntLong): IntLong
 native def nextFloatDouble(v: FloatDouble): FloatDouble
 native def nextSix(v: Six): Six
 native def sixBytesThenScribble(s: Six): UInt64
+native def flagsBytes(f: Flags): UInt64
+native def wideBytes(w: Wide): UInt64
 native def halveSingle(v: Single): Single
 native def fiveFrom(start: Int32): Five
 native def weighFive(f: Five): Int64
