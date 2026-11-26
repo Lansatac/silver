@@ -141,16 +141,27 @@ FileRun runFile(string file, const Packages packages, TestBackend backend, strin
         run.problem = compiled(lowered, context.sources, file, workDirectory, optimization, compiledResults);
         if (run.problem !is null) return run;
     }
+    TestResult[] interpretedResults;
+    if (backend != TestBackend.llvm)
+    {
+        try interpretedResults = interpreted(lowered, context.sources);
+        catch (DiagnosticException e)
+        {
+            run.diagnostics ~= formatDiagnostic(e.diagnostic, context.sources);
+            run.problem = "a native it calls can't be found";
+            return run;
+        }
+    }
     final switch (backend)
     {
         case TestBackend.interpreter:
-            run.results = interpreted(lowered, context.sources);
+            run.results = interpretedResults;
             break;
         case TestBackend.llvm:
             run.results = compiledResults;
             break;
         case TestBackend.both:
-            run.results = agreed(interpreted(lowered, context.sources), compiledResults);
+            run.results = agreed(interpretedResults, compiledResults);
             break;
     }
     return run;
@@ -408,6 +419,22 @@ version (unittest)
         assert(run.problem == "it has errors", run.problem);
         return run.diagnostics.map!(d => d.matchFirst(`Error ([A-Z]\d{4})`)[1]).array;
     }
+}
+
+@("a native that can't be found keeps the file's tests from running interpreted, and says which")
+unittest
+{
+    import std.algorithm : canFind;
+
+    auto directory = testDirectory("missing-native", ["calls.ag":
+        "native def silver_no_such_function(): Int\ntest \"t\" => expect(silver_no_such_function() == 1)"]);
+    scope (exit) rmdirRecurse(directory);
+
+    auto run = runFile(buildPath(directory, "calls.ag"), fixtures(directory), TestBackend.interpreter, tempDir);
+    assert(run.problem == "a native it calls can't be found", run.problem);
+    assert(run.results.length == 0);
+    auto shown = run.diagnostics.join("\n");
+    assert(shown.canFind("calls.ag(2,20): Error R0002: `silver_no_such_function` can't be called when interpreting"), shown);
 }
 
 @("a companion test file's helpers and imports reach neither its module's own code nor its module's importers")

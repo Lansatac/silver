@@ -9,6 +9,7 @@ import std.typecons : Rebindable, rebindable;
 
 import ast = silver.ast;
 import silver.ast : discardName, Id, Span;
+import silver.core.abi : crossesAlike, hostConvention;
 import silver.core.nodes;
 import silver.core.slots : numberLocals;
 import silver.sema : Analysis, DerivedOrder, DerivedPart, DictionaryFunctions, FunctionUse, IndexFunctions, LoopFunctions, SafeCall, ConstChar, ConstFloat32, float32Of, ConstInt, ConstUInt, ConstUnit, ConstValue, ErrorListData, ErrorUnionData, FunctionData, Intrinsic, NominalData, Primitive,
@@ -41,7 +42,9 @@ Program lowerFrom(Id!(ast.FunctionDecl) root, const Analysis analysis, const ast
     // Printing the error `main` returns can reach a type's own `opString`.
     lowering.lowerPending();
     auto program = Program(rebindable(analysis.types), lowering.functions, entry, lowering.libraries);
+    program.natives = lowering.natives;
     lowering.describeTypes(program);
+    checkNatives(program);
     numberLocals(program);
     return program;
 }
@@ -68,10 +71,30 @@ Program lowerTests(const ref ast.Program program, const Analysis analysis)
     }
     lowering.lowerPending();
     auto lowered = Program(rebindable(analysis.types), lowering.functions, size_t.max, lowering.libraries);
+    lowered.natives = lowering.natives;
     lowered.tests = tests;
     lowering.describeTypes(lowered);
+    checkNatives(lowered);
     numberLocals(lowered);
     return lowered;
+}
+
+/// Refuses natives that bind one symbol with signatures C would pass differently, since a C function
+/// has one, on either backend.
+/// Throws: DiagnosticException (`NotImplemented`) at the later native's first use.
+private void checkNatives(const ref Program program)
+{
+    import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException;
+
+    foreach (i, ref later; program.natives)
+    {
+        foreach (ref earlier; program.natives[0 .. i])
+        {
+            if (earlier.symbol != later.symbol || crossesAlike(program, earlier, later, hostConvention)) continue;
+            throw new DiagnosticException(Diagnostic(DiagnosticCode.NotImplemented, later.span,
+                "Natives that bind `%s` with different signatures can't both be called".format(later.symbol)));
+        }
+    }
 }
 
 /// How deeply an instance's type arguments can nest, which only polymorphic recursion reaches.
@@ -274,6 +297,8 @@ private final class Lowering
     private InstanceKey[InstanceKey] _neededBy;
     /// Each `native library` a call has needed, in the order first needed.
     string[] libraries;
+    /// Each C function called, as it was declared, in the order first called.
+    Native[] natives;
 
     /// The functions lowering makes up, by what they're for, so each is made once.
     private size_t[Type] _equalities;
@@ -929,8 +954,7 @@ private final class Lowering
         Local[] params;
         foreach (i, ref param; decl.params) params ~= new Local(paramName(param.name, i), signature.params[i]);
         auto args = params.map!(p => use(p, _span)).array;
-        auto body = Expr(signature.ret, _span, ExprKind(ForeignCall(decl.symbol, args, signature.params)));
-        noteLibrary(func);
+        auto body = Expr(signature.ret, _span, ExprKind(ForeignCall(nativeFor(func, _span), args)));
         functions[slot] = Function(decl.name, _analysis.moduleOf(func), params, null, signature.ret, body,
             FunctionOrigin.derived, decl.name);
         return slot;
@@ -2130,10 +2154,9 @@ private final class Lowering
                 return callWith(written, signature, type, span, null,
                     (Expr[] args, Expr* _) => Expr(signature.ret, span, ExprKind(Call(target, args))));
             case ast.FunctionKind.native:
-                noteLibrary(callee.decl);
-                auto symbol = decl.symbol;
+                auto native = nativeFor(callee.decl, span);
                 return callWith(written, signature, type, span, null,
-                    (Expr[] args, Expr* _) => Expr(signature.ret, span, ExprKind(ForeignCall(symbol, args, signature.params))));
+                    (Expr[] args, Expr* _) => Expr(signature.ret, span, ExprKind(ForeignCall(native, args))));
             case ast.FunctionKind.intrinsic:
                 return lowerIntrinsic(e.id, callee.decl, written, signature, span);
             case ast.FunctionKind.required:
@@ -2205,8 +2228,7 @@ private final class Lowering
             case ast.FunctionKind.ordinary:
                 return Expr(signature.ret, span, ExprKind(Call(slotFor(callee), args)));
             case ast.FunctionKind.native:
-                noteLibrary(callee.decl);
-                return Expr(signature.ret, span, ExprKind(ForeignCall(decl.symbol, args, signature.params)));
+                return Expr(signature.ret, span, ExprKind(ForeignCall(nativeFor(callee.decl, span), args)));
             case ast.FunctionKind.intrinsic:
                 auto intrinsic = _analysis.intrinsicOf(callee.decl);
                 if (intrinsic == Intrinsic.assert_ || intrinsic == Intrinsic.expect) return notLowered!Expr("`%s` as a conformance".format(decl.name));
@@ -2216,12 +2238,21 @@ private final class Lowering
         }
     }
 
-    private void noteLibrary(Id!(ast.FunctionDecl) native)
+    /// Where the C function the native `func` binds is in `natives`, adding it, and its library to
+    /// `libraries`, the first time. `span` is where it's called or used as a value.
+    private size_t nativeFor(Id!(ast.FunctionDecl) func, Span span)
     {
-        if (auto library = _analysis.libraryOf(native))
+        auto symbol = _analysis.declarationOf(func).symbol;
+        auto library = _analysis.libraryOf(func);
+        auto signature = _analysis.signatureOf(func);
+        foreach (i, ref native; natives)
         {
-            if (!libraries.canFind(library)) libraries ~= library;
+            if (native.symbol == symbol && native.library == library && native.params == signature.params
+                && native.result == signature.ret) return i;
         }
+        if (library !is null && !libraries.canFind(library)) libraries ~= library;
+        natives ~= Native(symbol, library, signature.params, signature.ret, span);
+        return natives.length - 1;
     }
 
     private Expr lowerIntrinsic(Id!(ast.Expr) call, Id!(ast.FunctionDecl) callee, const ast.Expr[] written,
@@ -3451,6 +3482,9 @@ def f(x: Float): Float => hypot(x, angle(x, 1))
 `library "m"
 
 def f(x: Float): Float foreign "hypot"(x, foreign "atan2"(x, 1.0))`);
+    // Each C function once, with the library to find it in.
+    result.program.natives.length.should.equal(2);
+    foreach (native; result.program.natives) native.library.should.equal("m");
 }
 
 @("a library is linked only when one of its natives is called")

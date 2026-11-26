@@ -1396,47 +1396,50 @@ private final class Generator
         return name;
     }
 
-    /// A call to the C function `call.symbol`, declared from the types at the call.
+    /// A call to a C function, declared with the types the platform's convention gives the native's
+    /// declared parameters and result.
     private Fragment emit(const Expr e, const ForeignCall call)
     {
-        auto returnType = cType(e.type, e.span, true);
+        auto native = &_program.natives[call.native];
+        auto description = describeCall(_program, *native, hostConvention);
+        auto returnType = description.result.passing == Passing.nothing ? "void" : llvmResult(description.result.parts[0]);
         Fragment arguments;
         string[] params;
         string[] operands;
         foreach (i, ref arg; call.args)
         {
-            auto param = cType(call.params[i], arg.span, false);
             auto value = emitExpr(arg);
             arguments = arguments.then(value);
-            if (param == "void") continue;
-            params ~= param;
-            if (isNullableHandle(call.params[i]))
+            string scalar;
+            if (isNullableHandle(native.params[i]))
             {
                 // `None` is null, whatever its pointer scalar holds.
                 auto option = operandsOf(arg, value.operands, 2);
                 auto pointer = _function.result("select i1 %s, ptr %s, ptr null".format(option[0], option[1]));
                 arguments = arguments.then(pointer);
-                operands ~= "ptr " ~ pointer.value;
-                continue;
+                scalar = pointer.value;
             }
-            operands ~= param ~ " " ~ operandOf(arg, value);
+            else scalar = operandOf(arg, value);
+            auto parts = description.arguments[i].parts;
+            foreach (part; parts)
+            {
+                assert(parts.length == 1, "a scalar crosses whole, as one part");
+                params ~= llvmParam(part);
+                operands ~= llvmParam(part) ~ " " ~ scalar;
+            }
         }
 
         // `nobuiltin`, or LLVM takes a native named like a C library function for that function, and
         // works out or rewrites calls to it with arithmetic of its own, which rounds differently.
-        auto declaration = "declare ccc %s @%s(%s) nobuiltin%s".format(returnType, call.symbol, params.join(", "),
+        auto symbol = native.symbol;
+        auto declaration = "declare ccc %s @%s(%s) nobuiltin%s".format(returnType, symbol, params.join(", "),
             e.type == _program.types.never ? " noreturn" : "");
-        if (call.symbol in runtime) return notImplemented("a native named like the runtime's own " ~ call.symbol, e.span);
-        if (auto existing = call.symbol in _foreign)
-        {
-            if (*existing != declaration)
-            {
-                return notImplemented("natives that bind `%s` with different signatures".format(call.symbol), e.span);
-            }
-        }
-        _foreign[call.symbol] = declaration;
+        if (symbol in runtime) return notImplemented("a native named like the runtime's own " ~ symbol, e.span);
+        assert((symbol in _foreign) is null || _foreign[symbol] == declaration,
+            "lowering refuses natives that bind one symbol with signatures C passes differently");
+        _foreign[symbol] = declaration;
 
-        auto called = arguments.then(_function.call(returnType, "@" ~ call.symbol, operands, "ccc"));
+        auto called = arguments.then(_function.call(returnType, "@" ~ symbol, operands, "ccc"));
         if (isNullableHandle(e.type))
         {
             auto present = _function.result("icmp ne ptr %s, null".format(called.value));
@@ -1452,21 +1455,45 @@ private final class Generator
         return types.isOption(type) && (types.optionInner(type) in _program.nativeTypes) !is null;
     }
 
-    /// `type` as a C function takes or returns it: C's ABI wants `bool`, and integers narrower
-    /// than an `int`, extended to 32 bits by whoever passes them, which LLVM leaves to the attribute.
-    /// The attribute comes before a result's type and after a parameter's.
-    private string cType(Type type, Span span, bool isResult)
+    /// The LLVM type of a C parameter, with the attribute that has the caller extend it after it.
+    private static string llvmParam(Part part)
     {
-        auto types = _program.types;
-        string extended(string extension, string llvm) => isResult ? extension ~ " " ~ llvm : llvm ~ " " ~ extension;
-        if (type == types.bool_) return extended("zeroext", "i1");
-        if (isNullableHandle(type)) return "ptr";
-        if (types.isInteger(type))
+        auto extension = extensionAttribute(part.extension);
+        return extension is null ? llvmScalar(part.type) : llvmScalar(part.type) ~ " " ~ extension;
+    }
+
+    /// The LLVM type of a C result, with the attribute saying the callee extended it before it, as
+    /// clang requires.
+    private static string llvmResult(Part part)
+    {
+        auto extension = extensionAttribute(part.extension);
+        return extension is null ? llvmScalar(part.type) : extension ~ " " ~ llvmScalar(part.type);
+    }
+
+    private static string extensionAttribute(Extension extension)
+    {
+        final switch (extension)
         {
-            auto info = types.integerOf(type);
-            if (info.bits < 32) return extended(info.signed ? "signext" : "zeroext", "i%s".format(info.bits));
+            case Extension.none: return null;
+            case Extension.zero: return "zeroext";
+            case Extension.sign: return "signext";
         }
-        return llvmType(type, span);
+    }
+
+    private static string llvmScalar(CType type)
+    {
+        final switch (type)
+        {
+            case CType.void_: return "void";
+            case CType.bool_: return "i1";
+            case CType.int8, CType.uint8: return "i8";
+            case CType.int16, CType.uint16: return "i16";
+            case CType.int32, CType.uint32: return "i32";
+            case CType.int64, CType.uint64: return "i64";
+            case CType.pointer: return "ptr";
+            case CType.float_: return "float";
+            case CType.double_: return "double";
+        }
     }
 
     private Fragment emit(const Expr e, const IntrinsicCall call)

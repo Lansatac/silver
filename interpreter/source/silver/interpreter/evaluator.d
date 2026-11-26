@@ -7,12 +7,12 @@ import std.meta : AliasSeq;
 import std.sumtype : match;
 import std.traits : isSigned;
 
-import silver.ast : Diagnostic, DiagnosticCode, Span;
+import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException, Span;
 import silver.sema;
 import silver.core;
 import silver.interpreter.errors;
 import silver.interpreter.stack : checkStack, runOnLargeStack;
-import silver.interpreter.foreign : addressText, CKind, CValue, foreignFunctions, fromCString, toCString;
+import silver.interpreter.foreign : addressText, callC, findNative, fromCString, toCString;
 import silver.interpreter.values;
 import silver.runtime.files : pathExists, readWhole, writeWhole;
 import silver.runtime.floattext : float32Text, floatText;
@@ -32,6 +32,18 @@ final class Evaluator
     private string[] _arguments;
     /// What a relative path is relative to, or null for the process's working directory.
     private string _directory;
+    /// How to call each of the program's `natives`, found and described before anything runs.
+    private Callable[] _natives;
+
+    private static struct Callable
+    {
+        const(void)* address;
+        CallDescription description;
+        /// How many words its arguments' parts take.
+        size_t words;
+        /// Why calling it is refused, or null.
+        string refusal;
+    }
 
     /// With `useStdOut`, output goes straight to standard output; otherwise it's kept for `output`.
     /// `directory` stands in for the directory the program was started in, so programs in one process
@@ -50,16 +62,20 @@ final class Evaluator
         return _output;
     }
 
-    /// Throws: RuntimeError when the program panics, and ProgramFailed when `main` returns an error.
+    /// Throws: RuntimeError when the program panics, ProgramFailed when `main` returns an error, and
+    /// DiagnosticException, before it starts, when a native it calls can't be found.
     void run()
     {
         if (auto mistake = argumentsMistake(_arguments)) throw new ProgramFailed(mistake);
+        findNatives();
         runOnLargeStack(&runProgram);
     }
 
     /// Runs each of the program's tests on its own, so a panic ends only that one.
+    /// Throws: DiagnosticException, before any test runs, when a native can't be found.
     TestRun[] runTests()
     {
+        findNatives();
         TestRun[] runs;
         _testing = true;
         runOnLargeStack(() {
@@ -101,6 +117,36 @@ final class Evaluator
         run.failures = _failures;
         run.output = _output;
         return run;
+    }
+
+    /// Finds every C function the program calls, as linking a compiled one does.
+    /// Throws: DiagnosticException (`MissingNativeBinding`) at the first call of one that can't be found.
+    private void findNatives()
+    {
+        auto types = _program.types;
+        _natives = new Callable[_program.natives.length];
+        foreach (i, ref native; _program.natives)
+        {
+            string problem;
+            auto callable = &_natives[i];
+            callable.address = findNative(native.symbol, native.library, problem);
+            if (callable.address is null)
+            {
+                throw new DiagnosticException(Diagnostic(DiagnosticCode.MissingNativeBinding, native.span,
+                    "`%s` can't be called when interpreting: %s".format(native.symbol, problem)));
+            }
+            callable.description = describeCall(_program, native, hostConvention);
+            foreach (ref argument; callable.description.arguments) callable.words += argument.parts.length;
+            foreach (param; native.params)
+            {
+                if (types.isInteger(param) && types.integerOf(param).bits < 32)
+                {
+                    callable.refusal = "`%s` can't be called when interpreting as it's declared: a parameter narrower than C's `int` is passed with its upper bits undefined on Windows, so the interpreter refuses `%s`"
+                        .format(native.symbol, types.describe(param));
+                    break;
+                }
+            }
+        }
     }
 
     private void runProgram()
@@ -960,80 +1006,73 @@ final class Evaluator
         }
     }
 
-    /// A call to a C function, which only the standard library's natives can reach for now: the
-    /// interpreter has each of them built in.
+    /// A call to a C function, through the platform's convention as `describeCall` describes it.
     private Value evaluate(ref const Expr e, ref const ForeignCall call, Value[] frame)
     {
-        auto native = call.symbol in foreignFunctions;
-        if (native is null)
-        {
-            throw new RuntimeError(Diagnostic(DiagnosticCode.MissingNativeBinding, e.span,
-                "`%s` can't be called when interpreting: only the standard library's natives can be, for now"
-                    .format(call.symbol)));
-        }
         auto types = _program.types;
-        auto fits = native.params.length == call.params.length && accepts(native.result, e.type, true);
-        foreach (i, param; call.params) fits = fits && accepts(native.params[i], param, false);
-        if (!fits)
-        {
-            throw new RuntimeError(Diagnostic(DiagnosticCode.MissingNativeBinding, e.span,
-                "`%s` can't be called when interpreting as it's declared: the interpreter has it built in for C's own signature, and this declaration doesn't pass the same values"
-                    .format(call.symbol)));
-        }
+        auto native = &_natives[call.native];
+        if (native.refusal !is null) throw new RuntimeError(Diagnostic(DiagnosticCode.MissingNativeBinding, e.span, native.refusal));
 
         Value[] values;
         auto jump = all(call.args, frame, values);
         if (jump.has!Jump) return jump;
-        CValue[] args;
+        ulong[16] few;
+        auto words = native.words <= few.length ? few[0 .. native.words] : new ulong[native.words];
+        size_t next;
         foreach (i, value; values)
         {
-            auto type = call.params[i];
-            if (types.isInteger(type)) args ~= CValue(value.as!long, cast(void*) value.as!long);
-            else if (type == types.float_ || type == types.float32) args ~= CValue(0, null, value.as!double);
-            else if (isNullableHandle(type))
-            {
-                auto option = value.as!Record;
-                args ~= CValue(0, option.tag == 0 ? null : option.fields[0].as!Handle.address);
-            }
-            else args ~= CValue(0, value.as!Handle.address);
+            foreach (part; native.description.arguments[i].parts) words[next++] = bitsOf(value, part);
         }
 
-        auto result = native.call(args);
-        if (e.type == types.unit || e.type == types.never) return Value(Unit());
-        if (e.type == types.float_) return Value(result.float_);
-        if (e.type == types.float32) return Value(result.float_);
-        if (e.type == types.bool_) return Value(result.integer != 0);
-        if (types.isInteger(e.type))
+        auto returned = callC(native.address, native.description, words);
+        if (native.description.result.passing == Passing.nothing) return Value(Unit());
+        // A scalar result is one part; a structure's would be put together from each.
+        auto part = native.description.result.parts[0];
+        auto bits = part.place.where == Where.floatRegister ? returned.floats[part.place.index]
+            : returned.integers[part.place.index];
+        final switch (part.type)
         {
-            auto bits = native.result == CKind.pointer ? cast(long) result.pointer : result.integer;
-            return Value(fitted(bits, types.integerOf(e.type)));
+            case CType.void_:
+                assert(0, "a void result passes nothing");
+            case CType.bool_:
+                return Value((bits & 1) != 0);
+            case CType.int8, CType.uint8, CType.int16, CType.uint16, CType.int32, CType.uint32, CType.int64, CType.uint64:
+                return Value(fitted(bits, types.integerOf(e.type)));
+            case CType.double_:
+                return Value(*cast(double*) &bits);
+            case CType.float_:
+                auto single = cast(uint) bits;
+                return Value(cast(double) *cast(float*) &single);
+            case CType.pointer:
+                auto address = cast(void*) bits;
+                if (!isNullableHandle(e.type)) return Value(Handle(address));
+                return address is null ? Value(Record(0, null)) : Value(Record(1, [Value(Handle(address))]));
         }
-        if (!isNullableHandle(e.type)) return Value(Handle(result.pointer));
-        return result.pointer is null ? Value(Record(0, null)) : Value(Record(1, [Value(Handle(result.pointer))]));
     }
 
-    /// Whether C passes a value of `type` as a `kind`: a pointer is a native type, an option of one or
-    /// a 64-bit integer, `float` a `Float32` and `double` a `Float`, and `void` a result of `Unit` or
-    /// `Never`. An integer result can be any integer type or `Bool`, cut down from C's; an integer
-    /// parameter has to be at least as wide as C's `int`, since Windows' convention leaves the upper bits
-    /// of a narrower one undefined.
-    private bool accepts(CKind kind, Type type, bool isResult)
+    /// The bits of `value` that C is passed as `part`: an integer as its two's complement, which a
+    /// `Value` already holds extended, a `float` in the low 32 bits, an option of a handle as null for
+    /// `None`. A scalar is the whole of its one part.
+    private static ulong bitsOf(Value value, Part part)
     {
-        auto types = _program.types;
-        final switch (kind)
+        final switch (part.type)
         {
-            case CKind.integer:
-                if (isResult) return types.isInteger(type) || type == types.bool_;
-                return types.isInteger(type) && types.integerOf(type).bits >= 32;
-            case CKind.float_:
-                return type == types.float_;
-            case CKind.single:
-                return type == types.float32;
-            case CKind.pointer:
-                return (type in _program.nativeTypes) !is null || isNullableHandle(type)
-                    || (types.isInteger(type) && types.integerOf(type).bits == 64);
-            case CKind.none:
-                return isResult && (type == types.unit || type == types.never);
+            case CType.void_:
+                assert(0, "no parameter is void");
+            case CType.bool_:
+                return value.as!bool ? 1 : 0;
+            case CType.int8, CType.uint8, CType.int16, CType.uint16, CType.int32, CType.uint32, CType.int64, CType.uint64:
+                return value.as!long;
+            case CType.double_:
+                auto double_ = value.as!double;
+                return *cast(ulong*) &double_;
+            case CType.float_:
+                float single = value.as!double;
+                return *cast(uint*) &single;
+            case CType.pointer:
+                if (value.has!Handle) return cast(ulong) value.as!Handle.address;
+                auto option = value.as!Record;
+                return option.tag == 0 ? 0 : cast(ulong) option.fields[0].as!Handle.address;
         }
     }
 

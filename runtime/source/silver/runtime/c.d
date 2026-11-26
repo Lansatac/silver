@@ -6,7 +6,8 @@ import core.memory : GC;
 import core.stdc.string : memcpy, strlen;
 
 import silver.runtime.buffer : newString;
-import silver.runtime.memory : collectable, SavedRegisters, silver_save_registers;
+import silver.runtime.memory : collectable;
+import silver.runtime.registers : SavedRegisters, silver_save_registers;
 import silver.runtime.panic : outOfMemory;
 
 extern (C) nothrow:

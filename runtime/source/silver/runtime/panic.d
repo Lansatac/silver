@@ -6,7 +6,7 @@ import core.stdc.stdio : fflush, fprintf, stderr, stdout;
 import core.stdc.stdlib : exit;
 import core.stdc.string : strlen;
 
-import silver.runtime.memory : SavedRegisters, silver_save_registers;
+import silver.runtime.registers : SavedRegisters, silver_save_registers;
 import silver.runtime.testing : panicInTest;
 
 /// Prints `message` to stderr after `location`, which says where in the Silver source the failure

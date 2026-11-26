@@ -26,9 +26,26 @@ struct Program
     Type[Type] cellContents;
     /// Each native type the program uses. A value of one is a pointer that a library owns.
     bool[Type] nativeTypes;
+    /// Each C function the program calls, once for each symbol, library and declared signature, which a
+    /// `ForeignCall` indexes. The natives that bind one symbol all pass the same C types.
+    Native[] natives;
     /// When the program is run for its tests, those tests in the order written, and `entryPoint`
     /// is unused.
     TestCase[] tests;
+}
+
+/// A C function a `native def` binds, as it's declared.
+struct Native
+{
+    string symbol;
+    /// What the native's module names in `native library`, or null when it has none.
+    string library;
+    /// The parameter types as declared, which an argument of type `Never` doesn't have, and the result
+    /// type: what `describeCall` says crosses how.
+    const(Type)[] params;
+    Type result;
+    /// The first call of it, or the first use of it as a value, for an error saying it can't be found.
+    Span span;
 }
 
 /// A `test`, which is a function in `Program.functions` taking nothing and returning Unit.
@@ -165,17 +182,14 @@ struct MakeClosure
     Expr[] captures;
 }
 
-/// A call to a `native def`: the C function `symbol`, through the C calling convention. Every
-/// argument is an integer, `Float`, `Bool`, native type or option of a native type, and so is the
-/// result, unless it's `Unit` or `Never`. An option of a native type crosses as a pointer, `None`
-/// being null.
+/// A call to a `native def`: the C function `Program.natives[native]`, through the C calling
+/// convention, as `describeCall` describes it. Every argument is an integer, `Float`, `Float32`,
+/// `Bool`, native type or option of a native type, and so is the result, unless it's `Unit` or
+/// `Never`. An option of a native type crosses as a pointer, `None` being null.
 struct ForeignCall
 {
-    string symbol;
+    size_t native;
     Expr[] args;
-    /// The native's parameter types as declared, which an argument of type `Never` doesn't have, and
-    /// which say how each argument crosses.
-    const(Type)[] params;
 }
 
 /// A call to an `intrinsic def`, an operation each backend implements itself. `print` and

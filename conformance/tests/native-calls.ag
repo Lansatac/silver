@@ -1,0 +1,61 @@
+import std.c
+import native_calls_support.silvertest
+
+// Natives of the C library and of Silver's runtime, beside those of the library the harness builds,
+// which native_calls_support.silvertest declares.
+native def strlen(text: CString): CSize
+native def llabs(x: Int64): Int64
+native def atan2(y: Float, x: Float): Float
+native def ldexp(x: Float, exponent: CInt): Float
+native def fmaf(x: Float32, y: Float32, z: Float32): Float32
+native def isalpha(c: CInt): CInt
+native("silver_monotonicNanos") def monotonic(): Int
+
+def main(): Unit {
+    printl(add64(40, 2))
+    printl(add64(9223372036854775807, -1))
+    printl(mix64(1, 2))
+    printl(mix64(4294967295, 18446744073709551615))
+    printl(negate32(-2147483647))
+    printl(complement32(0))
+    printl(low8(383))
+    printl(low8(255))
+    printl(lowUnsigned8(-1))
+    printl(low16(-40000))
+    printl(lowUnsigned16(-1))
+    printl(both(true, true))
+    printl(both(true, false))
+    printl(isOdd(7))
+    printl(isOdd(-4))
+    printl(scale(1.5, 4.0))
+    printl(halve(5.0))
+    printl(narrowed(0.1) == 0.1)
+    printl(widened(0.1) == 0.10000000149011612)
+
+    val start = at(0)
+    printl(distance(start, at(10)))
+    printl(start == at(0))
+    printl(isNull(nowhere()))
+    printl(isNull(start))
+    printl(isNull(None))
+
+    // Each argument weighed by its position, so one in the wrong place changes the sum.
+    printl(weighMixed(1, 2.0, 3, 4.0, 5, 6.0, 7, 8.0, 9, 10.0, 11, 12, 13, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20))
+    printl(weighIntegers(1, 2, 3, 4, 5, 6, 7, 8, 9, true))
+    printl(weighFloats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0))
+
+    printl(strlen(toCString("héllo")))
+    printl(llabs(-5))
+    printl(atan2(1.0, 1.0) * 4.0 == 3.141592653589793)
+    printl(ldexp(3.0, 4))
+    printl(fmaf(2.0, 3.0, 1.0))
+    printl(isalpha(65) != 0)
+    printl(isalpha(48) != 0)
+    val first = monotonic()
+    printl(monotonic() >= first)
+
+    val add = add64
+    printl(add(1, 2))
+    val weigh = weighFloats
+    printl(weigh(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0))
+}

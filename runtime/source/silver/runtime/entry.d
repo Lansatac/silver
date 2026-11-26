@@ -45,6 +45,10 @@ private void runProgram()
 /// a linker looks for the entry point only in objects. It starts druntime as dmd's own `main` would.
 extern (C) int silver_start(int argc, char** argv)
 {
+    import silver.runtime.clock : clockOutOfMemory;
+    import silver.runtime.panic : outOfMemory;
+
+    clockOutOfMemory = &outOfMemory;
     return _d_run_main(argc, argv, &runMain);
 }
 
