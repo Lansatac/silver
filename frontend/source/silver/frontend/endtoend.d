@@ -1206,6 +1206,22 @@ unittest
         }
 }
 
+@("silverc's own output, more than a buffer holds, to a standard output it can't write ends with status 1 and a message, not a D exception")
+unittest
+{
+    import std.range : iota;
+    import std.algorithm : map;
+
+    // Its Core is tens of kilobytes, so the write fails while silverc runs rather than at its final flush.
+    auto big = "def main(): Unit {\n" ~ iota(600).map!(i => "    printl(\"line number " ~ to!string(i)
+        ~ " of a long program\")\n").join ~ "}\n";
+    auto project = makeTree("frontend-unwritable-tool", ["big.ag": big]);
+    scope (exit) removeTree(project);
+    auto ran = runWithOutputUnwritable([built("silverc"), "--emit-core", "big.ag"], project);
+    assert(ran.status == 1 && ran.output.startsWith("error: couldn't write output: ") && ran.output.count('\n') == 1,
+        "status " ~ to!string(ran.status) ~ ", standard error:\n" ~ ran.output);
+}
+
 @("silver test with standard output closed by its reader ends quietly, on both backends")
 unittest
 {
