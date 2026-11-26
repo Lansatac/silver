@@ -24,8 +24,11 @@ struct Program
     const(Type)[][Type] sumMembers;
     /// What each `Ref` type the program uses holds.
     Type[Type] cellContents;
-    /// Each native type the program uses. A value of one is a pointer that a library owns.
+    /// Each native type with no fields the program uses. A value of one is a pointer that a library owns.
     bool[Type] nativeTypes;
+    /// Each native type with fields the program uses, which crosses into C as a structure. It's a
+    /// product otherwise, with its fields in `recordFields`.
+    bool[Type] nativeStructures;
     /// Each C function the program calls, once for each symbol, library and declared signature, which a
     /// `ForeignCall` indexes. The natives that bind one symbol all pass the same C types.
     Native[] natives;
@@ -184,8 +187,9 @@ struct MakeClosure
 
 /// A call to a `native def`: the C function `Program.natives[native]`, through the C calling
 /// convention, as `describeCall` describes it. Every argument is an integer, `Float`, `Float32`,
-/// `Bool`, native type or option of a native type, and so is the result, unless it's `Unit` or
-/// `Never`. An option of a native type crosses as a pointer, `None` being null.
+/// `Bool`, native type or option of a native type with no fields, and so is the result, unless it's
+/// `Unit` or `Never`. An option of a native type crosses as a pointer, `None` being null, and a native
+/// type with fields as a C structure.
 struct ForeignCall
 {
     size_t native;

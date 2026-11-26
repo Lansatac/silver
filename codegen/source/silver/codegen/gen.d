@@ -306,6 +306,9 @@ private final class FunctionState
     /// Whether the function has the runtime hand back a String or buffer, which comes through
     /// these two slots, allocated once at the top of the function.
     bool usesOutSlots;
+    /// The `alloca` of the memory each C structure crossing at a native's call is put into or read
+    /// out of, for the top of the entry block.
+    string[] cImages;
     private int _nextTemp;
     private int _nextLabel;
 
@@ -340,6 +343,15 @@ private final class FunctionState
     {
         if (name is null) name = newTemp();
         return Fragment.instruction(name ~ " = " ~ text, name);
+    }
+
+    /// Memory for the C structure `type`, aligned to at least 8 so each 8-byte piece can be loaded
+    /// and stored as the convention's types.
+    string newCImage(const CType type)
+    {
+        auto name = "%%.c%s".format(cImages.length);
+        cImages ~= "  %s = alloca [%s x i8], align %s".format(name, type.size, type.alignment > 8 ? type.alignment : 8);
+        return name;
     }
 
     Fragment load(string type, string pointer)
@@ -562,6 +574,7 @@ private final class Generator
         {
             allocas ~= ["  %s = alloca ptr".format(FunctionState.outData), "  %s = alloca i64".format(FunctionState.outLength)];
         }
+        allocas ~= _function.cImages;
         auto lines = whole.code[0 .. 1] ~ allocas ~ whole.code[1 .. $];
         // Only `silver_main` is called from outside the module.
         auto linkage = func.origin == FunctionOrigin.declared ? "internal " : "private ";
@@ -1397,36 +1410,89 @@ private final class Generator
     }
 
     /// A call to a C function, declared with the types the platform's convention gives the native's
-    /// declared parameters and result.
+    /// declared parameters and result. A structure is put into C's layout in memory of the function's
+    /// own, and passed from there as the convention says; one that comes back is read out of it.
     private Fragment emit(const Expr e, const ForeignCall call)
     {
         auto native = &_program.natives[call.native];
         auto description = describeCall(_program, *native, hostConvention);
-        auto returnType = description.result.passing == Passing.nothing ? "void" : llvmResult(description.result.parts[0]);
-        Fragment arguments;
+        Fragment code;
         string[] params;
         string[] operands;
+        string resultImage;
+        if (description.result.passing == Passing.hidden)
+        {
+            resultImage = _function.newCImage(description.result.type);
+            auto param = inMemory("sret", description.result.type);
+            params ~= param;
+            operands ~= param ~ " " ~ resultImage;
+        }
         foreach (i, ref arg; call.args)
         {
             auto value = emitExpr(arg);
-            arguments = arguments.then(value);
-            string scalar;
-            if (isNullableHandle(native.params[i]))
+            code = code.then(value);
+            auto crossing = description.arguments[i];
+            if (crossing.type.kind != CKind.structure)
             {
-                // `None` is null, whatever its pointer scalar holds.
-                auto option = operandsOf(arg, value.operands, 2);
-                auto pointer = _function.result("select i1 %s, ptr %s, ptr null".format(option[0], option[1]));
-                arguments = arguments.then(pointer);
-                scalar = pointer.value;
+                assert(crossing.parts.length == 1, "a scalar crosses whole, as one part");
+                string scalar;
+                if (isNullableHandle(native.params[i]))
+                {
+                    // `None` is null, whatever its pointer scalar holds.
+                    auto option = operandsOf(arg, value.operands, 2);
+                    auto pointer = _function.result("select i1 %s, ptr %s, ptr null".format(option[0], option[1]));
+                    code = code.then(pointer);
+                    scalar = pointer.value;
+                }
+                else scalar = operandOf(arg, value);
+                params ~= llvmParam(crossing.parts[0]);
+                operands ~= llvmParam(crossing.parts[0]) ~ " " ~ scalar;
+                continue;
             }
-            else scalar = operandOf(arg, value);
-            auto parts = description.arguments[i].parts;
-            foreach (part; parts)
+
+            auto image = _function.newCImage(crossing.type);
+            auto given = operandsOf(arg, value.operands, scalarsOf(native.params[i], e.span).length);
+            code = code.then(packStructure(native.params[i], crossing.type, given, image, 0, e.span));
+            final switch (crossing.passing)
             {
-                assert(parts.length == 1, "a scalar crosses whole, as one part");
-                params ~= llvmParam(part);
-                operands ~= llvmParam(part) ~ " " ~ scalar;
+                case Passing.value:
+                    foreach (part; crossing.parts)
+                    {
+                        auto address = byteAddress(image, part.offset);
+                        auto piece = _function.load(llvmPart(part), address.value);
+                        code = code.then(address).then(piece);
+                        params ~= llvmPart(part);
+                        operands ~= llvmPart(part) ~ " " ~ piece.value;
+                    }
+                    break;
+                case Passing.copy:
+                    params ~= "ptr";
+                    operands ~= "ptr " ~ image;
+                    break;
+                case Passing.stack:
+                    auto param = inMemory("byval", crossing.type);
+                    params ~= param;
+                    operands ~= param ~ " " ~ image;
+                    break;
+                case Passing.nothing, Passing.hidden:
+                    assert(0, "only a result passes nothing or through a hidden pointer");
             }
+        }
+
+        auto result = description.result;
+        string returnType;
+        final switch (result.passing)
+        {
+            case Passing.nothing, Passing.hidden:
+                returnType = "void";
+                break;
+            case Passing.value:
+                if (result.type.kind != CKind.structure) returnType = llvmResult(result.parts[0]);
+                else returnType = result.parts.length == 1 ? llvmPart(result.parts[0])
+                    : "{ %s }".format(result.parts.map!(part => llvmPart(part)).join(", "));
+                break;
+            case Passing.copy, Passing.stack:
+                assert(0, "a result comes back in registers or through a hidden pointer");
         }
 
         // `nobuiltin`, or LLVM takes a native named like a C library function for that function, and
@@ -1439,13 +1505,131 @@ private final class Generator
             "lowering refuses natives that bind one symbol with signatures C passes differently");
         _foreign[symbol] = declaration;
 
-        auto called = arguments.then(_function.call(returnType, "@" ~ symbol, operands, "ccc"));
+        auto called = code.then(_function.call(returnType, "@" ~ symbol, operands, "ccc"));
+        if (result.type.kind == CKind.structure)
+        {
+            auto image = resultImage;
+            if (result.passing == Passing.value)
+            {
+                image = _function.newCImage(result.type);
+                auto returned = called.value;
+                foreach (i, part; result.parts)
+                {
+                    auto address = byteAddress(image, part.offset);
+                    called = called.then(address);
+                    auto piece = returned;
+                    if (result.parts.length > 1)
+                    {
+                        auto taken = _function.extract(returnType, returned, i);
+                        called = called.then(taken);
+                        piece = taken.value;
+                    }
+                    called = called.then(Fragment.store(llvmPart(part), piece, address.value));
+                }
+            }
+            auto unpacked = unpackStructure(e.type, result.type, image, 0, e.span);
+            return called.then(unpacked);
+        }
         if (isNullableHandle(e.type))
         {
             auto present = _function.result("icmp ne ptr %s, null".format(called.value));
             return called.then(present).withOperands([present.value, called.value]);
         }
         return endIfNever(called, e.type);
+    }
+
+    /// A `byval` or `sret` pointer parameter to C memory of the structure `type`, which LLVM needs
+    /// only the size and alignment of. A copy on the stack is in whole 8-byte words, and aligned so,
+    /// as clang declares it.
+    private static string inMemory(string attribute, const CType type)
+    {
+        auto alignment = attribute == "byval" && type.alignment < 8 ? 8 : type.alignment;
+        return "ptr %s([%s x i8]) align %s".format(attribute, type.size, alignment);
+    }
+
+    /// The address `offset` bytes into `image`.
+    private Fragment byteAddress(string image, uint offset)
+    {
+        if (offset == 0) return Fragment.constant(image);
+        return _function.result("getelementptr inbounds i8, ptr %s, i64 %s".format(image, offset));
+    }
+
+    /// Code writing `operands`, a value of the native structure `type`, into C's layout `layout` at
+    /// `at` bytes into `image`: a `Bool` as a byte, and an option of a handle as a pointer that's
+    /// null for `None`.
+    private Fragment packStructure(Type type, const CType layout, const(string)[] operands, string image, uint at, Span span)
+    {
+        Fragment code;
+        size_t next;
+        foreach (i, field; _program.recordFields[type])
+        {
+            auto count = scalarsOf(field, span).length;
+            auto held = operands[next .. next + count];
+            next += count;
+            auto c = layout.fields[i];
+            if (c.type.kind == CKind.structure)
+            {
+                code = code.then(packStructure(field, c.type, held, image, at + c.offset, span));
+                continue;
+            }
+            auto address = byteAddress(image, at + c.offset);
+            code = code.then(address);
+            if (c.type.kind == CKind.bool_)
+            {
+                auto byte_ = _function.convert("zext", "i1", held[0], "i8");
+                code = code.then(byte_).then(Fragment.store("i8", byte_.value, address.value));
+            }
+            else if (isNullableHandle(field))
+            {
+                auto pointer = _function.result("select i1 %s, ptr %s, ptr null".format(held[0], held[1]));
+                code = code.then(pointer).then(Fragment.store("ptr", pointer.value, address.value));
+            }
+            else code = code.then(Fragment.store(llvmScalar(c.type.kind), held[0], address.value));
+        }
+        return code;
+    }
+
+    /// Code reading a value of the native structure `type` out of C's layout `layout` at `at` bytes
+    /// into `image`, with an operand for each of its scalars: a `Bool` is a byte that isn't 0, and an
+    /// option of a handle is `None` for null.
+    private Fragment unpackStructure(Type type, const CType layout, string image, uint at, Span span)
+    {
+        Fragment code;
+        string[] operands;
+        foreach (i, field; _program.recordFields[type])
+        {
+            auto c = layout.fields[i];
+            if (c.type.kind == CKind.structure)
+            {
+                auto inner = unpackStructure(field, c.type, image, at + c.offset, span);
+                code = code.then(inner);
+                operands ~= inner.operands;
+                continue;
+            }
+            auto address = byteAddress(image, at + c.offset);
+            code = code.then(address);
+            if (c.type.kind == CKind.bool_)
+            {
+                auto byte_ = _function.load("i8", address.value);
+                auto set = _function.result("icmp ne i8 %s, 0".format(byte_.value));
+                code = code.then(byte_).then(set);
+                operands ~= set.value;
+            }
+            else if (isNullableHandle(field))
+            {
+                auto pointer = _function.load("ptr", address.value);
+                auto present = _function.result("icmp ne ptr %s, null".format(pointer.value));
+                code = code.then(pointer).then(present);
+                operands ~= [present.value, pointer.value];
+            }
+            else
+            {
+                auto loaded = _function.load(llvmScalar(c.type.kind), address.value);
+                code = code.then(loaded);
+                operands ~= loaded.value;
+            }
+        }
+        return code.withOperands(operands);
     }
 
     /// Whether `type` is an option of a native type, which crosses into C as a pointer that may be null.
@@ -1459,7 +1643,7 @@ private final class Generator
     private static string llvmParam(Part part)
     {
         auto extension = extensionAttribute(part.extension);
-        return extension is null ? llvmScalar(part.type) : llvmScalar(part.type) ~ " " ~ extension;
+        return extension is null ? llvmPart(part) : llvmPart(part) ~ " " ~ extension;
     }
 
     /// The LLVM type of a C result, with the attribute saying the callee extended it before it, as
@@ -1467,7 +1651,7 @@ private final class Generator
     private static string llvmResult(Part part)
     {
         auto extension = extensionAttribute(part.extension);
-        return extension is null ? llvmScalar(part.type) : extension ~ " " ~ llvmScalar(part.type);
+        return extension is null ? llvmPart(part) : extension ~ " " ~ llvmPart(part);
     }
 
     private static string extensionAttribute(Extension extension)
@@ -1480,19 +1664,29 @@ private final class Generator
         }
     }
 
-    private static string llvmScalar(CType type)
+    /// The LLVM type of `part` as it's passed: a structure's bytes as the integer of their size, or
+    /// two of its floats as a vector, as clang passes them.
+    private static string llvmPart(Part part)
     {
-        final switch (type)
+        if (part.type == CKind.integer) return "i%s".format(part.size * 8);
+        if (part.type == CKind.floatPair) return "<2 x float>";
+        return llvmScalar(part.type);
+    }
+
+    private static string llvmScalar(CKind kind)
+    {
+        final switch (kind)
         {
-            case CType.void_: return "void";
-            case CType.bool_: return "i1";
-            case CType.int8, CType.uint8: return "i8";
-            case CType.int16, CType.uint16: return "i16";
-            case CType.int32, CType.uint32: return "i32";
-            case CType.int64, CType.uint64: return "i64";
-            case CType.pointer: return "ptr";
-            case CType.float_: return "float";
-            case CType.double_: return "double";
+            case CKind.void_: return "void";
+            case CKind.bool_: return "i1";
+            case CKind.int8, CKind.uint8: return "i8";
+            case CKind.int16, CKind.uint16: return "i16";
+            case CKind.int32, CKind.uint32: return "i32";
+            case CKind.int64, CKind.uint64: return "i64";
+            case CKind.pointer: return "ptr";
+            case CKind.float_: return "float";
+            case CKind.double_: return "double";
+            case CKind.structure, CKind.integer, CKind.floatPair: assert(0, "not a scalar");
         }
     }
 

@@ -366,7 +366,7 @@ private final class Parser
         return ImportStmt(ids.next!ImportStmt, path, names, forward);
     }
 
-    /// `native type Name`, a handle to something a library owns.
+    /// `native type Name`, a handle to something a library owns, or `native type Name(fields)`, a C structure.
     private TypeDecl parseNativeType()
     {
         pos += 2;
@@ -375,14 +375,25 @@ private final class Parser
         {
             auto paramsStart = here;
             parseTypeParameters();
-            throw error(spanFrom(paramsStart), "A native type can't take type parameters, since a C pointer has one type");
+            throw error(spanFrom(paramsStart), "A native type can't take type parameters, since a C type has one layout");
         }
+        Field[] fields;
         if (at(TokenKind.leftParen))
         {
-            throw error(spanOf(tokens[pos]),
-                "A native type has no fields or constructor; its values only come from native functions");
+            auto parensStart = here;
+            bool emptyParens;
+            fields = parseFields(emptyParens);
+            if (emptyParens)
+            {
+                throw error(spanFrom(parensStart),
+                    "A native type with no fields is written `native type %s`, with no `()`".format(text(nameToken)));
+            }
+            if (at(TokenKind.kwInvariant))
+            {
+                throw error(spanOf(tokens[pos]), "A native type can't have an invariant, since C can make any value of it");
+            }
         }
-        auto native = TypeDecl(ids.next!TypeDecl, text(nameToken), spanOf(nameToken), null, false);
+        auto native = TypeDecl(ids.next!TypeDecl, text(nameToken), spanOf(nameToken), fields, false);
         native.native = true;
         return native;
     }

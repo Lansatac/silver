@@ -2977,6 +2977,36 @@ unittest
         .shouldReport(DiagnosticCode.PatternMismatch, At("File(x)", 1));
 }
 
+@("a native type with fields is a structure: it crosses into C by value, and is an ordinary product otherwise")
+unittest
+{
+    enum file = "native type File\nnative type Vector2(x: Float32, y: Float32)\n"
+        ~ "native type Held(file: File, maybe: File?, on: Bool, at: Vector2, count: UInt8, size: Float)\n";
+    analyzed(file ~ `native def add(a: Vector2, b: Vector2): Vector2
+native def make(): Held
+def opAdd(a: Vector2, b: Vector2): Vector2 => Vector2(a.x + b.x, a.y + b.y)
+def main(): Unit {
+    val v = add(Vector2(1.0, 2.0), Vector2(3.0, 4.0)) + Vector2(1.0, 1.0)
+    val w = v with (x = 0.0)
+    val same = v == w && [v: 1][w] != None && make().at.y == 2.0
+    match v {
+        Vector2(x, _) => printl(x)
+    }
+}`).shouldHaveNoDiagnostics();
+    foreach (type; ["String", "[Int32]", "(Int32, Int32)", "Vector2?", "Int32?", "(Int32) -> Int32"])
+    {
+        analyzed(file ~ "native type Bad(first: Int32, second: " ~ type ~ ")\ndef main(): Unit { }")
+            .shouldReport(DiagnosticCode.InvalidNativeType, At(type, 1));
+    }
+    analyzed(file ~ "native def f(v: Vector2?): Unit\ndef main(): Unit { }")
+        .shouldReport(DiagnosticCode.InvalidNativeType, At("Vector2?", 1));
+    analyzed(file ~ "native type Loop(next: Loop)\ndef main(): Unit { }")
+        .shouldReport(DiagnosticCode.UninhabitedType, At("Loop", 1));
+    auto cycle = analyzed(file ~ "native type A(b: B)\nnative type B(a: A)\ndef main(): Unit { }");
+    assert(cycle.collector.diagnostics.length == 2);
+    foreach (d; cycle.collector.diagnostics) assert(d.code == DiagnosticCode.UninhabitedType);
+}
+
 @("an intrinsic is declared only in lang, and only for one the compiler implements")
 unittest
 {

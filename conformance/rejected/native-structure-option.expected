@@ -1,0 +1,1 @@
+T0028: `Vector2?` can't cross into C: a structure is passed by value, and only a pointer can be null

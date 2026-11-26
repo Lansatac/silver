@@ -1006,10 +1006,11 @@ final class Evaluator
         }
     }
 
-    /// A call to a C function, through the platform's convention as `describeCall` describes it.
+    /// A call to a C function, through the platform's convention as `describeCall` describes it. A
+    /// structure is put into C's layout in a buffer, which its parts are taken from or whose address is
+    /// passed, and one that comes back is read out of one.
     private Value evaluate(ref const Expr e, ref const ForeignCall call, Value[] frame)
     {
-        auto types = _program.types;
         auto native = &_natives[call.native];
         if (native.refusal !is null) throw new RuntimeError(Diagnostic(DiagnosticCode.MissingNativeBinding, e.span, native.refusal));
 
@@ -1021,58 +1022,146 @@ final class Evaluator
         size_t next;
         foreach (i, value; values)
         {
-            foreach (part; native.description.arguments[i].parts) words[next++] = bitsOf(value, part);
+            auto crossing = &native.description.arguments[i];
+            if (crossing.type.kind != CKind.structure)
+            {
+                words[next++] = bitsOf(value, crossing.parts[0].type);
+                continue;
+            }
+            auto image = cImage(crossing.type);
+            pack(value, _program.natives[call.native].params[i], crossing.type, image, 0);
+            if (crossing.passing == Passing.copy)
+            {
+                words[next++] = cast(ulong) image.ptr;
+                continue;
+            }
+            foreach (part; crossing.parts) words[next++] = wordAt(image, part.offset, part.size);
         }
 
-        auto returned = callC(native.address, native.description, words);
-        if (native.description.result.passing == Passing.nothing) return Value(Unit());
-        // A scalar result is one part; a structure's would be put together from each.
-        auto part = native.description.result.parts[0];
+        auto result = &native.description.result;
+        ubyte[] resultImage;
+        if (result.passing == Passing.hidden) resultImage = cImage(result.type);
+        auto returned = callC(native.address, native.description, words, resultImage.ptr);
+        if (result.passing == Passing.nothing) return Value(Unit());
+        if (result.type.kind == CKind.structure)
+        {
+            if (result.passing == Passing.value)
+            {
+                resultImage = cImage(result.type);
+                foreach (part; result.parts)
+                {
+                    auto bits = part.place.where == Where.floatRegister ? returned.floats[part.place.index]
+                        : returned.integers[part.place.index];
+                    resultImage[part.offset .. part.offset + part.size] = (cast(ubyte*) &bits)[0 .. part.size];
+                }
+            }
+            return unpack(e.type, result.type, resultImage, 0);
+        }
+        auto part = result.parts[0];
         auto bits = part.place.where == Where.floatRegister ? returned.floats[part.place.index]
             : returned.integers[part.place.index];
-        final switch (part.type)
+        // A `Bool` result is its low bit, as compiled code reads a `zeroext i1`.
+        if (part.type == CKind.bool_) return Value((bits & 1) != 0);
+        return valueOf(bits, part.type, e.type);
+    }
+
+    /// Room for a C structure of `type`, rounded up to whole 8-byte words so a part is read whole.
+    private static ubyte[] cImage(const CType type)
+    {
+        return new ubyte[(type.size + 7) / 8 * 8];
+    }
+
+    /// The `size` bytes at `offset` in `image`, as the low bytes of a word.
+    private static ulong wordAt(const(ubyte)[] image, uint offset, uint size)
+    {
+        ulong word;
+        (cast(ubyte*) &word)[0 .. size] = image[offset .. offset + size];
+        return word;
+    }
+
+    /// Writes `value`, of the native structure `type`, into C's layout `layout` at `at` bytes into
+    /// `image`: a `Bool` as a byte, and an option of a handle as a pointer that's null for `None`.
+    private void pack(Value value, Type type, const CType layout, ubyte[] image, uint at)
+    {
+        auto fields = value.as!Record.fields;
+        foreach (i, field; _program.recordFields[type])
         {
-            case CType.void_:
-                assert(0, "a void result passes nothing");
-            case CType.bool_:
-                return Value((bits & 1) != 0);
-            case CType.int8, CType.uint8, CType.int16, CType.uint16, CType.int32, CType.uint32, CType.int64, CType.uint64:
-                return Value(fitted(bits, types.integerOf(e.type)));
-            case CType.double_:
-                return Value(*cast(double*) &bits);
-            case CType.float_:
-                auto single = cast(uint) bits;
-                return Value(cast(double) *cast(float*) &single);
-            case CType.pointer:
-                auto address = cast(void*) bits;
-                if (!isNullableHandle(e.type)) return Value(Handle(address));
-                return address is null ? Value(Record(0, null)) : Value(Record(1, [Value(Handle(address))]));
+            auto c = layout.fields[i];
+            if (c.type.kind == CKind.structure)
+            {
+                pack(fields[i], field, c.type, image, at + c.offset);
+                continue;
+            }
+            auto bits = bitsOf(fields[i], c.type.kind);
+            auto offset = at + c.offset;
+            image[offset .. offset + c.type.size] = (cast(ubyte*) &bits)[0 .. c.type.size];
         }
     }
 
-    /// The bits of `value` that C is passed as `part`: an integer as its two's complement, which a
-    /// `Value` already holds extended, a `float` in the low 32 bits, an option of a handle as null for
-    /// `None`. A scalar is the whole of its one part.
-    private static ulong bitsOf(Value value, Part part)
+    /// A value of the native structure `type`, read out of C's layout `layout` at `at` bytes into
+    /// `image`: a `Bool` is a byte that isn't 0, and an option of a handle is `None` for null.
+    private Value unpack(Type type, const CType layout, const(ubyte)[] image, uint at)
     {
-        final switch (part.type)
+        Value[] fields;
+        foreach (i, field; _program.recordFields[type])
         {
-            case CType.void_:
-                assert(0, "no parameter is void");
-            case CType.bool_:
+            auto c = layout.fields[i];
+            if (c.type.kind == CKind.structure)
+            {
+                fields ~= unpack(field, c.type, image, at + c.offset);
+                continue;
+            }
+            auto bits = wordAt(image, at + c.offset, c.type.size);
+            fields ~= c.type.kind == CKind.bool_ ? Value(bits != 0) : valueOf(bits, c.type.kind, field);
+        }
+        return Value(Record(0, fields));
+    }
+
+    /// The value of `type` that C gave as `bits` of the scalar `kind`: an integer cut to the declared
+    /// width, a `float` from the low 32 bits, and an option of a handle `None` for null.
+    private Value valueOf(ulong bits, CKind kind, Type type)
+    {
+        switch (kind)
+        {
+            case CKind.int8, CKind.uint8, CKind.int16, CKind.uint16, CKind.int32, CKind.uint32, CKind.int64, CKind.uint64:
+                return Value(fitted(bits, _program.types.integerOf(type)));
+            case CKind.double_:
+                return Value(*cast(double*) &bits);
+            case CKind.float_:
+                auto single = cast(uint) bits;
+                return Value(cast(double) *cast(float*) &single);
+            case CKind.pointer:
+                auto address = cast(void*) bits;
+                if (!isNullableHandle(type)) return Value(Handle(address));
+                return address is null ? Value(Record(0, null)) : Value(Record(1, [Value(Handle(address))]));
+            default:
+                assert(0, "a scalar C gives back is an integer, a floating-point number or a pointer");
+        }
+    }
+
+    /// The bits of `value` that C is given as the scalar `kind`: an integer as its two's complement,
+    /// which a `Value` already holds extended, a `float` in the low 32 bits, an option of a handle as
+    /// null for `None`.
+    private static ulong bitsOf(Value value, CKind kind)
+    {
+        switch (kind)
+        {
+            case CKind.bool_:
                 return value.as!bool ? 1 : 0;
-            case CType.int8, CType.uint8, CType.int16, CType.uint16, CType.int32, CType.uint32, CType.int64, CType.uint64:
+            case CKind.int8, CKind.uint8, CKind.int16, CKind.uint16, CKind.int32, CKind.uint32, CKind.int64, CKind.uint64:
                 return value.as!long;
-            case CType.double_:
+            case CKind.double_:
                 auto double_ = value.as!double;
                 return *cast(ulong*) &double_;
-            case CType.float_:
+            case CKind.float_:
                 float single = value.as!double;
                 return *cast(uint*) &single;
-            case CType.pointer:
+            case CKind.pointer:
                 if (value.has!Handle) return cast(ulong) value.as!Handle.address;
                 auto option = value.as!Record;
                 return option.tag == 0 ? 0 : cast(ulong) option.fields[0].as!Handle.address;
+            default:
+                assert(0, "C is given a scalar as an integer, a floating-point number or a pointer");
         }
     }
 

@@ -1,0 +1,46 @@
+import native_structures_support.silverstructs
+
+// Structures passed to natives and back by value, in each shape the conventions treat differently:
+// what C computes from them shows what it was given, and what it returns is printed field by field.
+def main(): Unit {
+    printl(packColor(Color(1, 2, 3, 4)))
+    printl(brighter(Color(10, 20, 250, 7), 10))
+    printl(addVectors(Vector2(1.0, 2.0), Vector2(3.0, 4.5)))
+    printl(cross(Vector2(2.0, 3.0), Vector2(5.0, 7.0)))
+    printl(grow(Rectangle(1.0, 2.0, 3.0, 4.0), 0.5))
+    printl(weighRectangle(Rectangle(1.0, 2.0, 3.0, 4.0)))
+    printl(nextMixed(Mixed(-5, 1.25)))
+    printl(nextDoubleLong(DoubleLong(1.5, 9223372036854775806)))
+    printl(rotate(Triple(1.0, 2.0, 3.0)))
+    printl(rotateBytes(Bytes3(1, 2, 255)))
+    printl(reverseLine(Line(Vector2(1.0, 2.0), Vector2(3.0, 4.0))))
+    printl(lineWeight(Line(Vector2(1.0, 2.0), Vector2(3.0, 4.0))))
+    printl(flipFlags(Flags(true, false, 41)))
+    printl(weighFlags(Flags(true, false, 41)))
+    printl(weighFlags(Flags(false, true, -1)))
+
+    printl(fiveFrom(10))
+    printl(weighFive(Five(1, 2, 3, 4, 5)))
+    printl(reverseFive(Five(1, 2, 3, 4, 5)))
+
+    val both = hold(4, true)
+    val one = hold(4, false)
+    printl(heldDistance(both))
+    printl(heldDistance(one))
+    printl(one.maybe == None)
+    printl(both.maybe != None)
+    printl(heldDistance(Held(both.spot, both.spot)))
+    printl(heldDistance(Held(both.spot, None)))
+    printl(heldDistance(both with (maybe = one.spot)))
+
+    printl(weighRectangles(Rectangle(1.0, 2.0, 3.0, 4.0), Rectangle(5.0, 6.0, 7.0, 8.0), Rectangle(9.0, 10.0, 11.0, 12.0),
+        Rectangle(13.0, 14.0, 15.0, 16.0), Rectangle(17.0, 18.0, 19.0, 20.0)))
+    printl(weighHelds(hold(0, true), hold(1, false), hold(2, true), hold(5, true)))
+    printl(weighMixedCall(1, Vector2(2.0, 5.0), 3.0, Color(1, 0, 0, 0), Five(1, 1, 1, 1, 1), 0.5, DoubleLong(2.0, 3), 4,
+        1.0, 2.0, 3.0, Rectangle(1.0, 2.0, 3.0, 4.0), Rectangle(5.0, 6.0, 7.0, 8.0), 2.0))
+    printl(combine(Five(1, 2, 3, 4, 5), 10, Vector2(20.0, 30.0), 40.0, 50, Color(0, 0, 0, 60)))
+
+    val add = addVectors
+    printl(add(Vector2(1.0, 1.0), Vector2(2.0, 2.0)))
+    printl(addVectors(Vector2(1.0, 2.0), Vector2(3.0, 4.0)) == Vector2(4.0, 6.0))
+}

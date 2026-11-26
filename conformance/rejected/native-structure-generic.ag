@@ -1,0 +1,6 @@
+// A C structure has one layout, so a native type can't take type parameters.
+native type Box<T>(value: T)
+
+def main(): Unit {
+    printl(1)
+}

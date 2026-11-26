@@ -1,0 +1,41 @@
+// A native type with fields is an ordinary product inside Silver, whatever crosses into C.
+import std.hash
+
+native type Vector2(x: Float32, y: Float32)
+native type Color(r: UInt8, g: UInt8, b: UInt8, a: UInt8)
+native type Line(from: Vector2, to: Vector2)
+native type Flags(on: Bool, count: Int32)
+
+def opAdd(a: Vector2, b: Vector2): Vector2 => Vector2(a.x + b.x, a.y + b.y)
+def opNeg(v: Vector2): Vector2 => Vector2(-v.x, -v.y)
+
+def describe(line: Line): String => match line {
+    Line(Vector2(0.0, 0.0), to) => "from the origin to {to}"
+    Line(from, Vector2(x, _)) => "from {from} to x = {x}"
+}
+
+def main(): Unit {
+    val v = Vector2(1.0, 2.0) + Vector2(3.0, 4.5)
+    printl(v)
+    printl(-v)
+    printl(v == Vector2(4.0, 6.5))
+    printl(v != Vector2(4.0, 6.0))
+    printl(v with (x = 0.0))
+    printl("{Color(255, 128, 0, 255)}")
+    printl(Flags(true, -3))
+
+    val line = Line(Vector2(0.0, 0.0), v)
+    printl(line)
+    printl(line.to.y)
+    printl(describe(line))
+    printl(describe(line with (from = Vector2(1.0, 1.0))))
+    printl(line == Line(Vector2(0.0, 0.0), Vector2(4.0, 6.5)))
+
+    val names = [Color(255, 0, 0, 255): "red", Color(0, 0, 255, 255): "blue"]
+    printl(names[Color(0, 0, 255, 255)] ?? "none")
+    printl(names[Color(0, 255, 0, 255)] ?? "none")
+    printl(hash(Vector2(1.0, 2.0)) == hash(Vector2(1.0, 2.0)))
+
+    val vectors = [v, -v, Vector2(0.5, 0.25)]
+    printl(vectors.fold(Vector2(0.0, 0.0), (a, b) => a + b))
+}

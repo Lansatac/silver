@@ -1,0 +1,6 @@
+// A field of a C structure has to be a type C has.
+native type Bad(name: String, size: Int32)
+
+def main(): Unit {
+    printl(Bad("a", 1))
+}

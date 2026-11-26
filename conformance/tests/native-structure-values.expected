@@ -1,0 +1,16 @@
+Vector2(4.0, 6.5)
+Vector2(-4.0, -6.5)
+true
+true
+Vector2(0.0, 6.5)
+Color(255, 128, 0, 255)
+Flags(true, -3)
+Line(Vector2(0.0, 0.0), Vector2(4.0, 6.5))
+6.5
+from the origin to Vector2(4.0, 6.5)
+from Vector2(1.0, 1.0) to x = 4.0
+true
+blue
+none
+true
+Vector2(0.5, 0.25)
