@@ -698,6 +698,14 @@ def f(y: Int): Int => 2", "    val g: (Int) -> Int = f
         .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
 }
 
+@("a conformance that finds only a function and its reported duplicate reports just the duplicate")
+unittest
+{
+    analyzedWith("interface A { def a(x: Self): Int }\ndef a(x: Int): Int => 1\ndef a(y: Int): Int => 2\nconform Int: A\n"
+        ~ "def use<T: A>(x: T): Int => a(x)", "    printl(use(1))")
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("a", 3));
+}
+
 @("a nested def of a name an enclosing block has already declared is shadowing, not an overload")
 unittest
 {

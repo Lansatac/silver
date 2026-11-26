@@ -4101,9 +4101,8 @@ private final class TypeChecker
         if (winners.length == 1) return winners[0].candidate;
         if (!reportable) return Candidate.init;
         auto unbeaten = trials.filter!(t => !trials.any!(u => beats(u, t))).array;
-        // One reported for taking the same parameters as an earlier one doesn't make the call ambiguous too.
-        auto undecided = unbeaten.filter!(t => (t.candidate.symbol in _sameAsEarlier) is null).array;
-        if (undecided.length == 1) return undecided[0].candidate;
+        auto decided = leftByDuplicates(unbeaten.map!(t => t.candidate).array);
+        if (decided.isValid) return decided;
         auto tied = unbeaten.map!(t => "`" ~ overloadLabel(t.candidate) ~ "`").array;
         // Functions of different modules tie where a blanket forward brings them together.
         auto homes = unbeaten.map!(t => _resolutions.declarations.functionModules.get(t.candidate.func, null).idup).array.sort.uniq.array;
@@ -4120,6 +4119,15 @@ private final class TypeChecker
             "This call fits more than one `%s` equally well: %s; convert an argument, or annotate it, to choose one"
                 .format(spelled, tied.join(" and ")));
         return Candidate.init;
+    }
+
+    /// The one of the tied `candidates` that wasn't reported for taking the same parameters as an
+    /// earlier one, when there's exactly one, or none: a tie only with such duplicates is left to
+    /// their report.
+    private Candidate leftByDuplicates(const(Candidate)[] candidates)
+    {
+        auto undecided = candidates.filter!(c => (c.symbol in _sameAsEarlier) is null).array;
+        return undecided.length == 1 ? undecided[0] : Candidate.init;
     }
 
     /// Whether `a` fits a call better than `b`: at least as well for every argument and better for
@@ -4392,6 +4400,8 @@ private final class TypeChecker
         {
             auto best = fits.filter!(c => fits.all!(d => d == c || moreSpecific(c, d))).array;
             if (best.length == 1) fits = best;
+            auto decided = leftByDuplicates(fits);
+            if (decided.isValid) fits = [decided];
         }
         if (fits.length != 1)
         {
@@ -5626,7 +5636,10 @@ private final class TypeChecker
         auto winners = pool.filter!(t => pool.all!(u => u.trial.candidate.func == t.trial.candidate.func || beats(t.trial, u.trial))).array;
         if (winners.length != 1)
         {
-            auto unbeaten = pool.filter!(t => !pool.any!(u => beats(u.trial, t.trial))).map!(t => t.trial.candidate.func).array;
+            auto unbeatenAttempts = pool.filter!(t => !pool.any!(u => beats(u.trial, t.trial))).array;
+            auto decided = leftByDuplicates(unbeatenAttempts.map!(t => t.trial.candidate).array);
+            if (decided.isValid) return finish(unbeatenAttempts.find!(t => t.trial.candidate == decided).front, bound);
+            auto unbeaten = unbeatenAttempts.map!(t => t.trial.candidate.func).array;
             auto across = acrossModules(unbeaten);
             auto tied = unbeaten.map!(f => "`" ~ overloadLabel(f, across) ~ "`").array;
             result.failure = "more than one `%s` takes %s equally well: %-(%s and %)".format(name, arguments(), tied)
