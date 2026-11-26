@@ -346,11 +346,13 @@ private final class FunctionState
     }
 
     /// Memory for the C structure `type`, aligned to at least 8 so each 8-byte piece can be loaded
-    /// and stored as the convention's types.
+    /// and stored as the convention's types. It starts zeroed, as the interpreter's buffer does, so
+    /// the padding C may read is the same on both backends.
     string newCImage(const CType type)
     {
         auto name = "%%.c%s".format(cImages.length);
         cImages ~= "  %s = alloca [%s x i8], align %s".format(name, type.size, type.alignment > 8 ? type.alignment : 8);
+        cImages ~= "  store [%s x i8] zeroinitializer, ptr %s, align 1".format(type.size, name);
         return name;
     }
 
