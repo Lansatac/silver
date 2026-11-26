@@ -13,6 +13,6 @@ def main(): Unit {
     printl(report([Thing(3), Thing(4)]))
     printl(report(Mine("five")))
     printl(encode([1, 2]))
-    val json: Json = Thing(6)
+    val json = Thing(6)
     printl(toJson(json))
 }

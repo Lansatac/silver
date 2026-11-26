@@ -1,1 +1,0 @@
-T0001: Type `Filtered<[Int], Int>` is not assignable to type `[Int]`; `.array()` collects it into one

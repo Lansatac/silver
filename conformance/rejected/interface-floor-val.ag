@@ -1,4 +1,4 @@
-// An interface on a `val` checks the value's type.
+// An interface name isn't a type for a `val`'s annotation.
 
 interface Indexed<T> {
     def length(value: Self): Int

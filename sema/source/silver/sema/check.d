@@ -1267,15 +1267,13 @@ private final class TypeChecker
                     .format(_types.describe(floored.written)));
             failed = true;
         }
-        auto result = settleBeside(floored, inferred.types, inferred.values, site, span, "only errors");
+        auto result = settleBeside(floored, inferred.types, inferred.values, site, span);
         return failed ? _types.error : result;
     }
 
     /// The error union written `floored.written` once the floors on its success side are settled
-    /// from `values`, whose `types` came from `synthesizeBeside` with its errors. `failures` is
-    /// what the subject is said to give when none of them is a value.
-    private Type settleBeside(const Floored floored, const(Type)[] types, const(Expr)[] values, Site site, Span span,
-        string failures)
+    /// from `values`, whose `types` came from `synthesizeBeside` with its errors.
+    private Type settleBeside(const Floored floored, const(Type)[] types, const(Expr)[] values, Site site, Span span)
     {
         auto success = _types.never;
         foreach (i, type; types)
@@ -1287,8 +1285,8 @@ private final class TypeChecker
         if (success == _types.never && types.any!(t => _types.isFailure(t)))
         {
             _collector.reportError(DiagnosticCode.TypeMismatch, span,
-                "%s %s, so nothing gives the type `%s` stands for; write the type out"
-                    .format(floored.subject, failures, floored.floors[0].name));
+                "%s only errors, so nothing gives the type `%s` stands for; write the type out"
+                    .format(floored.subject, floored.floors[0].name));
             return _types.error;
         }
         auto settled = settleFloors(Floored(_types.successOf(floored.written), floored.floors, floored.subject), success,
@@ -1505,25 +1503,7 @@ private final class TypeChecker
     /// `val binding = value`, or a binding in a pattern given its part of a tuple literal.
     private void checkBinding(const VarDecl binding, const Expr value, BodyContext ctx)
     {
-        if (auto floors = binding.id in _resolutions.bindingFloors)
-        {
-            declareFloors(*floors);
-            auto floored = Floored(_declarer.resolveType(*binding.type), *floors, "`%s` is".format(binding.name));
-            auto settled = _types.error;
-            if (isFallible(floored))
-            {
-                auto type = synthesizeBeside(value, _types.errorOf(floored.written), ctx);
-                settled = settleBeside(floored, [type], [value], ctx.site, value.span, "only an error");
-            }
-            else
-            {
-                auto type = synthesize(value, ctx);
-                settled = settleFloors(floored, type, ctx.site, value.span, [value]);
-                if (settled != _types.error && settled != type) coerce(value, type, settled);
-            }
-            _typing.symbolTypes[SymbolId(binding.id)] = settled;
-        }
-        else if (binding.type is null)
+        if (binding.type is null)
         {
             // A discard keeps no value, so a `None` or `[]` needs no type to be dropped.
             auto type = synthesize(value, ctx);

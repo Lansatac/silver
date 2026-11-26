@@ -1,1 +1,1 @@
-T0043: `strings` is `[Int]`, which isn't a `Range<String>`: it's a `Range<Int>` instead
+S0026: `Range<String>` is an interface, which a `val`'s annotation can't name, since an interface name is a type only in a function's signature; leave the annotation off, or write the type

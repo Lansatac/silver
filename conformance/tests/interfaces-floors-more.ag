@@ -59,16 +59,16 @@ def main(): Unit {
     printl(maybe([]))
     printl(direct([5]))
 
-    val kept: Range<Int> ! NotFound = find([7])
+    val kept = find([7])
     printl(kept)
-    val plain: Range<Int> & Indexed<Int> ! NotFound = [8]
+    val plain: [Int] ! NotFound = [8]
     printl(plain)
     val later = (xs: [Int]): Range<Int> ! NotFound => (find(xs)?).filter(x => x > 1)
     printl(later([1, 2]))
     printl(later([]))
 
     printl(rows([8])[1][0])
-    val grid: Range<Range<Int>> & Indexed<[Int]> = [[1], [2]]
+    val grid = [[1], [2]]
     printl(length(grid))
 
     printl(middle([4, 5, 6]))

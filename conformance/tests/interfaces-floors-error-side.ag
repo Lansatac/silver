@@ -30,6 +30,6 @@ def main(): Unit {
     val counted = (xs: [Int]): Range<Int> ! UInt8 => if length(xs) > 1 => Error(200) else Ok(xs)
     printl(counted([1, 2]))
     printl(counted([3]))
-    val held: Range<Int> ! Parse = if length(tens.array()) == 0 => Error(BadDigit(7)) else Ok([4])
+    val held: [Int] ! Parse = if length(tens.array()) == 0 => Error(BadDigit(7)) else Ok([4])
     printl(held)
 }

@@ -106,15 +106,14 @@ package struct Resolution
     /// type is an interface name, in parameter order. They come after the declared ones.
     SideTable!(Id!FunctionDecl, const(TypeParam)[]) hiddenParams;
     /// For a parameter type that's an interface name, the hidden type parameter it stands for,
-    /// and for an interface name or `A & B` in a result type or a `val`'s annotation, its floor.
+    /// and for an interface name or `A & B` in a result type, its floor.
     SideTable!(Id!TypeExpr, Id!TypeParam) sugarParams;
     /// The floors in a function's result type: one for each interface name or `A & B` in it, an
     /// outer one before those in its type arguments. Each stands for the type the body gives
     /// there, which its bounds check, and none is a type parameter of the function.
     SideTable!(Id!FunctionDecl, const(TypeParam)[]) resultFloors;
-    /// The same for a lambda's or nested `def`'s result type, and for a `val`'s annotation.
+    /// The same for a lambda's or nested `def's result type.
     SideTable!(Id!Expr, const(TypeParam)[]) lambdaFloors;
-    SideTable!(Id!VarDecl, const(TypeParam)[]) bindingFloors;
     /// The functions a generic function's bounds supply inside it, in the order its witnesses are
     /// kept: by type parameter, then bound, then the interface's function.
     SideTable!(Id!FunctionDecl, Id!FunctionDecl[]) boundFunctions;
@@ -630,7 +629,6 @@ private final class NameResolver
     private SideTable!(Id!TypeExpr, Id!TypeParam) _sugarParams;
     private SideTable!(Id!FunctionDecl, const(TypeParam)[]) _resultFloors;
     private SideTable!(Id!Expr, const(TypeParam)[]) _lambdaFloors;
-    private SideTable!(Id!VarDecl, const(TypeParam)[]) _bindingFloors;
     private SideTable!(Id!FunctionDecl, Id!FunctionDecl[]) _boundFunctions;
     private SideTable!(Id!FunctionDecl, Requirement) _requirements;
     private Forward[][string][string] _forwards;
@@ -706,7 +704,7 @@ private final class NameResolver
         }
         return Resolution(_resolutions, _typeResolutions, _callees, _constructions, _captures, _conversions, _methodLookups, _overloads,
             _operatorLookups, _declarations, _nativeLibraries, cast(const(Scope)[string]) _moduleScopes, _hiddenParams, _sugarParams,
-            _resultFloors, _lambdaFloors, _bindingFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances, _forwardImports, _listedImports, _conformances, _tests,
+            _resultFloors, _lambdaFloors, _boundFunctions, _requirements, _forwards, _aliasedInstances, _forwardImports, _listedImports, _conformances, _tests,
             _hiddenModules);
     }
 
@@ -2138,7 +2136,7 @@ private final class NameResolver
             },
             (const OptionType option) => resolveTypeExpr(*option.inner, current, inside),
             (const ErrorUnionType u) {
-                // Only the success side of a whole result type or annotation is a floor's place.
+                // Only the success side of a whole result type is a floor's place.
                 auto part = isFloor(inside) ? InterfaceUse.floorInErrorUnion : inside;
                 resolveTypeExpr(*u.success, current, use == InterfaceUse.floor ? InterfaceUse.floorPart : part);
                 foreach (error; u.errors) resolveTypeExpr(error, current, part);
@@ -2201,6 +2199,7 @@ private final class NameResolver
             case InterfaceUse.interfaceResult:
             case InterfaceUse.bodilessResult:
             case InterfaceUse.patternBinding:
+            case InterfaceUse.valAnnotation:
                 return use;
             case InterfaceUse.none:
             case InterfaceUse.bound:
@@ -2312,6 +2311,11 @@ private final class NameResolver
                     ("`%s` %s, which stands for the type a function's body returns, and this function has no body; "
                         ~ "write the type it returns").format(name, what));
                 return;
+            case InterfaceUse.valAnnotation:
+                _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
+                    ("`%s` %s, which a `val`'s annotation can't name, since an interface name is a type only in a "
+                        ~ "function's signature; leave the annotation off, or write the type").format(name, what));
+                return;
             case InterfaceUse.patternBinding:
                 _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span,
                     ("`%s` %s, which a binding in a pattern can't have as its type; write the type out, or bind "
@@ -2331,10 +2335,10 @@ private final class NameResolver
             case InterfaceUse.floor:
             case InterfaceUse.floorPart:
                 _collector.reportError(DiagnosticCode.InterfaceIsNotAType, span, joined
-                    ? ("`%s` joins interfaces, which only a `def`'s result type, a `val`'s annotation or the whole type "
+                    ? ("`%s` joins interfaces, which only a `def`'s result type or the whole type "
                         ~ "of a module-level `def`'s parameter can; use a type parameter with the bounds, as in `<T: %s>`")
                         .format(name, name)
-                    : ("`%s` is an interface, which stands for a type only as a `def`'s result type, a `val`'s annotation "
+                    : ("`%s` is an interface, which stands for a type only as a `def`'s result type "
                         ~ "or the whole type of a module-level `def`'s parameter; use a type parameter with a bound, as in "
                         ~ "`<T: %s>`, or a sum type of the types it holds").format(name, name));
                 return;
@@ -2408,8 +2412,7 @@ private final class NameResolver
                 _declarations.locals[varDecl.id] = &varDecl;
                 if (varDecl.type !is null)
                 {
-                    resolveTypeExpr(*varDecl.type, scopeTable, InterfaceUse.floor);
-                    if (auto floors = floorsIn(*varDecl.type)) _bindingFloors[varDecl.id] = floors;
+                    resolveTypeExpr(*varDecl.type, scopeTable, InterfaceUse.valAnnotation);
                 }
                 auto recursive = varDecl.value.kind.match!((const Lambda l) => l.self == varDecl.id, _ => false);
                 if (recursive)
@@ -3029,8 +3032,8 @@ private enum InterfaceUse
     joined,
     /// A part of an `A & B` that's a floor, whose type arguments are a floor's place too.
     joinedInFloor,
-    /// The whole of a result type or a `val`'s annotation, where an interface name or `A & B` is
-    /// a floor, as it is on the success side of an error union that's the whole type.
+    /// The whole of a result type, where an interface name or `A & B` is a floor,
+    /// as it is on the success side of an error union that's the whole type.
     floor,
     /// Inside one of those: a tuple's element, an option's or array's type, or a type argument.
     floorPart,
@@ -3044,6 +3047,8 @@ private enum InterfaceUse
     bodilessResult,
     /// The annotation of a binding in a pattern.
     patternBinding,
+    /// A `val`'s annotation.
+    valAnnotation,
     /// A top-level constant's type.
     constant,
 }

@@ -1,5 +1,5 @@
-// An interface name as a result type, or on a `val`, is a floor: the type is the body's or the
-// value's, checked to satisfy the interface, and it keeps everything it can do.
+// An interface name as a result type is a floor: the type is the body's, checked to satisfy the
+// interface, and it keeps everything it can do.
 
 import interfaces_support.floors
 import std.range : Filtered
@@ -60,18 +60,17 @@ def main(): Unit {
     printl(h(Countdown(2)).array())
     printl(apply(odds, [1, 2, 3]).array())
 
-    // On a `val`, the binding has the value's type.
-    val xs: Range<Int> = [1, 2, 3]
+    val xs = [1, 2, 3]
     printl(xs[0])
-    val ys: Range<Int> & Indexed<Int> = squares(xs)
+    val ys = squares(xs)
     printl(ys[2])
-    val zs: Range<Int> = odds(xs)
+    val zs = odds(xs)
     printl(zs.array())
-    val pair: (String, Range<Int>)? = ("p", Countdown(1))
+    val pair: (String, Countdown)? = ("p", Countdown(1))
     printl(pair)
-    val held: Box<Range<String>> = Box(["s"])
+    val held = Box(["s"])
     printl(held.value[0])
-    mutable val changing: Range<Int> = [1]
+    mutable val changing = [1]
     changing = [2, 3]
     printl(changing)
 
