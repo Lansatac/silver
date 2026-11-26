@@ -6,6 +6,30 @@ import std.sumtype : match;
 
 import silver.ast : Id, ModuleKey;
 
+/// The writes made to side tables while something is being tried, so they can be taken back: each
+/// entry puts one key back as it was. Nothing is kept while `recording` is off.
+struct Journal
+{
+    void delegate()[] undo;
+    bool recording;
+
+    /// Takes back every write since there were `mark` entries.
+    void rollBack(size_t mark)
+    {
+        auto was = recording;
+        recording = false;
+        while (undo.length > mark)
+        {
+            undo[$ - 1]();
+            undo.length--;
+        }
+        undo.assumeSafeAppend();
+        recording = was;
+    }
+}
+
+Journal journal;
+
 /// What sema knows about each of a kind of node, by the node's ID, kept apart for each module the
 /// nodes belong to. It's used as an associative array is.
 struct SideTable(K, V)
@@ -17,13 +41,34 @@ struct SideTable(K, V)
         return byModule[moduleOf(key)][key];
     }
 
+    /// Notes how `key` stands, for the journal to put back.
+    private void note(const K key)
+    {
+        if (!journal.recording) return;
+        auto self = &this;
+        auto home = moduleOf(key);
+        if (auto old = key in this)
+        {
+            auto value = *old;
+            journal.undo ~= () { self.byModule[home][key] = value; };
+        }
+        else
+        {
+            journal.undo ~= () {
+                if (auto table = home in self.byModule) (*table).remove(key);
+            };
+        }
+    }
+
     void opIndexAssign(V value, const K key)
     {
+        note(key);
         byModule.require(moduleOf(key))[key] = value;
     }
 
     void opIndexOpAssign(string op, T)(T value, const K key)
     {
+        note(key);
         mixin("byModule.require(moduleOf(key))[key] " ~ op ~ "= value;");
     }
 
@@ -41,11 +86,13 @@ struct SideTable(K, V)
 
     ref V require(const K key, lazy V value = V.init)
     {
+        note(key);
         return byModule.require(moduleOf(key)).require(key, value);
     }
 
     bool remove(const K key)
     {
+        note(key);
         if (auto table = moduleOf(key) in byModule) return (*table).remove(key);
         return false;
     }
@@ -84,4 +131,25 @@ unittest
     assert(table.byModule.length == 2 && table.length == 2);
     assert(table.get(a.next!Expr, 7) == 7);
     assert(table.remove(inA) && inA !in table);
+}
+
+@("a journal takes back the writes to a side table made while it records")
+unittest
+{
+    import silver.ast : Expr, NodeIds;
+
+    auto ids = new NodeIds(ModuleKey.of("a", "x"));
+    auto kept = ids.next!Expr, changed = ids.next!Expr, added = ids.next!Expr;
+    SideTable!(Id!Expr, int[]) table;
+    table[kept] = [1];
+    table[changed] = [2];
+    journal.recording = true;
+    auto mark = journal.undo.length;
+    table[changed] ~= 3;
+    table[added] = [4];
+    table.require(kept) ~= 5;
+    table.remove(changed);
+    journal.rollBack(mark);
+    journal.recording = false;
+    assert(table[kept] == [1] && table[changed] == [2] && added !in table);
 }

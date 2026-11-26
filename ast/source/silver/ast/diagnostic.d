@@ -55,6 +55,14 @@ class Collector
         _diagnostics ~= diagnostic;
     }
 
+    /// Drops every diagnostic after the first `count`, which were reported while something was only tried.
+    Diagnostic[] dropAfter(size_t count)
+    {
+        auto dropped = _diagnostics[count .. $];
+        _diagnostics = _diagnostics[0 .. count];
+        return dropped;
+    }
+
     /// Adds `text` to the message of the diagnostic at `index`, for a hint known only after it.
     void amend(size_t index, string text)
     {

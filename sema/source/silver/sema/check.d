@@ -20,6 +20,7 @@ import silver.sema.hooks : checkTypeHooks;
 import silver.sema.recursion;
 import silver.sema.type;
 import silver.sema.resolve;
+import silver.sema.table : journal;
 import silver.sema.typing;
 
 // Type checking for Silver programs.
@@ -152,8 +153,21 @@ private final class TypeChecker
     private bool[Entry] _cycledConformances;
     /// Whether a hint about a missing `conform` line is being worked out, which doesn't look for another.
     private bool _hinting;
-    /// How many trials, which drop what they find wrong, the checker is inside.
+    /// How many trials, which drop what they find wrong, the checker is inside. In one, a lambda's
+    /// body isn't looked at, and what only it would decide is left open.
     private size_t _trials;
+    /// How many attempts that may be taken back the checker is inside.
+    private size_t _trying;
+    /// What was found by work that an attempt set off but isn't part of it, as checking another
+    /// function's body to learn its result is, held until no attempt can take it back.
+    private Found _aside;
+    /// In how many steps the last expression checked against a type fitted it.
+    private int _cost;
+    /// Whether each expression has a type of its own, as far as that's been asked.
+    private bool[Id!Expr] _ownTypes;
+    /// What each expression that has no type of its own is with nothing expected, or an error
+    /// when it's nothing; the second for a trial, where a lambda's body isn't looked at.
+    private Type[Id!Expr][2] _alone;
     /// What looking a goal on types with no type parameters up found, by the goal.
     private Conformance[Looked] _lookups;
     /// What a `for` asks the element type of its `Range` to be.
@@ -310,15 +324,18 @@ private final class TypeChecker
         _declarer.rejectGrowingTypes(programModules);
         rejectGrowingCalls();
 
+        // A literal is seen each time it's typed, and one typed only by an attempt has no type.
+        bool[Id!Expr] rangeChecked;
         foreach (literal; _intLiterals)
         {
+            if (literal.id in rangeChecked || literal.id !in _typing.exprTypes) continue;
+            rangeChecked[literal.id] = true;
             checkLiteralRange(literal);
         }
-        bool[Id!Expr] floatsChecked;
         foreach (literal; _floatLiterals)
         {
-            if (literal.id in floatsChecked) continue;
-            floatsChecked[literal.id] = true;
+            if (literal.id in rangeChecked || literal.id !in _typing.exprTypes) continue;
+            rangeChecked[literal.id] = true;
             checkFloatLiteralRange(literal);
         }
 
@@ -387,6 +404,92 @@ private final class TypeChecker
             given ~= "`%s` %s".format(written.front.name, withArticle(_types.describe(arg)));
         }
         return given.length > 0 ? "%s with %-(%s and %)".format(text, given) : text;
+    }
+
+    /// The lists checking adds to as it goes.
+    private struct Found
+    {
+        Diagnostic[] diagnostics;
+        Reference[] references;
+    }
+
+    /// Where an attempt began, which is everything `takeBack` needs to undo it.
+    private struct Begun
+    {
+        size_t written, diagnostics, references;
+        bool recording;
+        InferredReturn* returns;
+        InferredReturn returned;
+    }
+
+    /// Begins an attempt: checking that `takeBack` undoes entirely, or `keep` lets stand.
+    private Begun beginAttempt(BodyContext ctx)
+    {
+        auto begun = Begun(journal.undo.length, _collector.diagnostics.length, _references.length, journal.recording,
+            ctx.inferred);
+        if (ctx.inferred !is null) begun.returned = *ctx.inferred;
+        journal.recording = true;
+        _trying++;
+        return begun;
+    }
+
+    /// Whether anything has been reported as wrong since `begun`.
+    private bool failed(const Begun begun)
+    {
+        return _collector.diagnostics[begun.diagnostics .. $].any!(d => d.severity == Severity.Error);
+    }
+
+    private void takeBack(Begun begun)
+    {
+        journal.rollBack(begun.written);
+        _collector.dropAfter(begun.diagnostics);
+        _references.length = begun.references;
+        _references.assumeSafeAppend();
+        if (begun.returns !is null) *begun.returns = begun.returned;
+        endAttempt(begun);
+    }
+
+    private void keep(Begun begun)
+    {
+        // With nothing around it to take them back, what it wrote stands.
+        if (!begun.recording)
+        {
+            journal.undo.length = begun.written;
+            journal.undo.assumeSafeAppend();
+        }
+        endAttempt(begun);
+    }
+
+    private void endAttempt(Begun begun)
+    {
+        journal.recording = begun.recording;
+        _trying--;
+        if (_trying > 0) return;
+        foreach (diagnostic; _aside.diagnostics) _collector.report(diagnostic);
+        _references ~= _aside.references;
+        _aside = Found.init;
+    }
+
+    /// Does `work`, which an attempt has set off but which stands whatever becomes of the attempt.
+    private void apart(scope void delegate() work)
+    {
+        if (_trying == 0) return work();
+        auto trying = _trying, trials = _trials, cost = _cost, recording = journal.recording, aside = _aside;
+        auto diagnostics = _collector.diagnostics.length, references = _references.length;
+        _trying = 0;
+        _trials = 0;
+        _aside = Found.init;
+        journal.recording = false;
+        work();
+        aside.diagnostics ~= _collector.dropAfter(diagnostics);
+        aside.references ~= _references[references .. $];
+        _references.length = references;
+        _references.assumeSafeAppend();
+        _trying = trying;
+        _trials = trials;
+        _cost = cost;
+        _aside = aside;
+        journal.recording = recording;
     }
 
     /// Notes a use of the generic `func` from `site`, for `rejectGrowingCalls`.
@@ -802,6 +905,13 @@ private final class TypeChecker
     {
         auto floors = f in _resolutions.resultFloors;
         if (floors is null) return;
+        auto state = _resultStates.get(f, ResultState.waiting);
+        if (state == ResultState.settled || state == ResultState.working && (!required || f in _recursiveResults)) return;
+        apart(() => workOutResult(f, *floors));
+    }
+
+    private void workOutResult(Id!FunctionDecl f, const(TypeParam)[] floors)
+    {
         auto func = _resolutions.declarations.functions[f];
         auto signature = signatureOf(f);
         final switch (_resultStates.get(f, ResultState.waiting))
@@ -809,7 +919,6 @@ private final class TypeChecker
             case ResultState.settled:
                 return;
             case ResultState.working:
-                if (!required || f in _recursiveResults) return;
                 _recursiveResults[f] = true;
                 _collector.reportError(DiagnosticCode.RecursiveResultType, func.returnType.span,
                     ("The type `%s` returns is worked out from its body, which uses `%s` before that's known; "
@@ -821,12 +930,12 @@ private final class TypeChecker
         }
         _resultStates[f] = ResultState.working;
         auto result = inferReturn(*func.body, siteOf(f), false,
-            Floored(signature.ret, *floors, "`%s` returns".format(func.name)));
+            Floored(signature.ret, floors, "`%s` returns".format(func.name)));
         if (f in _recursiveResults) result = _types.error;
         _typing.symbolTypes[SymbolId(f)] = _types.function_(signature.params, result, signature.mutables);
         _resultStates[f] = ResultState.settled;
         // Resolution has reported one that's written.
-        auto written = privateTypeIn(signature.ret) !is null || (*floors).any!(floor => _typing.bounds.get(floor.id, null)
+        auto written = privateTypeIn(signature.ret) !is null || floors.any!(floor => _typing.bounds.get(floor.id, null)
             .any!(bound => bound.args.any!(a => privateTypeIn(a) !is null)));
         auto hidden = func.isPrivate || written ? null : privateTypeIn(result);
         if (hidden !is null)
@@ -964,6 +1073,7 @@ private final class TypeChecker
     /// an inferred return that isn't one is promoted to one.
     private Type typeLambda(const Expr expr, const Lambda lambda, const(FunctionData)* expected, Site site, bool optional = false)
     {
+        if (_trials > 0) return lambdaShape(expr, lambda, expected);
         auto wrongCount = expected !is null && expected.params.length != lambda.params.length;
         if (wrongCount)
         {
@@ -1022,6 +1132,37 @@ private final class TypeChecker
         auto type = failed ? _types.error : _types.function_(params, ret, mutables);
         _typing.exprTypes[expr.id] = type;
         return type;
+    }
+
+    /// A lambda in a trial, where its body isn't looked at: it has to take as many parameters as
+    /// are expected, each annotated as the type expected of it, and its result is the one
+    /// written, or else whatever is expected, or open.
+    private Type lambdaShape(const Expr expr, const Lambda lambda, const(FunctionData)* expected)
+    {
+        if (expected !is null && expected.params.length != lambda.params.length)
+        {
+            _collector.reportError(DiagnosticCode.TypeMismatch, expr.span,
+                "This lambda has %s parameters, where %s are expected".format(lambda.params.length, expected.params.length));
+            return _types.error;
+        }
+        Type[] params;
+        bool[] mutables;
+        foreach (i, param; lambda.params)
+        {
+            auto type = param.annotated ? quietlyResolved(param.type) : expected !is null ? expected.params[i] : Type.init;
+            if (type == Type.init)
+            {
+                _collector.reportError(DiagnosticCode.UntypedLambdaParameter, param.nameSpan,
+                    "Nothing here says what type `%s` is; write `%s: Type`".format(param.name, param.name));
+                return _types.error;
+            }
+            params ~= type;
+            mutables ~= param.mutable;
+        }
+        auto written = lambda.returnType !is null && (expr.id in _resolutions.lambdaFloors) is null;
+        auto ret = written ? quietlyResolved(*lambda.returnType)
+            : expected !is null && expected.ret != Type.init ? expected.ret : _types.error;
+        return _types.function_(params, ret, mutables);
     }
 
     /// The common type of everything `body` can return, each promoted to it as needed. With
@@ -1998,11 +2139,54 @@ private final class TypeChecker
         return type;
     }
 
+    /// The types of `parts`, which share one type that nothing outside them says. Those with a
+    /// type of their own decide it, and one with none is checked against what they make where it
+    /// can be, as the `1` in `[1, small]` is a `UInt8`. Where it can't, and where none has a type
+    /// of its own, each is typed with nothing expected, and `join` brings them together as it does
+    /// a `None` beside a value. `around` is what typing each part is done inside, and `errors`
+    /// is as for `synthesizeBeside`.
+    private Type[] synthesizeTogether(const(Expr)[] parts, BodyContext ctx, Type errors = Type.init,
+        scope Type delegate(size_t, scope Type delegate()) around = null)
+    {
+        Type typed(size_t i, scope Type delegate() work) => around is null ? work() : around(i, work);
+        auto types = new Type[parts.length];
+        auto own = parts.map!(part => hasOwnType(part)).array;
+        Type decided;
+        auto decides = errors == Type.init && own.canFind(true) && own.canFind(false);
+        foreach (i, part; parts)
+        {
+            if (!own[i]) continue;
+            types[i] = typed(i, () => synthesizeBeside(part, errors, ctx));
+            auto type = types[i];
+            if (!decides || type == _types.never) continue;
+            if (decided == Type.init || isAssignable(decided, type)) decided = type;
+            else if (!isAssignable(type, decided)) decides = false;
+        }
+        decides = decides && decided != Type.init && gives(decided);
+        foreach (i, part; parts)
+        {
+            if (own[i]) continue;
+            if (decides)
+            {
+                auto begun = beginAttempt(ctx);
+                types[i] = typed(i, () => check(part, decided, ctx));
+                if (!failed(begun))
+                {
+                    keep(begun);
+                    continue;
+                }
+                takeBack(begun);
+            }
+            types[i] = typed(i, () => synthesizeBeside(part, errors, ctx));
+        }
+        return types;
+    }
+
     private Type synthesizeArrayLiteral(const ArrayLiteral literal, BodyContext ctx)
     {
         if (literal.elements.length == 0) return _types.emptyArray;
 
-        auto types = literal.elements.map!(e => synthesize(e, ctx)).array;
+        auto types = synthesizeTogether(literal.elements, ctx);
         auto joined = types[0];
         foreach (i, type; types[1 .. $])
         {
@@ -2031,7 +2215,7 @@ private final class TypeChecker
         }
         Type joined(const(Expr)[] parts, string what)
         {
-            auto types = parts.map!(e => synthesize(e, ctx)).array;
+            auto types = synthesizeTogether(parts, ctx);
             auto whole = types[0];
             foreach (i, type; types[1 .. $]) whole = join(whole, type, parts[i + 1].span, what);
             whole = _declarer.requireTyped(whole, parts[0].span);
@@ -2205,8 +2389,8 @@ private final class TypeChecker
         BodyContext ctx)
     {
         auto open = range.start is null || range.end is null;
-        // Two literals are fitted by their shape, so they take the interval type an `opIndex` asks for.
-        auto shaped = !open && isShaped(*index.index);
+        // Two literals have no type of their own, so they take the interval type an `opIndex` asks for.
+        auto shaped = !open && !hasOwnType(*index.index);
         auto interval = shaped ? Type.init
             : open ? openSliceInterval(expr, index, range, objectType, ctx)
             : synthesize(*index.index, ctx);
@@ -2365,7 +2549,9 @@ private final class TypeChecker
     {
         auto element = _types.nominalArgs(expected)[0];
         check(*range.start, element, ctx);
+        auto start = _cost;
         rangeEnd(*range.end, check(*range.end, element, ctx));
+        _cost = max(start, _cost);
         _typing.exprTypes[expr.id] = expected;
         return expected;
     }
@@ -3065,11 +3251,12 @@ private final class TypeChecker
     private Type synthesizeUnary(Id!Expr id, const UnaryExpr unary, Span span, BodyContext ctx)
     {
         auto function_ = operatorFunction(unary.op);
-        if (function_ !is null && isFittedByShape(*unary.operand))
+        auto operandType = function_ is null ? synthesize(*unary.operand, ctx) : operandType(*unary.operand, ctx);
+        if (isLeftToOperator(*unary.operand, operandType))
         {
             return synthesizeOperator(id, function_, "`%sa`".format(cast(string) unary.op), [*unary.operand], [Type.init], span, ctx);
         }
-        auto operandType = synthesize(*unary.operand, ctx);
+        if (operandType == Type.init) operandType = synthesize(*unary.operand, ctx);
         final switch (unary.op)
         {
             case UnaryOp.Minus:
@@ -3125,12 +3312,22 @@ private final class TypeChecker
         return !isNumeric(type) && type != _types.never;
     }
 
-    /// An operand of arithmetic that's fitted by its shape rather than typed first, which is every
-    /// one but a number literal, since what a literal beside a number is can't be said until the
-    /// other is typed.
-    private bool isFittedByShape(const Expr operand)
+    /// The type of an operand of arithmetic, or `Type.init` for one that isn't typed first: a
+    /// number literal, since what it is beside a number can't be said until the other is typed,
+    /// and one with no type of its own that isn't a number with nothing expected, which is left
+    /// to the operator function as an argument is.
+    private Type operandType(const Expr operand, BodyContext ctx)
     {
-        return isShaped(operand) && !isIntLiteral(operand) && !isFloatLiteral(operand);
+        if (hasOwnType(operand)) return synthesize(operand, ctx);
+        if (isIntLiteral(operand) || isFloatLiteral(operand)) return Type.init;
+        auto type = alone(operand, ctx);
+        return type != _types.error && isNumeric(type) ? synthesize(operand, ctx) : Type.init;
+    }
+
+    /// Whether `operand`, which `operandType` gave `type`, is left to an operator function.
+    private bool isLeftToOperator(const Expr operand, Type type)
+    {
+        return type == Type.init && !isIntLiteral(operand) && !isFloatLiteral(operand);
     }
 
     /// An arithmetic operation that means a call of the operator function `name`, chosen as a call
@@ -3140,19 +3337,27 @@ private final class TypeChecker
     {
         auto typed = operands.dup;
         string[] shown;
+        // What an operand is for a message: its type, or what it would be with nothing expected.
+        Type seen(size_t i)
+        {
+            if (operands[i] != Type.init) return operands[i];
+            auto type = alone(args[i], ctx);
+            return type == _types.error ? Type.init : type;
+        }
         foreach (i, arg; args)
         {
-            if (isShaped(arg)) typed[i] = Type.init;
-            auto type = operands[i] != Type.init ? operands[i] : defaultType(arg);
+            if (!hasOwnType(arg)) typed[i] = Type.init;
+            auto type = seen(i);
             shown ~= type == Type.init ? "this operand" : "`" ~ _types.describe(type) ~ "`";
         }
         // An operand that isn't a number is what's reported, as it was when only numbers had operators.
-        auto blamed = args.length.iota.filter!(i => operands[i] == Type.init ? isFittedByShape(args[i]) : isNotNumber(operands[i]));
+        auto blamed = args.length.iota.filter!(i => operands[i] == Type.init ? isLeftToOperator(args[i], operands[i])
+            : isNotNumber(operands[i]));
         // `+` doesn't join strings or arrays, so say what does.
         string hint;
         if (name == "opAdd")
         {
-            auto joined = args.length.iota.map!(i => operands[i] != Type.init ? operands[i] : defaultType(args[i]))
+            auto joined = args.length.iota.map!(i => seen(i))
                 .filter!(t => t == _types.string_ || t != Type.init && _types.isArray(t));
             if (!joined.empty)
             {
@@ -3308,20 +3513,19 @@ private final class TypeChecker
         }
         else if (operatorFunction(binary.op) !is null)
         {
-            // An operand fitted by its shape is typed by the call if it's made, as an argument is, so
-            // it isn't synthesized first; neither is a literal that's beside what isn't a number.
-            leftType = isShaped(*binary.left) ? Type.init : synthesize(*binary.left, ctx);
-            rightType = isShaped(*binary.right) ? Type.init : synthesize(*binary.right, ctx);
-            auto calls = isFittedByShape(*binary.left) || isFittedByShape(*binary.right)
+            // An operand left to the operator function is typed by the call if it's made, as an
+            // argument is, so it isn't synthesized first; neither is a literal that's beside what
+            // isn't a number.
+            leftType = operandType(*binary.left, ctx);
+            rightType = operandType(*binary.right, ctx);
+            auto calls = isLeftToOperator(*binary.left, leftType) || isLeftToOperator(*binary.right, rightType)
                 || (leftType != Type.init && isNotNumber(leftType)) || (rightType != Type.init && isNotNumber(rightType));
             if (calls)
             {
                 if (leftType == _types.error || rightType == _types.error)
                 {
-                    foreach (operand; [binary.left, binary.right])
-                    {
-                        if (isShaped(*operand)) checkArgument(*operand, _types.error, ctx);
-                    }
+                    if (leftType == Type.init) checkArgument(*binary.left, _types.error, ctx);
+                    if (rightType == Type.init) checkArgument(*binary.right, _types.error, ctx);
                     return _types.error;
                 }
                 return synthesizeOperator(id, operatorFunction(binary.op), "`a %s b`".format(cast(string) binary.op),
@@ -3566,7 +3770,7 @@ private final class TypeChecker
 
     /// Chooses which of `candidates` a call of `name` invokes, reporting it when none or several
     /// do. Each argument with a type of its own is synthesized first, once, and its type is left
-    /// in `typed`; the rest only have to have the right shape, and are checked once one is chosen.
+    /// in `typed`; the rest are tried against each candidate, and checked once one is chosen.
     private Candidate chooseFunction(const Expr name, string spelled, const(TypeExpr)[] written,
         const Candidates candidates, const CallExpr call, Type[] typed, bool hasReceiver, BodyContext ctx,
         Type expected = Type.init)
@@ -3588,7 +3792,7 @@ private final class TypeChecker
 
         foreach (i, arg; args)
         {
-            if (typed[i] == Type.init && (call.isMutable(i) || !isShaped(arg))) typed[i] = synthesize(arg, ctx);
+            if (typed[i] == Type.init && (call.isMutable(i) || hasOwnType(arg))) typed[i] = synthesize(arg, ctx);
         }
         auto writtenTypes = written.map!(w => quietlyResolved(w)).array;
         Trial[][] fitAll(Type against)
@@ -3618,7 +3822,7 @@ private final class TypeChecker
         auto nearer = imported.any!(t => own.all!(u => fitsNearer(t, u)));
         if (own.length > 0 && !nearer) return bestTrial(own, name.span, spelled, reportable);
         if (imported.length > 0) return bestTrial(imported, name.span, spelled, reportable);
-        if (reportable) reportNoOverload(name.span, spelled, groups);
+        if (reportable && !brokenArgument(call, typed, ctx)) reportNoOverload(name.span, spelled, groups);
         return Candidate.init;
     }
 
@@ -3666,43 +3870,89 @@ private final class TypeChecker
         return trial;
     }
 
+    /// Whether an argument of `call` with no type in `typed` is wrong whatever it's passed to,
+    /// which typing the arguments of a call that couldn't be chosen then reports.
+    private bool brokenArgument(const CallExpr call, const(Type)[] typed, BodyContext ctx)
+    {
+        auto begun = beginAttempt(ctx);
+        scope (exit) takeBack(begun);
+        typeUnchosen(call, typed, ctx);
+        return failed(begun);
+    }
+
+    /// How well `arg`, which has no type of its own, fits `param`: whether checking it against
+    /// `param` passes, and in how many steps, in a trial that's taken back.
+    private Fit fitOf(const Expr arg, Type param, BodyContext ctx)
+    {
+        if (param == _types.error) return Fit.exact;
+        auto begun = beginAttempt(ctx);
+        scope (exit) takeBack(begun);
+        _trials++;
+        scope (exit) _trials--;
+        checkArgument(arg, param, ctx);
+        return failed(begun) ? Fit.none : Fit.promoted(_cost);
+    }
+
     /// Fills in how well each argument fits `trial`'s function, or why one doesn't, binding its
-    /// type parameters as a call of it alone would, in a trial that records nothing. How well an
-    /// argument fits is read from what the arguments bind; the expected type, if any, binds too,
-    /// and the arguments have to suit what it binds, but it doesn't say how well. Bounds are
-    /// checked once a function is chosen, so a failing one doesn't keep it from fitting.
+    /// type parameters as a call of it alone would, in a trial that records nothing. An argument
+    /// with a type in `typed` is fitted by it, and one without is checked against its parameter
+    /// as that call would check it. How well an argument fits is read from what the arguments
+    /// bind; the expected type, if any, binds too, and the arguments have to suit what it binds,
+    /// but it doesn't say how well. Bounds are checked once a function is chosen, so a failing one
+    /// doesn't keep it from fitting.
     private void fitTrial(ref Trial trial, const CallExpr call, const(Type)[] typed, const(Type)[] written, bool hasReceiver,
         BodyContext ctx, Type expected)
     {
         auto params = typeParamsOf(trial.candidate);
         auto signature = signatureOf(trial.candidate);
         auto func = trial.candidate.func;
-        Binding bindAgainst(Type against)
+        // An integer literal is tried even when it's been synthesized, so it still adapts.
+        bool tried(size_t i) => typed[i] == Type.init || isIntLiteral(call.args[i]) && call.args[i].id.isValid;
+        /// What binding against an expected type found, and how each tried argument then fitted.
+        static struct Tried
         {
             Binding binding;
-            foreach (i, type; written) binding.bound[params[i].id] = type;
-            binding.typed = typed.dup;
-            // A nested def isn't generic, so there's nothing to bind.
-            if (!func.isValid) return binding;
-            // A trial records nothing, so it doesn't work out a result from the body. A result written
-            // as an interface name then says nothing the expected type could bind, whether or not
-            // it's been worked out elsewhere, so the choice doesn't depend on the order of checking.
-            if ((func in _resolutions.resultFloors) !is null) against = Type.init;
+            Fit[] fits;
+        }
+        Tried bindAgainst(Type against)
+        {
+            Tried found;
+            foreach (i, type; written) found.binding.bound[params[i].id] = type;
+            found.binding.typed = typed.dup;
+            found.binding.checked = new bool[call.args.length];
+            found.fits = new Fit[call.args.length];
+            auto begun = beginAttempt(ctx);
+            scope (exit) takeBack(begun);
             _trials++;
             scope (exit) _trials--;
-            bindCall(binding, signature, signature.ret, params, func, call, against, ctx, true);
-            // Bounds don't rule a function out, but one that holds binds what its interface says.
-            conformanceOf(func, binding.bound, ctx.site);
-            return binding;
+            // A nested def isn't generic, so there's nothing to bind.
+            if (func.isValid)
+            {
+                // A trial records nothing, so it doesn't work out a result from the body. A result written
+                // as an interface name then says nothing the expected type could bind, whether or not
+                // it's been worked out elsewhere, so the choice doesn't depend on the order of checking.
+                if ((func in _resolutions.resultFloors) !is null) against = Type.init;
+                bindCall(found.binding, signature, signature.ret, params, func, call, against, ctx);
+                // Bounds don't rule a function out, but one that holds binds what its interface says.
+                conformanceOf(func, found.binding.bound, ctx.site);
+            }
+            // A type parameter nothing has decided could be anything, so what's passed for it fits.
+            auto open = found.binding.bound.dup;
+            foreach (param; params) open.require(param.id, _types.error);
+            foreach (i, arg; call.args)
+            {
+                if (!tried(i) || call.isMutable(i) != signature.isMutable(i)) continue;
+                auto b = &found.binding;
+                auto param = _types.substitute(signature.params[i], open);
+                found.fits[i] = b.checked[i] ? b.fits[i]
+                    : typed[i] == Type.init && b.typed[i] != Type.init && !isIntLiteral(arg) && !isFloatLiteral(arg)
+                        ? typedFit(b.typed[i], param, params, false, false)
+                    : fitOf(arg, param, ctx);
+            }
+            return found;
         }
 
         string argument(size_t i) => hasReceiver && i == 0 ? "the receiver" : "argument %s".format(hasReceiver ? i : i + 1);
-        // An integer literal is fitted by its shape even when it's been synthesized, so it still adapts.
-        bool byShape(size_t i) => typed[i] == Type.init || isIntLiteral(call.args[i]);
-        Fit fitAt(size_t i, Type param)
-        {
-            return byShape(i) ? shapeFit(call.args[i], param, params) : typedFit(typed[i], param, params, call.isMutable(i));
-        }
         string misfit(size_t i, Type param)
         {
             auto type = typed[i] == Type.init ? literalType(call.args[i]) : typed[i];
@@ -3711,47 +3961,45 @@ private final class TypeChecker
                 : "%s is `%s`, not `%s`".format(argument(i), _types.describe(type), _types.describe(param));
         }
 
-        auto plain = bindAgainst(Type.init);
         trial.fits = new Fit[call.args.length];
         trial.readings = new int[call.args.length];
+        foreach (i; 0 .. call.args.length)
+        {
+            if (call.isMutable(i) == signature.isMutable(i)) continue;
+            trial.problem = call.isMutable(i)
+                ? "%s is passed as `mutable`, and its parameter isn't".format(argument(i))
+                : "%s has to be passed as `mutable`".format(argument(i));
+            return;
+        }
+        auto plain = bindAgainst(Type.init);
         foreach (i, arg; call.args)
         {
-            if (call.isMutable(i) != signature.isMutable(i))
-            {
-                trial.problem = call.isMutable(i)
-                    ? "%s is passed as `mutable`, and its parameter isn't".format(argument(i))
-                    : "%s has to be passed as `mutable`".format(argument(i));
-                return;
-            }
-            auto param = _types.substitute(signature.params[i], plain.bound);
-            auto fit = fitAt(i, param);
+            auto param = _types.substitute(signature.params[i], plain.binding.bound);
+            auto fit = tried(i) ? plain.fits[i] : typedFit(typed[i], param, params, call.isMutable(i));
             if (fit == Fit.none)
             {
                 trial.problem = misfit(i, param);
                 return;
             }
             trial.fits[i] = fit;
-            if (byShape(i)) trial.readings[i] = literalReading(arg, param);
+            if (tried(i)) trial.readings[i] = literalReading(arg, param);
         }
 
-        auto binding = plain;
-        auto withExpected = expected != Type.init;
-        if (withExpected) binding = bindAgainst(expected);
+        auto binding = expected == Type.init ? plain : bindAgainst(expected);
         // Every argument has to fit what's bound in the end. A promotion into a sum binds nothing,
         // so a parameter that still mentions a type parameter takes no member of a sum here.
-        Fit finalFit(size_t i, Type param) => byShape(i) ? shapeFit(call.args[i], param, params)
-            : typedFit(typed[i], param, params, call.isMutable(i), false);
         foreach (i; 0 .. call.args.length)
         {
-            auto param = _types.substitute(signature.params[i], binding.bound);
-            if (finalFit(i, param) != Fit.none) continue;
-            auto plainParam = _types.substitute(signature.params[i], plain.bound);
-            if (!withExpected || finalFit(i, plainParam) == Fit.none)
+            auto param = _types.substitute(signature.params[i], binding.binding.bound);
+            auto fit = tried(i) ? binding.fits[i] : typedFit(typed[i], param, params, call.isMutable(i), false);
+            if (fit != Fit.none) continue;
+            auto plainParam = _types.substitute(signature.params[i], plain.binding.bound);
+            if (expected == Type.init || !tried(i) && typedFit(typed[i], plainParam, params, call.isMutable(i), false) == Fit.none)
             {
                 trial.problem = misfit(i, plainParam);
                 return;
             }
-            auto given = binding.fromExpected.filter!(p => _types.mentionsParameter(signature.params[i], p)).array;
+            auto given = binding.binding.fromExpected.filter!(p => _types.mentionsParameter(signature.params[i], p)).array;
             trial.problem = misfit(i, param) ~ (given.length == 1
                 ? ", which the expected type gives `%s`".format(_resolutions.declarations.typeParams[given[0]].name) : "");
             trial.againstExpected = true;
@@ -3763,8 +4011,11 @@ private final class TypeChecker
     /// candidate's own `params`.
     private Fit typedFit(Type actual, Type param, const(TypeParam)[] params, bool mutable, bool injects = true)
     {
-        if (actual == _types.error || actual == _types.never || _types.mentionsError(param)) return Fit.exact;
-        if (mentionsAny(param, params)) return couldBe(param, actual, params, injects) ? Fit.exact : Fit.none;
+        if (actual == _types.error || actual == _types.never || param == _types.error) return Fit.exact;
+        if (mentionsAny(param, params) || _types.mentionsError(param) || _types.mentionsError(actual))
+        {
+            return couldBe(param, actual, params, injects) ? Fit.exact : Fit.none;
+        }
         if (actual == param) return Fit.exact;
         if (mutable) return Fit.none;
         return Fit.promoted(fitSteps(actual, param));
@@ -3775,11 +4026,15 @@ private final class TypeChecker
         return params.any!(p => _types.mentionsParameter(type, p.id));
     }
 
-    /// Whether `declared`, in which any of `params` could be any type, could take a value of `actual`.
+    /// Whether `declared`, in which any of `params` could be any type, could take a value of
+    /// `actual`. An error in either is a part that's unknown, which could be any type too.
     private bool couldBe(Type declared, Type actual, const(TypeParam)[] params, bool injects = true)
     {
-        if (actual == _types.error || actual == _types.never) return true;
-        if (!mentionsAny(declared, params)) return isAssignable(actual, declared);
+        if (actual == _types.error || actual == _types.never || declared == _types.error) return true;
+        if (!mentionsAny(declared, params) && !_types.mentionsError(declared) && !_types.mentionsError(actual))
+        {
+            return isAssignable(actual, declared);
+        }
         auto data = _types[actual];
         return _types[declared].match!(
             (const TypeParamData _) => true,
@@ -3832,169 +4087,7 @@ private final class TypeChecker
         );
     }
 
-    /// An argument that isn't synthesized to choose an overload, because its type depends on where
-    /// it goes, or because it can be compared with a parameter as it's written: a literal, `None`,
-    /// `[]`, a lambda, a generic or overloaded name, or an array, tuple or `Some` of those.
-    private bool isShaped(const Expr arg)
-    {
-        if (isUntyped(arg)) return true;
-        return arg.kind.match!(
-            (const BoolLiteral _) => true,
-            (const FloatLiteral _) => true,
-            (const UnaryExpr _) => isFloatLiteral(arg),
-            (const StringLiteral _) => true,
-            (const CharLiteral _) => true,
-            (const UnitLiteral _) => true,
-            (const ArrayLiteral literal) => literal.elements.all!(e => isShaped(e)),
-            (const TupleLiteral literal) => literal.elements.all!(e => isShaped(e)),
-            (const SomeExpr some) => isShaped(*some.value),
-            (const RangeExpr range) => range.start !is null && range.end !is null
-                && isIntLiteral(*range.start) && isIntLiteral(*range.end),
-            _ => false,
-        );
-    }
-
-    /// How well `arg`, one that `isShaped`, fits `param`, which may still mention `params`.
-    private Fit shapeFit(const Expr arg, Type param, const(TypeParam)[] params)
-    {
-        if (_types.mentionsError(param)) return Fit.exact;
-        auto bare = _types[param].match!((const TypeParamData p) => params.canFind!(q => q.id == p.param), _ => false);
-        auto members = _declarer.membersOf(param);
-        bool sumHas(bool delegate(Type) test) => members.any!(m => test(m));
-        // Inside an option, the value is promoted, which is a step more.
-        Fit inOption(Fit delegate(Type) inner)
-        {
-            if (!_types.isOption(param)) return inner(param);
-            return inner(_types.optionInner(param)).then(1);
-        }
-
-        if (isIntLiteral(arg))
-        {
-            if (bare || param == _types.int_) return Fit.exact;
-            // A step for each layer, one for an injection, and one for taking a type other than `Int`.
-            auto steps = 0;
-            auto core = param;
-            for (; _types.isOption(core) || _types.isErrorUnion(core); steps++)
-            {
-                core = _types.isOption(core) ? _types.optionInner(core) : _types.successOf(core);
-            }
-            if (params.canFind!(p => core == _declarer.parameterType(p))) return Fit.promoted(max(steps, 1));
-            if (_declarer.isSum(core))
-            {
-                auto numbers = _declarer.membersOf(core).filter!(m => isNumeric(m)).array;
-                if (numbers.empty) return Fit.none;
-                steps++;
-                core = numbers.canFind(_types.int_) ? _types.int_ : numbers[0];
-            }
-            if (!isNumeric(core)) return Fit.none;
-            return Fit.promoted(steps + (core == _types.int_ ? 0 : 1));
-        }
-        if (isFloatLiteral(arg) && !bare)
-        {
-            // A float literal is a `Float` unless the number it lands in is a `Float32`.
-            auto steps = 0;
-            auto core = param;
-            for (; _types.isOption(core) || _types.isErrorUnion(core); steps++)
-            {
-                core = _types.isOption(core) ? _types.optionInner(core) : _types.successOf(core);
-            }
-            auto adapts = core == _types.float32
-                || _declarer.isSum(core) && floatMembers(core) == [_types.float32];
-            if (adapts) return Fit.promoted(steps + 1);
-        }
-        if (isLambda(arg))
-        {
-            auto lambda = arg.kind.match!((const Lambda l) => l, (_) => Lambda.init);
-            if (bare) return lambda.params.all!(p => p.annotated) ? Fit.exact : Fit.none;
-            bool annotationsFit(const FunctionData f)
-            {
-                foreach (i, p; lambda.params)
-                {
-                    if (!p.annotated) continue;
-                    auto annotated = quietlyResolved(p.type);
-                    auto fits = mentionsAny(f.params[i], params) ? couldBe(f.params[i], annotated, params) : annotated == f.params[i];
-                    if (!fits && annotated != _types.error) return false;
-                }
-                return true;
-            }
-            return inOption((Type t) => _types[t].match!(
-                (const FunctionData f) => f.params.length == lambda.params.length && annotationsFit(f) ? Fit.exact : Fit.none,
-                _ => Fit.none,
-            ));
-        }
-        if (auto candidates = arg.id in _resolutions.overloads)
-        {
-            if (bare) return Fit.none;
-            return inOption((Type t) => _types[t].match!(
-                (const FunctionData f) => candidates.all.joiner.any!(c => signatureOf(c).params.length == f.params.length)
-                    ? Fit.exact : Fit.none,
-                _ => Fit.none,
-            ));
-        }
-        auto generic = isUntyped(arg) ? genericNamed(arg) : Generic.init;
-        if (generic.found)
-        {
-            if (bare) return Fit.converted;
-            return inOption((Type t) {
-                if (_types.isFunction(generic.type)) return _types.isFunction(t)
-                    && signatureOf(t).params.length == signatureOf(generic.type).params.length ? Fit.exact : Fit.none;
-                auto decl = declOf(t);
-                return decl == declOf(generic.member) || generic.owner != Type.init && decl == declOf(generic.owner)
-                    ? Fit.exact : Fit.none;
-            });
-        }
-        return arg.kind.match!(
-            (const NoneLiteral _) => bare || _types.isOption(param) || sumHas(m => _types.isOption(m)) ? Fit.converted : Fit.none,
-            (const ArrayLiteral literal) {
-                if (literal.elements.length == 0)
-                {
-                    auto array = _types.isArray(param) || _types.isOption(param) && _types.isArray(_types.optionInner(param));
-                    return bare || array || sumHas(m => _types.isArray(m)) ? Fit.converted : Fit.none;
-                }
-                if (bare) return Fit.exact;
-                if (sumHas(m => _types.isArray(m))) return Fit.converted;
-                return inOption((Type t) => _types.isArray(t)
-                    ? literal.elements.map!(e => shapeFit(e, _types.arrayElement(t), params)).fold!min(Fit.exact)
-                    : Fit.none);
-            },
-            // Only the empty one is fitted by its shape.
-            (const MapLiteral _) {
-                auto dictionary = isDictionary(param) || _types.isOption(param) && isDictionary(_types.optionInner(param));
-                return bare || dictionary || sumHas(m => isDictionary(m)) ? Fit.converted : Fit.none;
-            },
-            (const TupleLiteral literal) {
-                if (bare) return Fit.exact;
-                if (sumHas(m => _types.isTuple(m))) return Fit.converted;
-                return inOption((Type t) {
-                    if (!_types.isTuple(t) || _types.tupleElements(t).length != literal.elements.length) return Fit.none;
-                    auto elements = _types.tupleElements(t);
-                    return literal.elements.length.iota.map!(i => shapeFit(literal.elements[i], elements[i], params))
-                        .fold!min(Fit.exact);
-                });
-            },
-            (const SomeExpr some) {
-                if (bare) return Fit.exact;
-                if (_types.isOption(param)) return shapeFit(*some.value, _types.optionInner(param), params);
-                return sumHas(m => _types.isOption(m)) ? Fit.converted : Fit.none;
-            },
-            (const OkExpr ok) {
-                if (bare) return Fit.converted;
-                return _types.isErrorUnion(param) ? Fit.exact : Fit.none;
-            },
-            // `a..b` of two literals fits an interval of any integer type, as each literal would.
-            (const RangeExpr range) {
-                if (bare) return Fit.exact;
-                return inOption((Type t) => isInterval(t)
-                    ? min(shapeFit(*range.start, _types.nominalArgs(t)[0], params),
-                        shapeFit(*range.end, _types.nominalArgs(t)[0], params))
-                    : Fit.none);
-            },
-            _ => literalType(arg) != Type.init ? typedFit(literalType(arg), param, params, false)
-                : assert(0, "only an argument that isShaped is fitted by its shape"),
-        );
-    }
-
-    /// How the integer literals in `arg`, one that `isShaped`, read as `param`: 0 as integers (or
+    /// How the integer literals in `arg`, which has no type of its own, read as `param`: 0 as integers (or
     /// when there are none), 1 when one becomes a `Float`, and 2 a `Float32`. An integer literal is
     /// an integer first, and a float only where no integer type fits, so of two functions that fit
     /// a call alike the one reading its literals no later is chosen.
@@ -4047,42 +4140,6 @@ private final class TypeChecker
             (const CharLiteral _) => _types.char_,
             (const UnitLiteral _) => _types.unit,
             _ => Type.init,
-        );
-    }
-
-    /// The type synthesis gives an argument made only of literals, or `Type.init` when part of it
-    /// has none of its own. An array's elements join as they do there, so `[Some(1), None]` is an
-    /// `[Int?]`.
-    private Type defaultType(const Expr arg)
-    {
-        if (isIntLiteral(arg)) return _types.int_;
-        Type[] each(const(Expr)[] elements) => elements.map!(e => defaultType(e)).array;
-        Type joined(Type a, Type b)
-        {
-            if (a == Type.init || b == Type.init) return Type.init;
-            if (isAssignable(a, b)) return b;
-            if (isAssignable(b, a)) return a;
-            if (a == _types.none && !_types.isOption(b)) return _types.option(b);
-            if (b == _types.none && !_types.isOption(a)) return _types.option(a);
-            return Type.init;
-        }
-        return arg.kind.match!(
-            (const NoneLiteral _) => _types.none,
-            (const ArrayLiteral literal) {
-                auto elements = each(literal.elements);
-                if (elements.length == 0) return Type.init;
-                auto element = elements.fold!((a, b) => joined(a, b));
-                return element == Type.init || element == _types.none ? Type.init : _types.array(element);
-            },
-            (const TupleLiteral literal) {
-                auto elements = each(literal.elements);
-                return elements.canFind(Type.init) ? Type.init : _types.tuple(elements);
-            },
-            (const SomeExpr some) {
-                auto inner = defaultType(*some.value);
-                return inner == Type.init || inner == _types.none ? Type.init : _types.option(inner);
-            },
-            _ => literalType(arg),
         );
     }
 
@@ -5871,13 +5928,28 @@ private final class TypeChecker
     /// `actual`. Nothing is reported, and a parameter that's already bound is left alone.
     private void bindParams(Type declared, Type actual, const(TypeParam)[] params, ref Substitution bound)
     {
+        if (actual == _types.error && _trials > 0 && _types.isParameter(declared))
+        {
+            // What a trial left open stays open in what takes its type from it.
+            _types[declared].match!(
+                (const TypeParamData p) {
+                    if (params.canFind!(q => q.id == p.param)) bound.require(p.param, actual);
+                },
+                (_) {},
+            );
+            return;
+        }
         if (actual == _types.error || actual == _types.never || isBareLiteralType(actual)) return;
         // What `!` unwraps is an option or an error union whose error isn't known, so it's either.
         auto unwrapped = _types.isErrorUnion(actual) && _types.errorOf(actual) == _types.error;
         auto data = _types[actual];
         _types[declared].match!(
             (const TypeParamData p) {
-                if (params.canFind!(q => q.id == p.param) && p.param !in bound && !unwrapped) bound[p.param] = actual;
+                // A bare `Error(e)` has no type of its own for a parameter to be.
+                if (params.canFind!(q => q.id == p.param) && p.param !in bound && !unwrapped && !_types.isFailure(actual))
+                {
+                    bound[p.param] = actual;
+                }
             },
             (const OptionData o) => bindParams(o.inner, _types.isOption(actual) ? _types.optionInner(actual)
                 : unwrapped ? _types.successOf(actual) : actual, params, bound),
@@ -5941,7 +6013,7 @@ private final class TypeChecker
     /// and at the member of a sum that the result names.
     private void bindExpected(Type result, Type expected, const(TypeParam)[] params, ref Substitution bound)
     {
-        if (expected == Type.init || expected == _types.error) return;
+        if (expected == Type.init || expected == _types.error && _trials == 0) return;
         // What `!` unwraps, when the result isn't something it can unwrap.
         auto unwrapped = _types.isErrorUnion(expected) && _types.errorOf(expected) == _types.error;
         if (unwrapped && !_types.isOption(result) && !_types.isErrorUnion(result)) return;
@@ -5993,24 +6065,189 @@ private final class TypeChecker
         foreach (param; g.params ~ g.ownerParams) bound[param.id] = _types.error;
     }
 
-    /// An argument whose type depends on where it goes: an integer literal, a float literal, a lambda, `None`, `[]`
-    /// or `[:]`, and as with `None`, a generic name with no type arguments that isn't called, like `Nil`.
-    private bool isUntyped(const Expr expr)
+    /// Whether `expr` has a type of its own, or takes its type from where it goes, which doesn't
+    /// depend on what surrounds it (docs/language/types.md, "A type of its own").
+    private bool hasOwnType(const Expr expr)
     {
-        if (expr.id in _resolutions.overloads) return true;
-        auto genericName = expr.kind.match!(
-            (const Identifier id) => id.typeArgs.length == 0,
-            (const MemberAccess access) => access.typeArgs.length == 0,
+        // A placeholder stands for a value that has been typed.
+        if (!expr.id.isValid) return true;
+        if (auto known = expr.id in _ownTypes) return *known;
+        auto own = decidesOwnType(expr);
+        _ownTypes[expr.id] = own;
+        return own;
+    }
+
+    private bool decidesOwnType(const Expr expr)
+    {
+        if (expr.id in _resolutions.overloads || isIntLiteral(expr) || isFloatLiteral(expr)) return false;
+        bool named(const(TypeExpr)[] typeArgs)
+        {
+            return typeArgs.length > 0 || expr.id in _resolutions.aliasedInstances || !genericNamed(expr).found;
+        }
+        // The values an `if` or `match` can have are those of the arms that finish.
+        bool anyArm(const(Expr)[] arms)
+        {
+            auto values = arms.filter!(arm => !leaves(arm));
+            return values.empty || values.any!(arm => hasOwnType(arm));
+        }
+        return expr.kind.match!(
+            (const Identifier id) => named(id.typeArgs),
+            (const MemberAccess access) => named(access.typeArgs),
+            (const NoneLiteral _) => false,
+            (const OkExpr _) => false,
+            (const ErrorExpr _) => false,
+            (const SomeExpr some) => hasOwnType(*some.value),
+            (const ArrayLiteral literal) => literal.elements.any!(e => hasOwnType(e)),
+            (const MapLiteral literal) => literal.keys.any!(e => hasOwnType(e)) && literal.values.any!(e => hasOwnType(e)),
+            (const TupleLiteral literal) => literal.elements.all!(e => hasOwnType(e)),
+            (const RangeExpr range) => range.start is null && range.end is null
+                || range.start !is null && hasOwnType(*range.start) || range.end !is null && hasOwnType(*range.end),
+            (const IfExpr if_) => if_.falseBody is null || anyArm([*if_.trueBody, *if_.falseBody]),
+            (const MatchExpr match_) => anyArm(match_.arms.map!(arm => arm.body).array),
+            (const BlockExpr block) => block.value is null || hasOwnType(*block.value),
+            (const Lambda lambda) => lambda.params.all!(p => p.annotated)
+                && (lambda.returnType !is null || hasOwnType(*lambda.body)),
+            (const CallExpr call) => callHasOwnType(expr, call),
+            _ => true,
+        );
+    }
+
+    /// Whether `expr` ends in `return`, `break` or `continue`, so it has no value to count.
+    private static bool leaves(const Expr expr)
+    {
+        return expr.kind.match!(
+            (const ReturnExpr _) => true,
+            (const BreakExpr _) => true,
+            (const ContinueExpr _) => true,
+            (const BlockExpr block) {
+                if (block.value !is null) return leaves(*block.value);
+                return block.statements.length > 0 && block.statements[$ - 1].kind.match!(
+                    (const ExprStmt last) => leaves(last.expr),
+                    _ => false,
+                );
+            },
             _ => false,
         );
-        if (genericName && expr.id !in _resolutions.aliasedInstances && genericNamed(expr).found) return true;
-        return isIntLiteral(expr) || isFloatLiteral(expr) || isLambda(expr) || expr.kind.match!(
-            (const NoneLiteral _) => true,
-            (const OkExpr _) => true,
-            (const ArrayLiteral literal) => literal.elements.length == 0,
-            (const MapLiteral literal) => literal.keys.length == 0,
-            _ => false,
-        );
+    }
+
+    /// A call has a type of its own unless it's of a generic function or constructor and a type
+    /// parameter in its result is reached by no argument that has one, which is read off the
+    /// signature. A parameter that a bound gives from one that's reached is reached too. A call
+    /// of an overloaded function has one, being chosen by its own arguments, unless only one of
+    /// the functions takes as many, which is then called as if there were no others.
+    private bool callHasOwnType(const Expr expr, const CallExpr call)
+    {
+        if (expr.id in _resolutions.conversions) return true;
+        const(Expr)[] args = call.args;
+        Id!FunctionDecl sole(const Candidates candidates)
+        {
+            auto taking = candidates.all.joiner.filter!(c => signatureOf(c).params.length == args.length).array;
+            return taking.length == 1 ? cast() taking[0].func : Id!FunctionDecl.init;
+        }
+        if (isMethodCall(expr.id, *call.callee))
+        {
+            auto object = call.callee.kind.match!(
+                (const MemberAccess access) => access.typeArgs.length == 0 ? access.object : null,
+                _ => null,
+            );
+            auto lookup = expr.id in _resolutions.methodLookups;
+            if (object is null || lookup is null) return true;
+            args = (cast(Expr*) object)[0 .. 1] ~ cast(Expr[]) call.args;
+            auto method = sole(distinct(*lookup));
+            if (!method.isValid) return true;
+            return reachesResult(method, _resolutions.typeParamsOf(method), signatureOf(method), signatureOf(method).ret,
+                args, i => i > 0 && call.isMutable(i - 1));
+        }
+        if (auto candidates = call.callee.id in _resolutions.overloads)
+        {
+            if (typeArgsOf(*call.callee).length > 0) return true;
+            auto func = sole(distinct(*candidates));
+            if (!func.isValid) return true;
+            return reachesResult(func, _resolutions.typeParamsOf(func), signatureOf(func), signatureOf(func).ret, args,
+                i => call.isMutable(i));
+        }
+        auto g = genericNamed(*call.callee);
+        if (!g.found || g.writes || !_types.isFunction(g.type)) return true;
+        auto sum = g.owner != Type.init;
+        return reachesResult(sum ? Id!FunctionDecl.init : g.func, sum ? g.ownerParams : g.params, signatureOf(g.type),
+            sum ? g.owner : signatureOf(g.type).ret, args, i => call.isMutable(i));
+    }
+
+    /// Whether each of `params` that `result` mentions is reached by one of `args` that has a
+    /// type of its own, through its parameter in `signature`, or given by a bound of `func` from
+    /// one that is.
+    private bool reachesResult(Id!FunctionDecl func, const(TypeParam)[] params, const FunctionData signature, Type result,
+        const(Expr)[] args, scope bool delegate(size_t) isMutable)
+    {
+        if (params.length == 0 || signature.params.length != args.length) return true;
+        bool[Id!TypeParam] reached;
+        foreach (i, arg; args)
+        {
+            if (!isMutable(i) && !hasOwnType(arg)) continue;
+            foreach (param; params)
+            {
+                if (_types.mentionsParameter(signature.params[i], param.id)) reached[param.id] = true;
+            }
+        }
+        for (auto more = func.isValid; more;)
+        {
+            more = false;
+            foreach (param; params)
+            {
+                if (param.id !in reached) continue;
+                foreach (bound; _typing.bounds.get(param.id, null))
+                {
+                    foreach (index; resultOnlyParameters(bound.decl))
+                    {
+                        foreach (given; params)
+                        {
+                            if (given.id in reached || index >= bound.args.length
+                                || !_types.mentionsParameter(bound.args[index], given.id)) continue;
+                            reached[given.id] = more = true;
+                        }
+                    }
+                }
+            }
+        }
+        return params.all!(p => p.id in reached || !_types.mentionsParameter(result, p.id));
+    }
+
+    /// What `expr`, which has no type of its own, is with nothing expected, found by an attempt
+    /// that's taken back, once for each expression: an error when it's nothing, as a `Box([])` is.
+    private Type alone(const Expr expr, BodyContext ctx)
+    {
+        auto trial = _trials > 0 ? 1 : 0;
+        if (auto known = expr.id in _alone[trial]) return *known;
+        auto begun = beginAttempt(ctx);
+        auto type = synthesize(expr, ctx);
+        if (failed(begun)) type = _types.error;
+        takeBack(begun);
+        _alone[trial][expr.id] = type;
+        return type;
+    }
+
+    /// `expr` typed with nothing expected, when that gives it a type that can say what a type
+    /// parameter is, and otherwise an error, with nothing recorded or reported.
+    private Type typedAlone(const Expr expr, BodyContext ctx)
+    {
+        if (auto known = expr.id in _alone[0]) return gives(*known) ? synthesize(expr, ctx) : _types.error;
+        auto begun = beginAttempt(ctx);
+        auto type = synthesize(expr, ctx);
+        if (failed(begun)) type = _types.error;
+        _alone[0][expr.id] = type;
+        if (gives(type))
+        {
+            keep(begun);
+            return type;
+        }
+        takeBack(begun);
+        return _types.error;
+    }
+
+    /// Whether `type`, found for an expression with nothing expected, is one a type parameter can be.
+    private bool gives(Type type)
+    {
+        return !_types.mentionsError(type) && !isBareLiteralType(type);
     }
 
     /// What a lambda passed for a parameter of type `declared` is checked against, when each of its
@@ -6038,9 +6275,10 @@ private final class TypeChecker
         Substitution bound;
         /// Each argument's type, once it has one of its own.
         Type[] typed;
-        /// Which arguments have had their turn without a type of their own: checked against a
-        /// parameter that was known by then, or, in a trial, compared by their shape.
+        /// Which arguments have been checked against a parameter that was known at their turn.
         bool[] checked;
+        /// In a trial, how well each of those fitted.
+        Fit[] fits;
         Conformance conformance;
         /// The type parameters the expected type bound.
         Id!TypeParam[] fromExpected;
@@ -6054,25 +6292,36 @@ private final class TypeChecker
     /// type; then integer literals and lambdas, as each can be typed, and a lambda that can't be
     /// yet may be once a later one binds what it needs.
     ///
-    /// A call being checked runs it with `trial` false, and its arguments are synthesized, or
-    /// checked against a parameter known by their turn, as they're reached. Overload choice runs
-    /// it with `trial` true, which records nothing: an argument has the type `b.typed` gives it,
-    /// or the one synthesis would, and a lambda binds only what its annotations say, so what its
-    /// result would bind is undecided.
+    /// An argument is checked against its parameter when that's known at its turn, and otherwise
+    /// typed with nothing expected. In a trial, which an attempt around this takes back, a lambda's
+    /// body isn't looked at: it binds what its annotations say, and what its result would bind is
+    /// undecided.
     private void bindCall(ref Binding b, const FunctionData signature, Type result, const(TypeParam)[] params,
-        Id!FunctionDecl func, const CallExpr call, Type expected, BodyContext ctx, bool trial)
+        Id!FunctionDecl func, const CallExpr call, Type expected, BodyContext ctx)
     {
+        auto trial = _trials > 0;
         auto args = call.args;
         if (b.typed.length < args.length) b.typed.length = args.length;
         b.checked = new bool[args.length];
+        b.fits = new Fit[args.length];
         const(TypeParam)[] bindable() => b.undecided.length == 0 ? params : params.filter!(p => !b.undecided.canFind(p.id)).array;
         void bind(size_t i, Type type)
         {
             bindParams(signature.params[i], type, bindable(), b.bound);
         }
         bool known(size_t i) => !signature.isMutable(i) && !call.isMutable(i) && isBound(signature.params[i], params, b.bound);
-        // A float literal that hasn't had its turn. Integer literals, and what's made of them, wait for it.
-        bool floatPending() => args.length.iota.any!(j => isFloatLiteral(args[j]) && b.typed[j] == Type.init && !b.checked[j] && !known(j));
+        void checkAt(size_t i)
+        {
+            auto reported = _collector.diagnostics.length;
+            checkArgument(args[i], _types.substitute(signature.params[i], b.bound), ctx);
+            auto wrong = _collector.diagnostics[reported .. $].any!(d => d.severity == Severity.Error);
+            b.fits[i] = wrong ? Fit.none : Fit.promoted(_cost);
+            b.checked[i] = true;
+        }
+        // A float literal, or a literal made of them, that hasn't had its turn. Integer literals,
+        // and what's made of them, wait for it.
+        bool floatPending() => args.length.iota.any!(j => (isFloatLiteral(args[j]) || isFloatOnly(args[j]))
+            && b.typed[j] == Type.init && !b.checked[j] && !known(j));
         bool open() => params.any!(p => p.id !in b.bound);
         void solveBounds()
         {
@@ -6121,19 +6370,10 @@ private final class TypeChecker
                 bind(i, b.typed[i]);
                 continue;
             }
-            if (!call.isMutable(i) && isUntyped(arg)) continue;
+            if (!call.isMutable(i) && !hasOwnType(arg)) continue;
             if (known(i))
             {
-                if (!trial) checkArgument(arg, _types.substitute(signature.params[i], b.bound), ctx);
-                b.checked[i] = true;
-                continue;
-            }
-            if (!call.isMutable(i) && waitsForFloat(arg) && floatPending()) continue;
-            if (trial)
-            {
-                auto type = defaultType(arg);
-                if (type != Type.init) bind(i, type);
-                b.checked[i] = true;
+                checkAt(i);
                 continue;
             }
             b.typed[i] = synthesize(arg, ctx);
@@ -6154,39 +6394,7 @@ private final class TypeChecker
                 if (b.typed[i] != Type.init || b.checked[i]) continue;
                 if (known(i))
                 {
-                    if (!trial) checkArgument(arg, _types.substitute(signature.params[i], b.bound), ctx);
-                    b.checked[i] = progress = true;
-                }
-                // An integer literal beside a float literal waits, so that `pair(1, 1.5)` is a `Float` pair.
-                else if (isFloatLiteral(arg) || isIntLiteral(arg)
-                    && !floatPending())
-                {
-                    if (trial)
-                    {
-                        bind(i, isIntLiteral(arg) ? _types.int_ : _types.float_);
-                        b.checked[i] = true;
-                    }
-                    else
-                    {
-                        b.typed[i] = synthesize(arg, ctx);
-                        bind(i, b.typed[i]);
-                    }
-                    progress = true;
-                }
-                else if (!call.isMutable(i) && waitsForFloat(arg) && !floatPending())
-                {
-                    // Nothing has fixed its parameters, so it's typed on its own, as it would have been in the first pass.
-                    if (trial)
-                    {
-                        auto type = defaultType(arg);
-                        if (type != Type.init) bind(i, type);
-                        b.checked[i] = true;
-                    }
-                    else
-                    {
-                        b.typed[i] = synthesize(arg, ctx);
-                        bind(i, b.typed[i]);
-                    }
+                    checkAt(i);
                     progress = true;
                 }
                 else if (isLambda(arg))
@@ -6200,6 +6408,7 @@ private final class TypeChecker
                     {
                         bindLambda(i, arg, lambda, expectation);
                         b.checked[i] = true;
+                        b.fits[i] = Fit.exact;
                     }
                     else
                     {
@@ -6208,6 +6417,21 @@ private final class TypeChecker
                         b.typed[i] = typeLambda(arg, lambda, expectation, ctx.site, optional);
                         bind(i, b.typed[i]);
                     }
+                    progress = true;
+                }
+                // An integer literal beside a float literal waits, so that `pair(1, 1.5)` is a `Float` pair.
+                else if ((isIntLiteral(arg) || waitsForFloat(arg)) && floatPending())
+                {
+                    continue;
+                }
+                else
+                {
+                    // Its parameter is still open, so it's what it is with nothing expected, and
+                    // one that's nothing by itself waits for a later argument to say more.
+                    auto type = trial ? alone(arg, ctx) : typedAlone(arg, ctx);
+                    if (!gives(type)) continue;
+                    b.typed[i] = type;
+                    bind(i, type);
                     progress = true;
                 }
             }
@@ -6262,8 +6486,10 @@ private final class TypeChecker
         binding.typed = typed;
         if (g.writes) bindWritten(g, binding.bound);
         auto bounded = sum ? Id!FunctionDecl.init : g.func;
-        bindCall(binding, signature, signature.ret, params, bounded, call, expected, ctx, false);
+        bindCall(binding, signature, signature.ret, params, bounded, call, expected, ctx);
         auto checked = binding.checked;
+        // In a trial, what only a lambda's result would decide is open, and anything fits it.
+        foreach (param; binding.undecided) binding.bound.require(param, _types.error);
         // A parameter only a bound decides is unknown because the bound failed, so that's the error.
         if (bounded.isValid && params.any!(p => p.id !in binding.bound))
         {
@@ -6279,7 +6505,7 @@ private final class TypeChecker
                 foreach (p; params) if (p.id !in binding.bound) binding.bound[p.id] = _types.error;
             }
         }
-        reportUnbound(expr, g, params, sum, signature, args, typed, hasReceiver, binding.bound, expected);
+        reportUnbound(expr, g, params, sum, signature, args, typed, hasReceiver, binding.bound, expected, ctx);
         auto bound = binding.bound;
         Conformance conformance;
         if (bounded.isValid) conformance = conformanceOf(bounded, bound, ctx.site);
@@ -6343,8 +6569,8 @@ private final class TypeChecker
     /// Reports the first of `params` that nothing bound, as the argument that didn't fit when one
     /// should have bound it, and binds each to `error`.
     private void reportUnbound(const Expr expr, const Generic g, const(TypeParam)[] params, bool sum,
-        const FunctionData signature, const(Expr)[] args, const(Type)[] typed, bool hasReceiver, ref Substitution bound,
-        Type expected)
+        const FunctionData signature, const(Expr)[] args, Type[] typed, bool hasReceiver, ref Substitution bound,
+        Type expected, BodyContext ctx)
     {
         auto reported = false;
         foreach (param; params)
@@ -6355,37 +6581,26 @@ private final class TypeChecker
             reported = true;
 
             bool mentions(size_t i) => _types.mentionsParameter(signature.params[i], param.id);
-            auto culprit = args.length.iota.filter!(i => typed[i] != Type.init && mentions(i));
+            // One that should have said, and has no type of its own, is typed with nothing expected,
+            // so it's reported where it needs a type, as it would be anywhere.
+            auto reports = _collector.diagnostics.length;
+            foreach (i, arg; args)
+            {
+                if (mentions(i) && typed[i] == Type.init && !isLambda(arg) && !isIntLiteral(arg) && !isFloatLiteral(arg))
+                {
+                    typed[i] = synthesize(arg, ctx);
+                }
+            }
+            if (_collector.diagnostics.length > reports) continue;
+            auto culprit = args.length.iota.filter!(i => typed[i] != Type.init && mentions(i) && !isLambda(args[i]));
             if (!culprit.empty)
             {
                 auto i = culprit.front;
-                if (typed[i] == _types.none) _declarer.reportUntypedNone(args[i].span);
-                else if (typed[i] == _types.emptyArray) _declarer.reportUntypedEmptyArray(args[i].span);
-                else if (typed[i] == _types.emptyDictionary) _declarer.reportUntypedEmptyDictionary(args[i].span);
-                else if (_types.mentionsError(typed[i]) || typed[i] == _types.never) continue;
-                else
-                {
-                    _collector.reportError(DiagnosticCode.TypeMismatch, args[i].span,
-                        "`%s` takes `%s` %s, but this is `%s`".format(g.spelled, _types.describe(signature.params[i]),
-                            hasReceiver && i == 0 ? "first" : "here", _types.describe(typed[i])));
-                }
-                continue;
-            }
-            auto untyped = args.length.iota.filter!(i => mentions(i) && typed[i] == Type.init && !isLambda(args[i])
-                && !isIntLiteral(args[i]) && !isFloatLiteral(args[i]));
-            if (!untyped.empty)
-            {
-                auto arg = args[untyped.front];
-                arg.kind.match!(
-                    (const NoneLiteral _) { _declarer.reportUntypedNone(arg.span); },
-                    (const OkExpr _) { _declarer.reportUntypedErrorUnion("Ok", arg.span); },
-                    (const ArrayLiteral _) { _declarer.reportUntypedEmptyArray(arg.span); },
-                    (const MapLiteral _) { _declarer.reportUntypedEmptyDictionary(arg.span); },
-                    (_) {
-                        if (arg.id in _resolutions.overloads) reportOverloadedValue(arg);
-                        else reportUninferredValue(arg, genericNamed(arg), true);
-                    },
-                );
+                if (_types.mentionsError(typed[i]) || typed[i] == _types.never) continue;
+                if (_declarer.requireTyped(typed[i], args[i].span) == _types.error) continue;
+                _collector.reportError(DiagnosticCode.TypeMismatch, args[i].span,
+                    "`%s` takes `%s` %s, but this is `%s`".format(g.spelled, _types.describe(signature.params[i]),
+                        hasReceiver && i == 0 ? "first" : "here", _types.describe(typed[i])));
                 continue;
             }
             auto hidden = g.params[g.writable .. $].canFind!(p => p.id == param.id);
@@ -6594,9 +6809,9 @@ private final class TypeChecker
     }
 
     /// `object.f(args)`. A field named `f` comes first; otherwise it's `f(object, args)`, with the
-    /// `f` a plain name finds at module level. The receiver was synthesized to look for the field,
-    /// so it's an argument that already has its type, unless it's only a shape, which has no fields
-    /// and is left to the function as an argument is. `object?.f(args)` is the same call on
+    /// `f` a plain name finds at module level. A receiver with a type of its own was synthesized
+    /// to look for the field, so it's an argument that already has its type; one with none is
+    /// left to the function as an argument is. `object?.f(args)` is the same call on
     /// `object`'s value, made an option or error union again.
     private Type methodCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected)
     {
@@ -6619,8 +6834,18 @@ private final class TypeChecker
         );
         if (!safe)
         {
-            // A receiver that's only a shape has no fields to look for, and waits for the function as an argument does.
-            auto objectType = cantHaveFields(*object) ? Type.init : synthesize(*object, ctx);
+            // A receiver with no type of its own has the fields of what it would be with nothing
+            // expected, and without the one named it waits for the function as an argument does.
+            Type objectType;
+            if (hasOwnType(*object))
+            {
+                objectType = synthesize(*object, ctx);
+            }
+            else
+            {
+                auto fallback = alone(*object, ctx);
+                if (fallback != _types.error && hasField(fallback, member)) objectType = synthesize(*object, ctx);
+            }
             return callOn(expr, call, object, member, typeArgs, objectType, ctx, expected);
         }
 
@@ -6869,13 +7094,6 @@ private final class TypeChecker
         return _types.error;
     }
 
-    /// Whether the value of `expr` is only a shape that no declared type is given to, so it has no
-    /// fields to look for. A range literal is an `Interval`, which has some.
-    private bool cantHaveFields(const Expr expr)
-    {
-        return isShaped(expr) && expr.kind.match!((const RangeExpr _) => false, _ => true);
-    }
-
     private bool isModulePath(const Expr expr)
     {
         return (expr.id in _resolutions.modulePaths) !is null;
@@ -6890,6 +7108,8 @@ private final class TypeChecker
         for (auto nested = site.unsettled; nested !is null; nested = nested.outer)
         {
             if (nested.self != local) continue;
+            // An attempt would drop the report, so it's left for the check that stands.
+            if (_trying > 0) return true;
             if (!nested.usedItself)
             {
                 auto name = _resolutions.declarations.locals[local].name;
@@ -7053,7 +7273,9 @@ private final class TypeChecker
             auto params = signatureOf(f).params;
             auto typeParams = _resolutions.typeParamsOf(f);
             if (params.length != args.length) return false;
-            auto fit = typed[0] == Type.init ? shapeFit(args[0], params[0], typeParams)
+            Substitution open;
+            foreach (param; typeParams) open[param.id] = _types.error;
+            auto fit = typed[0] == Type.init ? fitOf(args[0], _types.substitute(params[0], open), ctx)
                 : typedFit(typed[0], params[0], typeParams, false);
             return fit != Fit.none;
         }
@@ -7070,7 +7292,7 @@ private final class TypeChecker
         // Each argument with a type of its own is synthesized once, so it's fitted by its type.
         foreach (i, arg; args)
         {
-            if (typed[i] == Type.init && !isShaped(arg)) typed[i] = synthesize(arg, ctx);
+            if (typed[i] == Type.init && hasOwnType(arg)) typed[i] = synthesize(arg, ctx);
         }
         auto call = CallExpr(null, cast(Expr[]) args);
         Candidates fitting;
@@ -7113,7 +7335,7 @@ private final class TypeChecker
         auto signature = signatureOf(function_);
         Binding binding;
         binding.typed = typed;
-        bindCall(binding, signature, signature.ret, params, function_, call, Type.init, ctx, false);
+        bindCall(binding, signature, signature.ret, params, function_, call, Type.init, ctx);
         auto bound = binding.bound;
         auto checked = binding.checked;
         void typeUnchecked()
@@ -7325,8 +7547,9 @@ private final class TypeChecker
             return _types.unit;
         }
 
-        auto thenType = trueBranch(if_, () => synthesizeBeside(*if_.trueBody, errors, ctx));
-        auto elseType = synthesizeBeside(*if_.falseBody, errors, ctx);
+        auto types = synthesizeTogether([*if_.trueBody, *if_.falseBody], ctx, errors,
+            (i, work) => i == 0 ? trueBranch(if_, work) : work());
+        auto thenType = types[0], elseType = types[1];
         auto joined = join(thenType, elseType, span, "Branches", ctx.site);
         if (joined != _types.error)
         {
@@ -7457,8 +7680,11 @@ private final class TypeChecker
         return candidates.length == 1 ? candidates[0] : Type.init;
     }
 
+    /// Checks `expr` against `expected`, which is passed into its parts, and leaves the steps it
+    /// took to fit in `_cost`.
     private Type check(const Expr expr, Type expected, BodyContext ctx)
     {
+        _cost = 0;
         if (isLambda(expr) && _types.isFunction(expected))
         {
             auto data = _types[expected].match!(
@@ -7491,6 +7717,7 @@ private final class TypeChecker
             {
                 checkBareRange(expr, *range, inner, ctx);
                 if (inner != expected) _typing.promotions[expr.id] = expected;
+                _cost += max(0, fitSteps(inner, expected));
                 return expected;
             }
         }
@@ -7507,6 +7734,7 @@ private final class TypeChecker
             {
                 check(expr, member, ctx);
                 _typing.promotions[expr.id] = expected;
+                _cost++;
                 return expected;
             }
         }
@@ -7534,6 +7762,7 @@ private final class TypeChecker
             {
                 check(expr, _types.successOf(expected), ctx);
                 _typing.promotions[expr.id] = expected;
+                _cost++;
                 return expected;
             }
         }
@@ -7548,6 +7777,7 @@ private final class TypeChecker
         {
             check(expr, _types.optionInner(expected), ctx);
             _typing.promotions[expr.id] = expected;
+            _cost++;
             return expected;
         }
         auto asDictionary = isDictionary(expected) && isDictionaryLiteral(expr);
@@ -7575,32 +7805,45 @@ private final class TypeChecker
                         return expected;
                     },
                     (const ArrayLiteral literal) {
+                        auto worst = 0;
                         foreach (element; literal.elements)
                         {
                             check(element, _types.arrayElement(expected), ctx);
+                            worst = max(worst, _cost);
                         }
+                        _cost = worst;
                         return expected;
                     },
                     (const MapLiteral literal) {
                         auto entry = _types.nominalArgs(expected);
+                        auto worst = 0;
                         foreach (i, key; literal.keys)
                         {
                             check(key, entry[0], ctx);
+                            worst = max(worst, _cost);
                             check(literal.values[i], entry[1], ctx);
+                            worst = max(worst, _cost);
                         }
-                        return builtDictionary(expr, literal, expected, ctx);
+                        auto built = builtDictionary(expr, literal, expected, ctx);
+                        _cost = worst;
+                        return built;
                     },
                     (const BinaryExpr binary) {
                         recordConcat(expr, binary);
                         check(*binary.left, expected, ctx);
+                        auto left = _cost;
                         check(*binary.right, expected, ctx);
+                        _cost = max(left, _cost);
                         return expected;
                     },
                     (const TupleLiteral literal) {
+                        auto worst = 0;
                         foreach (i, element; literal.elements)
                         {
                             check(element, _types.tupleElements(expected)[i], ctx);
+                            worst = max(worst, _cost);
                         }
+                        _cost = worst;
                         return expected;
                     },
                     (const MatchExpr match_) => checkMatch(match_, expected, expr.span, ctx),
@@ -7615,8 +7858,34 @@ private final class TypeChecker
     }
 
     /// Fits `expr`, already found to have type `type`, to `expected`: a literal adapts and a
-    /// value that isn't an option yet is promoted, and anything else has to be assignable.
+    /// value that isn't an option yet is promoted, and anything else has to be assignable. The
+    /// steps that took are left in `_cost`.
     private Type coerce(const Expr expr, Type type, Type expected, Site site = Site.init)
+    {
+        auto fitted = fitTo(expr, type, expected, site);
+        _cost = stepsTaken(expr, type, expected);
+        return fitted;
+    }
+
+    /// In how many steps `expr`, of `type`, went where `expected` is, once it has: a value by the
+    /// fit relation, and a number literal by a step for each layer around the number it became,
+    /// one for going into a sum, and one for becoming other than its default type.
+    private int stepsTaken(const Expr expr, Type type, Type expected)
+    {
+        auto integer = isIntLiteral(expr);
+        if (!integer && !isFloatLiteral(expr) || !expr.id.isValid) return max(0, fitSteps(type, expected));
+        auto steps = 0;
+        auto core = expected;
+        for (; _types.isOption(core) || _types.isErrorUnion(core); steps++)
+        {
+            core = _types.isOption(core) ? _types.optionInner(core) : _types.successOf(core);
+        }
+        if (_declarer.isSum(core)) steps++;
+        auto became = _typing.exprTypes.get(expr.id, type);
+        return steps + (became == (integer ? _types.int_ : _types.float_) ? 0 : 1);
+    }
+
+    private Type fitTo(const Expr expr, Type type, Type expected, Site site)
     {
         if (isNumeric(expected) && isIntLiteral(expr))
         {
@@ -7768,7 +8037,7 @@ private final class TypeChecker
             return _types.unit;
         }
         checkMatchHead(match_, span, ctx);
-        auto types = match_.arms.map!(arm => synthesizeBeside(arm.body, errors, ctx)).array;
+        auto types = synthesizeTogether(match_.arms.map!(arm => arm.body).array, ctx, errors);
         auto joined = _types.never;
         foreach (i, type; types)
         {
@@ -7785,7 +8054,14 @@ private final class TypeChecker
     private Type checkMatch(const MatchExpr match_, Type expected, Span span, BodyContext ctx)
     {
         checkMatchHead(match_, span, ctx);
-        auto types = match_.arms.map!(arm => check(arm.body, expected, ctx)).array;
+        auto worst = 0;
+        Type[] types;
+        foreach (arm; match_.arms)
+        {
+            types ~= check(arm.body, expected, ctx);
+            worst = max(worst, _cost);
+        }
+        _cost = worst;
         return types.all!(t => t == _types.never) ? _types.never : expected;
     }
 
@@ -8156,7 +8432,9 @@ private final class TypeChecker
     {
         checkIfHead(if_, ctx);
         auto thenType = trueBranch(if_, () => check(*if_.trueBody, expected, ctx));
+        auto worst = _cost;
         auto elseType = check(*if_.falseBody, expected, ctx);
+        _cost = max(worst, _cost);
         return thenType == _types.never && elseType == _types.never ? _types.never : expected;
     }
 
@@ -8191,12 +8469,10 @@ private final class TypeChecker
         );
     }
 
-    /// An array, tuple, `Some` or dictionary literal made only of literals, with an integer literal in it.
-    /// Where a float literal argument is waiting to bind a type parameter, so does this, since typing it
-    /// first would bind `Int`: `pick(1.5, [2])` is a `[Float]`.
-    private bool waitsForFloat(const Expr arg)
+    /// Whether `arg` is made only of literals, as an array, tuple, `Some` or dictionary literal of them is.
+    private static bool onlyLiterals(const Expr arg)
     {
-        bool onlyLiterals(const Expr e) => isLiteral(e) || e.kind.match!(
+        return isLiteral(arg) || arg.kind.match!(
             (const NoneLiteral _) => true,
             (const ArrayLiteral l) => l.elements.all!(x => onlyLiterals(x)),
             (const TupleLiteral l) => l.elements.all!(x => onlyLiterals(x)),
@@ -8204,14 +8480,33 @@ private final class TypeChecker
             (const MapLiteral m) => m.keys.all!(x => onlyLiterals(x)) && m.values.all!(x => onlyLiterals(x)),
             _ => false,
         );
-        bool hasInteger(const Expr e) => isIntLiteral(e) || e.kind.match!(
-            (const ArrayLiteral l) => l.elements.any!(x => hasInteger(x)),
-            (const TupleLiteral l) => l.elements.any!(x => hasInteger(x)),
-            (const SomeExpr some) => hasInteger(*some.value),
-            (const MapLiteral m) => m.keys.any!(x => hasInteger(x)) || m.values.any!(x => hasInteger(x)),
+    }
+
+    /// Whether one of the literals `arg` is made of passes `test`.
+    private static bool anyLiteral(const Expr arg, bool delegate(const Expr) test)
+    {
+        return test(arg) || arg.kind.match!(
+            (const ArrayLiteral l) => l.elements.any!(x => anyLiteral(x, test)),
+            (const TupleLiteral l) => l.elements.any!(x => anyLiteral(x, test)),
+            (const SomeExpr some) => anyLiteral(*some.value, test),
+            (const MapLiteral m) => m.keys.any!(x => anyLiteral(x, test)) || m.values.any!(x => anyLiteral(x, test)),
             _ => false,
         );
-        return !isIntLiteral(arg) && onlyLiterals(arg) && hasInteger(arg);
+    }
+
+    /// An array, tuple, `Some` or dictionary literal made only of literals, with an integer literal in it.
+    /// Where a float literal argument is waiting to bind a type parameter, so does this, since typing it
+    /// first would bind `Int`: `pick(1.5, [2])` is a `[Float]`.
+    private bool waitsForFloat(const Expr arg)
+    {
+        return !isIntLiteral(arg) && onlyLiterals(arg) && anyLiteral(arg, e => isIntLiteral(e));
+    }
+
+    /// One made only of literals with a float literal and no integer literal in it, which is what
+    /// integer literals wait for as they do for a float literal: `pick(11, [2.5])` is a `[Float]`.
+    private bool isFloatOnly(const Expr arg)
+    {
+        return onlyLiterals(arg) && anyLiteral(arg, e => isFloatLiteral(e)) && !anyLiteral(arg, e => isIntLiteral(e));
     }
 
     /// A float literal, possibly signed. It's a `Float` unless the type expected of it is `Float32`.
@@ -8256,10 +8551,12 @@ private final class TypeChecker
         if (from == to) return 0;
         if (from == _types.error || to == _types.error) return 0;  // already reported
         if (from == _types.never) return 0;                         // no value ever arrives
+        // `None` is the option it lands in, and `[]` and `[:]` the array and dictionary, in no steps.
         if (from == _types.none)
         {
-            return _types.isOption(to) || _types.isErrorUnion(to) && _types.isOption(_types.successOf(to)) ? 1 : -1;
+            return _types.isOption(to) ? 0 : _types.isErrorUnion(to) && _types.isOption(_types.successOf(to)) ? 1 : -1;
         }
+        if (from == _types.emptyArray && _types.isArray(to) || from == _types.emptyDictionary && isDictionary(to)) return 0;
         if (_types.isFailure(from))
         {
             return (_types.isErrorUnion(to) || _types.isFailure(to)) && errorFits(_types.errorOf(from), _types.errorOf(to)) ? 1 : -1;
@@ -8285,7 +8582,10 @@ private final class TypeChecker
 
     private void requireAssignable(Type from, Type to, Span span, Site site = Site.init)
     {
-        if (isAssignable(from, to) || _types.mentionsError(from) || _types.mentionsError(to)) return;
+        if (isAssignable(from, to)) return;
+        // An error in a type has been reported. In a trial it's a part that's still open, and the
+        // rest has to fit around it.
+        if ((_types.mentionsError(from) || _types.mentionsError(to)) && (_trials == 0 || couldBe(to, from, null, false))) return;
         auto opaque = _types.isParameter(to)
             ? ", which could be any type; only a value of type `%s` is one".format(_types.describe(to)) : "";
         auto collect = "";

@@ -241,7 +241,10 @@ unittest
 unittest
 {
     analyzedGeneric(`    val p = pair(1.5, "a")`).shouldReport(DiagnosticCode.TypeMismatch, At("1.5", 1));
-    analyzedGeneric(`    val p = pair(Box(1), Box(true))`).shouldReport(DiagnosticCode.TypeMismatch, At("Box", 3));
+    // `Box(true)` has a type of its own and `Box(1)` hasn't, so it decides, and the `1` is what doesn't fit.
+    analyzedGeneric(`    val p = pair(Box(1), Box(true))`).shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+    analyzedGeneric(`    val one = 1
+    val p = pair(Box(one), Box(true))`).shouldReport(DiagnosticCode.TypeMismatch, At("Box", 3));
 }
 
 @("a type parameter nothing determines asks for the type arguments")

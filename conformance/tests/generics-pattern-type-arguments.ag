@@ -29,7 +29,7 @@ def pair(h: Held, o: Outcome<UInt8>): Pair<Held, Outcome<UInt8>> => Pair(h, o)
 def main(): Unit {
     printl(describe(Box(1)))
     printl(describe(Box("s")))
-    printl(describe(Box([2, 3])))
+    printl(describe(Box<[Int]>([2, 3])))
     printl(total(Done(4)))
     printl(total(Failed("no")))
     printl(both(pair(Box(5), Done(255))))
