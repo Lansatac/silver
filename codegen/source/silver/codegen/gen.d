@@ -1,12 +1,12 @@
 module silver.codegen.gen;
 
-import std.algorithm : all, any, canFind, count, filter, fold, map, max;
+import std.algorithm : all, any, canFind, count, filter, fold, map;
 import std.array : array, join;
 import std.format : format;
-import std.range : iota;
 import std.sumtype : match;
 
 import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException, SourceMap, Span;
+import silver.codegen.frames : CallGraph, checkedFunctions, frameBound;
 import silver.codegen.runtime_bindings : runtime;
 import silver.core;
 import silver.sema : FunctionData, IntegerInfo, Intrinsic, Type;
@@ -154,12 +154,6 @@ private struct Slots
         _slots ~= Slot(pointer, type, end);
         pointers[local] = pointer;
         allocas ~= "  %s = alloca %s".format(pointer, type);
-    }
-
-    /// The type of each stack slot.
-    auto types() const
-    {
-        return _slots.map!(slot => slot.type);
     }
 
     /// `pointer`, which already points at a slot of `local`'s type, as where it lives.
@@ -445,9 +439,7 @@ private final class Generator
     /// The functions on a cycle of calls (`recursiveFunctions`), and their LLVM names.
     private bool[size_t] _recursive;
     private bool[string] _recursiveNames;
-    /// The functions that check the stack on entry: see `checkedFunctions`.
-    private bool[size_t] _checked;
-    /// The fields of each struct type, by its name.
+    /// The fields of each struct type, by its name, for `frameBound`.
     private const(string)[][string] _structFields;
 
     this(const ref Program program, const SourceMap sources)
@@ -458,14 +450,16 @@ private final class Generator
 
     string emitProgram()
     {
-        string[] functions;
         _recursive = recursiveFunctions();
         foreach (index; _recursive.byKey) _recursiveNames[mangled(index)] = true;
-        auto plans = _program.functions.map!(func => planSlots(func)).array;
-        _checked = checkedFunctions(plans);
+        // Which functions check the stack depends on their frames, which the emitted code decides.
+        EmittedFunction[] emitted;
+        foreach (i, ref func; _program.functions) emitted ~= emitFunction(i, func);
+        auto checked = checkedFunctions(callGraph(emitted.map!(f => f.frame).array));
+        string[] functions;
         foreach (i, ref func; _program.functions)
         {
-            functions ~= emitFunction(i, func, plans[i]);
+            functions ~= emitted[i].text(checked[i] ? emitStackCheck(func.body.span) : Fragment.init);
         }
         auto entry = emitEntry();
         // After the functions and the entry, so every runtime call and string literal has been seen.
@@ -551,12 +545,33 @@ private final class Generator
         return text;
     }
 
-    private string emitFunction(size_t index, const Function func, Slots slots)
+    /// A function's IR, waiting to learn whether it checks the stack.
+    private static struct EmittedFunction
+    {
+        /// The `define` line.
+        string head;
+        /// The entry block's allocas.
+        string[] allocas;
+        /// The body, from the `.entry` label.
+        string[] body;
+        /// A bound on its frame at -O0 (`frameBound`).
+        size_t frame;
+
+        /// The function's text, with `check` made first. The allocas stay in the first block, as
+        /// LLVM wants, which is then the check's, and the check goes on to `.entry`.
+        string text(Fragment check) const
+        {
+            auto lines = check.code.length == 0 ? body[0 .. 1] ~ allocas ~ body[1 .. $]
+                : ".stack:" ~ allocas ~ check.code ~ body;
+            return "%s\n%-(%s\n%)\n}\n".format(head, lines);
+        }
+    }
+
+    private EmittedFunction emitFunction(size_t index, const Function func)
     {
         auto span = func.body.span;
         auto returnType = llvmType(func.returnType, span);
-        _function = new FunctionState(slots, scalarsOf(func.returnType, span));
-        auto stackCheck = index in _checked ? emitStackCheck(span) : Fragment.init;
+        _function = new FunctionState(planSlots(func), scalarsOf(func.returnType, span));
 
         string[] params;
         Fragment receive;
@@ -579,7 +594,6 @@ private final class Generator
             ? emitInto(func.body, _function.returnScalars, FunctionState.resultSlot, true)
             : emitTail(func.body);
         auto whole = Fragment.label(".entry")
-            .then(stackCheck)
             .then(receive)
             .then(body)
             .then(emitEnding(body.operands, func.body.type == _program.types.never));
@@ -592,11 +606,18 @@ private final class Generator
             allocas ~= ["  %s = alloca ptr".format(FunctionState.outData), "  %s = alloca i64".format(FunctionState.outLength)];
         }
         allocas ~= _function.cImages;
-        auto lines = whole.code[0 .. 1] ~ allocas ~ whole.code[1 .. $];
         // Only `silver_main` is called from outside the module.
         auto linkage = func.origin == FunctionOrigin.declared ? "internal " : "private ";
-        return "define %s%s %s(%s) #0 {\n%s\n}\n".format(linkage, returnType, mangled(index), params.join(", "), lines.join("\n"));
+        auto head = "define %s%s %s(%s) #0 {".format(linkage, returnType, mangled(index), params.join(", "));
+        auto code = whole.code.dup;
+        // The check's own values and its call of `silver_panic`, which every function is allowed.
+        auto frame = frameBound(allocas ~ code, params.length, _structFields) + checkFrame;
+        return EmittedFunction(head, allocas, code, frame);
     }
+
+    /// What the stack check adds to a frame by `frameBound`: three values, and a call with two
+    /// arguments, which no smaller call's area hides.
+    private enum checkFrame = 3 * 8 + 48;
 
     /// How the function ends, `operands` being its body's value. LLVM returns one value, so several
     /// scalars go back as a struct, which the caller takes apart at once. The body and every
@@ -2616,103 +2637,26 @@ private final class Generator
         );
     }
 
-    /// The most a chain of calls that don't check the stack may take, by `frameOf`'s estimate: the
-    /// runtime's 1 MB margin below the last check covers it, with room left for natives and the
-    /// runtime's own frames.
-    private enum uncheckedChain = 256 * 1024;
-
-    /// The functions that check the stack on entry. Only recursion can overflow it, and every cycle
-    /// of calls passes through a function on a cycle of direct calls (`_recursive`) or one that a
-    /// function value reaches and that calls something in turn. Reached that way are every target
-    /// of a closure, and what compares and hashes closures' captures, which the runtime calls
-    /// through a closure's descriptor and which recur as deep as closures capture closures; one
-    /// that calls nothing, as `x => x * 2` doesn't, is on no cycle. Since the check is made once a
-    /// function's frame exists, the margin must also cover every frame below it down to the next
-    /// check, so a function that isn't on a cycle checks too when the longest chain of unchecked
-    /// frames starting at it would pass `uncheckedChain`.
-    private bool[size_t] checkedFunctions(const Slots[] plans)
+    /// The call graph `checkedFunctions` decides from, with each function's frame bound from the IR
+    /// emitted for it. Reached through a function value are every target of a closure, and what
+    /// compares and hashes closures' captures, which the runtime calls through a closure's
+    /// descriptor and which recur as deep as closures capture closures.
+    private CallGraph callGraph(const size_t[] frames)
     {
         auto count = _program.functions.length;
-        auto callees = new size_t[][](count);
-        auto opaque = new bool[](count);
+        auto graph = CallGraph(frames.dup, new size_t[][](count), new bool[](count), new bool[](count), new bool[](count));
         bool[size_t] reached;
         foreach (i, ref func; _program.functions)
         {
             bool[size_t] targets;
-            collectCalls(func.body, targets, reached, opaque[i]);
-            callees[i] = targets.keys;
+            collectCalls(func.body, targets, reached, graph.opaque[i]);
+            graph.callees[i] = targets.keys;
             if (func.captureEquality != noFunction) reached[func.captureEquality] = true;
             if (func.captureHash != noFunction) reached[func.captureHash] = true;
         }
-
-        auto checked = _recursive.dup;
-        foreach (i; reached.byKey)
-        {
-            if (opaque[i] || callees[i].length > 0) checked[i] = true;
-        }
-
-        auto frames = iota(count).map!(i => frameOf(_program.functions[i], plans[i])).array;
-        // A call the call graph can't see lands in a function a function value reaches, which
-        // checks if it calls anything and so takes its own frame at most. Natives and the runtime
-        // are left to what the margin has beyond `uncheckedChain`.
-        size_t opaqueFrame = 0;
-        foreach (i; reached.byKey) opaqueFrame = max(opaqueFrame, frames[i]);
-
-        // Below each function that doesn't check: its frame and the longest chain under it. Those
-        // functions are on no cycle, so this ends.
-        auto chains = new size_t[](count);
-        auto known = new bool[](count);
-        size_t below(size_t callee)
-        {
-            if (callee in checked) return frames[callee];
-            if (known[callee]) return chains[callee];
-            size_t deepest = opaque[callee] ? opaqueFrame : 0;
-            foreach (next; callees[callee]) deepest = max(deepest, below(next));
-            known[callee] = true;
-            chains[callee] = frames[callee] + deepest;
-            if (chains[callee] <= uncheckedChain) return chains[callee];
-            checked[callee] = true;
-            return frames[callee];
-        }
-
-        foreach (i; 0 .. count) below(i);
-        return checked;
-    }
-
-    /// An estimate of the stack `func` takes at `-O0`, where every slot has its own memory: its
-    /// slots, its result's, and a little for the return address, saved registers and spills.
-    /// Optimized, slots mostly become registers, and inlining merges frames rather than adding them.
-    private size_t frameOf(const Function func, const ref Slots slots)
-    {
-        size_t bytes = 128;
-        foreach (type; slots.types) bytes += bytesOf(type);
-        auto returnType = llvmType(func.returnType, func.body.span);
-        if (isStruct(returnType)) bytes += bytesOf(returnType);
-        return bytes;
-    }
-
-    /// The size of a slot of the LLVM type `type`, a scalar or a struct of them, as LLVM lays it out.
-    private size_t bytesOf(string type)
-    {
-        if (auto fields = type in _structFields)
-        {
-            size_t at = 0, alignment = 1;
-            foreach (field; *fields)
-            {
-                auto size = bytesOf(field);
-                at = (at + size - 1) / size * size;
-                at += size;
-                alignment = max(alignment, size);
-            }
-            return (at + alignment - 1) / alignment * alignment;
-        }
-        switch (type)
-        {
-            case "i1", "i8": return 1;
-            case "i16": return 2;
-            case "i32", "float": return 4;
-            default: return 8;
-        }
+        foreach (i; reached.byKey) graph.reached[i] = true;
+        foreach (i; _recursive.byKey) graph.recursive[i] = true;
+        return graph;
     }
 
     /// The functions on a cycle of calls, function values included (Tarjan's algorithm). LLVM can
@@ -3559,10 +3503,9 @@ private final class Generator
         auto limit = _function.result("load ptr, ptr @silver_stack_limit", "%.limit");
         auto tooDeep = _function.result("icmp ult ptr %s, %s".format(frame.value, limit.value), "%.too.deep");
         return frame.then(limit).then(tooDeep)
-            .then(Fragment.branch(tooDeep.value, ".stack.overflow", ".stack.ok"))
+            .then(Fragment.branch(tooDeep.value, ".stack.overflow", ".entry"))
             .then(Fragment.label(".stack.overflow"))
-            .then(emitPanic(span, "Stack overflow"))
-            .then(Fragment.label(".stack.ok"));
+            .then(emitPanic(span, "Stack overflow"));
     }
 
     /// Declares an LLVM intrinsic, or another module-level line, once at the top of the module.
