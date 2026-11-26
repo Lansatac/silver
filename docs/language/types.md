@@ -159,7 +159,7 @@ Jack < Ace        // true
 
 ## Printing
 
-`print` and `printl` (which adds a newline) take a value of any type, as `print<T>(value: T)`, and `String(x)` and string holes format it in the same way. Every type prints, so generic code prints a value of a type parameter with no bound, and `print` and `printl` are function values like any other generic function: `each(names, printl)`.
+`print` and `printl` (which adds a newline) take a value of any type, as `print<T>(value: T)`, and `String(x)` and string holes format it in the same way. Every type prints, so generic code prints a value of a type parameter with no bound, and `print` and `printl` are function values like any other generic function: `val log: (String) -> Unit = printl` makes `log` print a line, where the function type it is expected to be chooses the overload.
 
 | Value | Printed form |
 | --- | --- |

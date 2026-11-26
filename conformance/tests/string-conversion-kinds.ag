@@ -35,5 +35,6 @@ def main(): Unit {
     printl(String(["a": 1]) ~ "|" ~ text(["b": 2]))
     printl(String(failing(false)) ~ "|" ~ text(failing(true)))
     printl(String(Ref(7)) ~ "|" ~ text(Ref("r")))
-    printl(String(printl<Int>) ~ "|" ~ text(print<String>))
+    val line: (Int) -> Unit = printl
+    printl(String(line) ~ "|" ~ text(print<String>))
 }

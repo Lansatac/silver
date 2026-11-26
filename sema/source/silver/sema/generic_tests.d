@@ -375,7 +375,7 @@ unittest
     inMain("    val qf: ([Bool]) -> Int = lang.array.length").shouldHaveNoDiagnostics();
     inMain("    val qf: (Int) -> Unit = lang.io.print").shouldHaveNoDiagnostics();
     inMain("    val qf: ([Int?]) -> Unit = lang.io.printl<[Int?]>").shouldHaveNoDiagnostics();
-    inMain("    val qf = lang.io.printl<Int>").shouldHaveNoDiagnostics();
+    inMain("    val qf: (Int) -> Unit = lang.io.printl").shouldHaveNoDiagnostics();
     inMain("    val qf = lang.io.print").shouldReport(DiagnosticCode.CannotInferTypeArgument, At("lang", 3));
 }
 

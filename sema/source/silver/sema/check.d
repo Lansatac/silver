@@ -4400,20 +4400,11 @@ private final class TypeChecker
         if (expected == _types.error) return _types.error;
         if (expected == Type.init || !_types.isFunction(expected))
         {
-            // The current module's functions come first, as for a call. Type arguments written
-            // leave only the functions with that many type parameters.
-            auto written = typeArgsOf(name).length;
-            foreach (group; candidates.groups)
+            // The current module's functions come first, as for a call.
+            if (candidates.groups[0].length == 1)
             {
-                auto taking = written == 0 ? group.dup
-                    : group.filter!(f => _resolutions.declarations.functions[f].typeParams.length == written).array;
-                if (taking.length == 0 && written > 0) continue;
-                if (taking.length == 1)
-                {
-                    _typing.chosenSymbols[name.id] = SymbolId(taking[0]);
-                    return namedValue(name, SymbolId(taking[0]), expected, site);
-                }
-                break;
+                _typing.chosenSymbols[name.id] = SymbolId(candidates.groups[0][0]);
+                return namedValue(name, SymbolId(candidates.groups[0][0]), expected, site);
             }
             reportOverloadedValue(name);
             return _types.error;
@@ -6157,6 +6148,14 @@ private final class TypeChecker
         if (open())
         {
             auto before = params.filter!(p => p.id !in b.bound).array;
+            // A bare `Error` binds no parameter by itself, so a bare result it's passed for is the
+            // expected error union whole, which `bindExpected` would take apart.
+            if (_types.isParameter(result) && expected != Type.init && _types.isErrorUnion(expected)
+                && _types.errorOf(expected) != _types.error
+                && args.length.iota.any!(i => signature.params[i] == result && b.typed[i] != Type.init && _types.isFailure(b.typed[i])))
+            {
+                bindParams(result, expected, bindable(), b.bound);
+            }
             bindExpected(result, expected, bindable(), b.bound);
             b.fromExpected = before.filter!(p => p.id in b.bound).map!(p => cast() p.id).array;
         }

@@ -581,19 +581,6 @@ unittest
     analyzedWith(shows, "    val f: (Float) -> Unit = show").shouldReport(DiagnosticCode.NoMatchingOverload, At("show", 4));
 }
 
-@("type arguments written choose an overloaded function as a value among those with that many type parameters")
-unittest
-{
-    enum both = "def put(): Unit => ()\ndef put<T>(value: T): Unit => ()\ndef pair<A, B>(a: A, b: B): Unit => ()\n"
-        ~ "def pair<T>(a: T): Unit => ()\n";
-    auto a = analyzed(both ~ "def main(): Unit {\n    val f = put<Int>\n    val g = pair<Int, String>\n    val h = pair<Int>\n}");
-    a.shouldHaveNoDiagnostics();
-    a.shouldResolve(At("put", 3), At("put", 2));
-    a.shouldResolve(At("pair", 3), At("pair", 1));
-    a.shouldResolve(At("pair", 4), At("pair", 2));
-    analyzed(both ~ "def main(): Unit {\n    val f = put<Int, Int>\n}").shouldReport(DiagnosticCode.AmbiguousOverload, At("put", 3));
-}
-
 @("an overloaded function passed to an overloaded function chooses by the parameter's arity")
 unittest
 {
