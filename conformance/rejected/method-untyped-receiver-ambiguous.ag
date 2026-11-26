@@ -1,0 +1,6 @@
+def pick(x: Int?): Int => 1
+def pick(x: String?): Int => 2
+
+def main(): Unit {
+    printl(None.pick())
+}

@@ -1,0 +1,5 @@
+def k<T>(x: T?): Int => 1
+
+def main(): Unit {
+    printl(None.k())
+}

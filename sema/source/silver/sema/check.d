@@ -3706,7 +3706,7 @@ private final class TypeChecker
         }
 
         string argument(size_t i) => hasReceiver && i == 0 ? "the receiver" : "argument %s".format(hasReceiver ? i : i + 1);
-        // A literal receiver has been synthesized to look for a field, but still adapts.
+        // An integer literal is fitted by its shape even when it's been synthesized, so it still adapts.
         bool byShape(size_t i) => typed[i] == Type.init || isIntLiteral(call.args[i]);
         Fit fitAt(size_t i, Type param)
         {
@@ -6672,7 +6672,8 @@ private final class TypeChecker
 
     /// `object.f(args)`. A field named `f` comes first; otherwise it's `f(object, args)`, with the
     /// `f` a plain name finds at module level. The receiver was synthesized to look for the field,
-    /// so it's an argument that already has its type. `object?.f(args)` is the same call on
+    /// so it's an argument that already has its type, unless it's only a shape, which has no fields
+    /// and is left to the function as an argument is. `object?.f(args)` is the same call on
     /// `object`'s value, made an option or error union again.
     private Type methodCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected)
     {
@@ -6693,7 +6694,12 @@ private final class TypeChecker
             },
             (_) => assert(0, "isMethodCall only accepts a member access"),
         );
-        if (!safe) return callOn(expr, call, object, member, typeArgs, synthesize(*object, ctx), ctx, expected);
+        if (!safe)
+        {
+            // A receiver that's only a shape has no fields to look for, and waits for the function as an argument does.
+            auto objectType = isShaped(*object) ? Type.init : synthesize(*object, ctx);
+            return callOn(expr, call, object, member, typeArgs, objectType, ctx, expected);
+        }
 
         auto held = _declarer.requireTyped(synthesize(*object, ctx), object.span);
         if (!throughValue(held, object.span, "a function is called on any other value with `.`"))
@@ -6747,14 +6753,14 @@ private final class TypeChecker
             return applyCallee(calleeType, call, expr.span, ctx);
         }
 
-        if (objectType == _types.error || hasField(objectType, member)) return asField();
+        if (objectType == _types.error || objectType != Type.init && hasField(objectType, member)) return asField();
 
         auto lookup = distinct(_resolutions.methodLookups[expr.id]);
         auto arguments = (cast(Expr*) object)[0 .. 1] ~ cast(Expr[]) call.args;
         auto mutables = call.mutableArgs.length > 0 ? false ~ call.mutableArgs.dup : null;
         auto rewritten = new const CallExpr(cast(Expr*) call.callee, arguments, mutables);
         _typing.methodCalls[expr.id] = rewritten;
-        auto receiver = _declarer.requireTyped(objectType, object.span);
+        auto receiver = objectType == Type.init ? Type.init : _declarer.requireTyped(objectType, object.span);
         auto typed = new Type[arguments.length];
         typed[0] = receiver;
         auto reported = _collector.diagnostics.length;

@@ -1,0 +1,50 @@
+// A receiver with no type of its own, or one that only a function can give a type to, is a first
+// argument that waits for the function, so a method call chooses and infers as the call written
+// with the value first does. Each pair below prints the call and then the method call.
+
+def opt(x: Int?): Int? => x
+def two<T>(x: T?, y: T): T => y
+def pick(x: Int?): Int => 1
+def pick(x: [String]): Int => 4
+def only(x: Int?, mutable y: Int): Int => 1
+def only(mutable x: Int?, y: Int): Int => 2
+def wrap<T>(x: [T], y: T): [T] => x
+def nonempty(x: [Int], y: Int): Int => y
+def num(x: UInt8): Int => 1
+def num(x: Int): Int => 2
+def lit(x: [UInt8]): Int => 1
+def lit(x: [Int]): Int => 2
+def narrow(x: [UInt8]): Int => x.length()
+def pair(x: (Int, UInt8)): Int => 3
+def fn(f: (Int) -> Int): Int => f(1)
+def holes(x: [Int?]): Int => x.length()
+
+def main(): Unit {
+    printl(opt(None))
+    printl(None.opt())
+    printl(two(None, 4))
+    printl(None.two(4))
+    printl(pick(None))
+    printl(None.pick())
+    printl(pick([]))
+    printl([].pick())
+    printl(wrap([], 1))
+    printl([].wrap(1))
+    printl(nonempty([], 3))
+    printl([].nonempty(3))
+    mutable val m = 1
+    printl(only(None, mutable m))
+    printl(None.only(mutable m))
+    printl(num(5))
+    printl((5).num())
+    printl(lit([5]))
+    printl([5].lit())
+    printl(narrow([1, 2]))
+    printl([1, 2].narrow())
+    printl(pair((1, 2)))
+    printl((1, 2).pair())
+    printl(fn(x => x + 2))
+    printl((x => x + 2).fn())
+    printl(holes([None, Some(1)]))
+    printl([None, Some(1)].holes())
+}
