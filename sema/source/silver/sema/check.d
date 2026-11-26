@@ -137,6 +137,8 @@ private final class TypeChecker
     /// The functions bounds supply that an earlier bound of the same function supplies already,
     /// by the earlier one.
     private Id!FunctionDecl[Id!FunctionDecl] _repeatedBounds;
+    /// The overloads reported for taking the same parameters as one declared before them.
+    private SideTable!(SymbolId, bool) _sameAsEarlier;
     /// What `exportedFunctions` has worked out, by name and then module.
     private const(Id!FunctionDecl)[][string][string] _exported;
     /// How many elements `placePath` has named, so each is a place of its own.
@@ -1232,10 +1234,7 @@ private final class TypeChecker
 
         auto type = expr.kind.match!(
             (const BlockExpr block) {
-                foreach (stmt; block.statements)
-                {
-                    checkStmt(stmt, ctx);
-                }
+                checkStatements(block.statements, ctx);
                 return block.value is null ? valuelessBlockType(block) : dropped(checkDiscarded(*block.value, ctx));
             },
             (const IfExpr if_) {
@@ -1342,7 +1341,6 @@ private final class TypeChecker
     /// `val binding = value`, or a binding in a pattern given its part of a tuple literal.
     private void checkBinding(const VarDecl binding, const Expr value, BodyContext ctx)
     {
-        scope (success) reportDuplicateNestedDef(binding);
         if (binding.type is null)
         {
             // A discard keeps no value, so a `None` or `[]` needs no type to be dropped.
@@ -1357,19 +1355,28 @@ private final class TypeChecker
         }
     }
 
-    /// Reports the nested `def` `binding` if it can't be told apart from one of its name that's
-    /// declared before it in its block, as the module-level check does.
+    /// Checks a block's statements, after reporting its nested `def`s that can't be told apart from
+    /// one of their name declared before them, as `checkOverloads` does a module's functions before
+    /// any body, so a call in a body never finds a duplicate that hasn't been reported.
+    private void checkStatements(const(Stmt)[] statements, BodyContext ctx)
+    {
+        foreach (stmt; statements) stmt.kind.match!((ref const VarDecl binding) => reportDuplicateNestedDef(binding), (_) {});
+        foreach (stmt; statements) checkStmt(stmt, ctx);
+    }
+
     private void reportDuplicateNestedDef(const VarDecl binding)
     {
         auto earlier = binding.id in _resolutions.earlierLocalOverloads;
         if (earlier is null) return;
-        bool typed(Id!VarDecl local) => _typing.symbolTypes.get(SymbolId(local), _types.error) != _types.error;
+        // A parameter type that's wrong is reported where it's checked.
+        bool typed(Id!VarDecl local) => !signatureOf(Candidate(local)).params.any!(p => _types.mentionsError(p));
         if (!typed(binding.id)) return;
         foreach (other; *earlier)
         {
             if (!typed(other) || !sameParameters(Candidate(other), Candidate(binding.id))) continue;
             _collector.reportError(DiagnosticCode.DuplicateOverload, binding.nameSpan,
                 sameParametersProblem(Candidate(other), binding.name).format(binding.name));
+            _sameAsEarlier[SymbolId(binding.id)] = true;
             return;
         }
     }
@@ -2883,7 +2890,7 @@ private final class TypeChecker
             },
             (const BlockExpr block) {
                 if (block.value is null) return Type.init;
-                foreach (stmt; block.statements) checkStmt(stmt, ctx);
+                checkStatements(block.statements, ctx);
                 auto type = synthesizeToward(*block.value, expected, ctx);
                 _typing.exprTypes[expr.id] = type;
                 return type;
@@ -4094,12 +4101,9 @@ private final class TypeChecker
         if (winners.length == 1) return winners[0].candidate;
         if (!reportable) return Candidate.init;
         auto unbeaten = trials.filter!(t => !trials.any!(u => beats(u, t))).array;
-        // Two nested defs that take the same parameters have been reported as duplicates already.
-        if (unbeaten.length == 2 && unbeaten.all!(t => t.candidate.local.isValid)
-            && sameParameters(unbeaten[0].candidate, unbeaten[1].candidate))
-        {
-            return unbeaten[0].candidate;
-        }
+        // One reported for taking the same parameters as an earlier one doesn't make the call ambiguous too.
+        auto undecided = unbeaten.filter!(t => (t.candidate.symbol in _sameAsEarlier) is null).array;
+        if (undecided.length == 1) return undecided[0].candidate;
         auto tied = unbeaten.map!(t => "`" ~ overloadLabel(t.candidate) ~ "`").array;
         // Functions of different modules tie where a blanket forward brings them together.
         auto homes = unbeaten.map!(t => _resolutions.declarations.functionModules.get(t.candidate.func, null).idup).array.sort.uniq.array;
@@ -4659,6 +4663,7 @@ private final class TypeChecker
             problem = sameParametersProblem(Candidate(earlier), first.name)
                 ~ (_resolutions.boundFunctions.get(earlier, null).length + _resolutions.boundFunctions.get(later.id, null).length == 0
                     ? "" : ", whatever their bounds");
+            _sameAsEarlier[SymbolId(later.id)] = true;
         }
         if (problem is null) return false;
         _collector.reportError(DiagnosticCode.DuplicateOverload, later.nameSpan, problem.format(later.name));
@@ -7352,10 +7357,7 @@ private final class TypeChecker
 
     private Type synthesizeBlock(const BlockExpr block, Span span, BodyContext ctx, Type errors = Type.init)
     {
-        foreach (stmt; block.statements)
-        {
-            checkStmt(stmt, ctx);
-        }
+        checkStatements(block.statements, ctx);
         if (block.value !is null)
         {
             return synthesizeBeside(*block.value, errors, ctx);
@@ -8137,10 +8139,7 @@ private final class TypeChecker
 
     private Type checkBlock(const Expr expr, const BlockExpr block, Type expected, BodyContext ctx)
     {
-        foreach (stmt; block.statements)
-        {
-            checkStmt(stmt, ctx);
-        }
+        checkStatements(block.statements, ctx);
         if (block.value !is null)
         {
             auto type = check(*block.value, expected, ctx);

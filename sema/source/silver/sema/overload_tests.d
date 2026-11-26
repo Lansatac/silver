@@ -669,6 +669,21 @@ unittest
     analyzedWith("", "    val f = 1\n    def f(y: Int): Int => y").shouldReport(DiagnosticCode.DuplicateDeclaration, At("f", 2));
 }
 
+@("a call that ties only with an overload reported as a duplicate reports just the duplicate, even from the duplicate's own body")
+unittest
+{
+    // The duplicate is reported on entering the block, before the body of either def is checked.
+    analyzedWith("", "    def f(x: Int): String => \"a\"\n    def f(y: Int): String => f(1)\n    printl(f(2))")
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    analyzedWith("def f(x: Int): String => \"a\"\ndef f(y: Int): String => f(1)", "    printl(f(2))")
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    // Parameter types that name the enclosing function's type parameter are compared too.
+    analyzedWith("def g<T>(x: T): Int {\n    def h(a: T): Int => 1\n    def h(b: T): Int => 2\n    h(x)\n}", "    printl(g(1))")
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("h", 2));
+    analyzedWith("def g<T>(x: T): Int {\n    def h(a: T): Int => 1\n    def h(b: [T]): Int => 2\n    h(x)\n}", "    printl(g(1))")
+        .shouldHaveNoDiagnostics();
+}
+
 @("a nested def of a name an enclosing block has already declared is shadowing, not an overload")
 unittest
 {
