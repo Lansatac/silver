@@ -1,0 +1,7 @@
+// A range literal is an `Interval`, whose field `from` wins over a function named `from`, as it
+// does for a range held in a variable, even though the literal is otherwise compared by its shape.
+def from(i: Interval<Int>): Int => 42
+
+def main(): Unit {
+    printl((0..3).from())
+}
