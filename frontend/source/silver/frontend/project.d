@@ -2214,6 +2214,16 @@ unittest
     m(head ~ git ~ "flavour = \"x\"\n", ProjectCode.UnknownField, 5, 1);
 }
 
+@("a `git` that begins with `-` is refused, since git would read it as an option, such as --upload-pack, and run it")
+unittest
+{
+    auto directory = makeTree("frontend-remote-option", null);
+    scope (exit) rmdirRecurse(directory);
+    enum head = "name = \"g\"\n[[package]]\nname = \"cards\"\n";
+    foreach (refused; ["--upload-pack=touch${IFS}x;false:", "-oProxyCommand=x:y", "--config=a.b=c:d"])
+        mistakeIn(directory, head ~ "git = \"" ~ refused ~ "\"\n", ProjectCode.RemoteSource, 4, 7);
+}
+
 @("a package's name has the segments a module's name has, wherever a silver.toml writes one")
 unittest
 {
