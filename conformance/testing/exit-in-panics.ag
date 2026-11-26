@@ -1,0 +1,16 @@
+import std.process
+
+// exit isn't a panic: panics doesn't catch it, and the test it's in ends there.
+test "exit inside panics ends the test" {
+    printl("before")
+    val message = panics((): Unit => exit(5))
+    printl("after panics: {message}")
+}
+
+test "a panic later in a test whose panics saw an exit" {
+    val message = panics((): Unit => exit(6))
+    val list = [1]
+    printl(list[3])
+}
+
+test "the next test runs" => expect(1 + 1 == 2)

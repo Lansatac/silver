@@ -1,0 +1,7 @@
+FAIL "exit inside panics ends the test" at exit-in-panics.ag(4,6)
+    exit-in-panics.ag(6,38): exit(5) called in a test
+    Output:
+        before
+FAIL "a panic later in a test whose panics saw an exit" at exit-in-panics.ag(10,6)
+    exit-in-panics.ag(11,38): exit(6) called in a test
+1 passed, 2 failed
