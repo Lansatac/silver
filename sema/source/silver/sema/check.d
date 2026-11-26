@@ -10,6 +10,7 @@ import std.string;
 
 
 import silver.ast;
+import silver.sema.abi : CallDescription, crossesAlike, cTypeOf, describeCall, hostConvention;
 import silver.sema.constant_eval;
 import silver.sema.coverage;
 import silver.sema.declare;
@@ -302,6 +303,7 @@ private final class TypeChecker
             checkForwardedOverloads(mod.name);
             checkListedOverloads(mod.name);
         }
+        checkNativeSymbols(programModules, program);
 
         // After every overload is checked and invariant typed, which finding a conformance's functions
         // can need, and before any body. One that's needed first is found from there.
@@ -4549,6 +4551,75 @@ private final class TypeChecker
                 (_) {},
             );
         }
+    }
+
+    /// Reports each native that binds a C symbol another native, in any module, binds with a signature
+    /// C passes differently, at the later one, since a C function has one signature. A pair is checked
+    /// whether or not the program reaches them. Two of one name in a module are `DuplicateOverload`'s.
+    private void checkNativeSymbols(R)(R modules, const Program program)
+    {
+        struct Binding
+        {
+            string module_, name;
+            Id!FunctionDecl id;
+            Span span;
+            CallDescription call;
+            bool never;
+        }
+
+        Binding[][string] bound;
+        foreach (mod; modules)
+        {
+            foreach (decl; mod.declarations)
+            {
+                decl.kind.match!(
+                    (const FunctionDecl f) {
+                        if (f.kind != FunctionKind.native) return;
+                        auto signature = signatureOf(f.id);
+                        bool[Type] visiting;
+                        if (!signature.params.all!(p => crossesIntoC(p, false, visiting)) || !crossesIntoC(signature.ret, true, visiting)) return;
+                        bool structure(Type t) => _declarer.isStructureType(t);
+                        const(Type)[] fields(Type t) => _types[t].match!(
+                            (const NominalData n) => _typing.fields[n.decl].map!(x => x.type).array,
+                            (_) => (const(Type)[]).init);
+                        auto call = describeCall(signature.params.map!(p => cTypeOf(_types, p, &structure, &fields)).array,
+                            cTypeOf(_types, signature.ret, &structure, &fields), hostConvention);
+                        auto binding = Binding(mod.name, f.name, f.id, f.nameSpan, call, signature.ret == _types.never);
+                        scope (exit) bound[f.symbol] ~= binding;
+                        foreach (earlier; bound.get(f.symbol, null))
+                        {
+                            if (earlier.module_ == mod.name && earlier.name == f.name) continue;
+                            if (crossesAlike(earlier.call, earlier.never, call, binding.never)) continue;
+                            auto place = program.sources is null || !program.sources.has(earlier.span.file) ? earlier.span.file
+                                : "%s(%s)".format(earlier.span.file, program.sources.locate(earlier.span).line);
+                            _collector.reportError(DiagnosticCode.NativeSymbolMismatch, f.nameSpan,
+                                ("`%s` binds the C symbol `%s` as `%s`, but `%s.%s` at %s binds it as `%s`, which C passes differently; "
+                                    ~ "a symbol has one signature, so give one of them another with `native(\"...\")`").format(
+                                    f.name, f.symbol, _types.describe(_typing.symbolTypes[SymbolId(f.id)]), earlier.module_, earlier.name, place,
+                                    _types.describe(_typing.symbolTypes[SymbolId(earlier.id)])));
+                            break;
+                        }
+                    },
+                    (_) {},
+                );
+            }
+        }
+    }
+
+    /// Whether `type` has a C equivalent as a native's parameter or, if `isReturn`, result, or a
+    /// structure's field: what `requireNativeType` reports otherwise, and a structure holding itself.
+    private bool crossesIntoC(Type type, bool isReturn, ref bool[Type] visiting)
+    {
+        if (_types.isInteger(type) || type == _types.float_ || type == _types.float32 || type == _types.bool_) return true;
+        if (isReturn && (type == _types.unit || type == _types.never)) return true;
+        if (_declarer.isHandleType(type) || (_types.isOption(type) && _declarer.isHandleType(_types.optionInner(type)))) return true;
+        if (!_declarer.isStructureType(type) || type in visiting) return false;
+        visiting[type] = true;
+        scope (exit) visiting.remove(type);
+        return _types[type].match!(
+            (const NominalData n) => n.args.length == 0 && _typing.fields[n.decl].all!(f => crossesIntoC(f.type, false, visiting)),
+            (_) => false,
+        );
     }
 
     /// Reports each function the module `m` forwards that takes the same parameters as one of its

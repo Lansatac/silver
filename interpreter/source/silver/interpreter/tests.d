@@ -147,24 +147,10 @@ unittest
         && error.diagnostic.message.canFind("can't use a static one"), error.diagnostic.message);
 }
 
-@("two natives that bind one symbol with signatures C passes differently are refused, as when compiling")
+@("natives that bind one symbol and cross alike are both called, as when compiling")
 unittest
 {
-    import std.exception : collectException;
-    import silver.ast : DiagnosticCode, DiagnosticException;
-
-    auto error = collectException!DiagnosticException(run("native(\"llabs\") def a(x: Int64): Int64\n"
-        ~ "native(\"llabs\") def b(x: Float): Float\ndef main(): Unit {\n    printl(a(-1))\n    printl(b(1.0))\n}"));
-    assert(error !is null);
-    error.diagnostic.code.should.equal(DiagnosticCode.NotImplemented);
-    error.diagnostic.message.should.contain("`llabs`");
-
-    // A narrow result is extended differently as signed and as unsigned.
-    error = collectException!DiagnosticException(run("native(\"abs\") def a(x: Int32): Int8\n"
-        ~ "native(\"abs\") def b(x: Int32): UInt8\ndef main(): Unit {\n    printl(a(-1))\n    printl(b(-1))\n}"));
-    assert(error !is null);
-    error.diagnostic.code.should.equal(DiagnosticCode.NotImplemented);
-
+    // Sema refuses the ones that cross differently (`T0057`).
     // A 32- or 64-bit integer crosses alike whether it's signed or not.
     run("native(\"llabs\") def a(x: Int64): Int64\nnative(\"llabs\") def b(x: UInt64): UInt64\n"
         ~ "native(\"abs\") def c(x: Int32): Int32\nnative(\"abs\") def d(x: UInt32): UInt32\ndef main(): Unit {\n"

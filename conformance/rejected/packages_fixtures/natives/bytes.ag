@@ -1,0 +1,3 @@
+module natives.bytes
+
+native("abs") def absoluteByte(x: Int8): Int8

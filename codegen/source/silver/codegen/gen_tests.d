@@ -400,17 +400,9 @@ unittest
     run.output.should.equal("");
 }
 
-@("two natives that bind one symbol with signatures C passes differently are refused before codegen")
+@("natives that bind one symbol and cross alike are declared once")
 unittest
 {
-    import std.exception : collectException;
-
-    auto error = collectException!DiagnosticException(generateSource(
-        "native(\"abs\") def a(x: Int32): Int32\nnative(\"abs\") def b(x: Int64): Int64\n"
-        ~ "def main(): Unit {\n    val x = a(1)\n    val y = b(2)\n}"));
-    assert(error !is null);
-    error.diagnostic.code.should.equal(DiagnosticCode.NotImplemented);
-
     // Signedness that decides no extension doesn't change what crosses.
     generateSource("native(\"llabs\") def a(x: Int64): Int64\nnative(\"llabs\") def b(x: UInt64): UInt64\n"
         ~ "def main(): Unit {\n    val x = a(1)\n    val y = b(2)\n}").should.contain("declare ccc i64 @llabs(i64)");

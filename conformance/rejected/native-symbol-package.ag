@@ -1,0 +1,7 @@
+// A native of another package binds `abs` as well, so the two natives are in different modules. The
+// one in the package, whose module sorts later, is the one reported.
+import natives.bytes
+
+native("abs") def absolute(x: Int32): Int32
+
+def main(): Unit { }

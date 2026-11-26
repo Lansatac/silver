@@ -79,20 +79,16 @@ Program lowerTests(const ref ast.Program program, const Analysis analysis)
     return lowered;
 }
 
-/// Refuses natives that bind one symbol with signatures C would pass differently, since a C function
-/// has one, on either backend.
-/// Throws: DiagnosticException (`NotImplemented`) at the later native's first use.
+/// Natives that bind one symbol cross alike, since a C function has one signature, which sema
+/// checks (`NativeSymbolMismatch`) and the backends rely on.
 private void checkNatives(const ref Program program)
 {
-    import silver.ast : Diagnostic, DiagnosticCode, DiagnosticException;
-
     foreach (i, ref later; program.natives)
     {
         foreach (ref earlier; program.natives[0 .. i])
         {
-            if (earlier.symbol != later.symbol || crossesAlike(program, earlier, later, hostConvention)) continue;
-            throw new DiagnosticException(Diagnostic(DiagnosticCode.NotImplemented, later.span,
-                "Natives that bind `%s` with different signatures can't both be called".format(later.symbol)));
+            assert(earlier.symbol != later.symbol || crossesAlike(program, earlier, later, hostConvention),
+                "sema refuses natives that bind one symbol with signatures C passes differently");
         }
     }
 }

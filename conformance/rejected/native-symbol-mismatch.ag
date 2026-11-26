@@ -1,0 +1,6 @@
+// Two natives bind `abs` with signatures C passes differently, which is refused where the second is
+// declared, though neither is called.
+native("abs") def absolute(x: Int32): Int32
+native("abs") def absoluteByte(x: Int8): Int8
+
+def main(): Unit { }

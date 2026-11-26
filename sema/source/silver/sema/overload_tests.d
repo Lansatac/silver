@@ -59,6 +59,33 @@ unittest
         .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
 }
 
+@("natives that bind one symbol need signatures C passes alike, wherever they are and whether or not they are called")
+unittest
+{
+    enum main = "\ndef main(): Unit => ()";
+    // Int64 and UInt64 cross alike, Int8 and UInt8 don't.
+    analyzed(`native("abs") def a(x: Int64): Int64
+native("abs") def b(x: UInt64): UInt64` ~ main).shouldHaveNoDiagnostics();
+    analyzed(`native("abs") def a(x: Int8): Int8
+native("abs") def b(x: UInt8): UInt8` ~ main).shouldReport(DiagnosticCode.NativeSymbolMismatch, At("b", 1));
+    auto message = analyzed(`native("abs") def a(x: Int32): Int32
+native("abs") def b(x: Float): Float` ~ main).onlyMessage(DiagnosticCode.NativeSymbolMismatch);
+    assert(message.canFind("`b` binds the C symbol `abs` as `(Float) -> Float`"));
+    assert(message.canFind("`main.a` at "));
+    // A different number of parameters, and a result that never returns, differ too.
+    analyzed(`native("f") def a(x: Int): Int
+native("f") def b(x: Int, y: Int): Int` ~ main).shouldReport(DiagnosticCode.NativeSymbolMismatch, At("b", 1));
+    analyzed(`native("f") def a(): Unit
+native("f") def b(): Never` ~ main).shouldReport(DiagnosticCode.NativeSymbolMismatch, At("b", 1));
+    // Across modules, including the standard library's: `lang.time` binds the runtime's `silver_nowNanos`.
+    auto lib = ["lib.ag": "module lib\nnative(\"abs\") def a(x: Int8): Int8"];
+    analyzed("import lib\nnative(\"abs\") def b(x: Int32): Int32" ~ main, lib)
+        .shouldReport(DiagnosticCode.NativeSymbolMismatch, At("b", 1));
+    analyzed("import std.time\nnative(\"silver_nowNanos\") def now(): Int32" ~ main)
+        .shouldReport(DiagnosticCode.NativeSymbolMismatch, At("now", 1));
+    analyzed("import std.time\nnative(\"silver_nowNanos\") def now(): Int" ~ main).shouldHaveNoDiagnostics();
+}
+
 @("two natives of one name need different symbols")
 unittest
 {

@@ -1,0 +1,2 @@
+--package natives=packages_fixtures/natives
+--uses natives

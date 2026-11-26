@@ -172,6 +172,8 @@ enum DiagnosticCode : string
     /// An arithmetic operator function whose parameters are all built-in numbers, which the
     /// operator does itself.
     InvalidOperatorFunction = "T0056",
+    /// Two natives that bind one C symbol with signatures C passes differently.
+    NativeSymbolMismatch = "T0057",
 
     /// A runtime failure nothing has classified yet.
     RuntimeError = "R0001",
