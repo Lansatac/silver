@@ -1614,6 +1614,44 @@ unittest
     assert(options.canFind("ray=" ~ buildPath(directory, "ray", "r.dll")), options.to!string);
 }
 
+@("two packages tested in one run that never share a program can each give the same library")
+unittest
+{
+    enum table = "\n[native.num." ~ hostPlatform ~ "]\nload = \"num.dll\"\n";
+    auto directory = makeTree("project-natives-tested", [
+        "silver.toml": "name = \"ws\"\nsource = \"src\"\n\n[[package]]\npath = \"a\"\n\n[[package]]\npath = \"b\"\n",
+        "src/": "",
+        "a/silver.toml": "name = \"a\"\nsource = \"src\"\n" ~ table,
+        "a/src/": "",
+        "a/num.dll": "",
+        "b/silver.toml": "name = \"b\"\nsource = \"src\"\n" ~ table,
+        "b/src/": "",
+        "b/num.dll": "",
+    ]);
+    scope (exit) rmdirRecurse(directory);
+
+    // Neither uses the other, so no program holds both, and each alone is fine.
+    project(buildPath(directory, "a", "silver.toml"));
+    project(buildPath(directory, "b", "silver.toml"));
+    TestRun run;
+    Mistake mistake;
+    assert(readTestRun(buildPath(directory, "silver.toml"), directory, run, mistake), formatMistake(mistake));
+}
+
+@("a [native] table's library is a name that `native library` can give and an option can carry")
+unittest
+{
+    auto directory = makeTree("project-natives-names", ["num.dll": ""]);
+    scope (exit) rmdirRecurse(directory);
+    foreach (library; [`""`, `"a=b"`])
+    {
+        PackageFile file;
+        Mistake mistake;
+        assert(!checkPackageFile(buildPath(directory, packageFileName), "name = \"g\"\n[native." ~ library ~ "."
+            ~ hostPlatform ~ "]\nload = \"num.dll\"", file, mistake), "no mistake for the library " ~ library);
+    }
+}
+
 @("a package's name has the segments a module's name has, wherever a silver.toml writes one")
 unittest
 {
