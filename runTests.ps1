@@ -1,5 +1,6 @@
 # Runs every package's tests, then the root's. Extra arguments go to each package's test command.
 # Conformance runs each compiled program optimized as well; SILVER_CONFORMANCE_UNOPTIMIZED=1 skips that.
+# $env:SILVER_CONFORMANCE_CASES = "glob,glob" limits conformance to the cases whose name (or directory/name) matches.
 # Packages are named relative to this directory (`:sema`, not `silver:sema`): dub can resolve a
 # qualified name to another checkout of the package, such as a git worktree.
 #

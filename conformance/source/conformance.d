@@ -207,10 +207,56 @@ version (unittest)
         return null;
     }
 
-    /// Every `*.ag` in `directory` under conformance/ with its `.expected` output, sorted by name.
+    /// The case filter from `SILVER_CONFORMANCE_CASES`, or none: comma-separated globs, each matched
+    /// against a case's name (`list-sum`) and against its directory and name (`panics/index-*`).
+    string[] caseFilter()
+    {
+        import std.algorithm : splitter;
+
+        return environment.get("SILVER_CONFORMANCE_CASES", "").splitter(',').map!(p => p.strip).filter!(p => p.length > 0).array;
+    }
+
+    bool selected(string directory, string name, const string[] filter)
+    {
+        import std.path : globMatch;
+
+        return filter.length == 0 || filter.canFind!(pattern => globMatch(name, pattern) || globMatch(directory ~ "/" ~ name, pattern));
+    }
+
+    /// The names of the `*.ag` cases in `directory` under conformance/, without companion test files.
+    string[] caseNames(string directory)
+    {
+        string[] names;
+        foreach (entry; dirEntries(buildPath(conformanceDirectory, directory), "*.ag", SpanMode.shallow))
+        {
+            // Loaded with the case it's the companion test file of.
+            if (!isCompanionFile(entry.name)) names ~= baseName(entry.name).stripExtension;
+        }
+        return names;
+    }
+
+    /// With a filter set, each of its patterns has to select a case somewhere, so a misspelled one
+    /// fails instead of running nothing and passing.
+    void checkFilterMatches(const string[] filter)
+    {
+        foreach (pattern; filter)
+        {
+            bool found;
+            foreach (directory; ["tests", "panics", "errors", "rejected", "testing"])
+            {
+                found = found || caseNames(directory).canFind!(name => selected(directory, name, [pattern]));
+            }
+            assert(found, "SILVER_CONFORMANCE_CASES: no case matches `" ~ pattern ~ "`");
+        }
+    }
+
+    /// Every `*.ag` in `directory` under conformance/ with its `.expected` output, sorted by name,
+    /// only those `SILVER_CONFORMANCE_CASES` selects when it's set.
     Case[] casesIn(string directory)
     {
         cLibrariesBuilt();
+        auto filter = caseFilter;
+        checkFilterMatches(filter);
         auto casesDirectory = buildPath(conformanceDirectory, directory);
         Case[] result;
         foreach (entry; dirEntries(casesDirectory, "*.ag", SpanMode.shallow))
@@ -218,6 +264,7 @@ version (unittest)
             // Loaded with the case it's the companion test file of.
             if (isCompanionFile(entry.name)) continue;
             auto name = baseName(entry.name).stripExtension;
+            if (!selected(directory, name, filter)) continue;
             auto expectedPath = buildPath(casesDirectory, name ~ ".expected");
             assert(exists(expectedPath), "Missing expected output file for " ~ entry.name);
             auto panicPath = buildPath(casesDirectory, name ~ ".panic");
@@ -229,7 +276,7 @@ version (unittest)
             result ~= Case(name, entry.name, readText(expectedPath).normalizeNewlines, panicMessage, errorMessage,
                 exists(inputPath) ? inputPath : null, exists(argumentsPath) ? argumentsIn(argumentsPath) : null);
         }
-        assert(result.length > 0, "No conformance .ag files were found in " ~ directory);
+        assert(result.length > 0 || filter.length > 0, "No conformance .ag files were found in " ~ directory);
         return result.sort!((a, b) => a.name < b.name).release;
     }
 
@@ -951,6 +998,8 @@ version (unittest)
     {
         // `stdlib/` holds the companion tests, which ship with it; `conformance/stdlib/` holds suites that
         // test it from outside, as `json_suite.ag` does.
+        // A case filter is for the cases above, so it leaves these out.
+        if (caseFilter.length > 0) return null;
         auto files = testFiles(standardLibraryPath()) ~ testFiles(buildPath(conformanceDirectory, "stdlib"));
         auto packages = Packages(withStandardLibrary([]));
         auto runs = files.map!(file => runFile(file, packages, backend, workDirectory, optimization)).array;
@@ -962,6 +1011,7 @@ version (unittest)
     {
         Build build;
         if (!findBuild("standard library's compiled tests", optimization, build)) return;
+        if (caseFilter.length > 0) return;
         auto workDirectory = workDirectoryFor("stdlib", optimization);
         auto problems = runStandardLibrary(TestBackend.both, workDirectory, optimization);
         finish(problems is null ? null : described("standard library tests", optimization)
