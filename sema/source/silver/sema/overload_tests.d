@@ -684,6 +684,20 @@ unittest
         .shouldHaveNoDiagnostics();
 }
 
+@("an overloaded name used as a value that matches only an overload and its reported duplicate reports just the duplicate")
+unittest
+{
+    analyzedWith("", "    def f(x: Int): Int => 1
+    def f(y: Int): Int => 2
+    val g: (Int) -> Int = f
+    printl(g(1))")
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+    analyzedWith("def f(x: Int): Int => 1
+def f(y: Int): Int => 2", "    val g: (Int) -> Int = f
+    printl(g(1))")
+        .shouldReport(DiagnosticCode.DuplicateOverload, At("f", 2));
+}
+
 @("a nested def of a name an enclosing block has already declared is shadowing, not an overload")
 unittest
 {
