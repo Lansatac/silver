@@ -23,6 +23,7 @@ package final class Declarer
         _typing = typing;
         _resolutions = resolutions;
         _collector = collector;
+        _types.sumMembers = &membersOf;
     }
 
     package TypeTable _types;

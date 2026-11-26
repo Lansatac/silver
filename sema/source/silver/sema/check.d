@@ -201,6 +201,20 @@ private final class TypeChecker
             }
         }
 
+        // Before any error list is built, which leaves a member out beside the sum that holds it.
+        foreach (mod; programModules)
+        {
+            foreach (decl; mod.declarations)
+            {
+                decl.kind.match!(
+                    (const TypeDecl t) {
+                        if (t.members.length > 0) _declarer.declareSum(t);
+                    },
+                    (_) {},
+                );
+            }
+        }
+
         foreach (mod; programModules)
         {
             foreach (decl; mod.declarations)
@@ -210,7 +224,7 @@ private final class TypeChecker
                         _declarer.declareSignature(f);
                     },
                     (const TypeDecl decl) {
-                        _declarer.declareConstructor(decl);
+                        if (decl.members.length == 0) _declarer.declareConstructor(decl);
                     },
                     (const ConstDecl c) {
                         declareConstant(c);
@@ -2915,14 +2929,13 @@ private final class TypeChecker
     }
 
     /// The errors `a` and `b` together, in the one form they're listed in: when one takes in the
-    /// other, that one, and otherwise a list of each type once, leaving out a member of a declared
-    /// sum that's listed too.
+    /// other, that one, and otherwise the list of both, which `errorList` leaves each type once in
+    /// and without a member of a declared sum that's listed too.
     private Type mergedErrors(Type a, Type b)
     {
         if (errorFits(b, a)) return a;
         if (errorFits(a, b)) return b;
-        auto all = _types.listed(a) ~ _types.listed(b);
-        return _types.errorList(all.filter!(m => !all.any!(t => t != m && _declarer.membersOf(t).canFind(m))).array);
+        return _types.errorList(_types.listed(a) ~ _types.listed(b));
     }
 
     /// A hole takes whatever `print` does, so its type needs no check of its own.

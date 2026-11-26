@@ -1,0 +1,53 @@
+// An error list leaves out a member beside the sum that holds it, however the list was built:
+// written, substituted for type parameters, or passed through several generic layers.
+
+type Bad(n: Int)
+type Empty
+type ParseError = :Bad | :Empty
+type Other(s: String)
+type Outer = :ParseError | :Other
+
+def pick<E, F>(c: Bool, x: Int ! E, y: Int ! F): Int ! E | F => if c => x else y
+
+def viaOne<E, F>(c: Bool, x: Int ! E, y: Int ! F): Int ! E | F => pick(c, x, y)
+def viaTwo<E, F>(c: Bool, x: Int ! E, y: Int ! F): Int ! F | E => viaOne(c, x, y)
+
+def parseFails(): Int ! ParseError => Error(Bad(1))
+def badFails(): Int ! Bad => Error(Bad(2))
+def emptyFails(): Int ! ParseError => Error(Empty)
+
+def written(r: Int ! ParseError | Bad): String => match r {
+    Ok(v) => "ok {v}"
+    Error(Bad(n)) => "bad {n}"
+    Error(Empty) => "empty"
+}
+
+def route(r: Int ! ParseError | Bad): String => match r {
+    Ok(v) => "ok {v}"
+    Error(Bad(n)) => "bad {n}"
+    Error(_) => "other"
+}
+
+def nested(r: Int ! Outer | ParseError | Other): String => match r {
+    Ok(v) => "ok {v}"
+    Error(e: ParseError) => "parse {e}"
+    Error(Other(s)) => "other {s}"
+}
+
+def main(): Unit {
+    printl(route(pick(true, parseFails(), badFails())))
+    printl(route(pick(false, parseFails(), badFails())))
+    printl(route(pick(true, emptyFails(), badFails())))
+    printl(route(pick(true, badFails(), parseFails())))
+    printl(route(viaTwo(true, parseFails(), badFails())))
+    printl(route(viaTwo(false, parseFails(), badFails())))
+    printl(written(viaOne(false, emptyFails(), badFails())))
+    printl(written(parseFails()))
+    printl(written(badFails()))
+    printl(written(Ok(3)))
+    val o: Int ! Outer = Error(Other("x"))
+    printl(nested(o))
+    val pe: ParseError = Empty
+    val p: Int ! Outer = Error(pe)
+    printl(nested(p))
+}

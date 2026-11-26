@@ -187,6 +187,19 @@ unittest
     shape(table, list).should.equal("ErrorList/2");
 }
 
+@("TypeTable leaves a member out of an error list that holds the sum it belongs to")
+unittest
+{
+    auto table = new TypeTable;
+    auto sum = table.int_;
+    table.sumMembers = (Type t) => t == sum ? [table.string_, table.bool_] : null;
+
+    assert(table.errorList([sum, table.string_]) == sum);
+    assert(table.errorList([table.bool_, sum, table.string_]) == sum);
+    assert(table.listed(table.errorList([table.char_, table.string_, sum])).length == 2);
+    assert(table.errorList([table.string_, table.char_]) != table.char_);
+}
+
 @("TypeTable describes an error union as it's written, with parentheses where one would parse otherwise")
 unittest
 {

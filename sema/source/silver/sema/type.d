@@ -78,12 +78,18 @@ final class TypeTable
         return registerTypeData(TypeData(ErrorUnionData(success, error)));
     }
 
+    /// What a declared sum can be, set by whoever knows the declarations, so that `errorList` can
+    /// leave out a member beside the sum that holds it.
+    const(Type)[] delegate(Type) sumMembers;
+
     /// The error list of `members`, which is its one member when there's only one. A member that's
-    /// a list itself, as a type parameter can become, contributes its own members, and order and
-    /// repeats don't matter.
+    /// a list itself, as a type parameter can become, contributes its own members, order and
+    /// repeats don't matter, and a member of a declared sum that's listed too is left out, so
+    /// however a list was built it has one form.
     Type errorList(const(Type)[] members)
     {
-        import std.algorithm : sort, uniq;
+        import std.algorithm : canFind, filter, sort, uniq;
+        import std.algorithm : anyOf = any;
 
         Type[] flat;
         foreach (member; members)
@@ -91,6 +97,11 @@ final class TypeTable
             flat ~= listed(member);
         }
         auto sorted = std.array.array(flat.sort!((a, b) => a.index < b.index).uniq);
+        if (sumMembers !is null && sorted.length > 1)
+        {
+            auto listedTypes = sorted;
+            sorted = std.array.array(listedTypes.filter!(m => !listedTypes.anyOf!(t => t != m && sumMembers(t).canFind(m))));
+        }
         if (sorted.length == 1) return sorted[0];
         return registerTypeData(TypeData(ErrorListData(sorted.idup)));
     }
