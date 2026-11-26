@@ -12,21 +12,28 @@
 module silver.runtime.memory;
 
 import core.exception : OutOfMemoryError;
-import core.gc.gcinterface : GC;
 import core.internal.gc.impl.conservative.gc : ConservativeGC, Gcx;
+import core.internal.gc.proxy : gc_getProxy, gc_init_nothrow;
 static import core.memory;
 import core.stdc.string : memset;
-import silver.runtime.panic : outOfMemory, panic;
+import silver.runtime.panic : outOfMemory, panic, silver_panic;
 import silver.runtime.registers : SavedRegisters, silver_save_registers;
 
 alias BlkAttr = core.memory.GC.BlkAttr;
 alias BlkInfo = core.memory.GC.BlkInfo;
 
-private extern (C) void gc_init_nothrow() nothrow;
-private extern (C) GC gc_getProxy() nothrow @nogc;
+// This calls druntime's internals, and leaves out the lock because of how they behave in this version,
+// so a new one needs the argument in "One thread, no collector lock" in `notes/runtime.md` checked again.
+static assert(__VERSION__ == 2113, "druntime changed: re-read ConservativeGC.qalloc, mallocNoSync, "
+    ~ "addrOfNoSync and Gcx.fullcollect against collectable and blockOf, and the argument in "
+    ~ "notes/runtime.md, before raising this");
 
 /// druntime's collector itself, which its entry points call with the lock held.
 private __gshared Gcx* heap;
+
+/// Set while `heap` is allocating. druntime's entry points refuse a finalizer that allocates during
+/// a collection, and going around them loses that check, so this keeps it.
+private __gshared bool allocating;
 
 /// Starts the collector, which druntime otherwise does at its first use, and finds it. It runs before
 /// anything is allocated through here.
@@ -47,8 +54,11 @@ BlkInfo collectable(size_t size, uint attributes) nothrow
     silver_save_registers(&saved);
     try
     {
+        if (allocating) silver_panic(null, "allocated while the collector was busy");
+        allocating = true;
         BlkInfo block;
         block.base = heap.alloc(size, block.size, attributes, null);
+        allocating = false;
         if (block.base is null) outOfMemory();
         // As `GC.qalloc` does: what the caller won't write mustn't look like pointers to the scan.
         if (!(attributes & BlkAttr.NO_SCAN)) memset(block.base + size, 0, block.size - size);
@@ -57,6 +67,7 @@ BlkInfo collectable(size_t size, uint attributes) nothrow
     }
     catch (OutOfMemoryError)
     {
+        allocating = false;
         outOfMemory();
     }
 }
