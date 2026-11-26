@@ -5,6 +5,8 @@
 /// the compiler, which is given the facts.
 module silver.frontend.project;
 
+import silver.frontend.git : Want, Wanted;
+import silver.frontend.lock : lockCode;
 import silver.frontend.toml;
 
 /// The name of a package file.
@@ -59,8 +61,30 @@ enum ProjectCode : string
     PackageOptionGiven = "F0036",
     /// An entry with a `name`, `source` or `uses` whose directory has a package file of its own.
     DescribesItself = "F0037",
-    /// A key of a remote package, which isn't built.
+    /// What isn't built of remote packages: `version`, and `test = true` on one.
     RemotePackage = "F0038",
+    /// `source` or `uses` on a remote entry.
+    RemoteField = "F0039",
+    /// Two of `tag`, `branch` and `rev`, or an empty one.
+    RemoteWant = "F0040",
+    /// A `rev` that isn't a full hash.
+    ShortRev = "F0041",
+    /// A `git` of a kind silver doesn't fetch from.
+    RemoteSource = "F0042",
+    /// A repository holding a symbolic link, or a path that can't be written the same everywhere.
+    Unfetchable = "F0043",
+    /// A remote entry whose `name` isn't the name the package's own file gives it.
+    NameMismatch = "F0044",
+    /// Two entries for one name that reach different commits or directories.
+    RemoteConflict = "F0045",
+    /// git couldn't fetch, isn't there, or the cache can't be written.
+    FetchFailed = "F0046",
+    /// A tree in the cache whose hash isn't the lock's.
+    HashMismatch = "F0047",
+    /// A `path` entry of a remote package outside its repository.
+    OutsideRepository = "F0048",
+    /// A mistake in what `silver.lock` says.
+    BadLock = lockCode,
     /// An absolute path in a `[native.<library>.<platform>]` table.
     AbsoluteNativePath = "F0050",
     /// A file a `[native.<library>.<platform>]` table names for this platform that isn't there.
@@ -147,6 +171,23 @@ struct Listed
     bool test;
 }
 
+/// A `[[package]]` entry with a `git`: a package fetched from a repository.
+struct Remote
+{
+    Named name;
+    /// As written.
+    string git;
+    Span gitSpan;
+    /// For a directory on this machine, that directory, absolute; null for a URL.
+    string directory;
+    /// The package's directory inside the repository, normalized with `/`, or null for its root.
+    string path;
+    Span pathSpan;
+    Wanted wanted;
+    /// The `[[package]]` header, or the inline table.
+    Span span;
+}
+
 /// What a package file says, checked.
 struct PackageFile
 {
@@ -160,6 +201,7 @@ struct PackageFile
     Described[] described;
     Listed[] listed;
     NativeTable[] natives;
+    Remote[] remotes;
 }
 
 /// The facts the compiler is given about one package.
@@ -244,15 +286,185 @@ bool checkPackageFile(string file, string text, out PackageFile result, out Mist
     return true;
 }
 
-/// Reads the project whose package file is `file`, and every package file its packages lead to.
-bool readProject(string file, out Project project, out Mistake mistake)
+/// Reads the project whose package file is `file`, and every package file its packages lead to,
+/// fetching the remote packages they use with `remotes`. With none given, the lock beside `file` is
+/// written once the project is read; the caller of one given writes it, with `Remotes.finish`.
+bool readProject(string file, out Project project, out Mistake mistake, Remotes remotes = null)
 {
     PackageFile root;
     if (!readPackageFile(file, root, mistake)) return false;
     auto reader = ProjectReader();
+    reader.remotes = remotes is null ? new Remotes(root.file) : remotes;
     if (!reader.add(root, mistake)) return false;
+    if (remotes is null && !reader.remotes.finish(mistake)) return false;
     project = Project(root.file, reader.packages, reader.natives);
     return true;
+}
+
+/// The remote packages one run reaches, from the package file it starts from: what the lock beside
+/// that file says, and what's taken, so that the lock is written once, when everything is read.
+final class Remotes
+{
+    import silver.frontend.git : Tree;
+    import silver.frontend.lock : Locked;
+
+    /// The lock, beside the starting package file.
+    string lockFile;
+    /// Says what's being fetched, as it starts.
+    void delegate(string) say;
+
+    private Locked[] locked;
+    private bool lockRead;
+    private bool lockThere;
+    private Locked[] taken;
+    /// The directory of each of `taken`'s files.
+    private string[] trees;
+
+    this(string startingFile, void delegate(string) say = null)
+    {
+        import silver.frontend.lock : lockFileName;
+        import std.path : buildPath, dirName;
+        import std.stdio : stderr;
+
+        lockFile = buildPath(dirName(startingFile), lockFileName);
+        this.say = say !is null ? say : (string line) { stderr.writeln(line); };
+    }
+
+    /// The directory the files of the commit that `remote`, an entry of `from`, takes are in, and the
+    /// commit: the lock's when it has the entry as written, else the one its tag or branch is at now.
+    bool checkout(const ref PackageFile from, const ref Remote remote, out string files, out string commit,
+        out Mistake mistake)
+    {
+        import silver.frontend.git : cacheDirectory, cached, fetch, Failure, Problem, resolve;
+        import silver.frontend.lock : sameEntry;
+        import std.path : dirName;
+
+        bool fail(string code, string message)
+        {
+            mistake = Mistake(from.file, code, remote.gitSpan, message);
+            return false;
+        }
+        if (!readLock(mistake)) return false;
+        auto wanted = Locked(remote.name.name, remote.directory is null ? remote.git
+            : written(remote.directory, dirName(lockFile)), remote.path, remote.wanted);
+        foreach (k, t; taken)
+        {
+            if (!sameEntry(t, wanted)) continue;
+            files = trees[k];
+            commit = t.commit;
+            return true;
+        }
+        const(Locked)* lock;
+        foreach (ref l; locked)
+        {
+            if (sameEntry(l, wanted)) lock = &l;
+        }
+        auto cache = cacheDirectory();
+        if (cache is null)
+        {
+            return fail(ProjectCode.FetchFailed, "There's nowhere to keep remote packages: neither HOME nor "
+                ~ "XDG_CACHE_HOME is set, so set SILVER_CACHE to a directory for them");
+        }
+        auto url = remote.directory is null ? remote.git : remote.directory;
+        auto what = quoted(remote.name.name);
+        Failure failure;
+        bool failed()
+        {
+            return fail(failure.problem == Problem.unfetchable ? ProjectCode.Unfetchable : ProjectCode.FetchFailed,
+                failure.problem == Problem.cache ? failure.message : what ~ " can't be fetched"
+                ~ (failure.problem == Problem.noGit ? ", since " : ": ") ~ failure.message);
+        }
+        if (lock !is null) commit = lock.commit;
+        else if (remote.wanted.want == Want.rev) commit = remote.wanted.name;
+        else if (!resolve(url, remote.wanted, commit, failure)) return failed();
+        Tree tree;
+        if (!cached(cache, commit, tree, failure))
+        {
+            if (failure.message !is null) return failed();
+            say("Fetching " ~ remote.name.name ~ " from " ~ remote.git ~ wantedText(remote.wanted) ~ ", commit " ~ commit);
+            if (!fetch(cache, url, remote.wanted, commit, tree, failure)) return failed();
+        }
+        if (lock !is null && tree.hash != lock.hash)
+        {
+            return fail(ProjectCode.HashMismatch, "The files of " ~ what ~ " at commit " ~ commit ~ ", in "
+                ~ dirName(tree.directory) ~ ", have the hash " ~ tree.hash ~ ", and " ~ lockFile ~ " says "
+                ~ lock.hash ~ ": the cache or the lock has been changed. Deleting that directory has the commit "
+                ~ "fetched again, and if its hash still differs, the lock's is wrong");
+        }
+        wanted.commit = commit;
+        wanted.hash = tree.hash;
+        taken ~= wanted;
+        trees ~= tree.directory;
+        files = tree.directory;
+        return true;
+    }
+
+    /// Writes the lock with every entry taken, sorted, unless it already says that, and with none when
+    /// nothing is remote, only if there's a lock to empty.
+    bool finish(out Mistake mistake)
+    {
+        import silver.frontend.lock : lockText, tidied;
+        import std.conv : to;
+        import std.file : remove, rename, write;
+        import std.process : thisProcessID;
+
+        if (!readLock(mistake)) return false;
+        auto now = tidied(taken);
+        if (lockThere ? now == tidied(locked) : now.length == 0) return true;
+        auto temporary = lockFile ~ "." ~ thisProcessID.to!string ~ ".tmp";
+        try
+        {
+            write(temporary, lockText(now));
+            rename(temporary, lockFile);
+        }
+        catch (Exception e)
+        {
+            try remove(temporary);
+            catch (Exception) {}
+            mistake = Mistake(lockFile, ProjectCode.BadLock, Span(), "The lock can't be written: " ~ e.msg);
+            return false;
+        }
+        locked = now;
+        lockThere = true;
+        return true;
+    }
+
+    private bool readLock(out Mistake mistake)
+    {
+        import silver.frontend.lock : parseLock = readLock;
+        import std.file : exists, read;
+
+        if (lockRead) return true;
+        lockRead = true;
+        if (!exists(lockFile)) return true;
+        lockThere = true;
+        string text, code, message;
+        Span span;
+        try text = cast(string) read(lockFile);
+        catch (Exception e)
+        {
+            mistake = Mistake(lockFile, ProjectCode.Unreadable, Span(), "The lock can't be read: " ~ e.msg);
+            return false;
+        }
+        if (!parseLock(text, locked, code, span, message))
+        {
+            mistake = Mistake(lockFile, code, span, message);
+            return false;
+        }
+        return true;
+    }
+}
+
+/// What `wanted` takes, as an entry writes it after a comma, or nothing for the default branch.
+string wantedText(Wanted wanted)
+{
+    final switch (wanted.want)
+    {
+        case Want.defaultBranch: return "";
+        case Want.tag: return ", tag = \"" ~ wanted.name ~ "\"";
+        case Want.branch: return ", branch = \"" ~ wanted.name ~ "\"";
+        case Want.rev: return ", rev = \"" ~ wanted.name ~ "\"";
+    }
 }
 
 /// The packages whose files with no `module` line `path` may hold: the one
@@ -393,7 +605,7 @@ struct TestRun
 /// under it, unless its `test` is false, as `silver test` would test it from there; and when
 /// `directory` is the file's own, each listed package outside it whose `test` is true, alone. A
 /// directory under it with a package file that isn't named this way is another project, left out.
-bool readTestRun(string file, string directory, out TestRun run, out Mistake mistake)
+bool readTestRun(string file, string directory, out TestRun run, out Mistake mistake, Remotes remotes = null)
 {
     import std.algorithm : any, canFind, filter;
     import std.array : array;
@@ -402,6 +614,7 @@ bool readTestRun(string file, string directory, out TestRun run, out Mistake mis
     PackageFile root;
     if (!readPackageFile(file, root, mistake)) return false;
     auto reader = ProjectReader();
+    reader.remotes = remotes is null ? new Remotes(root.file) : remotes;
     if (!reader.add(root, mistake)) return false;
     directory = buildNormalizedPath(absolutePath(directory));
 
@@ -484,6 +697,7 @@ bool readTestRun(string file, string directory, out TestRun run, out Mistake mis
         if (!reached) run.tested ~= c.directory;
     }
     run.skipped = run.skipped.filter!(s => run.tested.any!(t => within(s, t) && !samePath(s, t))).array;
+    if (remotes is null && !reader.remotes.finish(mistake)) return false;
     run.project = Project(root.file, reader.packages, reader.natives);
     return true;
 }
@@ -795,6 +1009,9 @@ struct Checker
         // The first of `name`, `source` and `uses`, which only a package described here has.
         const(Entry)* describing;
         const(Value)* test;
+        const(Entry)* git;
+        // The `tag`, `branch` and `rev` given.
+        const(Entry)*[] wants;
         foreach (ref field; value.table.entries)
         {
             switch (field.key)
@@ -818,20 +1035,32 @@ struct Checker
                     test = &field.value;
                     break;
                 case "version":
+                    return fail(ProjectCode.RemotePackage, field.keySpan, "`version` asks for a package from the "
+                        ~ "registry, which isn't built yet; a remote package can come from git, with its `name`, `git` "
+                        ~ "and a `tag`, `branch` or `rev`");
                 case "git":
+                    if (!str(field.value, "`git`")) return false;
+                    git = &field;
+                    break;
                 case "branch":
                 case "rev":
                 case "tag":
-                    return fail(ProjectCode.RemotePackage, field.keySpan, "`" ~ field.key ~ "` says where a remote "
-                        ~ "package comes from, and remote packages aren't supported yet: a package is described here, "
-                        ~ "with its `name` and `path`, or is listed by its `path` alone when it has a silver.toml of its "
-                        ~ "own");
+                    if (!str(field.value, "`" ~ field.key ~ "`")) return false;
+                    wants ~= &field;
+                    break;
                 default:
                     return unknown(field, "A `[[package]]` entry has `path`, and `name`, `source` and `uses` when it "
-                        ~ "describes the package, and `test`");
+                        ~ "describes the package, and `test`; a remote one has `name`, `git`, `path` and one of `tag`, "
+                        ~ "`branch` and `rev`");
             }
             if (describing is null && (field.key == "name" || field.key == "source" || field.key == "uses"))
                 describing = &field;
+        }
+        if (git !is null) return remote(value, d.name, *git, path, wants, test);
+        if (wants.length > 0)
+        {
+            return fail(ProjectCode.MissingField, wants[0].keySpan, "`" ~ wants[0].key ~ "` says what to take from a "
+                ~ "git repository, and this entry gives no `git`, the repository");
         }
         if (path is null)
         {
@@ -874,6 +1103,86 @@ struct Checker
         else if (!directory(*source, "A package's `source`", d.directory, "the package's directory", true, d.modules))
             return false;
         result.described ~= d;
+        return true;
+    }
+
+    /// Checks a remote entry, one with a `git`: its `name`, the repository, its `path` inside it, and
+    /// what it takes.
+    bool remote(const ref Value value, Named named, const ref Entry git, const(Value)* path,
+        const(Entry)*[] wants, const(Value)* test)
+    {
+        import silver.frontend.git : fullHash, SourceKind, sourceKind;
+        import std.path : buildNormalizedPath, isAbsolute;
+
+        foreach (ref field; value.table.entries)
+        {
+            if (field.key == "source" || field.key == "uses")
+            {
+                return fail(ProjectCode.RemoteField, field.keySpan, "`" ~ field.key ~ "` isn't given for a remote "
+                    ~ "package: its own silver.toml says " ~ (field.key == "source" ? "where its modules are"
+                    : "what it uses"));
+            }
+        }
+        if (named.name is null)
+        {
+            return fail(ProjectCode.MissingField, value.span, "A remote package has to give its `name`, the name its "
+                ~ "own silver.toml gives it, as name = \"cards\"");
+        }
+        if (test !is null && test.boolean)
+        {
+            return fail(ProjectCode.RemotePackage, test.span, "Testing a remote package isn't built yet, so its entry "
+                ~ "can't say `test = true`");
+        }
+        Remote r = Remote(named, git.value.text, git.value.span);
+        r.span = value.span;
+        immutable kind = sourceKind(r.git);
+        if (r.git.length == 0 || kind == SourceKind.other)
+        {
+            return fail(ProjectCode.RemoteSource, git.value.span, "`git` is an https:// or ssh:// URL, git's "
+                ~ "user@host:path, or a directory on this machine, and \"" ~ r.git ~ "\" is none of those");
+        }
+        if (kind == SourceKind.local) r.directory = directoryFrom(result.directory, r.git);
+        if (wants.length > 1)
+        {
+            return fail(ProjectCode.RemoteWant, wants[1].keySpan, "A remote package takes at most one of `tag`, `branch` "
+                ~ "and `rev`, and this entry gives `" ~ wants[0].key ~ "` and `" ~ wants[1].key ~ "`");
+        }
+        if (wants.length == 1)
+        {
+            auto w = wants[0];
+            r.wanted = Wanted(w.key == "tag" ? Want.tag : w.key == "branch" ? Want.branch : Want.rev, w.value.text);
+            if (r.wanted.want == Want.rev && !fullHash(w.value.text))
+            {
+                return fail(ProjectCode.ShortRev, w.value.span, "A `rev` is a commit's full hash, its 40 characters as "
+                    ~ "git writes it in lowercase, so that the commit can be fetched alone");
+            }
+            if (w.value.text.length == 0)
+            {
+                return fail(ProjectCode.RemoteWant, w.value.span, "`" ~ w.key ~ "` names a " ~ w.key ~ ", and \"\" "
+                    ~ "names none; with no `tag`, `branch` or `rev` the repository's default branch is taken");
+            }
+        }
+        if (path !is null)
+        {
+            if (path.text.length == 0)
+            {
+                return fail(ProjectCode.EmptyDirectory, path.span, "A remote package's `path` names a directory in its "
+                    ~ "repository, and \"\" names none; leave it out to mean the repository's root");
+            }
+            auto inside = buildNormalizedPath(path.text);
+            import std.array : replace;
+            import std.algorithm : startsWith;
+
+            inside = inside.replace("\\", "/");
+            if (isAbsolute(path.text) || inside == ".." || inside.startsWith("../"))
+            {
+                return fail(ProjectCode.OutsideDirectory, path.span, "A remote package's `path` is a directory inside "
+                    ~ "its repository, and \"" ~ path.text ~ "\" isn't");
+            }
+            if (inside != ".") r.path = inside;
+            r.pathSpan = path.span;
+        }
+        result.remotes ~= r;
         return true;
     }
 
@@ -1036,6 +1345,25 @@ struct Checker
                 }
             }
         }
+        foreach (k, ref r; result.remotes)
+        {
+            string line;
+            if (r.name.name == result.name.name) line = "is this file's own";
+            foreach (ref d; result.described)
+            {
+                if (d.name.name == r.name.name) line = "is described here, at line " ~ decimal(d.name.span.line);
+            }
+            foreach (ref earlier; result.remotes[0 .. k])
+            {
+                if (earlier.name.name == r.name.name)
+                    line = "has another remote entry here, at line " ~ decimal(earlier.name.span.line);
+            }
+            if (line !is null)
+            {
+                return fail(ProjectCode.DuplicateName, r.name.span, "The package " ~ quoted(r.name.name) ~ " " ~ line
+                    ~ ", and a program holds one package of a name");
+            }
+        }
         return true;
     }
 }
@@ -1052,6 +1380,10 @@ struct Reached
     /// Where its modules are, absolute, or null when it only describes others.
     string modules;
     Span pathSpan;
+    /// Whether `file` is in the entry's directory, rather than above it.
+    bool ownFile;
+    /// For a fetched package, the entry that fetched it and the commit, for a message; else null.
+    string fetched;
 }
 
 /// Follows the packages of files, file by file, reading each file once.
@@ -1060,6 +1392,12 @@ struct ProjectReader
     Facts[] packages;
     PackageFile[] read;
     NativeTable[] natives;
+    /// What fetches remote packages, and records them for the lock.
+    Remotes remotes;
+    /// The directories fetched packages' repositories are in.
+    string[] checkouts;
+    /// For each package fetched, the entry that fetched it, for a message about another that disagrees.
+    string[string] fetchedBy;
 
     const(Facts)* named(string name) const
     {
@@ -1121,11 +1459,10 @@ struct ProjectReader
     }
 
     /// Reads the file behind each of `file.listed`: the package file in its directory, or else the nearest
-    /// above it, which has to describe a package there.
+    /// above it, which has to describe a package there. A fetched package's entries stay in its repository.
     bool resolve(const ref PackageFile file, out Reached[] reached, out Mistake mistake)
     {
-        import std.path : buildPath, dirName;
-
+        immutable confine = checkoutHolding(file.file);
         foreach (ref entry; file.listed)
         {
             bool fail(string code, string message)
@@ -1133,62 +1470,13 @@ struct ProjectReader
                 mistake = Mistake(file.file, code, entry.pathSpan, message);
                 return false;
             }
-            auto describing = buildPath(entry.directory, packageFileName);
-            immutable own = isFile(describing);
-            if (!own)
+            if (confine !is null && !within(entry.directory, confine))
             {
-                auto above = dirName(entry.directory);
-                describing = above == entry.directory ? null : findPackageFile(above);
+                return fail(ProjectCode.OutsideRepository, "This package was fetched, and its entries stay in its "
+                    ~ "repository, " ~ confine ~ ", which " ~ entry.directory ~ " is outside");
             }
-            // What to write instead: a package with no file of its own can only be described here when it's
-            // under this file's directory.
-            immutable noName = within(entry.directory, file.directory)
-                ? "; a package with no silver.toml of its own is described here, with its `name` as well as its `path`"
-                : "; a package outside this file's directory has a silver.toml of its own, so give that directory one, "
-                    ~ "or give the `path` of a package another file describes";
-            if (describing is null)
-            {
-                return fail(ProjectCode.NoPackageThere, entry.directory ~ " has no " ~ packageFileName ~ ", and no "
-                    ~ "directory above it has one" ~ noName);
-            }
-            PackageFile there;
-            if (!fileAt(describing, there, mistake))
-            {
-                if (mistake.file !is null && samePath(mistake.file, describing))
-                    mistake.message ~= "\nIt was read because " ~ file.file ~ " lists it, at line "
-                        ~ decimal(entry.pathSpan.line);
-                return false;
-            }
-            Reached r = Reached(null, there.file, entry.directory, null, entry.pathSpan);
-            if (own)
-            {
-                r.name = there.name.name;
-                r.modules = there.modules;
-            }
-            else
-            {
-                foreach (ref d; there.described)
-                {
-                    if (samePath(d.directory, entry.directory))
-                    {
-                        r.name = d.name.name;
-                        r.modules = d.modules;
-                    }
-                }
-                if (r.name is null)
-                {
-                    // A directory of modules below a package's own: that package is what's meant.
-                    string holder;
-                    foreach (p; placedOf(there))
-                    {
-                        if (within(entry.directory, p.modules)) holder = p.home;
-                    }
-                    return fail(ProjectCode.NoPackageThere, entry.directory ~ " has no " ~ packageFileName ~ ", and "
-                        ~ describing ~ ", the nearest above it, describes no package there" ~ (holder is null ? noName
-                        : "; it holds modules of the package at " ~ holder ~ ", which is listed as `path = \""
-                        ~ written(holder, file.directory) ~ "\"`"));
-                }
-            }
+            Reached r;
+            if (!locate(file, entry.directory, entry.pathSpan, confine, r, mistake)) return false;
             string clash;
             if (r.name == file.name.name) clash = file.directory;
             foreach (ref d; file.described)
@@ -1202,16 +1490,158 @@ struct ProjectReader
             if (clash !is null)
             {
                 return fail(ProjectCode.TwoDirectories, quoted(r.name) ~ " is at " ~ entry.directory ~ ", described in "
-                    ~ there.file ~ ", and this file already has a package of that name, at " ~ clash);
+                    ~ r.file ~ ", and this file already has a package of that name, at " ~ clash);
             }
-            if (auto inside = nested(own ? placedOf(there) : [Placed(r.name, r.modules, r.home)], placedOf(file)))
+            foreach (ref remote; file.remotes)
+            {
+                if (remote.name.name == r.name)
+                {
+                    return fail(ProjectCode.DuplicateName, quoted(r.name) ~ " is at " ~ entry.directory ~ ", described "
+                        ~ "in " ~ r.file ~ ", and this file has a remote entry of that name too, at line "
+                        ~ decimal(remote.name.span.line));
+                }
+            }
+            auto there = fileOf(r);
+            if (auto inside = nested(r.ownFile ? placedOf(there) : [Placed(r.name, r.modules, r.home)], placedOf(file)))
                 return fail(ProjectCode.InsidePackage, inside);
             reached ~= r;
         }
         return true;
     }
 
-    /// Finds each of `uses`, listed in `file`, whose entries with only a `path` lead to `listed`.
+    /// The package file at `r.file`, which `locate` has read.
+    PackageFile fileOf(const ref Reached r)
+    {
+        PackageFile found;
+        Mistake mistake;
+        immutable ok = fileAt(r.file, found, mistake);
+        assert(ok);
+        return found;
+    }
+
+    /// The checkout of a fetched package that holds `path`, or null.
+    string checkoutHolding(string path) const
+    {
+        foreach (c; checkouts)
+        {
+            if (within(path, c)) return c;
+        }
+        return null;
+    }
+
+    /// What the package at `directory` is, which an entry of `file` at `span` names: the package file in
+    /// that directory, or else the nearest above it, which has to describe a package there. With a
+    /// `confine`, the directory is in that fetched repository, and no file above it counts.
+    bool locate(const ref PackageFile file, string directory, Span span, string confine, out Reached r,
+        out Mistake mistake)
+    {
+        import std.path : buildPath, dirName;
+
+        bool fail(string code, string message)
+        {
+            mistake = Mistake(file.file, code, span, message);
+            return false;
+        }
+        immutable fetched = confine !is null && !within(file.file, confine);
+        auto describing = buildPath(directory, packageFileName);
+        immutable own = isFile(describing);
+        if (!own)
+        {
+            auto above = dirName(directory);
+            describing = above == directory || (confine !is null && !within(above, confine)) ? null
+                : findPackageFile(above);
+            if (describing !is null && confine !is null && !within(describing, confine)) describing = null;
+        }
+        // What to write instead: a package with no file of its own can only be described here when it's
+        // under this file's directory.
+        immutable noName = fetched
+            ? "; a remote entry's `path` is the directory of a package in its repository, one with a silver.toml of "
+                ~ "its own or described by the nearest above it"
+            : within(directory, file.directory)
+            ? "; a package with no silver.toml of its own is described here, with its `name` as well as its `path`"
+            : "; a package outside this file's directory has a silver.toml of its own, so give that directory one, "
+                ~ "or give the `path` of a package another file describes";
+        if (describing is null)
+        {
+            return fail(ProjectCode.NoPackageThere, directory ~ " has no " ~ packageFileName ~ ", and no "
+                ~ "directory above it" ~ (confine is null ? "" : " in its repository") ~ " has one" ~ noName);
+        }
+        PackageFile there;
+        if (!fileAt(describing, there, mistake))
+        {
+            if (mistake.file !is null && samePath(mistake.file, describing))
+                mistake.message ~= "\nIt was read because " ~ file.file ~ " lists it, at line " ~ decimal(span.line);
+            return false;
+        }
+        r = Reached(null, there.file, directory, null, span, own);
+        if (own)
+        {
+            r.name = there.name.name;
+            r.modules = there.modules;
+            return true;
+        }
+        foreach (ref d; there.described)
+        {
+            if (samePath(d.directory, directory))
+            {
+                r.name = d.name.name;
+                r.modules = d.modules;
+            }
+        }
+        if (r.name !is null) return true;
+        // A directory of modules below a package's own: that package is what's meant.
+        string holder;
+        foreach (p; placedOf(there))
+        {
+            if (within(directory, p.modules)) holder = p.home;
+        }
+        return fail(ProjectCode.NoPackageThere, directory ~ " has no " ~ packageFileName ~ ", and " ~ describing
+            ~ ", the nearest above it, describes no package there" ~ (holder is null ? noName
+            : "; it holds modules of the package at " ~ holder ~ ", which is listed as `path = \""
+            ~ written(holder, fetched ? confine : file.directory) ~ "\"`"));
+    }
+
+    /// Fetches the package that `remote`, an entry of `file`, names, and finds it as `locate` does in its
+    /// repository's files.
+    bool fetch(const ref PackageFile file, const ref Remote remote, out Reached r, out Mistake mistake)
+    {
+        import std.path : buildNormalizedPath;
+
+        bool fail(string code, Span span, string message)
+        {
+            mistake = Mistake(file.file, code, span, message);
+            return false;
+        }
+        assert(remotes !is null, "a project with remote packages is read with a Remotes");
+        string files, commit;
+        if (!remotes.checkout(file, remote, files, commit, mistake)) return false;
+        auto home = remote.path is null ? files : buildNormalizedPath(files, remote.path);
+        immutable span = remote.path is null ? remote.gitSpan : remote.pathSpan;
+        auto source = remote.git ~ " at commit " ~ commit;
+        if (!isDirectory(home))
+        {
+            return fail(ProjectCode.NotADirectory, span, "The repository " ~ source ~ " has no directory " ~ remote.path
+                ~ ", the entry's `path`");
+        }
+        bool known;
+        foreach (c; checkouts) known = known || samePath(c, files);
+        if (!known) checkouts ~= files;
+        if (!locate(file, home, span, files, r, mistake)) return false;
+        if (r.name != remote.name.name)
+        {
+            return fail(ProjectCode.NameMismatch, remote.name.span, "This entry names the package " ~ quoted(remote.name.name)
+                ~ ", and " ~ r.file ~ ", which describes the package at " ~ (remote.path is null ? "the root of "
+                ~ source : remote.path ~ " in " ~ source) ~ ", names it " ~ quoted(r.name) ~ "; a remote entry's `name` is "
+                ~ "the name the package's own file gives it, which is the name its modules are under");
+        }
+        r.fetched = "the entry at line " ~ decimal(remote.span.line) ~ " of " ~ file.file ~ ", git = "
+            ~ quotedString(remote.git) ~ (remote.path is null ? "" : ", path = " ~ quotedString(remote.path))
+            ~ wantedText(remote.wanted) ~ ", which is commit " ~ commit;
+        return true;
+    }
+
+    /// Finds each of `uses`, listed in `file`, whose entries with only a `path` lead to `listed`, and
+    /// whose remote entries are fetched.
     bool follow(const ref PackageFile file, const Named[] uses, const Reached[] listed, out Mistake mistake)
     {
         foreach (used; uses)
@@ -1228,11 +1658,24 @@ struct ProjectReader
             {
                 import std.array : join;
 
+                bool fetched;
+                foreach (ref remote; file.remotes)
+                {
+                    if (remote.name.name != used.name) continue;
+                    Reached r;
+                    if (!fetch(file, remote, r, mistake)) return false;
+                    if (!reach(file, r, mistake)) return false;
+                    fetched = true;
+                    break;
+                }
+                if (fetched) continue;
+
                 // The names the entries do give, so that a name written differently shows.
                 string[] given;
                 foreach (ref d; file.described) given ~= quoted(d.name.name) ~ " at line " ~ decimal(d.name.span.line);
                 foreach (ref r; listed)
                     given ~= quoted(r.name) ~ " at line " ~ decimal(r.pathSpan.line) ~ ", as its silver.toml names it";
+                foreach (ref r; file.remotes) given ~= quoted(r.name.name) ~ " at line " ~ decimal(r.name.span.line);
                 mistake = Mistake(file.file, ProjectCode.UnknownPackage, used.span, "No `[[package]]` entry here "
                     ~ "gives " ~ quoted(used.name) ~ (given.length > 0 ? ": the entries give " ~ given.join("; ")
                         ~ ", and a name in `uses` is the name a package's own file gives it"
@@ -1271,6 +1714,14 @@ struct ProjectReader
         if (auto known = named(entry.name))
         {
             if (samePath(known.home, entry.home)) return true;
+            auto before = known.name in fetchedBy;
+            if (entry.fetched !is null || before !is null)
+            {
+                return fail(ProjectCode.RemoteConflict, quoted(entry.name) ~ " is reached by " ~ (entry.fetched is null
+                    ? "the entry here, at " ~ entry.home : entry.fetched) ~ ", and already by " ~ (before is null
+                    ? "the package at " ~ known.home ~ ", described in " ~ known.file : *before) ~ "; a program holds "
+                    ~ "one package of a name, from one source at one commit");
+            }
             return fail(ProjectCode.TwoDirectories, quoted(entry.name) ~ " is at " ~ entry.home ~ " here, and already "
                 ~ "at " ~ known.home ~ ", described in " ~ known.file);
         }
@@ -1282,7 +1733,15 @@ struct ProjectReader
             if (p.directory !is null) known ~= Placed(p.name, p.directory, p.home);
         }
         if (auto inside = nested(placedOf(found), known)) return fail(ProjectCode.InsidePackage, inside);
-        return add(found, mistake);
+        if (entry.fetched !is null) fetchedBy[entry.name] = entry.fetched;
+        if (!add(found, mistake))
+        {
+            if (entry.fetched !is null && mistake.file !is null && !samePath(mistake.file, from.file)
+                && checkoutHolding(mistake.file) !is null)
+                mistake.message ~= "\nIt was fetched for " ~ entry.fetched;
+            return false;
+        }
+        return true;
     }
 }
 
@@ -1518,12 +1977,11 @@ unittest
     m("name = \"g\"\nuses = [\"a\"]\n[[package]]\nname = \"g.x\"\npath = \"lib\"", ProjectCode.UsesWithoutModules, 2, 1);
     m("name = \"g\"\nuses = [geometry]", TomlCode.BadValue, 2, 9);
     auto remote = m("name = \"g\"\n[[package]]\nname = \"geo\"\nversion = \"1.2\"", ProjectCode.RemotePackage, 4, 1);
-    assert(remote.message == "`version` says where a remote package comes from, and remote packages aren't supported "
-        ~ "yet: a package is described here, with its `name` and `path`, or is listed by its `path` alone when it has a "
-        ~ "silver.toml of its own", remote.message);
-    m("name = \"g\"\n[[package]]\ngit = \"https://example.com/geo\"\nbranch = \"main\"", ProjectCode.RemotePackage, 3, 1);
-    m("name = \"g\"\n[[package]]\npath = \"lib\"\nrev = \"abc\"", ProjectCode.RemotePackage, 4, 1);
-    m("name = \"g\"\n[[package]]\ngit = \"https://example.com/geo\"\ntag = \"v1\"", ProjectCode.RemotePackage, 3, 1);
+    assert(remote.message == "`version` asks for a package from the registry, which isn't built yet; a remote package "
+        ~ "can come from git, with its `name`, `git` and a `tag`, `branch` or `rev`", remote.message);
+    m("name = \"g\"\n[[package]]\nname = \"geo\"\ngit = \"https://example.com/geo\"\nversion = \"1\"",
+        ProjectCode.RemotePackage, 5, 1);
+    m("name = \"g\"\n[[package]]\npath = \"lib\"\nrev = \"abc\"", ProjectCode.MissingField, 4, 1);
     auto ownEntry = m("name = \"g\"\n[[package]]\npath = \".\"", ProjectCode.ListsOwnPackage, 3, 8);
     assert(ownEntry.message == directory ~ " is this file's own directory, so the package there is this file's own, "
         ~ "'g', and needs no entry", ownEntry.message);
@@ -1651,6 +2109,50 @@ unittest
         assert(!checkPackageFile(buildPath(directory, packageFileName), "name = \"g\"\n[native." ~ library ~ "."
             ~ hostPlatform ~ "]\nload = \"num.dll\"", file, mistake), "no mistake for the library " ~ library);
     }
+}
+
+@("a remote entry gives a name, a repository, a path in it and what to take, and each mistake in one is located")
+unittest
+{
+    import std.path : dirName;
+
+    auto directory = makeTree("frontend-remote-entries", null);
+    scope (exit) rmdirRecurse(directory);
+    enum head = "name = \"g\"\n[[package]]\nname = \"cards\"\n";
+    auto file = checked(directory, head ~ "git = \"https://example.com/cards\"\npath = \"lib/./cards\"\ntag = \"v1\"\n"
+        ~ "test = false\n");
+    assert(file.remotes.length == 1 && file.listed.length == 0 && file.described.length == 0);
+    assert(file.remotes[0].name.name == "cards" && file.remotes[0].git == "https://example.com/cards");
+    assert(file.remotes[0].path == "lib/cards" && file.remotes[0].wanted == Wanted(Want.tag, "v1"));
+    assert(file.remotes[0].directory is null && file.remotes[0].span.line == 2);
+    auto local = checked(directory, head ~ "git = \"../repo\"\npath = \".\"\n").remotes[0];
+    assert(local.directory == buildPath(dirName(directory), "repo") && local.path is null);
+    assert(local.wanted == Wanted(Want.defaultBranch));
+    enum hash = "4f1c2a9e0b7d3c58e6a1f92d4b0c7e3a5d8f1b26";
+    assert(checked(directory, head ~ "git = \"git@host:a/cards\"\nrev = \"" ~ hash ~ "\"\n").remotes[0].wanted
+        == Wanted(Want.rev, hash));
+    checked(directory, head ~ "git = \"ssh://git@host/a/cards\"\nbranch = \"main\"\n");
+
+    void m(string text, string code, uint line, uint column) => cast(void) mistakeIn(directory, text, code, line, column);
+    enum git = "git = \"https://example.com/cards\"\n";
+    m(head ~ git ~ "source = \"src\"\n", ProjectCode.RemoteField, 5, 1);
+    m(head ~ "uses = [\"x\"]\n" ~ git, ProjectCode.RemoteField, 4, 1);
+    m(head ~ git ~ "tag = \"v1\"\nbranch = \"main\"\n", ProjectCode.RemoteWant, 6, 1);
+    m(head ~ git ~ "tag = \"\"\n", ProjectCode.RemoteWant, 5, 7);
+    m(head ~ git ~ "rev = \"4f1c2a9\"\n", ProjectCode.ShortRev, 5, 7);
+    m(head ~ git ~ "rev = \"" ~ hash[0 .. $ - 1] ~ "G\"\n", ProjectCode.ShortRev, 5, 7);
+    foreach (refused; ["http://example.com/cards", "file:///srv/cards", "git://host/cards", "ext::sh -c x", ""])
+        m(head ~ "git = \"" ~ refused ~ "\"\n", ProjectCode.RemoteSource, 4, 7);
+    m(head ~ git ~ "path = \"../x\"\n", ProjectCode.OutsideDirectory, 5, 8);
+    m(head ~ git ~ "path = \"a/../../x\"\n", ProjectCode.OutsideDirectory, 5, 8);
+    m(head ~ git ~ "path = \"/x\"\n", ProjectCode.OutsideDirectory, 5, 8);
+    m(head ~ git ~ "path = \"\"\n", ProjectCode.EmptyDirectory, 5, 8);
+    m(head ~ git ~ "test = true\n", ProjectCode.RemotePackage, 5, 8);
+    m("name = \"g\"\n[[package]]\n" ~ git, ProjectCode.MissingField, 2, 1);
+    m("name = \"g\"\n[[package]]\npath = \"lib\"\ntag = \"v1\"\n", ProjectCode.MissingField, 4, 1);
+    m(head ~ git ~ "[[package]]\nname = \"cards\"\ngit = \"https://example.com/other\"\n", ProjectCode.DuplicateName, 6, 8);
+    m("name = \"cards\"\n[[package]]\nname = \"cards\"\n" ~ git, ProjectCode.DuplicateName, 3, 8);
+    m(head ~ git ~ "flavour = \"x\"\n", ProjectCode.UnknownField, 5, 1);
 }
 
 @("a package's name has the segments a module's name has, wherever a silver.toml writes one")

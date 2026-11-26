@@ -45,7 +45,7 @@ Silver is designed to be compiled a package at a time. A package compiles to its
 | [Native functions](language/native.md) | Calling C functions, native types, libraries, intrinsics | Partial: only x86-64's conventions are built |
 | [Programs](language/programs.md) | `main`, arguments, exit status, standard output and error | Implemented |
 | [Testing](language/testing.md) | `test`, `assert`, `expect`, `panics`, the test runner | Partial: no library hooks |
-| [The `silver` tool](silver.md) | Its commands, `silver.toml`, finding a project, scripts | Partial: no remote packages; a script in no project can't say it needs a package |
+| [The `silver` tool](silver.md) | Its commands, `silver.toml`, finding a project, scripts | Partial: remote packages from git and `silver.lock`, but no `silver update`, `--locked`, `--offline` or registry; a script in no project can't say it needs a package |
 
 ## Standard library
 

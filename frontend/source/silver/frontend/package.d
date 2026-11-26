@@ -417,8 +417,8 @@ string searchStart(string file, string workingDirectory)
 Plan plan(string compiler, Request request, string workingDirectory)
 {
     import silver.frontend.project : compilerOptions, Facts, findPackageFile, formatMistake, homedAt, homesOf, Mistake,
-        programHomes, Project, ProjectCode, projectsUnder, readProject, readTestRun, scriptHomes, shownFrom, startedIn,
-        TestRun;
+        programHomes, Project, ProjectCode, projectsUnder, readProject, readTestRun, Remotes, scriptHomes, shownFrom,
+        startedIn, TestRun;
     import silver.frontend.toml : Span;
     import std.algorithm : canFind, map;
     import std.array : array;
@@ -502,7 +502,9 @@ Plan plan(string compiler, Request request, string workingDirectory)
             }
             Project project;
             Mistake mistake;
-            if (!readProject(result.projectFile, project, mistake))
+            // One for both readings of a test run, so the lock is written once, with what either reached.
+            auto remotes = new Remotes(result.projectFile);
+            if (!readProject(result.projectFile, project, mistake, remotes))
             {
                 result.mistake = formatMistake(mistake, shown);
                 return result;
@@ -520,6 +522,11 @@ Plan plan(string compiler, Request request, string workingDirectory)
                 }
                 if (!testing)
                 {
+                    if (!remotes.finish(mistake))
+                    {
+                        result.mistake = formatMistake(mistake, shown);
+                        return result;
+                    }
                     result.program = at.name;
                     result.arguments = [compiler, request.command, fromSilver] ~ compilerOptions(project, shown,
                         programHomes(project, *at)) ~ ["--program", at.name] ~ arguments.options
@@ -533,7 +540,7 @@ Plan plan(string compiler, Request request, string workingDirectory)
             if (testing && isDirectory(named))
             {
                 TestRun run;
-                if (!readTestRun(result.projectFile, named, run, mistake))
+                if (!readTestRun(result.projectFile, named, run, mistake, remotes))
                 {
                     result.mistake = formatMistake(mistake, shown);
                     return result;
@@ -556,6 +563,11 @@ Plan plan(string compiler, Request request, string workingDirectory)
                 facts = compilerOptions(project, shown, homes);
             }
             result.scriptHomes = homes.map!(h => h.name.idup).array;
+            if (!remotes.finish(mistake))
+            {
+                result.mistake = formatMistake(mistake, shown);
+                return result;
+            }
         }
         else if (testing && named !is null && isDirectory(named))
         {
