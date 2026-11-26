@@ -1937,9 +1937,9 @@ private final class TypeChecker
                 : synthesizeBinary(expr.id, binary, expr.span, ctx),
             (const CallExpr call) => expr.id in _resolutions.conversions
                 ? synthesizeConversion(call, _declarer.builtinType(_resolutions.conversions[expr.id]), expr.span, ctx)
-                : deriveOrder(expr, call, placeExpect(expr, isMethodCall(expr.id, *call.callee)
+                : refusePrintedError(expr, call, deriveOrder(expr, call, placeExpect(expr, isMethodCall(expr.id, *call.callee)
                     ? synthesizeMethodCall(expr, call, ctx, expected)
-                    : synthesizeCall(expr, call, ctx, expected), ctx.site), ctx.site),
+                    : synthesizeCall(expr, call, ctx, expected), ctx.site), ctx.site)),
             (const MemberAccess member) => synthesizeMemberAccess(expr, member, ctx, expected),
             (const WithExpr with_) => synthesizeWith(expr, with_, ctx),
             (const WhileExpr while_) => synthesizeWhile(while_, expr.span, ctx),
@@ -2567,6 +2567,19 @@ private final class TypeChecker
                 "`expect` records a failure for a test to report, so it can only be used in one; `assert` stops the program instead");
         }
         if (isIntrinsic(*callee, "panics")) reportPanicsOutsideTest(call.span);
+        return type;
+    }
+
+    /// `call`, of type `type`, reported if it prints a bare `Error(e)`, which says nothing of the
+    /// success side, as `val x = Error(e)` is.
+    private Type refusePrintedError(const Expr expr, const CallExpr call, Type type)
+    {
+        auto callee = calleeOf(expr.id);
+        if (callee is null) callee = expr.id in _typing.methodCallees;
+        if (callee is null || !isIntrinsic(*callee, "print") && !isIntrinsic(*callee, "printl")) return type;
+        auto given = call.callee.id in _typing.typeArguments;
+        if (given is null || (*given).length != 1 || !_types.isFailure((*given)[0])) return type;
+        _declarer.reportUntypedErrorUnion("Error", call.args.length > 0 ? call.args[0].span : expr.span);
         return type;
     }
 
@@ -5879,11 +5892,7 @@ private final class TypeChecker
         auto data = _types[actual];
         _types[declared].match!(
             (const TypeParamData p) {
-                // `Error(e)` alone doesn't say what the success side is, so it can't be a type argument.
-                if (params.canFind!(q => q.id == p.param) && p.param !in bound && !unwrapped && !_types.isFailure(actual))
-                {
-                    bound[p.param] = actual;
-                }
+                if (params.canFind!(q => q.id == p.param) && p.param !in bound && !unwrapped) bound[p.param] = actual;
             },
             (const OptionData o) => bindParams(o.inner, _types.isOption(actual) ? _types.optionInner(actual)
                 : unwrapped ? _types.successOf(actual) : actual, params, bound),
@@ -6148,14 +6157,6 @@ private final class TypeChecker
         if (open())
         {
             auto before = params.filter!(p => p.id !in b.bound).array;
-            // A bare `Error` binds no parameter by itself, so a bare result it's passed for is the
-            // expected error union whole, which `bindExpected` would take apart.
-            if (_types.isParameter(result) && expected != Type.init && _types.isErrorUnion(expected)
-                && _types.errorOf(expected) != _types.error
-                && args.length.iota.any!(i => signature.params[i] == result && b.typed[i] != Type.init && _types.isFailure(b.typed[i])))
-            {
-                bindParams(result, expected, bindable(), b.bound);
-            }
             bindExpected(result, expected, bindable(), b.bound);
             b.fromExpected = before.filter!(p => p.id in b.bound).map!(p => cast() p.id).array;
         }
@@ -6375,7 +6376,6 @@ private final class TypeChecker
                 if (typed[i] == _types.none) _declarer.reportUntypedNone(args[i].span);
                 else if (typed[i] == _types.emptyArray) _declarer.reportUntypedEmptyArray(args[i].span);
                 else if (typed[i] == _types.emptyDictionary) _declarer.reportUntypedEmptyDictionary(args[i].span);
-                else if (_types.isFailure(typed[i])) _declarer.reportUntypedErrorUnion("Error", args[i].span);
                 else if (_types.mentionsError(typed[i]) || typed[i] == _types.never) continue;
                 else
                 {
