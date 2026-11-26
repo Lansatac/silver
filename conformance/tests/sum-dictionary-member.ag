@@ -1,0 +1,34 @@
+// A dictionary literal is checked against a sum's dictionary member as an array literal is against its array member.
+type J = :String | :Int | :Bool | :[J] | :[String: J]
+
+def show(j: J): String => match j {
+    s: String => "string {s}"
+    i: Int => "int {i}"
+    b: Bool => "bool {b}"
+    a: [J] => "array of {length(a)}"
+    d: [String: J] => "dictionary of {length(d)}"
+}
+def make(n: Int): J => ["k": n]
+def pick(c: Bool): J => if c { ["a": "b"] } else { [1, ["x": 2]] }
+
+def main(): Unit {
+    val a: J = [1, 2]
+    val b: J = ["d": "e"]
+    val c: [String: J] = ["c": ["d": "e"]]
+    val e: J = [:]
+    val n: [J] = [["a": 1], [1], ["b": ["c": true]]]
+    val o: J? = ["a": 1]
+    mutable val m: J = 1
+    m = ["z": 1]
+    printl(show(a))
+    printl(show(b))
+    printl(show(c["c"] ?? "none"))
+    printl(show(e))
+    printl(show(make(1)))
+    printl(show(pick(true)))
+    printl(show(pick(false)))
+    for x in n { printl(show(x)) }
+    printl(show(o ?? 1))
+    printl(show(m))
+    printl(c)
+}
