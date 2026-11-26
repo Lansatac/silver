@@ -394,6 +394,7 @@ unittest
 version (unittest)
 {
     import std.file : mkdirRecurse, rmdirRecurse, tempDir;
+    import std.uuid : randomUUID;
     import silver.ast : Package;
 
     /// The standard library, and `directory` as a test's unnamed package.
@@ -405,8 +406,7 @@ version (unittest)
     /// A fresh directory under the temp dir holding `files` (path to text). The caller removes it.
     private string testDirectory(string name, string[string] files)
     {
-        auto directory = buildPath(tempDir, "silver-runner-" ~ name);
-        if (exists(directory)) rmdirRecurse(directory);
+        auto directory = buildPath(tempDir, "silver-runner-" ~ name ~ "-" ~ randomUUID().toString());
         foreach (path, text; files)
         {
             mkdirRecurse(dirName(buildPath(directory, path)));

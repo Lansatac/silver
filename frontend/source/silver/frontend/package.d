@@ -807,9 +807,9 @@ version (unittest)
     {
         import std.file : mkdirRecurse, tempDir, write;
         import std.path : buildNormalizedPath;
+        import std.uuid : randomUUID;
 
-        auto directory = buildNormalizedPath(tempDir, "silver-" ~ name);
-        if (exists(directory)) removeTree(directory);
+        auto directory = buildNormalizedPath(tempDir, "silver-" ~ name ~ "-" ~ randomUUID().toString());
         mkdirRecurse(directory);
         foreach (path, text; files)
         {

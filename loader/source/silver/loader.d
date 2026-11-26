@@ -94,7 +94,9 @@ unittest
     import std.algorithm : canFind;
     import std.file : remove, tempDir, write;
 
-    auto file = buildPath(tempDir, "silver-loader-native-files.dll");
+    import std.uuid : randomUUID;
+
+    auto file = buildPath(tempDir, "silver-loader-native-files-" ~ randomUUID().toString() ~ ".dll");
     write(file, "");
     scope (exit) remove(file);
     Packages packages;
@@ -1537,17 +1539,14 @@ version (unittest)
     import std.array : array;
     import std.file : mkdirRecurse, rmdirRecurse, tempDir, write;
     import std.string : indexOf;
+    import std.uuid : randomUUID;
     import silver.syntax.parse : ParseException;
 
     /// Makes a fresh directory under the temp dir holding `files` (path to text),
     /// and returns its path. The caller removes it.
     string makeModuleDirectory(string name, string[string] files)
     {
-        auto directory = buildPath(tempDir(), "silver-loader-" ~ name);
-        if (exists(directory))
-        {
-            rmdirRecurse(directory);
-        }
+        auto directory = buildPath(tempDir(), "silver-loader-" ~ name ~ "-" ~ randomUUID().toString());
         mkdirRecurse(directory);
         foreach (fileName, text; files)
         {

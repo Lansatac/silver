@@ -529,7 +529,8 @@ Ran withBadArgument(string[] words, string workingDirectory)
         wstring wide;
         foreach (word; words) wide ~= escapeWindowsArgument(word).toUTF16 ~ " ";
         auto line = (wide ~ "caf"w ~ cast(wchar) 0xD800 ~ ".txt\0"w).dup;
-        auto outputPath = buildPath(tempDir, "silver-wide-output.txt");
+        import std.uuid : randomUUID;
+        auto outputPath = buildPath(tempDir, "silver-wide-output-" ~ randomUUID().toString() ~ ".txt");
         SECURITY_ATTRIBUTES inherit = {SECURITY_ATTRIBUTES.sizeof, null, TRUE};
         auto file = CreateFileW((outputPath.toUTF16 ~ "\0").ptr, GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL, null);

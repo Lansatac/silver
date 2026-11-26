@@ -639,7 +639,7 @@ final class Evaluator
     private Value evaluate(ref const Expr e, ref const Prim prim, Value[] frame)
     {
         if (prim.op == PrimOp.Concat) return concat(prim, frame);
-        if (prim.op == PrimOp.Append && prim.args[1].kind.has!ArrayLit)
+        if (prim.op == PrimOp.Append && prim.args[1].kind.typeIndex == tagOf!(ExprKind, ArrayLit))
         {
             return appendLiteral(prim, prim.args[1].kind.member!ArrayLit, frame);
         }

@@ -987,8 +987,8 @@ version (unittest)
     /// A fresh directory under the temp dir holding `files` (name to text). The caller removes it.
     private string testDirectory(string name, string[string] files)
     {
-        auto directory = buildPath(tempDir, "silver-driver-" ~ name);
-        if (directory.exists) rmdirRecurse(directory);
+        import std.uuid : randomUUID;
+        auto directory = buildPath(tempDir, "silver-driver-" ~ name ~ "-" ~ randomUUID().toString());
         mkdirRecurse(directory);
         foreach (file, text; files)
         {

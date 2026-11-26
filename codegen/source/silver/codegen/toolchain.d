@@ -421,8 +421,9 @@ unittest
 {
     import std.file : mkdirRecurse, readText, rmdirRecurse, tempDir, write;
 
-    auto directory = buildPath(tempDir, "silver-toolchain-beside");
-    if (exists(directory)) rmdirRecurse(directory);
+    import std.uuid : randomUUID;
+
+    auto directory = buildPath(tempDir, "silver-toolchain-beside-" ~ randomUUID().toString());
     mkdirRecurse(buildPath(directory, "vendor"));
     mkdirRecurse(buildPath(directory, "out"));
     scope (exit) rmdirRecurse(directory);
