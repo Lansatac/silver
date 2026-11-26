@@ -1,0 +1,10 @@
+// A written error list can't list a type beside a sum that holds it inside a type argument of a
+// sum's member, declared before the sum that holds the type.
+
+type Bad(n: Int)
+type Empty
+type Holder<T>(v: T)
+type Wrapped = :String | :Holder<Int ! ParseError | Bad>
+type ParseError = :Bad | :Empty
+
+def main(): Unit => ()
