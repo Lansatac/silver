@@ -363,6 +363,12 @@ version (linux)
         assert(sharedLibrariesOfScript(script) == ["/usr/lib/libc.so.6", "/lib64/ld-linux-x86-64.so.2"]);
         assert(sharedLibrariesOfScript(null) == []);
     }
+
+    @("a file that is neither ELF nor text names no libraries, and is no exception")
+    unittest
+    {
+        assert(sharedLibrariesOfScript("\xff\xfe\x00GROUP ( \xc3 )") == []);
+    }
 }
 
 /// The shared library `file`, loaded by the system's own search, or null. A library stays loaded.
