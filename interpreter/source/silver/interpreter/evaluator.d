@@ -639,6 +639,10 @@ final class Evaluator
     private Value evaluate(ref const Expr e, ref const Prim prim, Value[] frame)
     {
         if (prim.op == PrimOp.Concat) return concat(prim, frame);
+        if (prim.op == PrimOp.Append && prim.args[1].kind.has!ArrayLit)
+        {
+            return appendLiteral(prim, prim.args[1].kind.member!ArrayLit, frame);
+        }
         auto lhs = evaluate(prim.args[0], frame);
         if (lhs.has!Jump) return lhs;
         Value rhs;
@@ -650,6 +654,40 @@ final class Evaluator
         // Most arithmetic is on `Int`, and asking the table about a type costs a lookup.
         if (onNumbers[prim.op] && same(prim.args[0].type, _int)) return integerPrim!long(prim.op, lhs, rhs, e.span);
         return apply(e, prim, lhs, rhs);
+    }
+
+    /// `lhs ~= [a, b]`: the elements are appended to `lhs` with no array made of them first. As
+    /// compiled code does, `lhs` is evaluated first and then every element, so one that leaves
+    /// (`?`, `break`, `return`) appends nothing, and `xs ~= [xs[0]]` reads `xs` before it grows.
+    pragma(inline, false)
+    private Value appendLiteral(ref const Prim prim, ref const ArrayLit literal, Value[] frame)
+    {
+        auto lhs = evaluate(prim.args[0], frame);
+        if (lhs.has!Jump) return lhs;
+        Value only;
+        Value[] elements;
+        if (literal.elements.length == 1)
+        {
+            only = evaluate(literal.elements[0], frame);
+            if (only.has!Jump) return only;
+            elements = (&only)[0 .. 1];
+        }
+        else
+        {
+            auto jump = all(literal.elements, frame, elements);
+            if (jump.has!Jump) return jump;
+        }
+
+        auto types = _program.types;
+        if (lhs.has!string || lhs.as!ArrayValue.elements.length == 0 && types.arrayElement(prim.args[0].type) == types.uint8)
+        {
+            auto text = byteString(lhs);
+            foreach (element; elements) text ~= cast(char) element.as!long;
+            return Value(text);
+        }
+        auto held = lhs.as!ArrayValue.elements;
+        held ~= elements;
+        return Value(ArrayValue(held));
     }
 
     /// Whether `op` is arithmetic or a comparison, which `integerPrim` computes for an integer.

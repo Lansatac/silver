@@ -1,0 +1,82 @@
+// `xs ~= [a, b]` appends its elements in place: the array is read first, then the elements in
+// order, and the same on both backends however many there are.
+type Holder(items: [Int])
+
+def note(label: String, value: Int): Int {
+    printl("eval " ~ label)
+    value
+}
+
+def grow(mutable xs: [Int], n: Int): Unit {
+    xs ~= [n, length(xs)]
+}
+
+def main(): Unit {
+    // The array is read before the elements run, and its elements are read before it grows.
+    mutable val xs = [10]
+    xs ~= [xs[0]]
+    xs ~= [length(xs)]
+    xs ~= [xs[0], xs[1], length(xs)]
+    printl(xs)
+
+    // Order of evaluation.
+    mutable val order: [Int] = []
+    order ~= [note("a", 1), note("b", 2), note("c", 3)]
+    order ~= [note("d", 4)]
+    printl(order)
+
+    // Another name for the array does not see the append, and appending to it after copies.
+    mutable val base = [1, 2]
+    val kept = base
+    base ~= [3]
+    mutable val other = kept
+    other ~= [4]
+    printl(kept)
+    printl(base)
+    printl(other)
+
+    // Empty literals, and the first append onto an empty array.
+    mutable val empty: [Int] = []
+    empty ~= []
+    printl(length(empty))
+    empty ~= [1]
+    empty ~= []
+    printl(empty)
+
+    // Mutable parameters and fields as the target.
+    mutable val viaParam: [Int] = []
+    grow(mutable viaParam, 7)
+    grow(mutable viaParam, 8)
+    printl(viaParam)
+    mutable val holder = Holder([])
+    holder.items ~= [length(holder.items), 5]
+    holder.items ~= [holder.items[0] + 100]
+    printl(holder)
+
+    // Nested arrays, and elements that are promoted to the array's element type.
+    mutable val nested: [[Int]] = []
+    nested ~= [[1]]
+    nested ~= [nested[0], []]
+    printl(nested)
+    mutable val options: [Int?] = []
+    options ~= [3]
+    options ~= [None, 4]
+    printl(options)
+    mutable val bytes: [UInt8] = []
+    bytes ~= [1, 2]
+    bytes ~= [bytes[0] + 250]
+    printl(bytes)
+    mutable val wide: [Int64] = []
+    wide ~= [1, 2]
+    printl(wide)
+
+    // Many appends, one element each.
+    mutable val many: [Int] = []
+    mutable val i = 0
+    while i < 3000 {
+        many ~= [i]
+        i += 1
+    }
+    printl(length(many))
+    printl(many[2999] + many[0])
+}
