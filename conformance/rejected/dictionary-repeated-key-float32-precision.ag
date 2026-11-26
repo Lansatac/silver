@@ -1,0 +1,5 @@
+// Two Float32 keys that differ only past Float32 precision are one key.
+def main(): Unit {
+    val d: [Float32: String] = [1.0: "a", 1.00000001: "b"]
+    printl(d)
+}

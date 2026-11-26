@@ -1,0 +1,7 @@
+// Float keys that print alike at six digits but differ are different keys.
+def main(): Unit {
+    val d = [1.0000001: "a", 1.0: "b", 0.1: "c", 0.2: "d"]
+    printl(d.size)
+    val s: [Float32: String] = [1.0: "a", 1.0000002: "b", 0.0: "c", 1.5: "d"]
+    printl(s.size)
+}

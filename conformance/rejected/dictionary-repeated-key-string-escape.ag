@@ -1,0 +1,4 @@
+// A string written with an escape and without is one key.
+def main(): Unit {
+    printl(["a\u{41}": "x", "aA": "y"])
+}

@@ -2292,18 +2292,53 @@ private final class TypeChecker
 
     private void rejectRepeatedKeys(const MapLiteral literal)
     {
-        string[] seen;
+        bool[string] seen;
         foreach (key; literal.keys)
         {
             if (!isConstantKey(key)) continue;
-            auto written = printExpr(key);
-            if (seen.canFind(written))
+            auto value = keyValue(key, false);
+            if (value in seen)
             {
                 _collector.reportError(DiagnosticCode.RepeatedKey, key.span,
                     "This key is written twice in the dictionary, and one of the two can only be a mistake");
             }
-            else seen ~= written;
+            else seen[value] = true;
         }
+    }
+
+    /// The constant key `key` as a string that two keys share exactly when they are the same key at
+    /// runtime: a number as the key's type holds it (a `Float32` rounded to one, `-0.0` the same as
+    /// `0.0`, as `Float` keys are), not as it was written. `negated` is a minus that wraps it.
+    private string keyValue(const Expr key, bool negated)
+    {
+        import std.conv : to;
+        import std.format : format;
+        auto typed = key.id in _typing.exprTypes;
+        auto type = typed is null ? Type.init : *typed;
+        string floatKey(double value) { return format("f%016x", value == 0 ? 0UL : *cast(ulong*) &value); }
+        string float32Key(float value) { return format("s%08x", value == 0 ? 0U : *cast(uint*) &value); }
+        string number(double value, float single) { return type == _types.float32 ? float32Key(single) : floatKey(value); }
+        return key.kind.match!(
+            (const FloatLiteral f)
+            {
+                auto single = float32Of(f);
+                return negated ? number(-f.value, -single) : number(f.value, single);
+            },
+            (const IntLiteral i)
+            {
+                if (_types.isInteger(type) || type == Type.init)
+                    return negated && i.value != 0 ? "-" ~ i.value.to!string : i.value.to!string;
+                return negated ? number(-cast(double) i.value, -cast(float) i.value)
+                    : number(cast(double) i.value, cast(float) i.value);
+            },
+            (const UnaryExpr unary)
+            {
+                if (unary.op == UnaryOp.Minus) return keyValue(*unary.operand, !negated);
+                return format("(%s %s)", unary.op, keyValue(*unary.operand, false));
+            },
+            (const TupleLiteral tuple) => format("(tuple%-(%s,%))", tuple.elements.map!(e => keyValue(e, false))),
+            (_) => printExpr(key),
+        );
     }
 
     /// `x[i]`, or `x[a..b]`. An array's are built in, with the range of a slice part of it rather

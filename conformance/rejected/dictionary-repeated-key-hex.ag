@@ -1,0 +1,4 @@
+// An integer written in hex and in decimal is one key.
+def main(): Unit {
+    printl([0x10: "a", 16: "b"])
+}
