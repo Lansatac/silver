@@ -44,7 +44,7 @@ def f(x: Int): String     def f(x: Float): String
 f(1)                      // f(Int)
 
 def h(x: Int8): String    def h(x: Float): String
-h(1)                      // h(Int8): an integer type fits, so the floats aren't considered
+h(1)                      // h(Int8): both take it in one step, and an integer is read first
 
 def k(x: Float32): String def k(x: Float): String
 k(1)                      // k(Float), as k(1.0) is
@@ -56,7 +56,7 @@ type N = :Float32 | :Float
 val s: N = 1              // a Float, as 1.0 is
 ```
 
-Overload choice [counts steps](functions.md#overloading) first, so how a literal is read decides only between functions that fit a call equally well otherwise: with `m(x: Int8?)` and `m(x: Float)`, `m(1)` calls `m(Float)`, a step fewer than the option.
+Overload choice [counts steps](functions.md#overloading) first, so how a literal is read is the last tie-break, deciding only between functions that fit a call equally well otherwise: with `m(x: Int8?)` and `m(x: Float)`, `m(1)` calls `m(Float)`, a step fewer than the option. A type fits a literal by its type, not its value: `h(300)` calls `h(Int8)` and is then an error, since `300` doesn't fit in an `Int8`.
 
 An integer literal too large for every integer type is the float literal of its value where only a float fits it, so `val x: Float = 99999999999999999999` is `1e20`. Where an integer type fits, it's an integer, and too large.
 
@@ -183,3 +183,5 @@ Apart from the infinities and NaN, the text is a Float literal in Silver and a n
 - A `Float32` is a 32-bit `float` in compiled code. The interpreter holds it as the `double` it widens to, rounded to a `float` after every operation, so both compute in single precision.
 - Adaptation doesn't go through arithmetic yet. Only a literal by itself adapts, also in parentheses or negated, so `val x: UInt8 = 1 + 2` and `1 + 2 + small` are errors while `small + 1 + 2` works; `UInt8(1 + 2)` is the way to write it.
 - A literal arm of an `if` or `match` doesn't take the type of the other arms yet, so `if c => 1 else small` is an error unless a `UInt8` is expected of it.
+- Open, for a decision: a sum with `Int` and another integer member, as `type S = :Int8 | :Int`, takes an integer literal as neither, so `val s: S = 1` is an error, and with `m(x: S)` beside `m(x: Float)`, `m(1)` chooses `m(S)` (an integer is read first) and then fails. Whether such a sum should take it as its `Int`, as overloads `f(Int8)` and `f(Int)` already choose `f(Int)`, isn't decided.
+- Open, for a decision: whether a literal's value counts toward fitting. Today only its type does, so with `u(x: UInt8)` and `u(x: Float)`, `u(-1)` chooses `u(UInt8)` and fails because a `UInt8` can't be negative, and with `h(x: Int8)` and `h(x: Float)`, `h(300)` chooses `h(Int8)` and fails its range check, where reading the value would choose the `Float`.
