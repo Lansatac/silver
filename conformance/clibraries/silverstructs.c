@@ -59,6 +59,16 @@ EXPORT int32_t weighFlags(Flags f) { return f.on + f.off * 2 + f.count * 4; }
 EXPORT IntLong nextIntLong(IntLong v) { v.small += 1; v.large *= 2; return v; }
 EXPORT FloatDouble nextFloatDouble(FloatDouble v) { v.single += 1; v.wide *= 2; return v; }
 EXPORT Six nextSix(Six v) { v.a += 1; v.b *= 2; v.c -= 1; return v; }
+// The bytes of a Six as C sees them, padding included, and then the parameter scribbled over, as C may: Win64
+// passes it as the address of the caller's copy.
+EXPORT uint64_t sixBytesThenScribble(Six s)
+{
+    volatile unsigned char *bytes = (volatile unsigned char *)&s;
+    uint64_t seen = 0;
+    for (int i = 0; i < (int)sizeof s; i++) seen |= (uint64_t)bytes[i] << (8 * i);
+    for (int i = 0; i < (int)sizeof s; i++) bytes[i] = 0xAB;
+    return seen;
+}
 EXPORT Single halveSingle(Single v) { v.value /= 2; return v; }
 
 // Over 16 bytes: in memory both ways.

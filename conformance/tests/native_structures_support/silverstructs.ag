@@ -38,6 +38,7 @@ native def weighFlags(f: Flags): Int32
 native def nextIntLong(v: IntLong): IntLong
 native def nextFloatDouble(v: FloatDouble): FloatDouble
 native def nextSix(v: Six): Six
+native def sixBytesThenScribble(s: Six): UInt64
 native def halveSingle(v: Single): Single
 native def fiveFrom(start: Int32): Five
 native def weighFive(f: Five): Int64

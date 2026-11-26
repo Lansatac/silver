@@ -1,0 +1,7 @@
+// Each time a call is reached, C sees a structure's padding as zero, though C changed the copy it was
+// passed the time before.
+import native_structures_support.silverstructs
+
+def main(): Unit {
+    for i in 0..3 { printl(sixBytesThenScribble(Six(1, 2, 3))) }
+}
