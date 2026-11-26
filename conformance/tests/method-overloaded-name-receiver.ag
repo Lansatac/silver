@@ -1,0 +1,17 @@
+// An overloaded function's name as a receiver is the first argument, chosen by the parameter it's
+// passed for, as in the call with it first.
+def dbl(x: Int): Int => x * 2
+def dbl(x: String): String => x ~ x
+def ap(f: (Int) -> Int, x: Int): Int => f(x)
+def ap2(f: (String) -> String, x: String): String => f(x)
+
+def main(): Unit {
+    printl(ap(dbl, 4))
+    printl(dbl.ap(4))
+    printl(ap2(dbl, "x"))
+    printl(dbl.ap2("x"))
+    def tri(x: Int): Int => x * 3
+    def tri(x: String): String => x
+    printl(ap(tri, 2))
+    printl(tri.ap(2))
+}
