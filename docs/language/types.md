@@ -66,7 +66,7 @@ Most expressions have a type of their own: `n + 1`, `"a"`, `point.x` and `Point(
 
 - `None`, `[]`, `[:]`, a bare `Error(e)`, a marker that a generic sum owns, a lambda without its parameter types, and the name of a generic or overloaded function.
 - A number literal, which takes the type expected of it, and is an `Int` or a `Float` only when nothing is expected.
-- Parentheses, a block, an `if` or `match`, an array, dictionary or tuple literal and arithmetic, when the part that decides their type has none of its own. `[1, 2]` has none, and `[1, n]` with `n: UInt8` is a `[UInt8]`, since `n` decides it. A tuple has none when any of its parts has none. An arm that can't finish, because it ends in `return`, `break`, `continue` or `tail`, has no value to count, and a block's earlier statements don't count.
+- Parentheses, a block, an `if` or `match`, an array, dictionary or tuple literal, a range literal `a..b` and arithmetic, when the part that decides their type has none of its own. `[1, 2]` has none, and `[1, n]` with `n: UInt8` is a `[UInt8]`, since `n` decides it. A tuple has none when any of its parts has none. An arm that can't finish, because it ends in `return`, `break`, `continue` or `tail`, has no value to count, and a block's earlier statements don't count.
 - A call of a generic function or constructor, `Some(...)` and `Ok(...)` among them, when a type parameter in its result is reached by no argument that has a type of its own. That can be read off the signature:
 
   ```silver
@@ -82,6 +82,10 @@ Most expressions have a type of their own: `n + 1`, `"a"`, `point.x` and `Point(
   opt(1, None)    // none of its own: only the literals reach T
   Box([])         // none of its own
   ```
+
+  A type parameter that a [bound](interfaces.md#bounds) gives from one an argument reaches is reached too: in `conv<R: Range<T>, T>(r: R): [T]`, `r` reaches `R`, and `R`'s conformance says what `T` is.
+
+  A lambda has no type of its own, so a call whose result only a lambda decides has none either, as `map(xs, x => x + 1)` with `map<T, U>(xs: [T], f: (T) -> U): [U]`: nothing but the lambda reaches `U`.
 
 An expression is one or the other whatever surrounds it, and one with a type of its own is typed once, by itself. So a call of an overloaded function is chosen by its own arguments, never by the call it's an argument of.
 
@@ -110,7 +114,7 @@ val b: Int? = describe(n)    // saw 5
 
 Where the result's own shape can't be the option or error union that's expected, the layer is the promotion's: against `Box<Int>?`, a result of `Box<T>` gives `T = Int`.
 
-With nothing expected, a number literal is its default type, literals that have to share a type [take one together](numbers.md#literals), and an expression made of such parts is what they make it: `id(1)` is an `Int` and `[1, 2.5]` a `[Float]`. Anything else is an error that asks for the type to be written, as `val x = None` and `val b = Box([])` are.
+With nothing expected, such an expression is what its parts make it, by the rules each form has anyway. A number literal is its default type, and literals that have to share a type [take one together](numbers.md#literals). A `None` beside a value [makes an option of it](options.md), so `[1, None]` is an `[Int?]` and `if c => 1 else None` an `Int?`. A generic call binds its type parameters from what its arguments are with nothing expected, so `id(1)` is an `Int` and `opt(1, None)` an `Int?`, and a lambda's body gives its result once its parameter types are known, so `map(xs, x => x + 1)` is an `[Int]`. Only an expression with nothing to make it anything is an error, which asks for the type to be written: `None`, `[]`, `[None]`, `(1, None)`, `Box([])` and `none()` are, as in `val x = None`.
 
 How such an expression takes its turn among a generic function's arguments is under [Inference](generics.md#inference), how it's compared with each of several functions under [Overloading](functions.md#overloading), and what it does before a `.` under [Method-call syntax](functions.md#method-call-syntax).
 
