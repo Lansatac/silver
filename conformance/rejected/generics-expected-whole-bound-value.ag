@@ -1,0 +1,11 @@
+// A generic function used as a value takes its type arguments from the expected function type,
+// and a bound that fails on one says that's where it came from.
+interface Zero { def zero(of: Of<Self>): Self }
+def zero(of: Of<Int>): Int => 0
+def zeroOf<T: Zero>(): T => zero(Of<T>)
+conform Int: Zero
+
+def main(): Unit {
+    val f: () -> Int? = zeroOf
+    printl(f())
+}

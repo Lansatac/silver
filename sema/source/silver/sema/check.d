@@ -4758,6 +4758,10 @@ private final class TypeChecker
         Witness[] witnesses;
         /// Why the first bound that doesn't hold doesn't, worded to follow the function's name, or null.
         string failure;
+        /// The type parameter whose bound doesn't hold, when that's the failure, and where in
+        /// `failure` the type it's bound to is named.
+        Id!TypeParam failedParam;
+        size_t afterType;
         /// Whether it failed by going too deep.
         bool tooDeep;
         /// Whether a bound is still undecided: its type isn't known, or more than one function
@@ -5417,9 +5421,12 @@ private final class TypeChecker
                 {
                     auto wanted = Bound(goal.decl, declared.args.map!(a => inTermsOfOpen(a)).array);
                     auto hidden = _resolutions.hiddenParams.get(func, null).canFind!(p => p.id == slot.param);
-                    result.failure = (hidden ? "needs %2$s, and `%3$s` isn't one: %4$s" : "needs `%1$s` to be %2$s, and `%3$s` isn't one: %4$s")
+                    auto named = (hidden ? "needs %2$s, and `%3$s`" : "needs `%1$s` to be %2$s, and `%3$s`")
                         .format(_resolutions.declarations.typeParams[slot.param].name, withArticle(_declarer.describe(wanted)),
-                            _types.describe(goal.self), found.failure);
+                            _types.describe(goal.self));
+                    result.failure = "%s isn't one: %s".format(named, found.failure);
+                    result.failedParam = slot.param;
+                    result.afterType = named.length;
                     result.tooDeep = found.tooDeep;
                     result.ambiguous = found.ambiguous;
                     return result;
@@ -5696,10 +5703,18 @@ private final class TypeChecker
     }
 
     /// Reports a use of the function spelled `spelled` whose type arguments don't satisfy its bounds.
-    private void reportUnsatisfied(Span span, string spelled, const Conformance conformance)
+    /// When the expected type gave the type parameter whose bound fails, the error says so.
+    private void reportUnsatisfied(Span span, string spelled, const Conformance conformance,
+        const(Id!TypeParam)[] fromExpected = null)
     {
+        string failure = conformance.failure;
+        if (conformance.failedParam.isValid && fromExpected.canFind(conformance.failedParam))
+        {
+            failure = failure[0 .. conformance.afterType] ~ ", which the expected type gives `%s`,"
+                .format(_resolutions.declarations.typeParams[conformance.failedParam].name) ~ failure[conformance.afterType .. $];
+        }
         _collector.reportError(conformance.tooDeep ? DiagnosticCode.BoundSearchTooDeep : DiagnosticCode.UnsatisfiedBound, span,
-            "`%s` %s".format(spelled, conformance.failure));
+            "`%s` %s".format(spelled, failure));
     }
 
     /// A use of a generic function or constructor: what it has to find, and what it is in terms of
@@ -6260,7 +6275,7 @@ private final class TypeChecker
             auto early = conformanceOf(bounded, tried, ctx.site);
             if (early.failure !is null && !early.tooDeep)
             {
-                reportUnsatisfied(g.span, g.spelled, early);
+                reportUnsatisfied(g.span, g.spelled, early, binding.fromExpected);
                 foreach (p; params) if (p.id !in binding.bound) binding.bound[p.id] = _types.error;
             }
         }
@@ -6268,7 +6283,7 @@ private final class TypeChecker
         auto bound = binding.bound;
         Conformance conformance;
         if (bounded.isValid) conformance = conformanceOf(bounded, bound, ctx.site);
-        if (conformance.failure !is null) reportUnsatisfied(g.span, g.spelled, conformance);
+        if (conformance.failure !is null) reportUnsatisfied(g.span, g.spelled, conformance, binding.fromExpected);
 
         auto paramTypes = signature.params.map!(p => _types.substitute(p, bound)).array;
         string[][] places;
@@ -6430,7 +6445,9 @@ private final class TypeChecker
         auto shape = sum ? g.owner : g.type;
         Substitution bound;
         if (g.writes) bindWritten(g, bound);
-        if (params.any!(p => p.id !in bound)) bindExpected(shape, expected, params, bound);
+        auto open = params.filter!(p => p.id !in bound).map!(p => cast() p.id).array;
+        if (open.length > 0) bindExpected(shape, expected, params, bound);
+        auto fromExpected = open.filter!(p => p in bound).array;
         Conformance conformance;
         if (g.func.isValid) conformance = conformanceOf(g.func, bound, site);
         if (params.any!(p => p.id !in bound))
@@ -6441,7 +6458,7 @@ private final class TypeChecker
         }
         else if (conformance.failure !is null)
         {
-            reportUnsatisfied(g.span, g.spelled, conformance);
+            reportUnsatisfied(g.span, g.spelled, conformance, fromExpected);
         }
         if (conformance.witnesses.length > 0) _typing.witnesses[g.name] = conformance.witnesses;
         _typing.typeArguments[g.name] = params.map!(p => bound[p.id]).array;

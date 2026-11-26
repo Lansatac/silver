@@ -1,11 +1,11 @@
 // A result that is only a type parameter takes the expected type whole, so a bound on it sees the
-// option that's expected, not what the option holds.
+// option that's expected, not what the option holds, and the error says where the option came from.
 interface Zero { def zero(of: Of<Self>): Self }
 def zero(of: Of<Int>): Int => 0
-def zero<T: Zero>(): T => zero(Of<T>)
+def zeroOf<T: Zero>(): T => zero(Of<T>)
 conform Int: Zero
 
 def main(): Unit {
-    val z: Int? = zero()
+    val z: Int? = zeroOf()
     printl(z)
 }
