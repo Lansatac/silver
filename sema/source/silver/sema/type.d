@@ -15,8 +15,6 @@ struct Type { private uint index; }
 
 final class TypeTable
 {
-    private int nextIndex = 1;
-
     Type error, never, unit, bool_, int_, float_, float32, string_, char_, any;
     Type int8, int16, int32, uint8, uint16, uint32, uint_;
     /// The type of a bare `None`, assignable to every option. No value keeps it: each one is
@@ -53,7 +51,8 @@ final class TypeTable
         emptyDictionary = registerTypeData(TypeData(EmptyDictionaryType()));
     }
 
-    private TypeData[int] _types;
+    /// Indexed by `Type.index`, handed out in order; slot 0 is unused, since no valid type has index 0.
+    private TypeData[] _types = [TypeData.init];
     private Type[TypeData] _interned;
     private string[Id!TypeDecl] _nominalNames;
     private string[Id!TypeParam] _parameterNames;
@@ -62,9 +61,8 @@ final class TypeTable
     private Type registerTypeData(TypeData data)
     {
         if (auto existing = data in _interned) return *existing;
-        auto type = Type(nextIndex);
-        nextIndex += 1;
-        _types[type.index] = data;
+        auto type = Type(cast(uint) _types.length);
+        _types ~= data;
         _interned[data] = type;
         return type;
     }
