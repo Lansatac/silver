@@ -8,6 +8,7 @@ version (unittest):
 import silver.frontend : makeTree, plan, Plan, removeTree, request;
 import std.algorithm : canFind, count, endsWith, startsWith;
 import std.array : join, replace;
+import std.conv : to;
 import std.file : exists, rmdirRecurse, tempDir;
 import std.path : buildNormalizedPath, buildPath, dirName;
 static import std.process;
@@ -1112,6 +1113,111 @@ unittest
     assert(ran.status == 1 && ran.output.canFind("Error L0017: The library 'num' is given two files to load in this "
         ~ "program: " ~ a ~ " by `--native-load a:num=" ~ a ~ "`, where a.num names it, and " ~ b ~ " by `--native-load "
         ~ "b:num=" ~ b ~ "`, here."), ran.output);
+}
+
+/// A program that writes lines until it can't.
+enum endless = "def main(): Unit {\n    mutable val i = 0\n    while i < 5000000 {\n        printl(\"line {i}\")\n"
+    ~ "        i += 1\n    }\n}\n\ntest \"prints\" => printl(\"in a test\")\n";
+
+/// Runs `arguments` with its standard output a pipe that is read for one line and then closed, as `| head -1` does,
+/// and returns the status and what it wrote to standard error. With `readLine` false the reader closes without reading.
+Ran runWithOutputClosed(string[] arguments, string workingDirectory, bool readLine = true)
+{
+    import std.file : readText, remove;
+    import std.stdio : File, stdin;
+
+    auto errors = buildPath(tempDir, "silver-closed-pipe-" ~ to!string(std.process.thisProcessID) ~ ".txt");
+    scope (exit) if (exists(errors)) remove(errors);
+    auto output = std.process.pipe();
+    int status;
+    string first;
+    {
+        auto stderr_ = File(errors, "w");
+        auto pid = std.process.spawnProcess(arguments, stdin, output.writeEnd, stderr_, null, std.process.Config.none,
+            workingDirectory);
+        output.writeEnd.close();
+        stderr_.close();
+        if (readLine) first = output.readEnd.readln();
+        output.readEnd.close();
+        status = std.process.wait(pid);
+    }
+    assert(!readLine || first.replace("\r\n", "\n") == "line 0\n", "the first line was " ~ first);
+    return Ran(status, readText(errors).replace("\r\n", "\n"));
+}
+
+/// Runs `arguments` with standard output a file opened for reading, which a write to fails on.
+Ran runWithOutputUnwritable(string[] arguments, string workingDirectory)
+{
+    import std.file : readText, remove, write;
+    import std.stdio : File, stdin;
+
+    auto base = buildPath(tempDir, "silver-unwritable-" ~ to!string(std.process.thisProcessID));
+    write(base ~ ".out", "");
+    scope (exit) foreach (suffix; [".out", ".err"]) if (exists(base ~ suffix)) remove(base ~ suffix);
+    int status;
+    {
+        auto unwritable = File(base ~ ".out", "r");
+        auto errors = File(base ~ ".err", "w");
+        status = std.process.wait(std.process.spawnProcess(arguments, stdin, unwritable, errors, null,
+            std.process.Config.none, workingDirectory));
+    }
+    return Ran(status, readText(base ~ ".err").replace("\r\n", "\n"));
+}
+
+@("a program whose standard output is closed by its reader ends with status 1 and no message, on both backends, as silver and silverc run it")
+unittest
+{
+    auto project = makeTree("frontend-closed-pipe", ["main.ag": endless]);
+    scope (exit) removeTree(project);
+    foreach (backend; ["interpreter", "llvm"])
+    {
+        auto bySilver = runWithOutputClosed([built("silver"), "-b", backend, "main.ag"], project);
+        assert(bySilver.status == 1 && bySilver.output == "", backend ~ ": status " ~ to!string(bySilver.status)
+            ~ ", standard error:\n" ~ bySilver.output);
+        auto bySilverc = runWithOutputClosed([built("silverc"), "-b", backend, "main.ag"], project);
+        assert(bySilverc.status == 1 && bySilverc.output == "", backend ~ ": status " ~ to!string(bySilverc.status)
+            ~ ", standard error:\n" ~ bySilverc.output);
+    }
+    // A built executable too.
+    auto exePath = buildPath(project, "endless" ~ exe);
+    expectRan(silver(["build", "-o", exePath, "main.ag"], project), "");
+    auto built_ = runWithOutputClosed([exePath], project);
+    assert(built_.status == 1 && built_.output == "", "status " ~ to!string(built_.status) ~ ", standard error:\n"
+        ~ built_.output);
+}
+
+@("a program that can't write its output for another reason ends with status 1 and a message, on both backends")
+unittest
+{
+    // The short programs write less than a buffer holds, so a compiled one finds out as it ends: at the end of
+    // `main`, or in `exit`.
+    auto project = makeTree("frontend-unwritable", [
+        "main.ag": endless,
+        "short.ag": "def main(): Unit {\n    printl(\"hi\")\n}\n",
+        "exits.ag": "import std.process\n\ndef main(): Unit {\n    printl(\"hi\")\n    exit(3)\n}\n",
+    ]);
+    scope (exit) removeTree(project);
+    foreach (backend; ["interpreter", "llvm"])
+        foreach (file; ["main.ag", "short.ag", "exits.ag"])
+        {
+            auto ran = runWithOutputUnwritable([built("silver"), "-b", backend, file], project);
+            assert(ran.status == 1 && ran.output.startsWith("error: couldn't write output: ") && ran.output.count('\n') == 1,
+                backend ~ " " ~ file ~ ": status " ~ to!string(ran.status) ~ ", standard error:\n" ~ ran.output);
+        }
+}
+
+@("silver test with standard output closed by its reader ends quietly, on both backends")
+unittest
+{
+    auto project = makeTree("frontend-closed-test", ["main.ag": endless]);
+    scope (exit) removeTree(project);
+    foreach (backend; ["interpreter", "llvm"])
+    {
+        // The report is one line, read by nothing: the reader is closed before the tool writes it.
+        auto ran = runWithOutputClosed([built("silver"), "test", "-b", backend, "main.ag"], project, false);
+        assert(ran.status == 1 && ran.output == "", backend ~ ": status " ~ to!string(ran.status)
+            ~ ", standard error:\n" ~ ran.output);
+    }
 }
 
 @("out/ has the silver and silverc that were last built into build/, so these tests run what was built")

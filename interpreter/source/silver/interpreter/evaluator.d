@@ -129,7 +129,8 @@ final class Evaluator
         return _errorOutput;
     }
 
-    /// Throws: RuntimeError when the program panics, ProgramFailed when `main` returns an error, and
+    /// Throws: RuntimeError when the program panics, ProgramFailed when `main` returns an error, OutputFailed when
+    /// standard output can't be written, and
     /// DiagnosticException, before it starts, when a native it calls can't be found.
     void run()
     {
@@ -1530,7 +1531,8 @@ final class Evaluator
     /// What the program prints, for the intrinsics that print.
     private void write(string text, bool newLine = false)
     {
-        import std.stdio : stdout;
+        import std.exception : ErrnoException;
+        import std.stdio : stdout, StdioException;
 
         if (newLine)
         {
@@ -1539,8 +1541,13 @@ final class Evaluator
 
         if (_useStdOut)
         {
-            stdout.write(text);
-            stdout.flush();
+            try
+            {
+                stdout.write(text);
+                stdout.flush();
+            }
+            catch (ErrnoException e) throw OutputFailed.of(e.errno);
+            catch (StdioException e) throw OutputFailed.of(e.errno);
         }
         else
         {

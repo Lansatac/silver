@@ -10,7 +10,7 @@ import silver.ast : Diagnostic, DiagnosticException, formatDiagnostic, Program, 
 import silver.codegen : copyBeside, executablePath, findingLibraries, findToolchain, generate, linkExecutable, Optimization,
     optimizeIr, sharedLibrariesOf, Toolchain;
 import silver.core : lowerProgram, printCore = print;
-import silver.interpreter : Evaluator, panicReport, panicStatus, ProgramExited, ProgramFailed, RuntimeError;
+import silver.interpreter : Evaluator, OutputFailed, panicReport, panicStatus, ProgramExited, ProgramFailed, RuntimeError;
 import silver.loader : describeNativeFiles, describePackageFiles, describePackages, describeScriptHomes, describeSilver, load,
     missingStandardLibrary, NativeFiles, nativesOf, Packages, programStart, standardPrelude, undeclared;
 import silver.sema : analyze, Analysis, Target;
@@ -82,6 +82,14 @@ int interpret(string programFile, const Packages packages, bool emitCore = false
         stdout.flush();
         return e.status;
     }
+    catch (OutputFailed e)
+    {
+        if (!e.closedPipe)
+        {
+            stderr.writeln("error: ", e.msg);
+        }
+        endAtOnce(1);
+    }
     catch (DiagnosticException e)
     {
         printDiagnostic(e.diagnostic, context);
@@ -89,6 +97,16 @@ int interpret(string programFile, const Packages packages, bool emitCore = false
     }
 
     return 0;
+}
+
+/// Ends the process with `status` without flushing standard output, whose buffer holds what a failed write left
+/// there: C's exit would write it again, and D's `stdout` complain when it can't.
+noreturn endAtOnce(int status)
+{
+    import core.stdc.stdlib : _Exit;
+
+    stderr.flush();
+    _Exit(status);
 }
 
 /// How `silver <file>` runs a program.

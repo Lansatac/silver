@@ -2,10 +2,10 @@
 module silver.runtime.process;
 
 import core.exception : OutOfMemoryError;
-import core.stdc.stdio : fflush, stdout;
 import core.stdc.stdlib : exit;
 
 import silver.runtime.buffer : newString;
+import silver.runtime.io : flushOutput;
 import silver.runtime.environment : environmentValue;
 import silver.runtime.registers : SavedRegisters, silver_save_registers;
 import silver.runtime.panic : outOfMemory;
@@ -18,7 +18,7 @@ extern (C) nothrow:
 noreturn silver_exit(ubyte status, const(char)* location, size_t locationLength) @nogc
 {
     exitInTest(status, location, locationLength);
-    fflush(stdout);
+    flushOutput();
     exit(status);
 }
 

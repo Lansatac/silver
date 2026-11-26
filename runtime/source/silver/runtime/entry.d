@@ -104,9 +104,11 @@ private extern (C) int runMain(char[][] args)
     import core.stdc.stdio : fprintf, stderr;
     import core.thread : Thread;
     import silver.runtime.arguments : takeArguments;
+    import silver.runtime.io : flushOutput;
     import silver.runtime.memory : takeHeap;
 
     takeHeap();
+    ignoreClosedPipes();
     // As an error returned from `main` is reported.
     if (auto mistake = takeArguments(cast(string[]) args))
     {
@@ -116,5 +118,17 @@ private extern (C) int runMain(char[][] args)
     auto thread = new Thread(&runProgram, stackSize);
     thread.start();
     thread.join();
+    flushOutput();
     return 0;
+}
+
+/// A write to a closed pipe then fails with EPIPE, which the write reports, rather than killing the process.
+private void ignoreClosedPipes() nothrow @nogc
+{
+    version (Posix)
+    {
+        import core.sys.posix.signal : SIG_IGN, SIGPIPE, signal;
+
+        signal(SIGPIPE, SIG_IGN);
+    }
 }

@@ -32,6 +32,33 @@ class ProgramExited : Exception
     }
 }
 
+/// Writing to standard output failed, which ends the program with status 1. A closed pipe is the reader having
+/// what it asked for, so it has no message; any other failure's `msg` is what follows `error: `.
+class OutputFailed : Exception
+{
+    /// Whether the reader closed the pipe.
+    bool closedPipe;
+
+    this(bool closedPipe, string message, string file = __FILE__, size_t line = __LINE__)
+    {
+        super(message, file, line);
+        this.closedPipe = closedPipe;
+    }
+
+    /// The failure `error`, a C `errno`, was.
+    static OutputFailed of(int error)
+    {
+        import core.stdc.errno : EINVAL, EPIPE;
+        import core.stdc.string : strerror;
+        import std.string : fromStringz;
+
+        // The C library reports a write to a closed pipe on Windows as EPIPE or EINVAL.
+        version (Windows) bool closed = error == EPIPE || error == EINVAL;
+        else bool closed = error == EPIPE;
+        return new OutputFailed(closed, "couldn't write output: " ~ strerror(error).fromStringz.idup);
+    }
+}
+
 /// What ends a program given `arguments` before its `main` starts, as an error from `main` would be
 /// reported, or null when every argument is UTF-8. On Windows, an argument with an unpaired surrogate
 /// arrives here as invalid UTF-8 too. The front end and the runtime keep copies, which a test compares.

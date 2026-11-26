@@ -94,7 +94,7 @@ A failure to write to standard error is ignored.
 
 ## Current implementation
 
-[main](#main), [Arguments](#arguments) and `eprint` and `eprintl` are built, on both backends:
+[main](#main), [Arguments](#arguments), `eprint` and `eprintl` and [a failed write to standard output](#standard-output-and-error) are built, on both backends:
 
 - `main` takes no parameters or one of type `[String]`, written directly or through an alias. Two parameters, a `mutable` one, or one of another type is `S0009`.
 - `silver` and `silverc` give the program what follows the file, options included, with the first `--` dropped by the rule above.
@@ -104,8 +104,10 @@ A failure to write to standard error is ignored.
 
 [Exit status](#exit-status)'s `exit` and [The environment](#the-environment) are built, as [`std.process`](../stdlib/process.md#current-implementation) says.
 
-The rest of this document's additions aren't built:
+A failed write to standard output ends the program as described above, on both backends:
 
-- `print` panics when the write fails, and when interpreted a closed pipe ends the program with the interpreter's own error.
+- A compiled program ignores SIGPIPE, so a write to a closed pipe fails with EPIPE rather than the system killing it with a signal. On Windows the C library reports it as EPIPE or EINVAL, and both count as closed. Elsewhere the failure's `strerror` is the message, so its words are the system's.
+- Output is buffered, so a failure can come at a later `print`, at the end of `main`, or in `exit`, which each end the program the same way. A panic's report and an error from `main` write out what's buffered too, but ignore a failure of that: they end the program with their own status and message. A `test` run compiled has its output carried to `silver test` as records, and a failure writing those is ignored; interpreted, a test's output is kept, not written.
+- `silverc` ignores SIGPIPE too, and what it writes itself (a test report) to a closed pipe ends it with status 1 and no message. Ending this way skips C's exit flush, since the buffer holds what couldn't be written.
 
 The exit statuses, and an error from `main`, are as described.
