@@ -387,6 +387,19 @@ unittest
     foreach (n; 3 .. 7) a.shouldCall(At("h", n), At("h", 1));
 }
 
+@("a literal for a parameter of an inner generic call that has a type whatever is chosen isn't read as the argument's")
+unittest
+{
+    auto defs = "def h(x: Int8): Unit => ()\ndef h(x: Float): Unit => ()\n"
+        ~ "def pickf<T>(f: Float, x: T): T => x\ndef pick8<T>(f: Int8, x: T): T => x";
+    auto a = analyzedWith(defs, "    h(pickf(1, 2))\n    h(pick8(1, 300))");
+    a.shouldHaveNoDiagnostics();
+    a.shouldCall(At("h", 3), At("h", 1));
+    a.shouldCall(At("h", 4), At("h", 2));
+    // One that's out of range there is wrong whichever `h` is chosen, and is reported as that.
+    analyzedWith(defs, "    h(pick8(300, 2))").shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
+}
+
 @("a call is ambiguous when no overload fits every argument at least as well as the others")
 unittest
 {
