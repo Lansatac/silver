@@ -94,27 +94,53 @@ A type parameter is bound by matching an argument's type against its parameter's
 - `A` against `T ! E` gives `T = A`.
 - A promotion into a sum never binds. With `type W<T> = :Box<T> | Empty`, a `Box<Int>` against `W<T>` binds nothing, so `g(Box(1))` for `g<T>(w: W<T>)` is an error. `g<Int>(Box(1))` works, and so does a binding with a type first, as in `val w: W<Int> = Box(1)`.
 
-When type arguments aren't written, each type parameter is found from the call alone, in this order:
+When type arguments aren't written, each type parameter is found from the call alone, as [the type its arguments share](types.md#a-shared-type): the arguments whose parameter types name it are its parts, and the type the call is expected to have counts as that section says. So what a value gives comes first, then what's expected, then what the remaining arguments would be by themselves:
 
-1. The arguments that have [a type of their own](types.md#a-type-of-its-own), all together. When they give a type parameter more than one type, it's the one of those that the others promote into, as an array's elements have: with `n: Int`, both `same(n, Some(n))` and `same(Some(n), n)` make `T` an `Int?`. The order they're written in doesn't matter.
-2. The bounds whose type is known by now. The type's conformance says what its interface's own type arguments are, as with `R: Range<T>`; see [Interface parameters](interfaces.md#interface-parameters).
-3. The expected type, where there is one, for any parameter still unknown. It's matched against the return type. A return type that is only a type parameter takes it whole, so `val v: Int? = id(None)` gives `T = Int?`. Any other return type that isn't itself an option or error union is matched inside the one expected, since its value promotes into it: against `Box<Int>?`, a return type of `Box<T>` gives `T = Int`. The layer `!` or `?` removes is part of what's expected (see [Errors](errors.md#whats-expected-of-the-operand)).
-4. The remaining arguments, those with no type of their own, left to right in the order they're written, each when its turn comes. One whose parameter type is known by now is checked against it, which passes that type into it. A type parameter that is still open is decided by the arguments that reach it together, as in step 1, each counted as what it would be with nothing expected, so `same(1, Some(2))` and `same(Some(2), 1)` are both `[Int?]`s. Each of them is then checked against the result. One that can't be typed yet, as a lambda whose parameter types aren't known or a `Box([])` whose parameter is still open, is tried again after the arguments that follow it. A lambda takes its parameter types from a parameter type that's known that far, as `(Int) -> U` is with `U` still open, and its body gives its return type. Nothing else reads part of a type: a generic or overloaded function's name needs the whole function type, so `map(xs, dbl)` with an overloaded `dbl` is an error, written `map(xs, x => dbl(x))`. When the parameter returns an option, as in `(S) -> (T, S)?`, that return type is an option too, so a body ending in `(a, b)` returns `Some((a, b))`, just as it would if the type were written out.
+```silver
+def same<T>(a: T, b: T): [T] => [a, b]
+def opt<T>(x: T, fallback: T?): T? => Some(x)
 
-Literals that reach the same type parameter [take one type together](numbers.md#literals), so `pair(1, 2.0)` is a pair of `Float`s and `pick(1.5, [2])` with `pick<T>(x: T, xs: [T])` is a `[Float]`.
+val n = 2
+val small: UInt8 = 3
 
-The arguments with a type of their own always decide before those without, and what they decide isn't revisited. So with `n: Int`, `two(opt(1, None), n)` for `two<T>(a: T, b: T)` is an error in either order: `n` makes `T` an `Int`, and `opt(1, None)` can only be an option. `two(opt(1, None), Some(n))` and `two(opt(1, None), 2)` are `[Int?]`s.
+same(n, Some(n))                 // [Int?], in either order
+same(small, 1)                   // [UInt8]: small decides, and the 1 takes it
+same(1, 2.5)                     // [Float]
+same(opt(1, None), n)            // [Int?]
+val v: [UInt8] = same(1, 2)      // [UInt8], from what's expected
+val w: [Int?] = same(n, n)       // [Int?], from what's expected, since an [Int] wouldn't fit
 
-Deciding together only picks among the types the arguments gave, and only by promotion into an option or an error union. No type is looked for that none of them gave, and a number doesn't widen: `pair("a", 2.0)` and `pair(n, 2.5)` with `pair<T>(a: T, b: T)` are type mismatches. Each argument is still checked against the result as written, so with `pick<T>(x: T, xs: [T])`, `pick(Some(n), [n])` is an error: `T` is an `Int?`, and an `[Int]` isn't an `[Int?]`.
+same("a", 2.0)                   // error: a String and a Float
+same(n, 2.5)                     // error: n is an Int
+```
 
-[Overload choice](functions.md#overloading) binds each candidate in this same order, as a trial that records nothing, so the function chosen is bound as the call then binds it.
+- The type parameters are found in whatever order their bounds and function arguments allow, not the order they're declared or written in; if each needs another first, it's an error.
+- A [bound](interfaces.md#bounds) rules out a candidate that doesn't meet it. Where a bound gives a type parameter, as `T` in `R: Range<T>`, the type's conformance says what it is, and what's expected only has to be fitted afterwards; see [Interface parameters](interfaces.md#interface-parameters). A type that conforms more than once offers each, and the other arguments choose.
+- Nothing runs back through a bound. In `[1, 2, 3].contains(small)` the receiver is an `[Int]` before the bound says what its elements are, so `small: UInt8` is an error; `[1, 2, small].contains(small)` says it.
+- A lambda without parameter types, or a generic or overloaded function's name, is checked once the type parameters among its own parameter types are known, and what it returns then counts for the others. An overloaded name is chosen by parameter types that are the same as the ones wanted, not ones that would fit.
+
+  ```silver
+  def map<T, U>(xs: [T], f: (T) -> U): [U]
+  def fold<T, A>(xs: [T], seed: A, f: (A, T) -> A): A
+
+  map(xs, x => x + 1)                 // T from xs, then U from the body
+  map(xs, dbl)                        // the dbl that takes a T
+  fold(xs, 0, (a, x) => a + x)        // A is an Int, from the seed
+  fold(xs, [], (a, x) => a ~ [x])     // error: nothing says what the [] is; write the type
+  ```
+
+  The seed alone decides `A`, since the lambda takes an `A` before it gives one. A lambda's written parameter types are known from the start, so `apply((x: Int) => x + 1, n)` needs nothing else first.
+- An argument that reaches two type parameters, as a tuple against `(A, B)`, counts for each as what it is with nothing expected, and is checked once both are found.
+
+When the parameter returns an option, as in `(S) -> (T, S)?`, a lambda's return type is an option too, so a body ending in `(a, b)` returns `Some((a, b))`, just as it would if the type were written out.
+
+[Overload choice](functions.md#overloading) finds each candidate's type parameters in this same way, as a trial that records nothing, so the function chosen is bound as the call then binds it.
 
 Once the parameters are known, every argument is checked against its parameter type with the ordinary [fit](types.md#steps), so literals adapt and values promote there, and only there:
 
 ```silver
 def larger<T>(a: T, b: T, less: (T, T) -> Bool): T => if less(a, b) => b else a
 
-val small: UInt8 = 3
 val m = larger(1, small, (a, b) => a < b)     // T = UInt8, and the 1 adapts
 ```
 
@@ -181,7 +207,9 @@ type Grow<T> = More(rest: Grow<(T, T)>, head: T) | Stop    // error: `Grow<T>`, 
 ## Current implementation
 
 - Type arguments that don't grow without end can still nest only 64 deep. Past that the program doesn't compile, and the error shows the instances, or the type, that led there.
-- The first argument to reach a type parameter decides it, in steps 1 and 4 alike, so the order matters: `same(Some(n), n)` is an `[Int?]` and `same(n, Some(n))` is an error.
-- In step 1, an argument whose parameter type is already known when its turn comes is checked against it rather than given a type of its own, so with `f<T>(a: T, b: [T])`, `f(small, [1, 2])` adapts the literals to `small`'s type.
-- In step 4, an integer literal, and an array, tuple, `Some` or dictionary literal made only of literals with an integer literal in it, waits for a float literal among the arguments, which is the only place literals take a type together; an integer literal by itself also waits for an array, tuple, `Some` or dictionary literal made only of float literals, so `pick(11, [2.5])` is a `[Float]`. Nothing else waits for one, so `same(id(1), 2.5)` is an error.
+- Type parameters aren't found as [Inference](#inference) describes, but by an earlier procedure in a fixed order: the arguments with a type of their own left to right, then the bounds, then the expected type, then the remaining arguments left to right. [Types](types.md#current-implementation) lists where the results differ. Beyond those:
+  - `map(xs, dbl)` with an overloaded or generic `dbl` is an error; only a lambda is checked before its result type is known.
+  - `val v: Int? = xs.fold(0, (a, x) => lookup(x))` with `lookup` giving an `Int?` works, but because the whole option is tried first, not because the lambda refuses an `Int`.
+  - A type that conforms to an interface more than once isn't chosen between by the other arguments.
+  - Among arguments with no type of their own, an integer literal waits for a float literal among the arguments, alone or inside an array, tuple, `Some` or dictionary literal made only of literals, so `pick(11, [2.5])` is a `[Float]`. Nothing else waits, so `same(id(1), 2.5)` is an error.
 - Where the expected type is a sum with more than one member of the generic type a call builds, as `type Held = :Box<Int> | :Box<String> | :Box<[Int]>`, the first of them gives the type arguments. So `val h: Held = Box([2, 3])` is an error, the literals having no type of their own to say otherwise, and `Box<[Int]>([2, 3])` is how to write it.

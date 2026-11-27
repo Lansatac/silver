@@ -62,61 +62,109 @@ A conversion is implicit only if it works for every value, keeps the value's mea
 
 ## A type of its own
 
-Most expressions have a type of their own: `n + 1`, `"a"`, `point.x` and `Point(1, 2)` are what they are wherever they're written. Some have none, and take their type from where they go:
+Three things decide the type of every expression: whether a value [fits](#steps) where a type is expected, whether the expression has a type of its own, and the [type several things share](#a-shared-type). No form has rules beyond these.
 
-- `None`, `[]`, `[:]`, a bare `Error(e)`, a marker that a generic sum owns, a lambda without its parameter types, and the name of a generic or overloaded function.
-- A number literal, which takes the type expected of it, and is an `Int` or a `Float` only when nothing is expected.
-- Parentheses, a block, an `if` or `match`, an array, dictionary or tuple literal, a range literal `a..b` and arithmetic, when the part that decides their type has none of its own. `[1, 2]` has none, and `[1, n]` with `n: UInt8` is a `[UInt8]`, since `n` decides it. A tuple has none when any of its parts has none. An arm that can't finish, because it ends in `return`, `break`, `continue` or `tail`, has no value to count, and a block's earlier statements don't count.
-- A call of a generic function or constructor, `Some(...)` and `Ok(...)` among them, when a type parameter in its result is reached by no argument that has a type of its own. That can be read off the signature:
+Some expressions have a type of their own. They are what they are wherever they're written, and are typed once:
 
-  ```silver
-  def id<T>(x: T): T
-  def opt<T>(x: T, y: T?): T?
-  def none<T>(): T?
-  val n = 2
+- a name, a field, and `x with (...)` on a value that has one;
+- a string, character or boolean literal, `()`, string interpolation, and a marker of a sum that isn't generic;
+- a call of a function that isn't generic, a call of a generic function whose result names none of its type parameters, as `length(xs)`, and a conversion, as `UInt8(x)`.
 
-  id(n)           // an Int: n reaches T
-  id(None)        // none of its own: only None reaches T
-  none()          // none of its own: nothing reaches T
-  opt(n, None)    // an Int?: n reaches T, and the None is checked against it
-  opt(1, None)    // none of its own: only the literals reach T
-  Box([])         // none of its own
-  ```
+Everything else takes its type from where it goes:
 
-  A type parameter that a [bound](interfaces.md#bounds) gives from one an argument reaches is reached too: in `conv<R: Range<T>, T>(r: R): [T]`, `r` reaches `R`, and `R`'s conformance says what `T` is.
+- a number literal, `None`, `[]`, `[:]`, a bare `Error(e)`, and a marker that a generic sum owns;
+- a lambda, and the name of a generic or overloaded function;
+- every form and every call of a generic function whose result names a type parameter: parentheses, a block, an `if` or `match`, an array, dictionary or tuple literal, a range literal, arithmetic, `Some(...)` and `Ok(...)`, `??`, and a call such as `id(n)`;
+- `x!`, `x?` and `x?.f()`, when `x` does.
 
-  A lambda has no type of its own, so a call whose result only a lambda decides has none either, as `map(xs, x => x + 1)` with `map<T, U>(xs: [T], f: (T) -> U): [U]`: nothing but the lambda reaches `U`.
+With nothing expected, such an expression is what its parts make it by the shared type below: `[1, 2]` is an `[Int]`, `Some(1)` an `Int?`, `[n, None]` an `[Int?]`. One with nothing to make it anything is an error that asks for the type to be written: `None`, `[]`, `[None]`, `(1, None)`, `Box([])`, and a lambda without its parameter types, as in `val x = None`. A form whose parts all have type `Never` is a `Never`.
 
-An expression is one or the other whatever surrounds it, and one with a type of its own is typed once, by itself. So a call of an overloaded function is chosen by its own arguments, never by the call it's an argument of.
+An overloaded function's call is [chosen by its own arguments](functions.md#overloading), never by the call it's an argument of, and is then one kind or the other by the function chosen.
 
-An expression with no type of its own is never given one first and fitted afterwards. The type its place expects is passed into it, and its parts are checked against that type's parts. A generic call takes what the expected type says of the type parameters its arguments left open, and its arguments are then checked against their parameters, so the expected type reaches as far in as it's needed:
+### Where a type is expected
+
+An expression with a type of its own is accepted where that type [fits](#steps).
+
+One without has the expected type passed into it, and its parts are checked against that type's parts. If that fails, and the expression has a type with nothing expected that fits, it's accepted as that. So an expected type never refuses an expression that would fit by itself:
 
 ```silver
+type W = :Int | :String
+
 val v: UInt8 = id(id(1))                               // each id is an id<UInt8>, and the 1 a UInt8
 val t: Table<String, Int> = Table(Branch(0, []), 0)    // the [] is a [Node<String, Int>]
 val r: Int ! String = id(Error("x"))
+val x: W = n + 1                                       // an Int, then made a W
+val a: (Int?)? = first(ints)                           // an Int?, then promoted
 ```
 
-That makes wrapping harmless: where `val v: X = e` works, so does `val v: X = id(e)`, and so do `(e)` and `{ e }`.
+That makes wrapping harmless: where `val v: X = e` works, so does `val v: X = id(e)`, and so do `(e)` and `{ e }`, with the same value.
 
-A result that is only a type parameter takes the expected type whole, so in `val v: Int? = id(None)` the `T` is `Int?`. A literal is therefore promoted on its way in, while a value with a type of its own decides `T` first and is promoted on its way out:
+### A shared type
+
+One rule decides the type that several things have to share: the elements of an array, the arms of an `if`, the two sides of `??`, the arguments that reach one type parameter `T` of a generic function. The things sharing it are its *parts*.
+
+Candidates for `T` come in three groups, tried in this order:
+
+1. What the parts with a type of their own give.
+2. What the expected type gives, when there is one. It's matched against the result, so against `[Int?]` a result of `[T]` gives `Int?`. When the result is only `T`, it gives two: the expected type without its outer option and error-union layers, and then the expected type itself.
+3. What every part is with nothing expected, and two types made from those. Where a part can't be one of them, that type as an option is offered. Where parts are error unions, the union of their errors is offered, around the success type they share: a part that isn't an error union counts as one with no errors, and a bare `Error(e)` adds its error. The option goes on the success type and the errors outside it.
+
+`T` is the least candidate that every part [accepts](#where-a-type-is-expected), in the first group that has one. It must satisfy `T`'s [bounds](interfaces.md#bounds), and the result must fit what's expected. Least means it fits each of the others that would do.
 
 ```silver
-def describe<T>(x: T): T {
-    printl("saw {x}")
-    x
-}
+val xs: [Int?] = [n, n]               // group 1's Int would make an [Int], which isn't an [Int?]; group 2 gives Int?
+val a: Int? = describe(5)             // group 2: Int, and the result is promoted
+val v: Int? = id(None)                // group 2: Int is refused by the None, so Int?
+val w: (Int?)? = (None)               // the outer None, as without the parentheses
+val q: UInt8? = 1 + 2                 // group 2: UInt8
 
-val n = 5
-val a: Int? = describe(5)    // saw Some(5)
-val b: Int? = describe(n)    // saw 5
+[small, 1, 2]                         // group 1: UInt8, and the literals take it
+[n, Some(n)]                          // group 3: Int?, in either order
+[small, Some(1)]                      // group 3: UInt8?
+[1, 2.5]                              // group 3: Float, which both can be
+[1, 2.5, None]                        // group 3: Float?
+[("a", 1), ("b", 2.5)]                // [(String, Float)]
+if c => fa() else fb()                // Int ! A | B
+if n < 0 => Error("neg") else if n == 0 => None else n     // Int? ! String, whatever order the arms are in
+
+[n, f]                                // error: an Int and a Float
+[(1, 2.5), (2.5, 3)]                  // error: no part's type suits both
 ```
 
-Where the result's own shape can't be the option or error union that's expected, the layer is the promotion's: against `Box<Int>?`, a result of `Box<T>` gives `T = Int`.
+- A part with a type of its own always decides before one without, and a value decides before the type that's expected. So with `describe<T>(x: T): T`, `val a: Int? = describe(n)` passes an `Int` and promotes the result, and `describe(5)` does the same.
+- Apart from the option and the merged errors, nothing is made up: `T` is always a type that a part or the expected type gave. Numbers don't widen, so an `Int` and a `Float` share nothing.
+- When two candidates would do and neither fits the other, it's an error that says so. The one exception is a number literal between number types, where an integer type comes before `Float` and `Float` before `Float32`, as [for overloads](functions.md#overloading).
+- A lambda without parameter types, or a generic or overloaded function's name, takes part only for the candidates of group 2, when `T` is among its own parameter types: otherwise it's checked once `T` is known. So in `val r: Int? = xs.fold(0, (a, x) => lookup(x))` with `lookup` giving an `Int?`, the lambda refuses an accumulator of `Int`, and it's an `Int?`.
+- The order the parts are written in never matters.
 
-With nothing expected, such an expression is what its parts make it, by the rules each form has anyway. A number literal is its default type, and literals that have to share a type [take one together](numbers.md#literals). A `None` beside a value [makes an option of it](options.md), so `[1, None]` is an `[Int?]` and `if c => 1 else None` an `Int?`. A generic call binds its type parameters from what its arguments are with nothing expected, so `id(1)` is an `Int` and `opt(1, None)` an `Int?`, and a lambda's body gives its result once its parameter types are known, so `map(xs, x => x + 1)` is an `[Int]`. Only an expression with nothing to make it anything is an error, which asks for the type to be written: `None`, `[]`, `[None]`, `(1, None)`, `Box([])` and `none()` are, as in `val x = None`.
+### Forms are calls
 
-How such an expression takes its turn among a generic function's arguments is under [Inference](generics.md#inference), how it's compared with each of several functions under [Overloading](functions.md#overloading), and what it does before a `.` under [Method-call syntax](functions.md#method-call-syntax).
+Each form is typed exactly as a call of the function beside it, so `same(a, b)` for `same<T>(a: T, b: T): [T]` types whenever `[a, b]` does, with the same elements. `number` and `integer` stand for the built-in number types. A parameter marked `!` is *exact*: its argument's type has to be the parameter's type itself, with no promotion, though a literal still adapts.
+
+| Form | Typed as |
+|---|---|
+| `[a, b, c]` | `array<T>(a: T, b: T, c: T): [T]` |
+| `[k1: v1, k2: v2]` | `dict<K, V>(k1: K, v1: V, k2: K, v2: V): [K: V]` |
+| `if c => a else b`, the arms of a `match`, the `return`s and value of a lambda | `choose<T>(a: T, b: T): T` |
+| `(a, b)` | `tuple<A, B>(a: A, b: B): (A, B)` |
+| `a..b` | `interval<T: integer>(a: T, b: T): Interval<T>` |
+| `(e)`, `{ e }` | `id<T>(x: T): T` |
+| `Some(e)`, `Ok(e)` | `some<T>(x: T): T?`, `ok<T, E>(x: T): T ! E` |
+| `a + b` and the other arithmetic | `add<T: number>(a: T, b: T): T`, beside the [operator functions](functions.md#operator-functions) in scope |
+| `-a`, `a << n` | `neg<T: number>(x: T): T`, `shl<T: integer, N: integer>(a: T, n: N): T` |
+| `a == b` | `eq<T>(a: T, b: T): Bool` |
+| `a < b` and the other comparisons | `lt<T: Ord>(!a: T, !b: T): Bool` |
+| `a ~ b` | `concat<T>(a: [T], b: [T]): [T]`, and `(a: String, b: String): String` |
+| `a ?? b` | `(!a: T?, b: T): T`, then `(!a: T?, b: T?): T?`, and the same two for `!a: T ! E` |
+
+- A part that can't finish, because it ends in `return`, `break`, `continue`, `tail`, `fail` or `panic(...)`, isn't an argument, and a block's earlier statements don't count.
+- In a lambda whose result is inferred, a `fail e` and an `x?` on an error union each count as a bare `Error`, and an `x?` on an option as a `None`.
+- `??` tries its functions in the order written, so `x ?? fail e` is the payload.
+- `x!` and `x?` pass the expected type into `x` with the layer they remove (see [Errors](errors.md#whats-expected-of-the-operand)), and `?.` and `for` have their own rules.
+- An exact parameter is why `age < 18` with `age: Int?` is an error and not a comparison with `Some(18)`, and so are `age < (18)` and `n ?? 0` with `n: Int`. `!`, `number` and `integer` can't be written in a program.
+- `n == None` with `n: Int` types, by the option of group 3, and is always false. It's reported as that, not as a type error.
+
+How a generic function's type parameters are found from this is under [Inference](generics.md#inference), how functions of one name are chosen between under [Overloading](functions.md#overloading), and what an expression does before a `.` under [Method-call syntax](functions.md#method-call-syntax).
 
 ## Equality and ordering
 
@@ -246,7 +294,15 @@ A function value prints as the function it comes from, without anything it captu
 
 ## Current implementation
 
-- Arithmetic made only of literals counts as having [a type of its own](#a-type-of-its-own), an `Int`, as [Numbers](numbers.md#current-implementation) describes, so `id(1 + 2)` is an `Int` wherever it goes.
+- [A type of its own](#a-type-of-its-own), where a type is expected, the shared type and forms as calls aren't built as described. What's built is an earlier set of rules that gives the same answers in most programs, and differs in these:
+  - A form or generic call whose parts all have types has a type of its own, so `val v: [Int?] = same(n, n)` is an error where `val v: [Int?] = [n, n]` works.
+  - Where an option is expected of a result that is only a type parameter, the whole option is taken first: `val a: Int? = describe(5)` passes `Some(5)`, and `val r: Int? = ap(1, y => y + 1)` with `ap<T>(x: T, f: (T) -> T): T` is an error.
+  - The first argument to reach a type parameter decides it, so `same(Some(n), n)` is an `[Int?]` and `same(n, Some(n))` an error; `two(opt(1, None), n)` and `same(n, None)` are errors in either order.
+  - An array's elements, an `if`'s arms and a dictionary's entries share a type by a rule of their own: `[n, Some(n)]` and `[n, None]` work, and `[small, Some(1)]`, `[1, 2.5]`, `if c => 1 else 2.5` and `[(1, 2), (2.5, 3)]` are errors.
+  - Arithmetic made only of literals has a type of its own, an `Int`, as [Numbers](numbers.md#current-implementation) describes, so `id(1 + 2)` is an `Int` wherever it goes, and `val x: UInt8? = 1 + 2` is an error.
+  - `~` and `??` have a type of their own, so `id([1] ~ [2])` isn't a `[UInt8]` where one is expected, and `Some(1) ?? small` with `small: UInt8` is an error.
+  - `n == None` with `n: Int` is a type error.
+  - A program with nested lambdas isn't checked in the order described, though the results agree.
 - A lambda that writes every parameter's type but not its result has no type of its own when its body has none, so `val f: (Int) -> UInt8 = id((x: Int) => 1)` works as it does without the `id`.
 - A tuple is ordered up to eight elements. `lang` writes the conformance once for each length, since no one declaration covers them all.
 - `compare` on an integer is written once for each integer type, since a bound can't ask for an integer yet, so an error about a call of it lists them all.

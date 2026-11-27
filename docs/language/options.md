@@ -28,12 +28,21 @@ Nothing collapses. `Some(None)` is distinct from `None`, and `(Int?)?` is distin
 
 `a ?? b` is the payload of `a`, or else `b`, which is evaluated only when needed.
 
-With `a: T?`, the result is:
+With `a: T?`, the result is `T` when `b` can be a `T`, and otherwise `T?` when `b` can be a `T?`:
 
-- `T?` if `b` is syntactically `Some(...)` or `None`
-- `T` if `b` has type `T`, even when `T` is itself an option
-- `T?` if `b` is any other option
-- otherwise `T`, with `b` checked against `T` and literals adapting
+```silver
+val m: Int? = Some(1)
+val small: UInt8 = 3
+
+m ?? 0                 // Int
+m ?? None              // Int?
+m ?? other             // Int?, with other: Int?
+Some(1) ?? small       // UInt8: small decides, and the 1 takes it
+Some(1) ?? 2.5         // Float
+m ?? return None       // Int
+```
+
+`a` has to be an option as it stands, so `n ?? 0` with `n: Int` is an error; it isn't promoted to make one. `a` and `b` [share `T`](types.md#a-shared-type) as two arguments of a function would, which is why `small` decides it above. The whole rule is `??`'s row under [Forms are calls](types.md#forms-are-calls).
 
 `??` is right-associative, sits between comparison and bit-or, and binds tighter than `..`. So `a ?? b + 1` is `a ?? (b + 1)`, and `a ?? b == c` is `(a ?? b) == c`.
 
@@ -98,4 +107,5 @@ Whether the result is wrapped again depends on the types as the code is written,
 
 ## Current implementation
 
+- `a ?? b` is typed by the form of `b`, not by what it can be: the result is `T?` when `b` is written as `Some(...)` or `None` or is any other option, and otherwise `T`, with `b` checked against `T`. So with `aa: (Int?)?`, `aa ?? Some(1)` is an `(Int?)?`, and `m ?? id(None)` is an error. `a` is typed first, by itself, so `Some(1) ?? small` and `Some(1) ?? 2.5` are errors.
 - `Some` can't be passed as a function value.

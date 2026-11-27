@@ -106,7 +106,7 @@ val half: Float = 1 / 2       // 0.5: both literals are Floats
 - Each literal is checked at compile time to fit, and the arithmetic then behaves as it does anywhere: `val y: UInt8 = 200 + 100` panics with `Integer overflow` when it runs. In a [constant](bindings.md#top-level-constants), which is evaluated at compile time, it's a compile error.
 - With nothing expected and no number beside it, arithmetic on integer literals is an `Int`.
 
-Literals that have to share one type, with nothing that has a type to decide it and nothing expected, take it together: a `Float` if any of them is a float literal, and an `Int` otherwise. That's so wherever values share a type: an array's elements, a dictionary's values, the arms of an `if` or `match`, the two sides of `??`, and the arguments that reach one type parameter of a generic function.
+Literals that have to [share one type](types.md#a-shared-type), with nothing that has a type to decide it and nothing expected, take it together: a `Float` if any of them is a float literal, and an `Int` otherwise, since a `Float` is the one type both kinds can be. That's so wherever values share a type: an array's elements, a dictionary's keys and its values, the arms of an `if` or `match`, the two sides of `??`, and the arguments that reach one type parameter of a generic function.
 
 ```silver
 def id<T>(x: T): T => x

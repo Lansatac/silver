@@ -74,7 +74,7 @@ val twice = (ok: Bool) => half(count(ok)?)?     // (Bool) -> Int ! Oops | Odd
 val read = parsed(text)?.half()                 // Int ! Input
 ```
 
-Branches whose values differ don't meet, even when one would promote to the other: `Int ! Oops` and `Int? ! Odd` are an error, as `Int ! Oops` and `String ! Odd` are. A bare `Error(e)` meets any of them. A declared sum is still never made up: only lists are.
+This is part of [the type several things share](types.md#a-shared-type), so it's the same for an array's elements and the arguments that reach one type parameter. Values that already have types and differ don't meet, even when one would promote to the other: `Int ! Oops` and `Int? ! Odd` are an error, as `Int ! Oops` and `String ! Odd` are. A bare `Error(e)` meets any of them, and so does a value that can't fail, which counts as failing with nothing. A `None` among them makes the success type an option, inside the errors, whatever order they come in: `if n < 0 => Error("neg") else if n == 0 => None else n` is an `Int? ! String`. A declared sum is still never made up: only lists are.
 
 ## Values
 
@@ -310,5 +310,6 @@ Two proposals build on this: [checked operations](../proposals/checked-operation
 
 The implementation matches this description, except:
 
+- Where a `None` and an error meet, the result follows how the arms are nested: `if n == 0 => None else if n < 0 => Error("neg") else n` is an `(Int ! String)?`, where the arms in the other order give an `Int? ! String`. Errors meet between the branches of an `if` or `match`, a lambda's results and `?.` only, not between the arguments that reach one type parameter.
 - Refusing a written list that names a type beside a sum holding it (and leaving it out of a list that type arguments make) is provisional, pending a decision: the alternative is leaving the member out of a written list too, as of a list made by substitution.
 - `Ok` and `Error` can't be passed as function values, as `Some` can't.
