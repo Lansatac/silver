@@ -337,6 +337,22 @@ def main(): Unit {
     assert(timer.peek.total!"seconds" < 5, format("took %s", timer.peek));
 }
 
+@("checking stays linear in how deep lambdas that are typed alone and then against a type nest in each other's statements")
+unittest
+{
+    enum depth = 18;
+    string value = `"z"`;
+    foreach (i; 0 .. depth) value = format("((x%s: Int) => { val q%s = %s\n 2 }).call8()", i, i, value);
+    auto timer = StopWatch(AutoStart.yes);
+    auto a = analyzed(format(`def call8(f: (Int) -> UInt8): String => "c"
+def main(): Unit {
+    val r = %s
+}`, value));
+    a.shouldHaveNoDiagnostics();
+    // Statements with no return in them typed for each typing of the lambda take minutes at this depth.
+    assert(timer.peek.total!"seconds" < 5, format("took %s", timer.peek));
+}
+
 private void shouldEqual(size_t actual, size_t expected, string file = __FILE__, size_t line = __LINE__)
 {
     import core.exception : AssertError;
