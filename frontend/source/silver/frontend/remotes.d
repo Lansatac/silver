@@ -498,3 +498,31 @@ unittest
     assert(ran.status == 1 && ran.output.canFind("silver.toml(6,7): Error F0047: The files of 'deck' at commit " ~ commit
         ~ ", in " ~ buildPath(scene.cache, "git", commit) ~ ", have the hash " ~ deckHash ~ ", and "), ran.output);
 }
+
+@("a fetched package's [native] tables give the compiler files in its repository, and one outside it is refused")
+unittest
+{
+    import silver.frontend.project : hostPlatform;
+
+    if (hostPlatform is null) return;
+    auto scene = Scene("natives");
+    scope (exit) scene.remove();
+    auto files = deckFiles("v1");
+    files["silver.toml"] = "name = \"deck\"\n\n[native.deckc." ~ hostPlatform ~ "]\nload = \"lib/deckc.so\"\n";
+    files["lib/deckc.so"] = "not a library: nothing loads it";
+    auto deck = scene.repository("deck", files);
+    auto commit = deck.head();
+    auto app = scene.app("app", entry("deck", deck), ["deck"], "deckName()", importDeck);
+    auto ran = scene.silver(["--show-command", "main.ag"], app);
+    assert(ran.status == 0 && ran.output.canFind(" --native-load deck:deckc=" ~ buildPath(scene.cache, "git", commit,
+        "files", "lib", "deckc.so") ~ " ") && ran.output.canFind("\nv1\n"), ran.output);
+
+    // `../hash` is the cache's file beside the repository's files: there, but not in the repository.
+    files["silver.toml"] = "name = \"deck\"\n\n[native.deckc." ~ hostPlatform ~ "]\nload = \"../hash\"\n";
+    auto leaky = scene.repository("leaky", files);
+    app = scene.app("app", entry("deck", leaky), ["deck"], "deckName()", importDeck);
+    ran = scene.silver(["main.ag"], app);
+    assert(ran.status == 1 && ran.output.canFind("silver.toml(3,15): Error F0048: This package was fetched, and the "
+        ~ "files its [native.deckc." ~ hostPlatform ~ "] table gives stay in its repository")
+        && ran.output.canFind("\nIt was fetched for the entry at line 4 of " ~ buildPath(app, "silver.toml")), ran.output);
+}
