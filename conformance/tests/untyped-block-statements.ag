@@ -6,6 +6,7 @@ def same<T>(a: T, b: T): T => a
 def ov(x: UInt8): String => "ov(UInt8) {x}"
 def ov(x: String): String => "ov(String)"
 def u(x: UInt8): String => "u {x}"
+def call2<U>(f: (Int) -> U): String => "call2 {f(1)} {f(0)}"
 
 def main(): Unit {
     val small: UInt8 = 9
@@ -45,4 +46,9 @@ def main(): Unit {
         3
     })).array()
     printl(e([1, 2]))
+    // Typed by itself to look for a field, then again as an argument whose result is still worked out.
+    printl(((x: Int) => {
+        if x > 0 { return small }
+        None
+    }).call2())
 }

@@ -162,12 +162,14 @@ private final class TypeChecker
     /// function's body to learn its result is, held until no attempt can take it back.
     private Found _aside;
     /// The blocks whose statements have been typed, which is done once however often the block's
-    /// value is tried, each by the typing of the lambda around it that was current.
-    private size_t[Id!Expr] _statementsTyped;
+    /// value is tried, each by what its statements read from around them.
+    private Around[Id!Expr] _statementsTyped;
     /// The typings of the lambdas being checked, innermost last: a lambda has a new one whenever
-    /// its parameters aren't the types they were, which the statements in its body depend on.
+    /// its parameters aren't the types they were, or the lambda around it has a new one, which
+    /// the statements in its body depend on.
     private size_t[] _lambdaTypings;
     private size_t[Id!Expr] _lambdaTyping;
+    private size_t[Id!Expr] _lambdaAround;
     private size_t _lambdaTypingCount;
     /// What statements typed once, inside an attempt, added to what a lambda returns, which taking
     /// the attempt back keeps.
@@ -426,6 +428,15 @@ private final class TypeChecker
     {
         Diagnostic[] diagnostics;
         Reference[] references;
+    }
+
+    /// What a block's statements read from around them: the typing of the lambdas they're in, and
+    /// what a `return` among them is checked against, or that it's collected to work that out.
+    private struct Around
+    {
+        size_t typing;
+        Type returnType;
+        bool collected;
     }
 
     /// What was added to the returns a lambda's body collects.
@@ -1128,7 +1139,9 @@ private final class TypeChecker
 
         Type[] params;
         bool[] mutables;
-        auto retyped = expr.id !in _lambdaTyping;
+        auto outer = _lambdaTypings.length == 0 ? 0 : _lambdaTypings[$ - 1];
+        auto retyped = expr.id !in _lambdaTyping || _lambdaAround.get(expr.id, 0) != outer;
+        _lambdaAround[expr.id] = outer;
         foreach (i, param; lambda.params)
         {
             auto type = _types.error;
@@ -1158,11 +1171,13 @@ private final class TypeChecker
             mutables ~= param.mutable;
         }
 
+        Type ret = lambda.returnType !is null ? _declarer.resolveType(*lambda.returnType)
+            : expected !is null ? expected.ret : Type.init;
+        // Working out what it returns collects each `return` anew, so the statements are typed for it again.
+        if (ret == Type.init || expr.id in _resolutions.lambdaFloors) retyped = true;
         if (retyped) _lambdaTyping[expr.id] = ++_lambdaTypingCount;
         _lambdaTypings ~= _lambdaTyping[expr.id];
         scope (exit) _lambdaTypings.length--;
-        Type ret = lambda.returnType !is null ? _declarer.resolveType(*lambda.returnType)
-            : expected !is null ? expected.ret : Type.init;
         if (auto floors = expr.id in _resolutions.lambdaFloors)
         {
             declareFloors(*floors);
@@ -1555,12 +1570,12 @@ private final class TypeChecker
     private void checkBlockStatements(Id!Expr block, const(Stmt)[] statements, BodyContext ctx)
     {
         if (statements.length == 0) return;
-        auto typing = _lambdaTypings.length == 0 ? 0 : _lambdaTypings[$ - 1];
+        auto around = Around(_lambdaTypings.length == 0 ? 0 : _lambdaTypings[$ - 1], ctx.returnType, ctx.inferred !is null);
         if (auto typed = block in _statementsTyped)
         {
-            if (*typed == typing) return;
+            if (*typed == around) return;
         }
-        _statementsTyped[block] = typing;
+        _statementsTyped[block] = around;
         if (_trying == 0 || ctx.inferred is null) return apart(() => checkStatements(statements, ctx));
         auto before = *ctx.inferred;
         apart(() => checkStatements(statements, ctx));

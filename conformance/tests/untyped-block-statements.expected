@@ -8,3 +8,4 @@ u 2
 0
 3
 [ov(UInt8) 3, ov(UInt8) 3]
+call2 Some(9) None
