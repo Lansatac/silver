@@ -62,6 +62,9 @@ private struct BodyContext
     InferredReturn* inferred;
     /// Whether this is a test's own body, where `?` stops the test instead of returning.
     bool testBody;
+    /// Set when a `return` or a postfix `?` is checked here, for a block to learn whether its
+    /// statements have one, or null.
+    bool* leaves;
 }
 
 /// A use of a generic function from a body, with the witnesses checking found for it.
@@ -168,6 +171,10 @@ private final class TypeChecker
     /// its parameters aren't the types they were, or the lambda around it has a new one, which
     /// the statements in its body depend on.
     private size_t[] _lambdaTypings;
+    /// For each of those, which working out of its result from its body this is, or 0 when its
+    /// result is given: each one collects the body's `return`s anew.
+    private size_t[] _resultsWorkedOut;
+    private size_t _resultWorkedOutCount;
     private size_t[Id!Expr] _lambdaTyping;
     private size_t[Id!Expr] _lambdaAround;
     private size_t _lambdaTypingCount;
@@ -430,13 +437,20 @@ private final class TypeChecker
         Reference[] references;
     }
 
-    /// What a block's statements read from around them: the typing of the lambdas they're in, and
-    /// what a `return` among them is checked against, or that it's collected to work that out.
+    /// What a block's statements read from around them: the typing of the lambdas they're in,
+    /// and, when there's a `return` or a postfix `?` among them, what that's checked against, or
+    /// which working out of the result it's collected for.
     private struct Around
     {
         size_t typing;
+        bool leaves;
         Type returnType;
-        bool collected;
+        size_t workedOut;
+
+        bool holds(const Around now) const
+        {
+            return typing == now.typing && (!leaves || returnType == now.returnType && workedOut == now.workedOut);
+        }
     }
 
     /// What was added to the returns a lambda's body collects.
@@ -1173,11 +1187,11 @@ private final class TypeChecker
 
         Type ret = lambda.returnType !is null ? _declarer.resolveType(*lambda.returnType)
             : expected !is null ? expected.ret : Type.init;
-        // Working out what it returns collects each `return` anew, so the statements are typed for it again.
-        if (ret == Type.init || expr.id in _resolutions.lambdaFloors) retyped = true;
         if (retyped) _lambdaTyping[expr.id] = ++_lambdaTypingCount;
         _lambdaTypings ~= _lambdaTyping[expr.id];
         scope (exit) _lambdaTypings.length--;
+        _resultsWorkedOut ~= ret == Type.init || expr.id in _resolutions.lambdaFloors ? ++_resultWorkedOutCount : 0;
+        scope (exit) _resultsWorkedOut.length--;
         if (auto floors = expr.id in _resolutions.lambdaFloors)
         {
             declareFloors(*floors);
@@ -1506,6 +1520,7 @@ private final class TypeChecker
 
     private Type synthesizeReturn(const ReturnExpr ret, BodyContext ctx)
     {
+        if (ctx.leaves !is null) *ctx.leaves = true;
         if (ctx.inferred is null)
         {
             if (!returnsErrorToNowhere(*ret.value, ctx)) check(*ret.value, ctx.returnType, ctx);
@@ -1570,15 +1585,22 @@ private final class TypeChecker
     private void checkBlockStatements(Id!Expr block, const(Stmt)[] statements, BodyContext ctx)
     {
         if (statements.length == 0) return;
-        auto around = Around(_lambdaTypings.length == 0 ? 0 : _lambdaTypings[$ - 1], ctx.returnType, ctx.inferred !is null);
+        auto around = Around(_lambdaTypings.length == 0 ? 0 : _lambdaTypings[$ - 1], false, ctx.returnType,
+            ctx.inferred is null || _resultsWorkedOut.length == 0 ? 0 : _resultsWorkedOut[$ - 1]);
         if (auto typed = block in _statementsTyped)
         {
-            if (*typed == around) return;
+            if (typed.holds(around)) return;
         }
-        _statementsTyped[block] = around;
-        if (_trying == 0 || ctx.inferred is null) return apart(() => checkStatements(statements, ctx));
+        auto inside = ctx;
+        inside.leaves = &around.leaves;
+        scope (exit)
+        {
+            _statementsTyped[block] = around;
+            if (around.leaves && ctx.leaves !is null) *ctx.leaves = true;
+        }
+        if (_trying == 0 || ctx.inferred is null) return apart(() => checkStatements(statements, inside));
         auto before = *ctx.inferred;
-        apart(() => checkStatements(statements, ctx));
+        apart(() => checkStatements(statements, inside));
         auto after = *ctx.inferred;
         auto added = InferredReturn(after.values[before.values.length .. $], after.types[before.types.length .. $],
             after.nones[before.nones.length .. $], after.errors[before.errors.length .. $],
@@ -3048,6 +3070,7 @@ private final class TypeChecker
     /// in a test's own body stops the test.
     private Type synthesizePropagate(const PropagateExpr propagate, Span span, BodyContext ctx, Type expected = Type.init)
     {
+        if (ctx.leaves !is null) *ctx.leaves = true;
         auto operandType = _declarer.requireTyped(unwrapped(*propagate.operand, ctx, expected, true), propagate.operand.span);
         if (operandType == _types.error) return operandType;
         auto returnType = ctx.returnType;
