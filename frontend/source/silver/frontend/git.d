@@ -38,6 +38,8 @@ SourceKind sourceKind(string git)
     import std.ascii : isAlpha, isAlphaNum;
     import std.string : indexOf;
 
+    // git would read it as an option, as `--upload-pack=...`, and run it.
+    if (git.startsWith("-")) return SourceKind.other;
     if (git.startsWith("https://")) return SourceKind.https;
     if (git.startsWith("ssh://")) return SourceKind.ssh;
     // A scheme, `name://`, or a transport, `name::`.
@@ -147,10 +149,10 @@ bool resolve(string url, Wanted wanted, out string commit, out Failure failure)
     string[] words = ["ls-remote"];
     final switch (wanted.want)
     {
-        case Want.defaultBranch: words ~= [url, "HEAD"]; break;
+        case Want.defaultBranch: words ~= ["--", url, "HEAD"]; break;
         // A pattern matches whole names, so an annotated tag's peeled line is asked for too.
-        case Want.tag: words ~= ["--tags", url, "refs/tags/" ~ wanted.name, "refs/tags/" ~ wanted.name ~ "^{}"]; break;
-        case Want.branch: words ~= ["--heads", url, "refs/heads/" ~ wanted.name]; break;
+        case Want.tag: words ~= ["--tags", "--", url, "refs/tags/" ~ wanted.name, "refs/tags/" ~ wanted.name ~ "^{}"]; break;
+        case Want.branch: words ~= ["--heads", "--", url, "refs/heads/" ~ wanted.name]; break;
         case Want.rev: assert(false);
     }
     string output;
@@ -201,9 +203,11 @@ bool fetch(string cache, string url, Wanted wanted, string commit, out Tree tree
         return false;
     }
     scope (exit) removeAll(work);
+    sweep(buildPath(cache, "tmp"), work);
     auto repository = buildPath(work, "repository");
     string ignored;
-    if (!git(["init", "-q", "--bare", "--template=", repository], null, ignored, failure)) return false;
+    auto format = commit.length == 64 ? ["--object-format=sha256"] : null;
+    if (!git(["init", "-q", "--bare", "--template="] ~ format ~ ["--", repository], null, ignored, failure)) return false;
     if (!fetchCommit(repository, url, wanted, commit, failure)) return false;
     string type;
     if (!git(["--git-dir=" ~ repository, "cat-file", "-t", commit], null, type, failure)) return false;
@@ -240,20 +244,42 @@ bool fetch(string cache, string url, Wanted wanted, string commit, out Tree tree
 /// whether it's executable.
 string treeHash(const File_[] files)
 {
+    Hashed[] hashed;
+    foreach (ref f; files) hashed ~= Hashed(f.path, contentHash(f.content), f.executable);
+    return treeHash(hashed);
+}
+
+/// The same, from each file's `contentHash`, so the files needn't be held while it's taken.
+string treeHash(const Hashed[] files)
+{
     import std.algorithm : sort;
     import std.digest : toHexString, LetterCase;
-    import std.digest.sha : sha256Of, SHA256;
+    import std.digest.sha : SHA256;
 
     auto sorted = files.dup;
     sorted.sort!((a, b) => a.path < b.path);
     SHA256 all;
     all.start();
     foreach (ref f; sorted)
-    {
-        all.put(cast(const(ubyte)[]) (toHexString!(LetterCase.lower)(sha256Of(f.content)).idup ~ " "
-            ~ (f.executable ? "x" : "-") ~ " " ~ f.path ~ "\n"));
-    }
+        all.put(cast(const(ubyte)[]) (f.content ~ " " ~ (f.executable ? "x" : "-") ~ " " ~ f.path ~ "\n"));
     return "sha256-" ~ toHexString!(LetterCase.lower)(all.finish()).idup;
+}
+
+/// A file's content's SHA-256, in lowercase hex.
+string contentHash(const(ubyte)[] content)
+{
+    import std.digest : toHexString, LetterCase;
+    import std.digest.sha : sha256Of;
+
+    return toHexString!(LetterCase.lower)(sha256Of(content)).idup;
+}
+
+/// A file of a tree with its content's hash in place of its content.
+struct Hashed
+{
+    string path;
+    string content;
+    bool executable;
 }
 
 /// A file of a tree: its path with `/`, its bytes, and whether it's executable.
@@ -324,10 +350,41 @@ string[string] gitEnvironment()
         env[key] = value;
     }
     // Only the sources silver accepts, so that git refuses `ext::` and the like too.
-    env["GIT_ALLOW_PROTOCOL"] = "https:ssh:file";
+    env["GIT_ALLOW_PROTOCOL"] = allowedProtocols(environment.get("GIT_ALLOW_PROTOCOL"));
     // With a terminal a login prompt can be answered; without one, as in CI, it would wait forever.
     if (!terminal()) env["GIT_TERMINAL_PROMPT"] = "0";
     return env;
+}
+
+/// The protocols git may use: silver's, narrowed to those of `given`, the user's own list, when there is one.
+string allowedProtocols(string given)
+{
+    import std.algorithm : canFind, filter, splitter;
+    import std.array : join;
+
+    enum ours = ["https", "ssh", "file"];
+    if (given is null) return ours.join(":");
+    return ours.filter!(p => given.splitter(':').canFind(p)).join(":");
+}
+
+/// Removes what interrupted fetches left in `tmp`, a day or more old, but `own`.
+void sweep(string tmp, string own)
+{
+    import core.time : days;
+    import std.datetime.systime : Clock;
+    import std.file : dirEntries, SpanMode, timeLastModified;
+
+    try
+    {
+        auto now = Clock.currTime();
+        foreach (entry; dirEntries(tmp, SpanMode.shallow, false))
+        {
+            if (entry.name != own && now - timeLastModified(entry.name) > 1.days) removeAll(entry.name);
+        }
+    }
+    catch (Exception)
+    {
+    }
 }
 
 /// A hooks directory that doesn't exist, so that git runs no hook.
@@ -364,18 +421,18 @@ bool fetchCommit(string repository, string url, Wanted wanted, string commit, ou
 {
     string ignored;
     auto at = ["--git-dir=" ~ repository];
-    if (git(at ~ ["fetch", "-q", "--depth", "1", "--no-tags", url, commit], null, ignored, failure)) return true;
+    if (git(at ~ ["fetch", "-q", "--depth", "1", "--no-tags", "--", url, commit], null, ignored, failure)) return true;
     // A server that refuses to fetch a commit it doesn't advertise.
     if (wanted.want != Want.rev)
     {
         immutable ref_ = wanted.want == Want.defaultBranch ? "HEAD"
             : (wanted.want == Want.tag ? "refs/tags/" : "refs/heads/") ~ wanted.name;
         Failure byRef;
-        if (git(at ~ ["fetch", "-q", "--depth", "1", "--no-tags", url, ref_], null, ignored, byRef) && has(repository, commit))
+        if (git(at ~ ["fetch", "-q", "--depth", "1", "--no-tags", "--", url, ref_], null, ignored, byRef) && has(repository, commit))
             return true;
     }
     Failure whole;
-    immutable fetched = git(at ~ ["fetch", "-q", "--no-tags", url, "+refs/heads/*:refs/heads/*",
+    immutable fetched = git(at ~ ["fetch", "-q", "--no-tags", "--", url, "+refs/heads/*:refs/heads/*",
         "+refs/tags/*:refs/tags/*"], null, ignored, whole);
     if (fetched && has(repository, commit)) return true;
     if (fetched) failure = Failure(Problem.failed, url ~ " has no commit " ~ commit);
@@ -411,7 +468,7 @@ bool writeTree(string repository, string commit, string directory, out string ha
         bool executable;
     }
     Blob[] blobs;
-    bool[string] folded;
+    Folded folded;
     foreach (record; listing.splitter('\0'))
     {
         if (record.length == 0) continue;
@@ -436,18 +493,16 @@ bool writeTree(string repository, string commit, string directory, out string ha
                 ~ wrong ~ ", so its files can't be the same everywhere");
             return false;
         }
-        auto key = toLower(path);
-        if (key in folded)
+        if (auto other = folded.clash(path))
         {
-            failure = Failure(Problem.unfetchable, "The repository holds two paths that differ only in case, one of "
-                ~ "them " ~ path ~ ", at commit " ~ commit ~ ", which a Windows or macOS file system can't hold apart, "
-                ~ "so its files can't be the same everywhere");
+            failure = Failure(Problem.unfetchable, "The repository holds " ~ other ~ " and " ~ path ~ ", at commit "
+                ~ commit ~ ", which differ only in case, and a Windows or macOS file system can't hold them apart, so "
+                ~ "its files can't be the same everywhere");
             return false;
         }
-        folded[key] = true;
         blobs ~= Blob(path, id, mode == "100755");
     }
-    File_[] files;
+    Hashed[] files;
     try
     {
         mkdirRecurse(directory);
@@ -458,14 +513,14 @@ bool writeTree(string repository, string commit, string directory, out string ha
         {
             cat.stdin.writeln(b.id);
             cat.stdin.flush();
-            auto header = cat.stdout.readln();
-            auto words = header.splitter(' ');
-            words.popFront();
-            words.popFront();
+            import std.array : array, join;
             import std.conv : to;
             import std.string : strip;
 
-            auto size = strip(words.front).to!size_t;
+            auto header = strip(cat.stdout.readln()).splitter(' ').array;
+            if (header.length != 3 || header[1] != "blob")
+                throw new Exception("git cat-file gave \"" ~ header.join(" ") ~ "\" for " ~ b.path);
+            auto size = header[2].to!size_t;
             auto content = new ubyte[size];
             if (size > 0) cat.stdout.rawRead(content);
             cat.stdout.readln();
@@ -473,7 +528,7 @@ bool writeTree(string repository, string commit, string directory, out string ha
             mkdirRecurse(dirName(target));
             write(target, content);
             readOnly(target, b.executable);
-            files ~= File_(b.path, content, b.executable);
+            files ~= Hashed(b.path, contentHash(content), b.executable);
         }
         cat.stdin.close();
     }
@@ -491,21 +546,93 @@ bool writeTree(string repository, string commit, string directory, out string ha
     return true;
 }
 
+/// The paths of a tree and the directories above them, folded to lowercase: two spellings of one, or a
+/// file and a directory of one, can't be held apart everywhere.
+struct Folded
+{
+    private struct Spelled
+    {
+        string path;
+        bool directory;
+    }
+    private Spelled[string] seen;
+
+    /// Adds the file `path`, giving the file or directory already there that differs from it or a directory
+    /// above it only in case, or that's a file where it needs a directory, or a directory where it's a file.
+    string clash(string path)
+    {
+        import std.uni : toLower;
+
+        string add(string spelled, bool directory)
+        {
+            auto key = toLower(spelled);
+            if (auto earlier = key in seen)
+            {
+                if (earlier.path == spelled && earlier.directory && directory) return null;
+                return earlier.path;
+            }
+            seen[key] = Spelled(spelled, directory);
+            return null;
+        }
+        foreach (k, char c; path)
+        {
+            if (c != '/') continue;
+            if (auto other = add(path[0 .. k], true)) return other;
+        }
+        return add(path, false);
+    }
+}
+
+/// Whether `name` is one git takes as a tag's or a branch's: what `git check-ref-format` allows of a name
+/// under refs/tags or refs/heads, and not starting with `-`.
+public bool validRefName(string name)
+{
+    import std.algorithm : canFind, endsWith, splitter, startsWith;
+
+    if (name.length == 0 || name == "@" || name.startsWith("-") || name.startsWith("/") || name.endsWith("/")
+        || name.endsWith(".") || name.canFind("..") || name.canFind("@{") || name.canFind("//"))
+        return false;
+    foreach (char c; name)
+    {
+        if (c < 0x20 || c == 0x7F || " ~^:?*[\\".canFind(c)) return false;
+    }
+    foreach (part; name.splitter('/'))
+    {
+        if (part.startsWith(".") || part.endsWith(".lock")) return false;
+    }
+    return true;
+}
+
 /// Why `path`, a path in a repository, can't be written the same on every platform, or null.
 string unwritable(string path)
 {
     import std.algorithm : splitter;
     import std.uni : sicmp;
 
+    import std.algorithm : canFind;
+    import std.string : indexOf;
+    import std.utf : validate;
+
+    try validate(path);
+    catch (Exception) return "whose name isn't UTF-8, which Windows can't name a file with";
     foreach (char c; path)
     {
         if (c < 0x20 || c == 0x7F) return "whose name has a control character";
-        if (c == '\\' || c == ':') return "whose name has a `" ~ c ~ "`, which Windows doesn't allow";
+        if ("\\:*?<>\"|".canFind(c)) return "whose name has a `" ~ c ~ "`, which Windows doesn't allow";
     }
     foreach (segment; path.splitter('/'))
     {
         if (segment.length == 0 || segment == "." || segment == "..") return "which isn't a path inside it";
         if (sicmp(segment, ".git") == 0) return "inside a directory named .git";
+        if (segment[$ - 1] == '.' || segment[$ - 1] == ' ')
+            return "whose name ends in a dot or a space, which Windows drops";
+        immutable dot = segment.indexOf('.');
+        auto stem = dot < 0 ? segment : segment[0 .. dot];
+        foreach (device; ["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+            "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"])
+        {
+            if (sicmp(stem, device) == 0) return "whose name is a device's on Windows";
+        }
     }
     return null;
 }
@@ -578,7 +705,7 @@ unittest
     assert(treeHash([a, b]) == "sha256-3e9a9d12f8a06dfb5d8eeda9ad4f80c5a9d45a9e2244833923adb688de4adaa0", treeHash([a, b]));
     assert(treeHash([a, File_("d/b.ag", b.content, false)]) != treeHash([a, b]));
     assert(treeHash([a, File_("d/b.ag", cast(const(ubyte)[]) "y\n", true)]) != treeHash([a, b]));
-    assert(treeHash([]) != treeHash([a]));
+    assert(treeHash(cast(File_[]) []) != treeHash([a]));
 }
 
 @("a path a platform can't write is refused")
@@ -601,4 +728,36 @@ unittest
     // A name that isn't UTF-8 can't be written on Windows, which names files in UTF-16.
     assert(unwritable("a\xFF.ag") !is null);
     assert(unwritable("console.ag") is null && unwritable("a.b/c.ag") is null && unwritable(".hidden") is null);
+}
+
+@("a file and a directory, or two directories, that differ only in case clash, and one directory's files don't")
+unittest
+{
+    Folded f;
+    assert(f.clash("a/b.ag") is null && f.clash("a/c.ag") is null && f.clash("a/d/e.ag") is null);
+    assert(f.clash("A/x.ag") == "a");
+    Folded g;
+    assert(g.clash("a") is null && g.clash("a/b") == "a");
+    Folded h;
+    assert(h.clash("d/x") is null && h.clash("D") == "d");
+    Folded i;
+    assert(i.clash("Read.me") is null && i.clash("read.ME") == "Read.me");
+}
+
+@("a tag's or branch's name is one git takes, never an option")
+unittest
+{
+    foreach (good; ["v1", "v0.3.0", "release/1.2", "main", "feature-x", "a_b"]) assert(validRefName(good), good);
+    foreach (bad; ["", "-x", "--upload-pack=y", "a..b", "a b", "a:b", "a*", "x^{}", "a~1", "a?", "a[", "a\\b",
+        "/a", "a/", "a.", ".a", "a/.b", "a.lock", "a/b.lock", "@", "a@{1}", "a//b"])
+        assert(!validRefName(bad), bad);
+}
+
+@("git may use silver's protocols, narrowed to the user's own list")
+unittest
+{
+    assert(allowedProtocols(null) == "https:ssh:file");
+    assert(allowedProtocols("https") == "https");
+    assert(allowedProtocols("ssh:git:https") == "https:ssh");
+    assert(allowedProtocols("") == "");
 }
