@@ -761,3 +761,28 @@ unittest
     assert(allowedProtocols("ssh:git:https") == "https:ssh");
     assert(allowedProtocols("") == "");
 }
+
+@("the sweep removes only what a fetch left, never other files under a SILVER_CACHE pointed at a directory in use")
+unittest
+{
+    import core.time : days;
+    import std.datetime.systime : Clock;
+    import std.file : exists, mkdirRecurse, setTimes, tempDir, write;
+    import std.path : buildPath;
+
+    auto tmp = buildPath(tempDir, "silver-git-sweep-" ~ __LINE__.stringof);
+    removeAll(tmp);
+    scope (exit) removeAll(tmp);
+    // As if SILVER_CACHE were a home directory, with a tmp of the user's own.
+    auto notes = buildPath(tmp, "notes.txt");
+    auto photos = buildPath(tmp, "photos");
+    auto left = buildPath(tmp, "4f1c2a9e0b7d3c58e6a1f92d4b0c7e3a5d8f1b26-123-456");
+    mkdirRecurse(photos);
+    mkdirRecurse(left);
+    write(notes, "mine");
+    auto old = Clock.currTime() - 2.days;
+    foreach (p; [notes, photos, left]) setTimes(p, old, old);
+    sweep(tmp, null);
+    assert(exists(notes) && exists(photos), "the sweep removed what no fetch left");
+    assert(!exists(left), "the sweep kept what an interrupted fetch left");
+}
