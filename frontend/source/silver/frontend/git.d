@@ -367,24 +367,39 @@ string allowedProtocols(string given)
     return ours.filter!(p => given.splitter(':').canFind(p)).join(":");
 }
 
-/// Removes what interrupted fetches left in `tmp`, a day or more old, but `own`.
+/// Removes what interrupted fetches left in `tmp`, a day or more old, but `own`: only directories named as
+/// a fetch names them, so nothing else is touched even when `SILVER_CACHE` is a directory in use.
 void sweep(string tmp, string own)
 {
     import core.time : days;
     import std.datetime.systime : Clock;
     import std.file : dirEntries, SpanMode, timeLastModified;
+    import std.path : baseName;
 
     try
     {
         auto now = Clock.currTime();
         foreach (entry; dirEntries(tmp, SpanMode.shallow, false))
         {
-            if (entry.name != own && now - timeLastModified(entry.name) > 1.days) removeAll(entry.name);
+            if (entry.name == own || !entry.isDir || !fetchesName(baseName(entry.name))) continue;
+            if (now - timeLastModified(entry.name) > 1.days) removeAll(entry.name);
         }
     }
     catch (Exception)
     {
     }
+}
+
+/// Whether `name` is as `fetch` names its work directory: a commit, the process's id and a number.
+bool fetchesName(string name)
+{
+    import std.algorithm : all, splitter;
+    import std.array : array;
+    import std.ascii : isDigit;
+
+    auto parts = name.splitter('-').array;
+    return parts.length == 3 && fullHash(parts[0]) && parts[1].length > 0 && parts[1].all!isDigit
+        && parts[2].length > 0 && parts[2].all!isDigit;
 }
 
 /// A hooks directory that doesn't exist, so that git runs no hook.
@@ -629,7 +644,8 @@ string unwritable(string path)
         immutable dot = segment.indexOf('.');
         auto stem = dot < 0 ? segment : segment[0 .. dot];
         foreach (device; ["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
-            "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"])
+            "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9", "com0", "lpt0", "com¹",
+            "com²", "com³", "lpt¹", "lpt²", "lpt³", "conin$", "conout$"])
         {
             if (sicmp(stem, device) == 0) return "whose name is a device's on Windows";
         }
@@ -785,4 +801,12 @@ unittest
     sweep(tmp, null);
     assert(exists(notes) && exists(photos), "the sweep removed what no fetch left");
     assert(!exists(left), "the sweep kept what an interrupted fetch left");
+}
+
+@("every name Windows gives a device is refused, with or without an extension")
+unittest
+{
+    foreach (device; ["COM0", "lpt0.ag", "COM\u00B9", "com\u00B2.txt", "LPT\u00B3", "CONIN$", "conout$.ag"])
+        assert(unwritable(device) !is null, device);
+    assert(unwritable("com10.ag") is null && unwritable("conin.ag") is null);
 }
