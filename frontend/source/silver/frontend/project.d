@@ -1451,6 +1451,20 @@ struct ProjectReader
         }
         if (!declare(file.name, file.directory, file.modules, file.uses, file.described.map!(d => d.name.name).array))
             return false;
+        if (auto confine = checkoutHolding(file.file))
+        {
+            foreach (ref n; file.natives)
+            {
+                foreach (f; [n.link, n.load])
+                {
+                    if (f is null || within(f, confine)) continue;
+                    mistake = Mistake(file.file, ProjectCode.OutsideRepository, n.span, "This package was fetched, and "
+                        ~ "the files its [native." ~ n.library ~ "." ~ n.platform ~ "] table gives stay in its "
+                        ~ "repository, " ~ confine ~ ", which " ~ f ~ " is outside");
+                    return false;
+                }
+            }
+        }
         natives ~= file.natives;
         foreach (ref d; file.described)
         {
