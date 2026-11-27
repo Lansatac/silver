@@ -1182,7 +1182,10 @@ struct Checker
             import std.algorithm : startsWith;
 
             inside = inside.replace("\\", "/");
-            if (isAbsolute(path.text) || inside == ".." || inside.startsWith("../"))
+            // Refused alike on every platform: Windows doesn't count "/x" as absolute, nor POSIX "C:x".
+            auto rooted = path.text.startsWith("/") || path.text.startsWith("\\")
+                || (path.text.length >= 2 && path.text[1] == ':');
+            if (rooted || isAbsolute(path.text) || inside == ".." || inside.startsWith("../"))
             {
                 return fail(ProjectCode.OutsideDirectory, path.span, "A remote package's `path` is a directory inside "
                     ~ "its repository, and \"" ~ path.text ~ "\" isn't");
@@ -2218,7 +2221,8 @@ unittest
         m(head ~ "git = \"" ~ refused ~ "\"\n", ProjectCode.RemoteSource, 4, 7);
     m(head ~ git ~ "path = \"../x\"\n", ProjectCode.OutsideDirectory, 5, 8);
     m(head ~ git ~ "path = \"a/../../x\"\n", ProjectCode.OutsideDirectory, 5, 8);
-    m(head ~ git ~ "path = \"/x\"\n", ProjectCode.OutsideDirectory, 5, 8);
+    foreach (rooted; ["/x", "\\\\x", "C:/x", "C:x"])
+        m(head ~ git ~ "path = \"" ~ rooted ~ "\"\n", ProjectCode.OutsideDirectory, 5, 8);
     m(head ~ git ~ "path = \"\"\n", ProjectCode.EmptyDirectory, 5, 8);
     m(head ~ git ~ "test = true\n", ProjectCode.RemotePackage, 5, 8);
     m("name = \"g\"\n[[package]]\n" ~ git, ProjectCode.MissingField, 2, 1);
