@@ -199,7 +199,7 @@ unittest
     import std.datetime.systime : Clock;
     import std.file : mkdirRecurse, setTimes;
 
-    auto stale = buildPath(scene.cache, "tmp", "4f1c2a9e0b7d3c58e6a1f92d4b0c7e3a5d8f1b26-123-456");
+    auto stale = buildPath(scene.cache, "tmp", "4f1c2a9e0b7d3c58-123-456");
     auto fresh = buildPath(scene.cache, "tmp", "fresh");
     mkdirRecurse(stale);
     mkdirRecurse(fresh);

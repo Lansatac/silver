@@ -194,7 +194,7 @@ bool fetch(string cache, string url, Wanted wanted, string commit, out Tree tree
     try
     {
         mkdirRecurse(buildPath(cache, "git"));
-        work = buildPath(cache, "tmp", commit ~ "-" ~ thisProcessID.to!string ~ "-" ~ uniform(0, 1_000_000_000).to!string);
+        work = buildPath(cache, "tmp", commit[0 .. 16] ~ "-" ~ thisProcessID.to!string ~ "-" ~ uniform(0, 1_000_000_000).to!string);
         mkdirRecurse(buildPath(work, "entry"));
     }
     catch (Exception e)
@@ -314,7 +314,7 @@ bool git(string[] words, string directory, out string output, out Failure failur
 {
     import std.process : Config, execute, ProcessException;
 
-    auto command = ["git", "-c", "core.hooksPath=" ~ nowhere, "-c", "core.autocrlf=false"] ~ words;
+    auto command = ["git", "-c", "core.hooksPath=" ~ nowhere, "-c", "core.autocrlf=false", "-c", "core.longpaths=true"] ~ words;
     try
     {
         auto ran = execute(command, gitEnvironment(), Config.newEnv, size_t.max, directory);
@@ -390,7 +390,8 @@ void sweep(string tmp, string own)
     }
 }
 
-/// Whether `name` is as `fetch` names its work directory: a commit, the process's id and a number.
+/// Whether `name` is as `fetch` names its work directory: a commit's first 16 digits, kept short for Windows' path
+/// limit, the process's id and a number.
 bool fetchesName(string name)
 {
     import std.algorithm : all, splitter;
@@ -398,7 +399,7 @@ bool fetchesName(string name)
     import std.ascii : isDigit;
 
     auto parts = name.splitter('-').array;
-    return parts.length == 3 && fullHash(parts[0]) && parts[1].length > 0 && parts[1].all!isDigit
+    return parts.length == 3 && parts[0].length == 16 && parts[0].all!(c => isDigit(c) || (c >= 'a' && c <= 'f')) && parts[1].length > 0 && parts[1].all!isDigit
         && parts[2].length > 0 && parts[2].all!isDigit;
 }
 
@@ -521,7 +522,7 @@ bool writeTree(string repository, string commit, string directory, out string ha
     try
     {
         mkdirRecurse(directory);
-        auto cat = pipeProcess(["git", "--git-dir=" ~ repository, "cat-file", "--batch"], Redirect.stdin | Redirect.stdout,
+        auto cat = pipeProcess(["git", "-c", "core.longpaths=true", "--git-dir=" ~ repository, "cat-file", "--batch"], Redirect.stdin | Redirect.stdout,
             gitEnvironment(), Config.newEnv);
         scope (exit) wait(cat.pid);
         foreach (ref b; blobs)
@@ -792,7 +793,7 @@ unittest
     // As if SILVER_CACHE were a home directory, with a tmp of the user's own.
     auto notes = buildPath(tmp, "notes.txt");
     auto photos = buildPath(tmp, "photos");
-    auto left = buildPath(tmp, "4f1c2a9e0b7d3c58e6a1f92d4b0c7e3a5d8f1b26-123-456");
+    auto left = buildPath(tmp, "4f1c2a9e0b7d3c58-123-456");
     mkdirRecurse(photos);
     mkdirRecurse(left);
     write(notes, "mine");
