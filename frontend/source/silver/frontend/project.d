@@ -1113,7 +1113,7 @@ struct Checker
     bool remote(const ref Value value, Named named, const ref Entry git, const(Value)* path,
         const(Entry)*[] wants, const(Value)* test)
     {
-        import silver.frontend.git : fullHash, SourceKind, sourceKind;
+        import silver.frontend.git : fullHash, SourceKind, sourceKind, validRefName;
         import std.path : buildNormalizedPath, isAbsolute;
 
         foreach (ref field; value.table.entries)
@@ -1162,6 +1162,12 @@ struct Checker
             {
                 return fail(ProjectCode.RemoteWant, w.value.span, "`" ~ w.key ~ "` names a " ~ w.key ~ ", and \"\" "
                     ~ "names none; with no `tag`, `branch` or `rev` the repository's default branch is taken");
+            }
+            if (r.wanted.want != Want.rev && !validRefName(w.value.text))
+            {
+                return fail(ProjectCode.RemoteWant, w.value.span, "\"" ~ w.value.text ~ "\" isn't a name git gives a "
+                    ~ w.key ~ ": it has no spaces, `~`, `^`, `:`, `?`, `*`, `[`, `\\`, `..` or `@{`, doesn't start "
+                    ~ "with `-` or `.`, and doesn't end with `/`, `.` or `.lock`");
             }
         }
         if (path !is null)
@@ -1615,6 +1621,15 @@ struct ProjectReader
             return false;
         }
         assert(remotes !is null, "a project with remote packages is read with a Remotes");
+        if (remote.directory !is null)
+        {
+            if (auto repository = checkoutHolding(file.file))
+            {
+                return fail(ProjectCode.OutsideRepository, remote.gitSpan, "This package was fetched, and its remote "
+                    ~ "entries name repositories by URL: a directory, \"" ~ remote.git ~ "\", names one on its author's "
+                    ~ "machine");
+            }
+        }
         string files, commit;
         if (!remotes.checkout(file, remote, files, commit, mistake)) return false;
         auto home = remote.path is null ? files : buildNormalizedPath(files, remote.path);
@@ -1690,58 +1705,38 @@ struct ProjectReader
         return true;
     }
 
-    /// Fetches every remote package the files reachable from `root` name, whether or not anything uses
-    /// it: `root`'s entries, and in turn those of each package file they lead to, fetched or not. So what
-    /// the lock holds depends only on the package files, never on the command.
+    /// Fetches every remote package that the project's own files name, whether or not anything uses it:
+    /// `root` and each file its `path` entries lead to, in turn, used or not. A package fetched is followed
+    /// as when it's used, only as far as what it uses, so its other entries, such as those only its own
+    /// tests use, aren't fetched. So what the lock holds depends only on the package files, never on the
+    /// command. What's found is added to a copy of this reader, so the packages given to the compiler stay
+    /// those the run uses, while two entries that disagree are still refused.
     bool fetchAll(const ref PackageFile root, out Mistake mistake)
     {
+        auto named = this;
+        named.fetchedBy = fetchedBy.dup;
         PackageFile[] pending = [cast(PackageFile) root];
-        // How each file was reached, when it was fetched, for a mistake in it.
-        string[] reachedBy = [null];
         string[] seen = [root.file];
-        Reached[string] byName;
-        void visit(string file, string by)
-        {
-            foreach (f; seen)
-            {
-                if (samePath(f, file)) return;
-            }
-            seen ~= file;
-            PackageFile found;
-            Mistake ignored;
-            immutable ok = fileAt(file, found, ignored);
-            assert(ok, "a file reached is read when it's reached");
-            pending ~= found;
-            reachedBy ~= by;
-        }
         for (size_t k = 0; k < pending.length; k++)
         {
             auto file = pending[k];
-            bool fail()
-            {
-                if (reachedBy[k] !is null && mistake.file !is null && checkoutHolding(mistake.file) !is null)
-                    mistake.message ~= "\nIt was fetched for " ~ reachedBy[k];
-                return false;
-            }
             Reached[] listed;
-            if (!resolve(file, listed, mistake)) return fail();
-            foreach (ref r; listed) visit(r.file, reachedBy[k]);
+            if (!named.resolve(file, listed, mistake)) return false;
+            foreach (ref r; listed)
+            {
+                bool known;
+                foreach (f; seen) known = known || samePath(f, r.file);
+                if (known || named.checkoutHolding(r.file) !is null) continue;
+                seen ~= r.file;
+                PackageFile found;
+                if (!named.fileAt(r.file, found, mistake)) return false;
+                pending ~= found;
+            }
             foreach (ref remote; file.remotes)
             {
                 Reached r;
-                if (!fetch(file, remote, r, mistake)) return fail();
-                if (auto earlier = remote.name.name in byName)
-                {
-                    if (!samePath(earlier.home, r.home))
-                    {
-                        mistake = Mistake(file.file, ProjectCode.RemoteConflict, remote.gitSpan, quoted(r.name)
-                            ~ " is reached by " ~ r.fetched ~ ", and already by " ~ earlier.fetched ~ "; a program "
-                            ~ "holds one package of a name, from one source at one commit");
-                        return fail();
-                    }
-                }
-                else byName[remote.name.name] = r;
-                visit(r.file, r.fetched);
+                if (!named.fetch(file, remote, r, mistake)) return false;
+                if (!named.reach(file, r, mistake)) return false;
             }
         }
         return true;
@@ -2199,6 +2194,11 @@ unittest
     m(head ~ git ~ "tag = \"v1\"\nbranch = \"main\"\n", ProjectCode.RemoteWant, 6, 1);
     m(head ~ git ~ "tag = \"\"\n", ProjectCode.RemoteWant, 5, 7);
     m(head ~ git ~ "rev = \"4f1c2a9\"\n", ProjectCode.ShortRev, 5, 7);
+    foreach (bad; ["-x", "--upload-pack=y", "a b", "v1:refs/heads/x", "a*", "x^{}"])
+    {
+        m(head ~ git ~ "tag = \"" ~ bad ~ "\"\n", ProjectCode.RemoteWant, 5, 7);
+        m(head ~ git ~ "branch = \"" ~ bad ~ "\"\n", ProjectCode.RemoteWant, 5, 10);
+    }
     m(head ~ git ~ "rev = \"" ~ hash[0 .. $ - 1] ~ "G\"\n", ProjectCode.ShortRev, 5, 7);
     foreach (refused; ["http://example.com/cards", "file:///srv/cards", "git://host/cards", "ext::sh -c x", ""])
         m(head ~ "git = \"" ~ refused ~ "\"\n", ProjectCode.RemoteSource, 4, 7);

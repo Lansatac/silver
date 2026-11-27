@@ -75,6 +75,8 @@ struct Scene
 {
     string directory;
     string cache;
+    /// Given to every run of silver.
+    string[string] env;
 
     this(string name)
     {
@@ -87,14 +89,14 @@ struct Scene
         removeTree(directory);
     }
 
-    Repository repository(string name, string[string] files)
+    Repository repository(string name, string[string] files, string[] format = null)
     {
         import std.file : mkdirRecurse;
 
         auto r = Repository(buildPath(directory, name), buildPath(directory, name ~ ".git"));
         mkdirRecurse(r.work);
-        r.git(["init", "-q", "-b", "main"]);
-        auto bare = std.process.execute(["git", "init", "-q", "--bare", "-b", "main", r.bare]);
+        r.git(["init", "-q", "-b", "main"] ~ format);
+        auto bare = std.process.execute(["git", "init", "-q", "--bare", "-b", "main"] ~ format ~ [r.bare]);
         assert(bare.status == 0, bare.output);
         r.commit(files);
         return r;
@@ -116,6 +118,7 @@ struct Scene
     Ran silver(string[] words, string workingDirectory, string[string] env = null)
     {
         string[string] all = ["SILVER_CACHE": cache];
+        foreach (k, v; this.env) all[k] = v;
         foreach (k, v; env) all[k] = v;
         built("silverc");
         auto result = std.process.execute([built("silver")] ~ words, all, std.process.Config.none, size_t.max,
@@ -191,6 +194,16 @@ unittest
     deck.tag("v1");
     auto commit = deck.head();
     auto app = scene.app("app", entry("deck", deck, "tag = \"v1\"\n"), ["deck"], "deckName()", importDeck);
+    // What an interrupted fetch left a day ago is swept; what one may be writing now isn't.
+    import core.time : days;
+    import std.datetime.systime : Clock;
+    import std.file : mkdirRecurse, setTimes;
+
+    auto stale = buildPath(scene.cache, "tmp", "stale");
+    auto fresh = buildPath(scene.cache, "tmp", "fresh");
+    mkdirRecurse(stale);
+    mkdirRecurse(fresh);
+    setTimes(stale, Clock.currTime() - 2.days, Clock.currTime() - 2.days);
 
     expectRan(scene.silver(["-b", "interpreter", "main.ag"], app), fetching("deck", deck, ", tag = \"v1\"", commit)
         ~ "v1\n");
@@ -208,7 +221,9 @@ unittest
 
         assert((getAttributes(buildPath(files, "cards.ag")) & octal!222) == 0, "a fetched file is writable");
     }
-    assert(!exists(buildPath(scene.cache, "tmp")) || isEmptyDirectory(buildPath(scene.cache, "tmp")));
+    assert(!exists(stale) && exists(fresh));
+    removeTree(fresh);
+    assert(isEmptyDirectory(buildPath(scene.cache, "tmp")));
 
     expectRan(scene.silver(["-b", "llvm", "main.ag"], app), "v1\n");
     expectRan(scene.silver(["run"], app), "v1\n");
@@ -333,6 +348,14 @@ unittest
     expectRan(scene.silver(["main.ag"], app), fetching("deck", deck, "", two) ~ "two\n");
     assert(lockOf(app) == locked("deck", "../deck.git", "", two, lockedHash(app, "deck")), lockOf(app));
 
+    // A SHA-256 repository's commit is fetched into one of its kind.
+    auto wide = scene.repository("wide", deckFiles("wide"), ["--object-format=sha256"]);
+    auto app3 = scene.app("app3", entry("deck", wide, "rev = \"" ~ wide.head() ~ "\"\n"), ["deck"], "deckName()",
+        importDeck);
+    assert(wide.head().length == 64);
+    expectRan(scene.silver(["main.ag"], app3), fetching("deck", wide, ", rev = \"" ~ wide.head() ~ "\"", wide.head())
+        ~ "wide\n");
+
     // Protocol version 0 refuses a commit that isn't a branch's or a tag's.
     auto app2 = scene.app("app2", entry("deck", deck, "rev = \"" ~ one ~ "\"\n"), ["deck"], "deckName()", importDeck);
     expectRan(scene.silver(["main.ag"], app2, ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "protocol.version",
@@ -340,23 +363,35 @@ unittest
     assert(lockOf(app2) == locked("deck", "../deck.git", "rev = \"" ~ one ~ "\"\n", one, lockedHash(app2, "deck")));
 }
 
-@("a remote package's own remote entries are followed and locked beside the starting file, its own lock is ignored, and two entries that disagree are refused, naming both")
+@("a remote package's own remote entries are followed as far as what it uses and locked beside the starting file, its own lock is ignored, and two entries that disagree are refused, naming both")
 unittest
 {
+    import std.array : replace;
+
     auto scene = Scene("transitive");
     scope (exit) scene.remove();
     auto deck = scene.repository("deck", deckFiles("v1"));
     deck.tag("v1");
     auto v1 = deck.head();
+    // A fetched package names its own packages by URL; here git takes this one's from the bare repository.
+    enum deckUrl = "https://example.invalid/deck";
+    scene.env = ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url." ~ deck.bare.replace("\\", "/") ~ ".insteadOf",
+        "GIT_CONFIG_VALUE_0": deckUrl];
+    // `spare` is one only its own tests would use: never fetched, since nothing maps its URL anywhere.
     auto table = scene.repository("table", [
-        "silver.toml": "name = \"table\"\nuses = [\"deck\"]\n" ~ entry("deck", deck, "tag = \"v1\"\n"),
+        "silver.toml": "name = \"table\"\nuses = [\"deck\"]\n\n[[package]]\nname = \"deck\"\ngit = \"" ~ deckUrl
+            ~ "\"\ntag = \"v1\"\n\n[[package]]\nname = \"spare\"\ngit = \"https://example.invalid/spare\"\n",
         "play.ag": "module table.play\n\nimport deck.cards\n\ndef play(): String => \"table of \" ~ deckName()\n",
         "silver.lock": "this isn't a lock",
     ]);
     auto app = scene.app("app", entry("table", table), ["table"], "play()", "import table.play\n");
     auto ran = scene.silver(["main.ag"], app);
-    assert(ran.status == 0 && ran.output.canFind("\ntable of v1\n") && ran.output.count("Fetching") == 2, ran.output);
-    assert(lockOf(app) == locked("deck", "../deck.git", "tag = \"v1\"\n", v1, deckHash) ~ "\n"
+    assert(ran.status == 0 && ran.output.canFind("\ntable of v1\n") && ran.output.count("Fetching") == 2
+        && ran.output.canFind("Fetching deck from " ~ deckUrl ~ ", tag = \"v1\""), ran.output);
+    assert(lockOf(app) == locked("deck", deckUrl, "tag = \"v1\"\n", v1, deckHash) ~ "\n"
+        ~ locked("table", "../table.git", "", table.head(), lockedHash(app, "table")), lockOf(app));
+    expectRan(scene.silver(["test"], app), "1 passed, 0 failed\n");
+    assert(lockOf(app) == locked("deck", deckUrl, "tag = \"v1\"\n", v1, deckHash) ~ "\n"
         ~ locked("table", "../table.git", "", table.head(), lockedHash(app, "table")), lockOf(app));
 
     // Every run locks what the files name, whatever the command: here a package listed by its path, which
@@ -373,6 +408,7 @@ unittest
         ~ "    printl(deckName())\n}\n");
     expectRan(scene.silver(["run"], withTools), "v1\n");
     auto toolsLock = locked("deck", "../deck.git", "tag = \"v1\"\n", v1, deckHash) ~ "\n"
+        ~ locked("deck", deckUrl, "tag = \"v1\"\n", v1, deckHash) ~ "\n"
         ~ locked("table", "../table.git", "", table.head(), lockedHash(app, "table"));
     assert(lockOf(withTools) == toolsLock, lockOf(withTools));
     expectRan(scene.silver(["test"], withTools), "No tests found\n");
@@ -391,7 +427,7 @@ unittest
     ran = scene.silver(["main.ag"], conflict);
     auto cached = buildPath(scene.cache, "git", table.head(), "files", "silver.toml");
     assert(ran.status == 1 && ran.output.canFind("Error F0045: 'deck' is reached by the entry at line 4 of " ~ cached
-        ~ ", git = " ~ quotedString(deck.bare) ~ ", tag = \"v1\", which is commit " ~ v1 ~ ", and already by the entry "
+        ~ ", git = \"" ~ deckUrl ~ "\", tag = \"v1\", which is commit " ~ v1 ~ ", and already by the entry "
         ~ "at line 4 of " ~ buildPath(conflict, "silver.toml") ~ ", git = " ~ quotedString(deck.bare) ~ ", tag = \"v2\", "
         ~ "which is commit " ~ deck.head() ~ "; a program holds one package of a name, from one source at one commit"),
         ran.output);
@@ -440,6 +476,17 @@ unittest
     ran = scene.silver(["main.ag"], app);
     assert(ran.status == 1 && ran.output.canFind("silver.toml(5,8): Error F0048: This package was fetched, and its "
         ~ "entries stay in its repository") && ran.output.canFind("\nIt was fetched for the entry at line 4 of "
+        ~ buildPath(app, "silver.toml")), ran.output);
+
+    // A fetched package's remote entry can't name a directory, which is one on its author's machine.
+    auto local = scene.repository("local", [
+        "silver.toml": "name = \"local\"\nuses = [\"deck\"]\n" ~ entry("deck", deck),
+        "near.ag": "module local.near\n\nimport deck.cards\n\ndef near(): String => deckName()\n",
+    ]);
+    app = scene.app("app", entry("local", local), ["local"], "near()", "import local.near\n");
+    ran = scene.silver(["main.ag"], app);
+    assert(ran.status == 1 && ran.output.canFind("silver.toml(6,7): Error F0048: This package was fetched, and its "
+        ~ "remote entries name repositories by URL") && ran.output.canFind("\nIt was fetched for the entry at line 4 of "
         ~ buildPath(app, "silver.toml")), ran.output);
 
     // A hash in the lock that isn't the files' is refused.
