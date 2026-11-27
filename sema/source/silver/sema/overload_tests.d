@@ -377,6 +377,16 @@ unittest
     a.shouldCall(At("h", 8), At("h", 2));
 }
 
+@("only the literals that are an argument's value are read, not one in a condition or in a call inside it")
+unittest
+{
+    auto a = analyzedWith("def h(x: Int8): Unit => ()\ndef h(x: Float): Unit => ()\ndef big(x: Float): Bool => x > 0.5\n"
+        ~ "def pick<T>(c: Bool, x: T): T => x",
+        "    val fl = 2.0\n    h(if fl == 1 => 1 else 2)\n    h(if big(1) => 1 else 2)\n    h(pick(big(1), 2))\n    h(pick(fl > 1, 2))");
+    a.shouldHaveNoDiagnostics();
+    foreach (n; 3 .. 7) a.shouldCall(At("h", n), At("h", 1));
+}
+
 @("a call is ambiguous when no overload fits every argument at least as well as the others")
 unittest
 {
