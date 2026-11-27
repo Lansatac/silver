@@ -85,7 +85,7 @@ type P = :Int8 | :Int16
 val p: P = 1              // error: two integer members, and neither is the default
 ```
 
-An integer literal too large for every integer type is the float literal of its value where only a float fits it, so `val x: Float = 99999999999999999999` is `1e20`. Where an integer type fits, it's an integer, and too large.
+An integer literal too large for every integer type fits no integer type, so it's the float literal of its value wherever a float can take it: `val x: Float = 99999999999999999999` is `1e20`, and `h(99999999999999999999)` calls `h(Float)`. Where only an integer type is expected, or nothing is, it's too large.
 
 Adaptation goes through arithmetic. An arithmetic or bitwise operator passes the type expected of it to its operands, and an operand made only of literals takes the type of the operand beside it, on either side:
 

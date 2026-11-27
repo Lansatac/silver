@@ -130,9 +130,6 @@ private final class TypeChecker
     /// Every number literal. A literal's type can change after it's first seen, as it adapts
     /// to where it's used, so ranges are checked once all the bodies have been.
     private const(Expr)[] _numberLiterals;
-    /// The number literals typed while an attempt is open, so that a trial can see what it made
-    /// each. Emptied when no attempt is open.
-    private const(Expr)[] _triedLiterals;
     private bool[Id!Expr] _negatedLiterals;
     /// Constants whose initializer already has an error, which evaluating would only repeat.
     private bool[Id!ConstDecl] _unevaluable;
@@ -455,20 +452,22 @@ private final class TypeChecker
         InferredReturn added;
     }
 
-    /// What checking an expression against a type gave it: the type it has there, and in how
-    /// many steps it fitted.
+    /// What checking an expression against a type gave it: the type it has there, in how many
+    /// steps it fitted, and what the number literals that make its value became there.
     private struct Fitted
     {
         Type type;
         int steps;
-    }
-
-    /// What a trial made the number literals it typed: whether each holds a value of the type it
-    /// became, and the latest an integer literal among them reads, by `reading`.
-    private struct Made
-    {
-        bool fits = true;
+        /// The latest an integer literal of its value reads, by `reading`.
         int reading;
+        /// Whether a literal of its value holds no value of the type it became.
+        bool misfit;
+
+        /// This, counting `part` of its value: the steps of whichever took more, and its literals.
+        Fitted and(const Fitted part) const => Fitted(type, max(steps, part.steps), max(reading, part.reading),
+            misfit || part.misfit);
+        /// This, as a whole of `type` taking `more` steps after it.
+        Fitted then(Type whole, int more) const => Fitted(whole, steps + more, reading, misfit);
     }
 
     /// Where an attempt began, which is everything `takeBack` needs to undo it.
@@ -535,7 +534,6 @@ private final class TypeChecker
         journal.recording = begun.recording;
         _trying--;
         if (_trying > 0) return;
-        _triedLiterals = null;
         foreach (diagnostic; _aside.diagnostics) _collector.report(diagnostic);
         _references ~= _aside.references;
         _aside = Found.init;
@@ -547,12 +545,11 @@ private final class TypeChecker
     {
         if (_trying == 0) return work();
         auto trying = _trying, trials = _trials, recording = journal.recording, aside = _aside, returned = _returned;
-        auto diagnostics = _collector.diagnostics.length, references = _references.length, tried = _triedLiterals;
+        auto diagnostics = _collector.diagnostics.length, references = _references.length;
         _trying = 0;
         _trials = 0;
         _aside = Found.init;
         _returned = null;
-        _triedLiterals = null;
         journal.recording = false;
         work();
         aside.diagnostics ~= _collector.dropAfter(diagnostics);
@@ -563,7 +560,6 @@ private final class TypeChecker
         _trials = trials;
         _aside = aside;
         _returned = returned;
-        _triedLiterals = tried;
         journal.recording = recording;
     }
 
@@ -2135,8 +2131,8 @@ private final class TypeChecker
     }
 
     /// `expected`, when there is one, is only for inferring the type arguments of a generic use.
-    /// `within`, when it's given, is set to the steps a generic call's arguments took to fit.
-    private Type synthesizeExact(const Expr expr, BodyContext ctx, Type expected = Type.init, int* within = null)
+    /// `within`, when it's given, is set to how a generic call's worst-fitting argument fitted.
+    private Type synthesizeExact(const Expr expr, BodyContext ctx, Type expected = Type.init, Fitted* within = null)
     {
         // "what type is this?"
         _typing.constructedMembers.remove(expr.id);
@@ -2144,11 +2140,11 @@ private final class TypeChecker
         auto type = expr.kind.match!(
             (const BoolLiteral _) => _types.bool_,
             (const IntLiteral _) {
-                noteLiteral(expr);
+                _numberLiterals ~= expr;
                 return _types.int_;
             },
             (const FloatLiteral _) {
-                noteLiteral(expr);
+                _numberLiterals ~= expr;
                 return _types.float_;
             },
             (const StringLiteral _) => _types.string_,
@@ -2626,7 +2622,7 @@ private final class TypeChecker
         auto end = fitted(*range.end, element, ctx);
         rangeEnd(*range.end, end.type);
         _typing.exprTypes[expr.id] = expected;
-        return Fitted(expected, max(start.steps, end.steps));
+        return start.and(end).then(expected, 0);
     }
 
     /// `lang`'s `Range`, which `for` loops over, or an invalid ID when `lang` isn't loaded.
@@ -3746,7 +3742,7 @@ private final class TypeChecker
         }
     }
 
-    private Type synthesizeCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected, int* within = null)
+    private Type synthesizeCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected, Fitted* within = null)
     {
         Type[] typed;
         auto reported = _collector.diagnostics.length;
@@ -3974,9 +3970,8 @@ private final class TypeChecker
     {
         auto begun = beginAttempt(ctx);
         scope (exit) takeBack(begun);
-        auto start = _triedLiterals.length;
         typeUnchosen(call, typed, ctx);
-        return failed(begun) || !madeSince(start).fits;
+        return failed(begun);
     }
 
     /// How well `arg`, which has no type of its own, fits `param`: whether checking it against
@@ -3989,11 +3984,9 @@ private final class TypeChecker
         scope (exit) takeBack(begun);
         _trials++;
         scope (exit) _trials--;
-        auto start = _triedLiterals.length;
-        auto steps = checkArgument(arg, param, ctx).steps;
-        auto made = madeSince(start);
-        reading = made.reading;
-        return failed(begun) || !made.fits ? Fit.none : Fit.promoted(steps);
+        auto fit = checkArgument(arg, param, ctx);
+        reading = fit.reading;
+        return failed(begun) || fit.misfit ? Fit.none : Fit.promoted(fit.steps);
     }
 
     /// Fills in how well each argument fits `trial`'s function, or why one doesn't, binding its
@@ -4053,7 +4046,7 @@ private final class TypeChecker
                 if (b.checked[i])
                 {
                     found.fits[i] = b.fits[i];
-                    found.readings[i] = b.readings[i];
+                    found.readings[i] = b.found[i].reading;
                 }
                 else if (typed[i] == Type.init && b.typed[i] != Type.init && !isIntLiteral(arg) && !isFloatLiteral(arg))
                 {
@@ -6401,11 +6394,9 @@ private final class TypeChecker
         Type[] typed;
         /// Which arguments have been checked against a parameter that was known at their turn.
         bool[] checked;
-        /// In how many steps each of those fitted, and in a trial, whether it did and how its
-        /// integer literals read.
-        int[] steps;
+        /// How each of those fitted, and in a trial, whether it did.
+        Fitted[] found;
         Fit[] fits;
-        int[] readings;
         Conformance conformance;
         /// The type parameters the expected type bound.
         Id!TypeParam[] fromExpected;
@@ -6431,8 +6422,7 @@ private final class TypeChecker
         if (b.typed.length < args.length) b.typed.length = args.length;
         b.checked = new bool[args.length];
         b.fits = new Fit[args.length];
-        b.readings = new int[args.length];
-        b.steps = new int[args.length];
+        b.found = new Fitted[args.length];
         const(TypeParam)[] bindable() => b.undecided.length == 0 ? params : params.filter!(p => !b.undecided.canFind(p.id)).array;
         void bind(size_t i, Type type)
         {
@@ -6442,12 +6432,9 @@ private final class TypeChecker
         void checkAt(size_t i)
         {
             auto reported = _collector.diagnostics.length;
-            auto start = _triedLiterals.length;
-            b.steps[i] = checkArgument(args[i], _types.substitute(signature.params[i], b.bound), ctx).steps;
-            auto made = madeSince(start);
-            auto wrong = !made.fits || _collector.diagnostics[reported .. $].any!(d => d.severity == Severity.Error);
-            b.fits[i] = wrong ? Fit.none : Fit.promoted(b.steps[i]);
-            b.readings[i] = made.reading;
+            b.found[i] = checkArgument(args[i], _types.substitute(signature.params[i], b.bound), ctx);
+            auto wrong = b.found[i].misfit || _collector.diagnostics[reported .. $].any!(d => d.severity == Severity.Error);
+            b.fits[i] = wrong ? Fit.none : Fit.promoted(b.found[i].steps);
             b.checked[i] = true;
         }
         // A float literal that hasn't had its turn, which integer literals and what's made of them
@@ -6583,7 +6570,7 @@ private final class TypeChecker
     /// `pretyped` is as for `applyCallee`. `hasReceiver` says the first argument is the `x` of `x.f()`,
     /// and `overloaded` that there are other functions the call could have meant.
     private Type applyGeneric(const Expr expr, const Generic g, const CallExpr call, Type expected, BodyContext ctx,
-        const(Type)[] pretyped = null, bool hasReceiver = false, bool overloaded = false, int* within = null)
+        const(Type)[] pretyped = null, bool hasReceiver = false, bool overloaded = false, Fitted* within = null)
     {
         auto args = call.args;
         auto sum = g.owner != Type.init && !buildsMember(g, expected);
@@ -6649,7 +6636,7 @@ private final class TypeChecker
         string[][] places;
         Span[] placeSpans;
         // The call fits where it goes as its worst-fitting argument fitted its parameter.
-        auto worst = 0;
+        Fitted worst;
         scope (exit) if (within !is null) *within = worst;
         foreach (i, arg; args)
         {
@@ -6660,10 +6647,9 @@ private final class TypeChecker
                     _collector.reportError(DiagnosticCode.MutabilityMismatch, arg.span,
                         "This parameter is `mutable`, so the call can change the argument; write `mutable` before it");
                 }
-                auto steps = checked[i] ? binding.steps[i]
-                    : typed[i] != Type.init ? coerced(arg, typed[i], paramTypes[i], ctx.site).steps
-                    : checkArgument(arg, paramTypes[i], ctx).steps;
-                worst = max(worst, steps);
+                worst = worst.and(checked[i] ? binding.found[i]
+                    : typed[i] != Type.init ? coerced(arg, typed[i], paramTypes[i], ctx.site)
+                    : checkArgument(arg, paramTypes[i], ctx));
                 continue;
             }
             if (!signature.isMutable(i))
@@ -6926,7 +6912,7 @@ private final class TypeChecker
         );
     }
 
-    private Type synthesizeMethodCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected, int* within)
+    private Type synthesizeMethodCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected, Fitted* within)
     {
         auto reported = _collector.diagnostics.length;
         auto type = methodCall(expr, call, ctx, expected, within);
@@ -6950,7 +6936,7 @@ private final class TypeChecker
     /// to look for the field, so it's an argument that already has its type; one with none is
     /// left to the function as an argument is. `object?.f(args)` is the same call on
     /// `object`'s value, made an option or error union again.
-    private Type methodCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected, int* within)
+    private Type methodCall(const Expr expr, const CallExpr call, BodyContext ctx, Type expected, Fitted* within)
     {
         const(Expr)* object;
         string member;
@@ -7031,7 +7017,7 @@ private final class TypeChecker
 
     /// `object.f(args)` with `object` of type `objectType`, as `methodCall` describes.
     private Type callOn(const Expr expr, const CallExpr call, const(Expr)* object, string member,
-        const(TypeExpr)[] typeArgs, Type objectType, BodyContext ctx, Type expected, int* within)
+        const(TypeExpr)[] typeArgs, Type objectType, BodyContext ctx, Type expected, Fitted* within)
     {
         Type asField()
         {
@@ -7835,7 +7821,7 @@ private final class TypeChecker
         Fitted promoted(Fitted inner)
         {
             _typing.promotions[expr.id] = expected;
-            return Fitted(expected, inner.steps + 1);
+            return inner.then(expected, 1);
         }
         if (isLambda(expr) && _types.isFunction(expected))
         {
@@ -7856,10 +7842,11 @@ private final class TypeChecker
         if (isMethod || unwraps || genericUse(expr).found || isOverloadedUse(expr))
         {
             // A call's arguments took steps to fit their parameters, before its result fits here.
-            int within;
+            Fitted within;
             auto type = synthesizeExact(expr, ctx, expected, &within);
             auto whole = coerced(expr, type, expected, ctx.site);
-            return Fitted(whole.type, whole.steps + within);
+            return Fitted(whole.type, whole.steps + within.steps, max(whole.reading, within.reading),
+                whole.misfit || within.misfit);
         }
         if (auto range = asRange(&expr))
         {
@@ -7873,7 +7860,7 @@ private final class TypeChecker
             {
                 auto bounds = checkBareRange(expr, *range, inner, ctx);
                 if (inner != expected) _typing.promotions[expr.id] = expected;
-                return Fitted(expected, bounds.steps + max(0, fitSteps(inner, expected)));
+                return bounds.then(expected, max(0, fitSteps(inner, expected)));
             }
         }
         auto constructed = constructedDecl(expr);
@@ -7891,14 +7878,14 @@ private final class TypeChecker
         if (_types.isErrorUnion(expected))
         {
             auto written = expr.kind.match!(
-                (const OkExpr ok) => fitted(*ok.value, _types.successOf(expected), ctx).steps,
-                (const ErrorExpr error) => fitted(*error.value, _types.errorOf(expected), ctx).steps,
-                _ => -1,
+                (const OkExpr ok) => fitted(*ok.value, _types.successOf(expected), ctx),
+                (const ErrorExpr error) => fitted(*error.value, _types.errorOf(expected), ctx),
+                _ => Fitted(Type.init, -1),
             );
-            if (written >= 0)
+            if (written.steps >= 0)
             {
                 _typing.exprTypes[expr.id] = expected;
-                return Fitted(expected, written);
+                return written.then(expected, 0);
             }
             // Written out as what the success side takes its type from, then promoted.
             if (isOptionSyntax(expr) || isArraySyntax(expr) || isTupleLiteral(expr) || isLambda(expr) || isDictionaryLiteral(expr))
@@ -7935,21 +7922,21 @@ private final class TypeChecker
             if (passedDown)
             {
                 // The whole fits as its worst-fitting part does.
-                auto worst = 0;
+                auto worst = Fitted(expected);
                 void part(const Expr inner, Type wanted)
                 {
-                    worst = max(worst, fitted(inner, wanted, ctx).steps);
+                    worst = worst.and(fitted(inner, wanted, ctx));
                 }
                 auto whole = expr.kind.match!(
                     (const IfExpr if_) => checkIf(if_, expected, ctx),
                     (const BlockExpr block) => checkBlock(expr, block, expected, ctx),
                     (const SomeExpr some) {
                         part(*some.value, _types.optionInner(expected));
-                        return Fitted(expected, worst);
+                        return worst;
                     },
                     (const ArrayLiteral literal) {
                         foreach (element; literal.elements) part(element, _types.arrayElement(expected));
-                        return Fitted(expected, worst);
+                        return worst;
                     },
                     (const MapLiteral literal) {
                         auto entry = _types.nominalArgs(expected);
@@ -7958,17 +7945,17 @@ private final class TypeChecker
                             part(key, entry[0]);
                             part(literal.values[i], entry[1]);
                         }
-                        return Fitted(builtDictionary(expr, literal, expected, ctx), worst);
+                        return worst.then(builtDictionary(expr, literal, expected, ctx), 0);
                     },
                     (const BinaryExpr binary) {
                         recordConcat(expr, binary);
                         part(*binary.left, expected);
                         part(*binary.right, expected);
-                        return Fitted(expected, worst);
+                        return worst;
                     },
                     (const TupleLiteral literal) {
                         foreach (i, element; literal.elements) part(element, _types.tupleElements(expected)[i]);
-                        return Fitted(expected, worst);
+                        return worst;
                     },
                     (const MatchExpr match_) => checkMatch(match_, expected, expr.span, ctx),
                     (_) => assert(0, "only ifs, blocks, matches, Some, arrays and tuples are passed down"),
@@ -8035,7 +8022,8 @@ private final class TypeChecker
         adaptLiteral(expr, number);
         if (number != expected) _typing.promotions[expr.id] = expected;
         if (_declarer.isSum(core)) steps++;
-        return Fitted(expected, steps + (number == literalDefault(expr) ? 0 : 1));
+        return Fitted(expected, steps + (number == literalDefault(expr) ? 0 : 1), isIntLiteral(expr) ? reading(number) : 0,
+            outOfRange(expr, number) !is null);
     }
 
     /// What a number literal is with nothing expected.
@@ -8118,36 +8106,6 @@ private final class TypeChecker
             return "This %s doesn't fit in `Float`; its largest value is about 1.7976931348623157e308".format(what);
         }
         return null;
-    }
-
-    /// Notes a number literal as typed, for the range check and for any attempt that's open.
-    private void noteLiteral(const Expr expr)
-    {
-        _numberLiterals ~= expr;
-        if (_trying > 0) _triedLiterals ~= expr;
-    }
-
-    /// What the number literals typed since there were `start` in `_triedLiterals` became: whether
-    /// each holds a value of its type, and the latest that an integer literal among them reads.
-    private Made madeSince(size_t start)
-    {
-        Made made;
-        foreach (literal; _triedLiterals[start .. $])
-        {
-            auto type = literal.id in _typing.exprTypes;
-            if (type is null) continue;
-            literal.kind.match!(
-                (const IntLiteral l) {
-                    if (outOfRange(l, (literal.id in _negatedLiterals) !is null, *type) !is null) made.fits = false;
-                    made.reading = max(made.reading, reading(*type));
-                },
-                (const FloatLiteral l) {
-                    if (outOfRange(l, *type) !is null) made.fits = false;
-                },
-                (_) {},
-            );
-        }
-        return made;
     }
 
     private Type fitTo(const Expr expr, Type type, Type expected, Site site)
@@ -8245,8 +8203,9 @@ private final class TypeChecker
     {
         checkMatchHead(match_, span, ctx);
         auto arms = match_.arms.map!(arm => fitted(arm.body, expected, ctx)).array;
-        return Fitted(arms.all!(arm => arm.type == _types.never) ? _types.never : expected,
-            arms.map!(arm => arm.steps).fold!max(0));
+        auto whole = Fitted(arms.all!(arm => arm.type == _types.never) ? _types.never : expected);
+        foreach (arm; arms) whole = whole.and(arm);
+        return whole;
     }
 
     private Type checkDiscardedMatch(const MatchExpr match_, Span span, BodyContext ctx)
@@ -8618,7 +8577,7 @@ private final class TypeChecker
         auto then = trueBranch(if_, () => fitted(*if_.trueBody, expected, ctx));
         auto otherwise = fitted(*if_.falseBody, expected, ctx);
         auto never = then.type == _types.never && otherwise.type == _types.never;
-        return Fitted(never ? _types.never : expected, max(then.steps, otherwise.steps));
+        return then.and(otherwise).then(never ? _types.never : expected, 0);
     }
 
     private Fitted checkBlock(const Expr expr, const BlockExpr block, Type expected, BodyContext ctx)
@@ -8627,7 +8586,7 @@ private final class TypeChecker
         if (block.value !is null)
         {
             auto value = fitted(*block.value, expected, ctx);
-            return Fitted(value.type == _types.never ? value.type : expected, value.steps);
+            return value.then(value.type == _types.never ? value.type : expected, 0);
         }
         // A Unit block expected to be a `Unit?` is promoted, so its own type stays Unit.
         auto type = valuelessBlockType(block);

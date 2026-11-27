@@ -13,6 +13,8 @@ h(Int8)
 h(Int8)
 h(Int8)
 h(Float)
+h(Int8)
+h(Int8)
 Int 1
 Int 2
 Float 1.0
