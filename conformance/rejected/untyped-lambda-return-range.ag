@@ -1,0 +1,9 @@
+// A `return` in the statements of a lambda's body is checked against the result the lambda
+// is given, also when the lambda was first typed with nothing expected, as a receiver is.
+
+def call8(f: (Int) -> UInt8): String => "call8 {f(1)} {f(0)}"
+
+def main(): Unit {
+    printl(((x: Int) => { if x > 0 { return 300 }
+        2 }).call8())
+}

@@ -1,0 +1,15 @@
+// A lambda that is typed with nothing expected and then against a function type has the
+// `return`s in its body's statements checked against the result that type gives.
+
+def same<T>(a: T, b: T): T => a
+def callopt(f: (Int) -> UInt8?): String => "callopt {f(1)} {f(0)}"
+def callf(f: (Int) -> Float): String => "callf {f(1)} {f(0)}"
+
+def main(): Unit {
+    printl(((x: Int) => { if x > 0 { return 7 }
+        2 }).callopt())
+    printl(((x: Int) => { if x > 0 { return 7 }
+        2 }).callf())
+    printl(callf(same((x: Int) => { if x > 0 { return 7 }
+        2 }, (y: Int) => 1.5)))
+}

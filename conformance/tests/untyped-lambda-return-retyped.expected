@@ -1,0 +1,3 @@
+callopt Some(7) Some(2)
+callf 7.0 2.0
+callf 7.0 2.0
