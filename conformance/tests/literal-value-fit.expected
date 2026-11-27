@@ -1,0 +1,23 @@
+h(Float)
+h(Float)
+g(Int16)
+u(UInt8)
+u(Float)
+u(Float)
+k(Float)
+h(Float)
+w(L)
+w(Float?)
+h(Int8)
+h(Int8)
+h(Int8)
+h(Int8)
+h(Float)
+Int 1
+Int 2
+Float 1.0
+Int8 1
+Float 300.0
+Float -129.0
+1.5
+2.5

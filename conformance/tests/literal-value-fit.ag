@@ -1,0 +1,76 @@
+// A type fits a literal by its value, so a function taking a type the literal doesn't fit isn't a
+// candidate for it, and a sum takes a literal as the number member that overloads taking each
+// would be chosen by.
+type S = :Int8 | :Int
+type N = :Float32 | :Float
+type M = :Int8 | :Float
+type L = :Int8 | :String
+type F = :Int8 | :Float32
+type E(code: Int)
+
+def h(x: Int8): String => "h(Int8)"
+def h(x: Float): String => "h(Float)"
+def g(x: Int8): String => "g(Int8)"
+def g(x: Int16): String => "g(Int16)"
+def u(x: UInt8): String => "u(UInt8)"
+def u(x: Float): String => "u(Float)"
+def k(x: Float32): String => "k(Float32)"
+def k(x: Float): String => "k(Float)"
+def w(x: L): String => "w(L)"
+def w(x: Float?): String => "w(Float?)"
+def id<T>(x: T): T => x
+
+def s(x: S): String => match x {
+    n: Int8 => "Int8 {n}"
+    n: Int => "Int {n}"
+}
+
+def n(x: N): String => match x {
+    f: Float32 => "Float32 {f}"
+    f: Float => "Float {f}"
+}
+
+def m(x: M): String => match x {
+    i: Int8 => "Int8 {i}"
+    f: Float => "Float {f}"
+}
+
+def main(): Unit {
+    printl(h(300))
+    printl(h(-129))
+    printl(g(300))
+    printl(u(200))
+    printl(u(-1))
+    printl(u(300))
+    printl(k(1e40))
+    printl(h(99999999999999999999))
+    printl(w(1))
+    printl(w(300))
+
+    // Wrapping a literal doesn't change the function it chooses.
+    val c = true
+    printl(h(id(1)))
+    printl(h(if c => 1 else 2))
+    printl(h({ 1 }))
+    printl(h((1)))
+    printl(h(id(300)))
+
+    val a: S = 1
+    val b: S? = 2
+    val t: N = 1
+    val p: M = 1
+    val q: M = 300
+    val r: M = -129
+    printl(s(a))
+    printl(s(b!))
+    printl(n(t))
+    printl(m(p))
+    printl(m(q))
+    printl(m(r))
+
+    // A float literal goes into a sum's float member inside an option or error union too.
+    val f: F? = 1.5
+    val e: F ! E = 2.5
+    printl(f!)
+    printl(e!)
+}

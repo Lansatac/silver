@@ -1,0 +1,9 @@
+// A literal that's out of range whichever function is chosen is reported as out of range, once,
+// not as no function fitting.
+def h(x: Int8): String => "h(Int8)"
+def h(x: Float): String => "h(Float)"
+
+def main(): Unit {
+    val n: Int8 = 5
+    printl(h(if n == 300 => 1 else 2))
+}

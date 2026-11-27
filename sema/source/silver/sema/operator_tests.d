@@ -280,8 +280,10 @@ unittest
     analyzed(v ~ "def opDiv(a: V, b: (Int8?)?): V => a\ndef main(): Unit => print(V(1) / Some(None))").shouldHaveNoDiagnostics();
     analyzed(v ~ "def opDiv(a: V, f: (Int) -> Int): V => a\ndef main(): Unit => print(V(1) / (x => x + 1))").shouldHaveNoDiagnostics();
     analyzed(v ~ "def opSub(a: V, b: Int8): V => a\ndef main(): Unit => print(V(1) - 100)").shouldHaveNoDiagnostics();
-    analyzed(v ~ "def opSub(a: V, b: Int8): V => a\ndef main(): Unit => print(V(1) - 200)")
-        .shouldReport(DiagnosticCode.LiteralOutOfRange, At("200", 1));
+    // A literal that doesn't fit by its value makes the function no candidate.
+    auto range = analyzed(v ~ "def opSub(a: V, b: Int8): V => a\ndef main(): Unit => print(V(1) - 200)");
+    range.shouldReport(DiagnosticCode.NoMatchingOverload, At("V(1) - 200", 1));
+    assert(range.collector.diagnostics[0].message.canFind("`200` doesn't fit in `Int8`"), range.collector.diagnostics[0].message);
     analyzed(v ~ "def opNeg(a: [Float]): V => V(1)\ndef main(): Unit => print(-[1, 2.5])").shouldHaveNoDiagnostics();
     analyzed(v ~ "def opAdd(a: String, b: V): V => b\ndef main(): Unit => print(\"s\" + V(1))").shouldHaveNoDiagnostics();
 }

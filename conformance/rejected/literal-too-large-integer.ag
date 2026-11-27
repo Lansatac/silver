@@ -1,6 +1,5 @@
-// Where an integer type fits, a literal is an integer, so one too large for 64 bits is still an error.
+// Where only an integer type fits, a literal too large for 64 bits is an error.
 def h(x: Int8): String => "Int8"
-def h(x: Float): String => "Float"
 
 def main(): Unit {
     printl(h(99999999999999999999))

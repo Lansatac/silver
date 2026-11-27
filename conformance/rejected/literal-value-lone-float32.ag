@@ -1,0 +1,6 @@
+// A lone function takes the literal as its parameter, and the range check reports it once.
+def k32(x: Float32): String => "Float32"
+
+def main(): Unit {
+    printl(k32(1e40))
+}

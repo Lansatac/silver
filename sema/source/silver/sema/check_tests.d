@@ -3189,13 +3189,27 @@ unittest
     analyzed("type P2\ntype P3\ntype A = :P2 | :P3\ndef f(): A => if true => P2 else P3\ndef main(): Unit => ()").shouldHaveNoDiagnostics();
 }
 
-@("a literal adapts to the sum's only integer member")
+@("a literal goes into a sum as the number member that overloads taking each would be chosen by")
 unittest
 {
-    analyzed("type V = :Int8 | :String\ndef main(): Unit {\n    val v: V = 1\n}").shouldHaveNoDiagnostics();
-    analyzed("type V = :Int8 | :Int\ndef main(): Unit {\n    val v: V = 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+    import std.algorithm.searching : canFind;
+
+    auto a = analyzed("type V = :Int8 | :String\ntype W = :Int8 | :Int\ntype M = :Int8 | :Float\ntype U = :UInt8 | :Int16\n"
+        ~ "def main(): Unit {\n    val v: V = 1\n    val w: W = 2\n    val m: M = 3\n    val n: M = 300\n    val u: U = -4\n}");
+    a.shouldHaveNoDiagnostics();
+    a.shouldHaveType("1", "Int8");
+    a.shouldHaveType("2", "Int");
+    a.shouldHaveType("3", "Int8");
+    a.shouldHaveType("300", "Float");
+    a.shouldHaveType("4", "Int16");
+    // Two integer members, and neither is the default.
+    auto tied = analyzed("type P = :Int8 | :Int16\ndef main(): Unit {\n    val p: P = 1\n}");
+    tied.shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+    assert(tied.collector.diagnostics[0].message.canFind("`Int8` or `Int16`"), tied.collector.diagnostics[0].message);
     analyzed("type V = :Int? | :String\ndef main(): Unit {\n    val v: V = 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+    // Where its value fits no member, it's reported against the member a lone function would take.
     analyzed("type V = :Int8 | :String\ndef main(): Unit {\n    val v: V = 300\n}").shouldReport(DiagnosticCode.LiteralOutOfRange, At("300", 1));
+    analyzed("type V = :Int8 | :Int16\ndef main(): Unit {\n    val v: V = 300\n}").shouldHaveNoDiagnostics();
 }
 
 @("an integer literal in a sum with no integer member is the float literal of its value, a Float before a Float32")
@@ -3222,9 +3236,10 @@ unittest
     analyzedMain("val x: Int = 99999999999999999999").shouldReport(DiagnosticCode.LiteralOutOfRange, At("99999999999999999999", 1));
     analyzedMain("val x: Float32 = 1000000000000000000000000000000000000000")
         .shouldReport(DiagnosticCode.LiteralOutOfRange, At("1000000000000000000000000000000000000000", 1));
-    // Where an integer type fits as well, it's an integer, so it's still too large.
-    analyzed("def h(x: Int8): Unit => ()\ndef h(x: Float): Unit => ()\ndef main(): Unit => h(99999999999999999999)")
-        .shouldReport(DiagnosticCode.LiteralOutOfRange, At("99999999999999999999", 1));
+    // An integer type it would have to fit in isn't a candidate.
+    auto h = analyzed("def h(x: Int8): Unit => ()\ndef h(x: Float): Unit => ()\ndef main(): Unit => h(99999999999999999999)");
+    h.shouldHaveNoDiagnostics();
+    h.shouldCall(At("h", 3), At("h", 2));
 }
 
 @("promotion into a sum is one step, under any option and error-union layers")
@@ -3234,7 +3249,7 @@ unittest
     analyzed("type V = :Int? | :String\ndef f(x: Int): V? => x\ndef main(): Unit => ()").shouldReport(DiagnosticCode.TypeMismatch, At("x", 2));
     analyzed("type A\ntype B = :A | :Int\ntype C = :B | :String\ndef f(a: A): C? => a\ndef main(): Unit => ()")
         .shouldReport(DiagnosticCode.TypeMismatch, At("a", 2));
-    analyzed("type V = :Int8 | :Int\ndef main(): Unit {\n    val v: V? = 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
+    analyzed("type V = :Int8 | :Int16\ndef main(): Unit {\n    val v: V? = 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
     analyzed("type V = :Int? | :String\ndef main(): Unit {\n    val v: V? = 1\n}").shouldReport(DiagnosticCode.TypeMismatch, At("1", 1));
 }
 

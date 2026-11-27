@@ -1,0 +1,7 @@
+// A sum with two integer members, neither of them the default, takes a literal as neither.
+type P = :Int8 | :Int16
+
+def main(): Unit {
+    val p: P = 1
+    printl(p == p)
+}

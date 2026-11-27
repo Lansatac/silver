@@ -169,4 +169,4 @@ val r = if val Circle(radius) = shape => radius else 0.0
 
 ## Current implementation
 
-The implementation matches this description, except for a number literal going into a sum, which has its own rule: see [Numbers](numbers.md#current-implementation).
+The implementation matches this description.

@@ -1,0 +1,7 @@
+// A literal goes into a sum only as one of its number members, not promoted twice into an option member.
+type V = :Int? | :String
+
+def main(): Unit {
+    val v: V = 1
+    printl(v == v)
+}

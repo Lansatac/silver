@@ -332,6 +332,51 @@ unittest
     a.shouldHaveType("1", 2, "Float");
 }
 
+@("a literal's value counts toward fitting, so a function whose parameter it doesn't fit isn't a candidate")
+unittest
+{
+    auto a = analyzedWith("def h(x: Int8): Unit => ()\ndef h(x: Float): Unit => ()\n"
+        ~ "def g(x: Int8): Unit => ()\ndef g(x: Int16): Unit => ()\n"
+        ~ "def u(x: UInt8): Unit => ()\ndef u(x: Float): Unit => ()\n"
+        ~ "def k(x: Float32): Unit => ()\ndef k(x: Float): Unit => ()\n"
+        ~ "type S = :Int8 | :String\ndef m(x: S): Unit => ()\ndef m(x: Float?): Unit => ()",
+        "    h(300)\n    h(-129)\n    g(300)\n    u(200)\n    u(-1)\n    u(300)\n    k(1e40)\n    m(1)\n    m(300)");
+    a.shouldHaveNoDiagnostics();
+    a.shouldCall(At("h", 3), At("h", 2));
+    a.shouldCall(At("h", 4), At("h", 2));
+    a.shouldCall(At("g", 3), At("g", 2));
+    a.shouldCall(At("u", 3), At("u", 1));
+    a.shouldCall(At("u", 4), At("u", 2));
+    a.shouldCall(At("u", 5), At("u", 2));
+    a.shouldCall(At("k", 3), At("k", 2));
+    a.shouldCall(At("m", 3), At("m", 1));
+    a.shouldCall(At("m", 4), At("m", 2));
+    a.shouldHaveType("300", 1, "Float");
+    a.shouldHaveType("300", 2, "Int16");
+
+    // Fitting none, it's no candidate for any, and the error says why for each.
+    auto none = analyzedWith("def g(x: Int8): Unit => ()\ndef g(x: UInt8): Unit => ()", "    g(300)");
+    none.shouldReport(DiagnosticCode.NoMatchingOverload, At("g", 3));
+    assert(none.collector.diagnostics[0].message.canFind("`300` doesn't fit in `UInt8`"), none.collector.diagnostics[0].message);
+    // A lone function takes it as its parameter, and the range check reports it once.
+    analyzedWith("def k32(x: Float32): Unit => ()", "    k32(1e40)").shouldReport(DiagnosticCode.LiteralOutOfRange, At("1e40", 1));
+    // Arithmetic on literals fits by its type, not its value.
+    analyzedWith("def u(x: UInt8): Unit => ()\ndef u(x: Float): Unit => ()", "    u(200 + 100)")
+        .shouldReport(DiagnosticCode.NoMatchingOverload, At("u", 3));
+}
+
+@("a literal reads as what checking made it, so wrapping it doesn't change the function chosen")
+unittest
+{
+    auto a = analyzedWith("def h(x: Int8): Unit => ()\ndef h(x: Float): Unit => ()\ndef id<T>(x: T): T => x\n"
+        ~ "type S = :Int8 | :Int\ndef w(x: S): Unit => ()\ndef w(x: Float): Unit => ()",
+        "    val c = true\n    h(id(1))\n    h(if c => 1 else 2)\n    h({ 1 })\n    h((1))\n    h(id(id(-1)))\n    w(1)\n    h(id(300))");
+    a.shouldHaveNoDiagnostics();
+    foreach (n; 3 .. 8) a.shouldCall(At("h", n), At("h", 1));
+    a.shouldCall(At("w", 3), At("w", 1));
+    a.shouldCall(At("h", 8), At("h", 2));
+}
+
 @("a call is ambiguous when no overload fits every argument at least as well as the others")
 unittest
 {

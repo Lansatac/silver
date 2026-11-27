@@ -1,0 +1,7 @@
+// A literal's value fits neither function, so neither is a candidate for it.
+def g(x: Int8): String => "Int8"
+def g(x: UInt8): String => "UInt8"
+
+def main(): Unit {
+    printl(g(300))
+}
