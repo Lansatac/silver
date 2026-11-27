@@ -6647,9 +6647,13 @@ private final class TypeChecker
                     _collector.reportError(DiagnosticCode.MutabilityMismatch, arg.span,
                         "This parameter is `mutable`, so the call can change the argument; write `mutable` before it");
                 }
-                worst = worst.and(checked[i] ? binding.found[i]
+                auto fit = checked[i] ? binding.found[i]
                     : typed[i] != Type.init ? coerced(arg, typed[i], paramTypes[i], ctx.site)
-                    : checkArgument(arg, paramTypes[i], ctx));
+                    : checkArgument(arg, paramTypes[i], ctx);
+                // What a literal becomes for a parameter with a type of its own is the same
+                // wherever the call goes, so only its steps count there.
+                if (!mentionsAny(signature.params[i], params)) fit = Fitted(fit.type, fit.steps);
+                worst = worst.and(fit);
                 continue;
             }
             if (!signature.isMutable(i))

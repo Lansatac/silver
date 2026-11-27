@@ -21,6 +21,8 @@ def w(x: Float?): String => "w(Float?)"
 def id<T>(x: T): T => x
 def pick<T>(c: Bool, x: T): T => x
 def big(x: Float): Bool => x > 1.5
+def pickf<T>(f: Float, x: T): T => x
+def pick8<T>(f: Int8, x: T): T => x
 
 def s(x: S): String => match x {
     n: Int8 => "Int8 {n}"
@@ -60,6 +62,8 @@ def main(): Unit {
     val fl = 2.0
     printl(h(if fl == 1 => 1 else 2))
     printl(h(pick(big(1), 2)))
+    printl(h(pickf(1, 2)))
+    printl(h(pick8(1, 300)))
 
     val a: S = 1
     val b: S? = 2
