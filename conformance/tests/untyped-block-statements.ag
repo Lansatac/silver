@@ -1,0 +1,48 @@
+// A block's statements are typed once however often its value is tried against a type, so a
+// `return` in them is counted once among what the function around returns, and their locals stand.
+
+def id<T>(x: T): T => x
+def same<T>(a: T, b: T): T => a
+def ov(x: UInt8): String => "ov(UInt8) {x}"
+def ov(x: String): String => "ov(String)"
+def u(x: UInt8): String => "u {x}"
+
+def main(): Unit {
+    val small: UInt8 = 9
+    val a = (x: Int) => ov({
+        if x > 0 { return "early" }
+        val k = x + 1
+        1
+    })
+    printl(a(1))
+    printl(a(0))
+    val b = (x: Int) => {
+        if x > 5 => small else {
+            if x > 0 { return small }
+            None
+        }
+    }
+    printl(b(9))
+    printl(b(1))
+    printl(b(0))
+    val c = (x: Int) => {
+        if x > 0 { return "early" }
+        2
+    }.u()
+    printl(c(1))
+    printl(c(0))
+    val d = (x: Int) => same({
+        if x > 0 { return 0 }
+        val y = [x, 1]
+        y[0] + 3
+    }, 4)
+    printl(d(1))
+    printl(d(0))
+    val e = (xs: [Int]) => xs.map(x => ov({
+        val twice = x * 2
+        mutable val n = 0
+        n += twice
+        3
+    })).array()
+    printl(e([1, 2]))
+}

@@ -1,0 +1,53 @@
+// A call whose result only a lambda decides is tried against each function with that result left
+// open. When that leaves more than one fitting alike, the call is what it is with nothing
+// expected, and the choice is made by that type. A literal's steps also count through a generic
+// call, so wrapping an argument doesn't change which function it reaches.
+
+def id<T>(x: T): T => x
+def same<T>(a: T, b: T): T => a
+def two<T>(a: T, b: T): [T] => [a, b]
+def mp<T, U>(xs: [T], f: (T) -> U): [U] {
+    mutable val made: [U] = []
+    for x in xs {
+        made ~= [f(x)]
+    }
+    made
+}
+def one<T, U>(x: T, f: (T) -> U): [U] => [f(x)]
+def app<T, U>(x: T, f: (T) -> U): U => f(x)
+def app2<T, U>(f: (T) -> U, x: T): U => f(x)
+
+def wide(x: Int): String => "wide(Int)"
+def wide(x: UInt8): String => "wide(UInt8)"
+def wide(xs: [Int]): String => "wide([Int])"
+def wide(xs: [UInt8]): String => "wide([UInt8])"
+def show(xs: [Int]): String => "ints"
+def show(xs: [String]): String => "strings"
+def u8(xs: [UInt8]): String => "u8 {xs}"
+
+def main(): Unit {
+    val n = 5
+    val xs = [1, 2, 3]
+    val bytes: [UInt8] = [4, 5]
+
+    // Chosen by what the lambda makes the call.
+    printl(wide(mp(xs, x => x + 1)))
+    printl(wide(mp(bytes, x => x)))
+    printl(wide(app(n, x => x)))
+    printl(wide(app2(x => same(id(1), x), 300)))
+    printl(show(one(1, x => x + 1)))
+    printl(show(one(1, x => "a")))
+    printl(xs.mp(x => x * 2).wide())
+
+    // Where a type is expected, it's passed in as before.
+    val small: [UInt8] = mp(xs, x => 1)
+    printl(wide(small))
+    printl(u8(mp(xs, x => 1)))
+
+    // A literal's steps count through a generic call.
+    printl(wide(1))
+    printl(wide(id(1)))
+    printl(wide(id(id(1))))
+    printl(wide(id([1])))
+    printl(wide(two(1, 2)))
+}

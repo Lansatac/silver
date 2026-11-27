@@ -175,6 +175,7 @@ type Grow<T> = More(rest: Grow<(T, T)>, head: T) | Stop    // error: `Grow<T>`, 
 - Default type arguments, as in `def make<R: Seedable = Xoshiro256>(seed: UInt64): R` or `type Pair<A, B = A>`: what a parameter is when nothing else decides it.
 - Value parameters, as in `def pow<n: Int>(x: Float)`, with compile-time evaluation.
 - Whether `Option` becomes an ordinary generic sum in the prelude, with `T?` as its spelling.
+- What the expected type says when it's a sum with more than one member of the generic type a call builds. With `type Held = :Box<Int> | :Box<String> | :Box<[Int]>`, `val h: Held = Box([2, 3])` is an error today, because the first such member gives the type argument and the literals have no type of their own to say otherwise, so the order the members are written in matters.
 - Inferring a common type that none of the arguments gave, as a wider number for `pair(n, 2.5)`, which waits on the same decision for integers widening.
 
 ## Current implementation
